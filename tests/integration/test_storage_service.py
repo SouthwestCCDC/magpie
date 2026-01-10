@@ -1,0 +1,338 @@
+"""Integration tests for StorageService."""
+
+from __future__ import annotations
+
+import io
+from pathlib import Path
+
+import pytest
+
+from magpie.config import MagpieSettings
+from magpie.storage.exceptions import ArtifactNotFoundError
+from magpie.storage.service import ArtifactInfo, StorageService
+
+
+@pytest.fixture
+def test_config(tmp_path: Path) -> MagpieSettings:
+    """Create test configuration with temporary paths."""
+    return MagpieSettings(storage_path=tmp_path)
+
+
+@pytest.fixture
+def storage_service(test_config: MagpieSettings) -> StorageService:
+    """Create a StorageService instance for testing."""
+    return StorageService(test_config)
+
+
+class TestStoreListGetFlow:
+    """Tests for the full store -> list -> get workflow."""
+
+    def test_store_list_get_flow(self, storage_service: StorageService) -> None:
+        """Test complete artifact lifecycle: store, list, get."""
+        artifact_path = "project/component"
+        content = b"test artifact content"
+        stream = io.BytesIO(content)
+
+        # Store
+        info, is_duplicate = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=stream,
+            uploaded_by="test-user",
+            source_uri="http://example.com/source",
+        )
+
+        assert is_duplicate is False
+        assert info.uploaded_by == "test-user"
+        assert info.source_uri == "http://example.com/source"
+        assert "latest" in info.tags
+        assert info.hash_ref.startswith("@")
+
+        # List
+        artifacts = storage_service.list_artifacts(artifact_path)
+        assert len(artifacts) == 1
+        assert artifacts[0].hash == info.hash
+        assert "latest" in artifacts[0].tags
+
+        # Get by tag
+        retrieved = storage_service.get_artifact_info(artifact_path, "latest")
+        assert retrieved.hash == info.hash
+        assert retrieved.uploaded_by == info.uploaded_by
+
+        # Get by hash_ref
+        retrieved_by_hash = storage_service.get_artifact_info(
+            artifact_path, info.hash_ref
+        )
+        assert retrieved_by_hash.hash == info.hash
+
+    def test_store_returns_artifact_info(self, storage_service: StorageService) -> None:
+        """store_artifact should return complete ArtifactInfo."""
+        info, _ = storage_service.store_artifact(
+            artifact_path="test/artifact",
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="uploader",
+            source_uri="s3://bucket/key",
+        )
+
+        assert isinstance(info, ArtifactInfo)
+        assert len(info.hash) == 64  # SHA-256 hex length
+        assert info.hash_ref.startswith("@")
+        assert len(info.hash_ref) == 9  # @ + 8 chars
+        assert info.uploaded_by == "uploader"
+        assert info.source_uri == "s3://bucket/key"
+        assert info.uploaded_at is not None
+
+
+class TestDuplicateHandling:
+    """Tests for duplicate artifact detection."""
+
+    def test_duplicate_detection(self, storage_service: StorageService) -> None:
+        """Storing same content twice should return is_duplicate=True."""
+        artifact_path = "test/duplicate"
+        content = b"duplicate content test"
+
+        # First store
+        info1, is_dup1 = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(content),
+            uploaded_by="user1",
+        )
+        assert is_dup1 is False
+
+        # Second store of same content
+        info2, is_dup2 = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(content),
+            uploaded_by="user2",
+        )
+        assert is_dup2 is True
+
+        # Both should have same hash
+        assert info1.hash == info2.hash
+        assert info1.hash_ref == info2.hash_ref
+
+    def test_duplicate_preserves_original_metadata(
+        self, storage_service: StorageService
+    ) -> None:
+        """Duplicate upload should preserve original uploader info."""
+        artifact_path = "test/preserve"
+        content = b"preserve metadata content"
+
+        # First upload
+        info1, _ = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(content),
+            uploaded_by="original-uploader",
+            source_uri="original-source",
+        )
+
+        # Duplicate upload with different metadata
+        info2, is_dup = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(content),
+            uploaded_by="new-uploader",
+            source_uri="new-source",
+        )
+
+        assert is_dup is True
+        # Original metadata should be preserved
+        assert info2.uploaded_by == "original-uploader"
+        assert info2.source_uri == "original-source"
+
+
+class TestArtifactIsolation:
+    """Tests for artifact path isolation."""
+
+    def test_different_artifact_paths_isolated(
+        self, storage_service: StorageService
+    ) -> None:
+        """Different artifact paths should not interfere with each other."""
+        content = b"shared content"
+
+        # Store in path A
+        info_a, is_dup_a = storage_service.store_artifact(
+            artifact_path="project-a/artifact",
+            file_stream=io.BytesIO(content),
+            uploaded_by="user-a",
+        )
+
+        # Store same content in path B (should not be duplicate)
+        info_b, is_dup_b = storage_service.store_artifact(
+            artifact_path="project-b/artifact",
+            file_stream=io.BytesIO(content),
+            uploaded_by="user-b",
+        )
+
+        # Both should be new (different artifact paths)
+        assert is_dup_a is False
+        assert is_dup_b is False
+
+        # Each path should have its own artifacts
+        list_a = storage_service.list_artifacts("project-a/artifact")
+        list_b = storage_service.list_artifacts("project-b/artifact")
+
+        assert len(list_a) == 1
+        assert len(list_b) == 1
+        assert list_a[0].uploaded_by == "user-a"
+        assert list_b[0].uploaded_by == "user-b"
+
+
+class TestTagResolution:
+    """Tests for tag and hash reference resolution."""
+
+    def test_get_by_tag_name(self, storage_service: StorageService) -> None:
+        """get_artifact_info should resolve tag names."""
+        artifact_path = "test/tags"
+        storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="user",
+        )
+
+        info = storage_service.get_artifact_info(artifact_path, "latest")
+        assert info is not None
+        assert "latest" in info.tags
+
+    def test_get_by_hash_ref(self, storage_service: StorageService) -> None:
+        """get_artifact_info should resolve hash references."""
+        artifact_path = "test/hash-ref"
+        stored_info, _ = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="user",
+        )
+
+        info = storage_service.get_artifact_info(artifact_path, stored_info.hash_ref)
+        assert info.hash == stored_info.hash
+
+    def test_get_nonexistent_tag_raises(self, storage_service: StorageService) -> None:
+        """get_artifact_info should raise for non-existent tag."""
+        artifact_path = "test/nonexistent-tag"
+        storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="user",
+        )
+
+        with pytest.raises(ArtifactNotFoundError, match="Tag.*not found"):
+            storage_service.get_artifact_info(artifact_path, "nonexistent")
+
+    def test_get_nonexistent_path_raises(self, storage_service: StorageService) -> None:
+        """get_artifact_info should raise for non-existent artifact path."""
+        with pytest.raises(ArtifactNotFoundError, match="Artifact path not found"):
+            storage_service.get_artifact_info("nonexistent/path", "latest")
+
+
+class TestListArtifacts:
+    """Tests for list_artifacts functionality."""
+
+    def test_list_returns_all_versions(self, storage_service: StorageService) -> None:
+        """list_artifacts should return all unique blobs with their tags."""
+        artifact_path = "test/versions"
+
+        # Store first version
+        info1, _ = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(b"version 1"),
+            uploaded_by="user",
+        )
+
+        # Store second version (different content)
+        info2, _ = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(b"version 2"),
+            uploaded_by="user",
+        )
+
+        # List should show latest points to version 2
+        artifacts = storage_service.list_artifacts(artifact_path)
+
+        # Should have 2 unique blobs (v1 has no tags anymore, v2 has latest)
+        # Actually, v1 loses its "latest" tag when v2 is stored
+        # So only v2 should appear in list since v1 has no tags
+        assert len(artifacts) == 1
+        assert artifacts[0].hash == info2.hash
+        assert "latest" in artifacts[0].tags
+
+    def test_list_empty_path_returns_empty(
+        self, storage_service: StorageService
+    ) -> None:
+        """list_artifacts should return empty list for non-existent path."""
+        artifacts = storage_service.list_artifacts("nonexistent/path")
+        assert artifacts == []
+
+    def test_list_groups_tags_by_hash(self, storage_service: StorageService) -> None:
+        """list_artifacts should group multiple tags pointing to same blob."""
+        artifact_path = "test/multi-tag"
+
+        # Store artifact - gets "latest" tag automatically
+        info, _ = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="user",
+        )
+
+        # Manually add another tag pointing to same hash (use full hash)
+        from magpie.storage.manifest import update_tag
+        from magpie.storage.paths import artifact_dir_path
+        from magpie.storage.symlinks import reconcile_symlinks
+
+        artifact_dir = artifact_dir_path(
+            storage_service.config.storage_path, artifact_path
+        )
+        manifest = update_tag(artifact_dir, "v1.0", info.hash)  # Use full hash
+        reconcile_symlinks(artifact_dir, manifest)
+
+        # List should show one blob with both tags
+        artifacts = storage_service.list_artifacts(artifact_path)
+        assert len(artifacts) == 1
+        assert "latest" in artifacts[0].tags
+        assert "v1.0" in artifacts[0].tags
+
+
+class TestEdgeCases:
+    """Tests for edge cases and error handling."""
+
+    def test_store_without_source_uri(self, storage_service: StorageService) -> None:
+        """store_artifact should work without source_uri."""
+        info, _ = storage_service.store_artifact(
+            artifact_path="test/no-source",
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="user",
+        )
+
+        assert info.source_uri is None
+
+    def test_store_creates_directories(
+        self, storage_service: StorageService, test_config: MagpieSettings
+    ) -> None:
+        """store_artifact should create artifact directory structure."""
+        artifact_path = "deep/nested/path/artifact"
+
+        storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="user",
+        )
+
+        expected_dir = test_config.storage_path / artifact_path
+        assert expected_dir.exists()
+        assert (expected_dir / "blobs").exists()
+
+    def test_symlinks_created(
+        self, storage_service: StorageService, test_config: MagpieSettings
+    ) -> None:
+        """store_artifact should create symlinks for tags."""
+        artifact_path = "test/symlinks"
+
+        storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="user",
+        )
+
+        artifact_dir = test_config.storage_path / artifact_path
+        symlink_path = artifact_dir / "latest"
+
+        assert symlink_path.is_symlink()
+        # Symlink should resolve to blob content
+        assert symlink_path.read_bytes() == b"content"

@@ -1,0 +1,48 @@
+"""FastAPI application for Magpie Artifacts API."""
+
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
+from fastapi import FastAPI
+
+from magpie.config import get_settings
+from magpie.server.errors import register_exception_handlers
+from magpie.server.observability import setup_observability
+from magpie.server.routes.artifacts import router as artifacts_router
+from magpie.server.routes.auth import router as auth_router
+from magpie.server.routes.gc import router as gc_router
+from magpie.server.routes.tags import router as tags_router
+from magpie.server.routes.upload import router as upload_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Application lifespan context manager for startup/shutdown events."""
+    # Startup: Initialize observability
+    settings = get_settings()
+    setup_observability(app, settings)
+    yield
+    # Shutdown: cleanup if needed
+
+
+app = FastAPI(
+    title="Magpie Artifacts API",
+    description="Content-addressed artifact storage with mutable tags",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+register_exception_handlers(app)
+app.include_router(upload_router)
+app.include_router(artifacts_router)
+app.include_router(tags_router)
+app.include_router(auth_router)
+app.include_router(gc_router)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    """Health check endpoint."""
+    return {"status": "ok"}

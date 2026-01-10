@@ -1,0 +1,134 @@
+# Magpie Artifact Storage - Caddy Configuration
+#
+# =============================================================================
+# AUTHENTICATION FLOW (forward_auth)
+# =============================================================================
+#
+# Protected routes use Caddy's forward_auth to validate Bearer tokens:
+#
+# 1. Client sends request with "Authorization: Bearer <token>" header
+# 2. Caddy makes subrequest to /api/v1/auth/validate with the same headers
+# 3. Auth endpoint validates token and returns:
+#    - 200 OK with X-Magpie-User and X-Magpie-Scope headers (valid token)
+#    - 401 Unauthorized (invalid/missing token)
+# 4. If auth returns 200, Caddy copies identity headers to upstream request
+# 5. If auth returns 401, Caddy returns 401 to client (request blocked)
+#
+# =============================================================================
+# ROUTE PROTECTION SUMMARY
+# =============================================================================
+#
+# PROTECTED ROUTES (require valid Bearer token):
+#   - POST   /api/v1/upload/*              - Artifact uploads
+#   - POST   /api/v1/artifacts/*/tags      - Create/update tags
+#   - DELETE /api/v1/artifacts/*/tags/*    - Remove tags
+#   - POST   /api/v1/tags/*/flush          - Flush tags globally
+#   - GET    /api/v1/tokens                - List tokens (admin)
+#   - POST   /api/v1/tokens                - Create tokens (admin)
+#   - DELETE /api/v1/tokens/*              - Revoke tokens (admin)
+#
+# PUBLIC ROUTES (no authentication required):
+#   - GET    /api/v1/artifacts/*           - List artifacts, get info
+#   - GET    /api/v1/auth/validate         - Auth validation endpoint
+#   - GET    /health                       - Health check
+#   - GET    /artifacts/*                  - Static file downloads
+#
+# =============================================================================
+# HEADER PROPAGATION
+# =============================================================================
+#
+# On successful authentication, these headers are copied to upstream:
+#   - X-Magpie-User:  Token name (identifies the authenticated client)
+#   - X-Magpie-Scope: Permission level (read, write, or admin)
+#
+# The FastAPI backend can use these headers for authorization decisions.
+#
+# =============================================================================
+
+:80 {
+	# =========================================================================
+	# PUBLIC ROUTES - No authentication required
+	# =========================================================================
+
+	# Health check endpoint - used by container orchestration
+	handle /health {
+		reverse_proxy magpie:8000
+	}
+
+	# Auth validation endpoint - must be public (used by forward_auth itself)
+	handle /api/v1/auth/validate {
+		reverse_proxy magpie:8000
+	}
+
+	# Artifact read operations (GET only) - public access
+	# Matches: GET /api/v1/artifacts/{path}, GET /api/v1/artifacts/{path}/{ref}/info
+	# Note: POST/DELETE to /artifacts/*/tags* are handled by protected routes below
+	@artifacts_read {
+		method GET
+		path /api/v1/artifacts/*
+	}
+	handle @artifacts_read {
+		reverse_proxy magpie:8000
+	}
+
+	# Static artifact downloads - served directly by Caddy for performance
+	# Files accessed via /artifacts/{artifact_path}/{ref} symlinks
+	handle /artifacts/* {
+		root * /data
+		file_server
+	}
+
+	# =========================================================================
+	# PROTECTED ROUTES - Require valid Bearer token via forward_auth
+	# =========================================================================
+
+	# Upload endpoint - requires write or admin scope
+	handle /api/v1/upload/* {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
+		reverse_proxy magpie:8000
+	}
+
+	# Tag mutation endpoints - requires write or admin scope
+	# Matches: POST /api/v1/artifacts/{path}/{ref}/tags
+	#          DELETE /api/v1/artifacts/{path}/tags/{tag_name}
+	@artifacts_tags {
+		path /api/v1/artifacts/*/tags*
+	}
+	handle @artifacts_tags {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
+		reverse_proxy magpie:8000
+	}
+
+	# Flush tag endpoint - requires admin scope
+	handle /api/v1/tags/* {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
+		reverse_proxy magpie:8000
+	}
+
+	# Token management endpoints - requires admin scope
+	handle /api/v1/tokens* {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
+		reverse_proxy magpie:8000
+	}
+
+	# =========================================================================
+	# FALLBACK
+	# =========================================================================
+
+	# Return 404 for unmatched routes
+	handle {
+		respond "Not Found" 404
+	}
+}

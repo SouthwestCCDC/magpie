@@ -1,0 +1,56 @@
+[project]
+name = "magpie"
+version = "0.1.0"
+description = "Content-addressed artifact storage with mutable tags"
+authors = [{ name = "SWCCDC Team" }]
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "click",
+    "httpx",
+    "pydantic-settings",
+    "aiofiles",
+    "python-multipart",
+    "sentry-sdk[fastapi]",
+    "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-exporter-otlp",
+]
+
+[project.scripts]
+magpie = "magpie.cli:main"
+magpie-ctl = "magpie.ctl:main"
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-asyncio",
+    "bandit[toml]",
+    "pre-commit",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "e2e: End-to-end tests requiring docker-compose",
+    "slow: Slow tests that take significant time to run",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/magpie"]
