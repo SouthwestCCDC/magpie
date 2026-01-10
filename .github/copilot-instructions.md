@@ -4,15 +4,14 @@ This document provides context for AI assistants working on the Magpie project.
 
 ## Project Overview
 
-**Magpie** is a content-addressed artifact storage system with mutable tags, replacing the current S3-synced file server used by SWCCDC.
+**Magpie** is a versioned artifact storage system with content-addressing and mutable tags, replacing the current S3-synced file server used by SWCCDC.
 
 - **Repository:** `SouthwestCCDC/magpie`
-- **Codename:** Magpie (bird-themed naming)
-- **Status:** Implementation in progress (Phase 1)
+- **Status:** Implementation in progress (Phases 1-6 complete, security remediation pending)
 
 ## Key Documentation
 
-For full context, read these documents in `deployment-artifacts-v2/docs/docs/projects/active/artifacts-v2/`:
+For full context, read these documents in `deployment/docs/docs/projects/active/magpie/`:
 
 | Document | Description |
 |----------|-------------|
@@ -96,7 +95,7 @@ uv run ruff format .                       # Format
 
 ## Related Repositories
 
-- `deployment-artifacts-v2` - Documentation site (contains design docs)
+- `deployment` - Documentation site (design docs in `docs/docs/projects/active/magpie/`)
 - `scoring` - Reference for code style alignment (ruff, line-length 100)
 - `infra-deployment` - Current artifacts v1 Ansible role
 
