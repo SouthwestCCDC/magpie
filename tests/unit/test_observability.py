@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,8 +9,8 @@ from fastapi import FastAPI
 
 from magpie.config import MagpieSettings
 from magpie.server.observability import (
-    setup_opentelemetry,
     setup_observability,
+    setup_opentelemetry,
     setup_sentry,
 )
 
@@ -44,9 +43,7 @@ class TestSentrySetup:
             setup_sentry(test_app, settings)
             mock_init.assert_called_once()
 
-    def test_sentry_uses_production_environment_when_not_debug(
-        self, test_app: FastAPI
-    ) -> None:
+    def test_sentry_uses_production_environment_when_not_debug(self, test_app: FastAPI) -> None:
         """Sentry should use 'production' environment when debug is False."""
         settings = MagpieSettings(sentry_dsn="https://test@sentry.io/123", debug=False)
 
@@ -55,9 +52,7 @@ class TestSentrySetup:
             call_kwargs = mock_init.call_args.kwargs
             assert call_kwargs["environment"] == "production"
 
-    def test_sentry_uses_development_environment_when_debug(
-        self, test_app: FastAPI
-    ) -> None:
+    def test_sentry_uses_development_environment_when_debug(self, test_app: FastAPI) -> None:
         """Sentry should use 'development' environment when debug is True."""
         settings = MagpieSettings(sentry_dsn="https://test@sentry.io/123", debug=True)
 
@@ -99,20 +94,14 @@ class TestOpenTelemetrySetup:
         with (
             patch("opentelemetry.trace.set_tracer_provider"),
             patch("opentelemetry.sdk.resources.Resource.create") as mock_resource,
-            patch(
-                "opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"
-            ),
+            patch("opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"),
         ):
             setup_opentelemetry(test_app, settings)
             mock_resource.assert_called_once_with({"service.name": "custom-service"})
 
-    def test_otel_configures_otlp_exporter_when_endpoint_set(
-        self, test_app: FastAPI
-    ) -> None:
+    def test_otel_configures_otlp_exporter_when_endpoint_set(self, test_app: FastAPI) -> None:
         """OTLP exporter should be configured when otel_endpoint is set."""
-        settings = MagpieSettings(
-            otel_enabled=True, otel_endpoint="http://localhost:4317"
-        )
+        settings = MagpieSettings(otel_enabled=True, otel_endpoint="http://localhost:4317")
 
         with (
             patch("opentelemetry.trace.set_tracer_provider"),
@@ -120,9 +109,7 @@ class TestOpenTelemetrySetup:
                 "opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter"
             ) as mock_exporter,
             patch("opentelemetry.sdk.trace.export.BatchSpanProcessor"),
-            patch(
-                "opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"
-            ),
+            patch("opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"),
         ):
             setup_opentelemetry(test_app, settings)
             mock_exporter.assert_called_once_with(endpoint="http://localhost:4317")
@@ -136,9 +123,7 @@ class TestOpenTelemetrySetup:
             patch(
                 "opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter"
             ) as mock_exporter,
-            patch(
-                "opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"
-            ),
+            patch("opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"),
         ):
             setup_opentelemetry(test_app, settings)
             mock_exporter.assert_not_called()
@@ -147,9 +132,7 @@ class TestOpenTelemetrySetup:
 class TestConfigToggles:
     """Tests for configuration toggles."""
 
-    def test_setup_observability_respects_all_toggles_disabled(
-        self, test_app: FastAPI
-    ) -> None:
+    def test_setup_observability_respects_all_toggles_disabled(self, test_app: FastAPI) -> None:
         """setup_observability should not initialize anything when all disabled."""
         settings = MagpieSettings(sentry_dsn=None, otel_enabled=False)
 
@@ -157,13 +140,9 @@ class TestConfigToggles:
         setup_observability(test_app, settings)
         # If we get here without error, early returns worked
 
-    def test_setup_observability_initializes_both_when_configured(
-        self, test_app: FastAPI
-    ) -> None:
+    def test_setup_observability_initializes_both_when_configured(self, test_app: FastAPI) -> None:
         """setup_observability should initialize both when both are configured."""
-        settings = MagpieSettings(
-            sentry_dsn="https://test@sentry.io/123", otel_enabled=True
-        )
+        settings = MagpieSettings(sentry_dsn="https://test@sentry.io/123", otel_enabled=True)
 
         with (
             patch("sentry_sdk.init") as mock_sentry_init,

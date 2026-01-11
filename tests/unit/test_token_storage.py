@@ -72,9 +72,7 @@ class TestInitDatabase:
         init_database(db_path)
 
         conn = sqlite3.connect(db_path)
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='tokens'"
-        )
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tokens'")
         result = cursor.fetchone()
         conn.close()
 
@@ -106,9 +104,7 @@ class TestInitDatabase:
         init_database(db_path)  # Should not raise
 
         conn = sqlite3.connect(db_path)
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='tokens'"
-        )
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tokens'")
         assert cursor.fetchone() is not None
         conn.close()
 
@@ -167,17 +163,13 @@ class TestSaveToken:
 
         save_token(db_conn, token)
 
-        cursor = db_conn.execute(
-            "SELECT * FROM tokens WHERE name = ?", ("full-token",)
-        )
+        cursor = db_conn.execute("SELECT * FROM tokens WHERE name = ?", ("full-token",))
         row = cursor.fetchone()
         assert row["scope"] == "admin"
         assert row["enabled"] == 0
         assert row["created_at"] is not None
 
-    def test_save_token_duplicate_name_raises(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
+    def test_save_token_duplicate_name_raises(self, db_conn: sqlite3.Connection) -> None:
         """save_token should raise error for duplicate name."""
         token1 = make_token(name="duplicate", token_hash="hash1")
         token2 = make_token(name="duplicate", token_hash="hash2")
@@ -187,9 +179,7 @@ class TestSaveToken:
         with pytest.raises(sqlite3.IntegrityError):
             save_token(db_conn, token2)
 
-    def test_save_token_duplicate_hash_raises(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
+    def test_save_token_duplicate_hash_raises(self, db_conn: sqlite3.Connection) -> None:
         """save_token should raise error for duplicate hash."""
         token1 = make_token(name="token1", token_hash="same-hash")
         token2 = make_token(name="token2", token_hash="same-hash")
@@ -203,9 +193,7 @@ class TestSaveToken:
 class TestGetTokenByHash:
     """Tests for get_token_by_hash function."""
 
-    def test_get_token_by_hash_returns_token(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
+    def test_get_token_by_hash_returns_token(self, db_conn: sqlite3.Connection) -> None:
         """get_token_by_hash should return matching token."""
         token = make_token(name="find-me", token_hash="findable-hash")
         save_token(db_conn, token)
@@ -216,17 +204,13 @@ class TestGetTokenByHash:
         assert result.name == "find-me"
         assert result.token_hash == "findable-hash"
 
-    def test_get_token_by_hash_returns_none_for_unknown(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
+    def test_get_token_by_hash_returns_none_for_unknown(self, db_conn: sqlite3.Connection) -> None:
         """get_token_by_hash should return None for unknown hash."""
         result = get_token_by_hash(db_conn, "nonexistent-hash")
 
         assert result is None
 
-    def test_get_token_by_hash_preserves_all_fields(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
+    def test_get_token_by_hash_preserves_all_fields(self, db_conn: sqlite3.Connection) -> None:
         """get_token_by_hash should return token with all fields intact."""
         original = make_token(
             name="complete",
@@ -249,9 +233,7 @@ class TestGetTokenByHash:
 class TestListTokens:
     """Tests for list_tokens function."""
 
-    def test_list_tokens_returns_all_tokens(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
+    def test_list_tokens_returns_all_tokens(self, db_conn: sqlite3.Connection) -> None:
         """list_tokens should return all stored tokens."""
         tokens = [
             make_token(name="token1", token_hash="hash1"),
@@ -267,17 +249,13 @@ class TestListTokens:
         names = {t.name for t in result}
         assert names == {"token1", "token2", "token3"}
 
-    def test_list_tokens_returns_empty_for_no_tokens(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
+    def test_list_tokens_returns_empty_for_no_tokens(self, db_conn: sqlite3.Connection) -> None:
         """list_tokens should return empty list when no tokens exist."""
         result = list_tokens(db_conn)
 
         assert result == []
 
-    def test_list_tokens_includes_disabled_tokens(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
+    def test_list_tokens_includes_disabled_tokens(self, db_conn: sqlite3.Connection) -> None:
         """list_tokens should include disabled tokens."""
         enabled_token = make_token(name="enabled", token_hash="hash1", enabled=True)
         disabled_token = make_token(name="disabled", token_hash="hash2", enabled=False)
@@ -304,9 +282,7 @@ class TestDeleteToken:
         assert result is True
         assert get_token_by_hash(db_conn, "delete-hash") is None
 
-    def test_delete_token_returns_true_on_success(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
+    def test_delete_token_returns_true_on_success(self, db_conn: sqlite3.Connection) -> None:
         """delete_token should return True when token is deleted."""
         token = make_token(name="deletable", token_hash="hash")
         save_token(db_conn, token)
@@ -315,17 +291,13 @@ class TestDeleteToken:
 
         assert result is True
 
-    def test_delete_token_returns_false_for_nonexistent(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
+    def test_delete_token_returns_false_for_nonexistent(self, db_conn: sqlite3.Connection) -> None:
         """delete_token should return False for non-existent token."""
         result = delete_token(db_conn, "nonexistent")
 
         assert result is False
 
-    def test_delete_token_does_not_affect_other_tokens(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
+    def test_delete_token_does_not_affect_other_tokens(self, db_conn: sqlite3.Connection) -> None:
         """delete_token should not affect other tokens."""
         token1 = make_token(name="keep", token_hash="hash1")
         token2 = make_token(name="delete", token_hash="hash2")

@@ -25,9 +25,7 @@ class BlobMetadata(BaseModel):
     source_uri: str | None = None  # Optional source URI
 
 
-def write_metadata(
-    artifact_dir: Path, hash_ref: str, metadata: BlobMetadata
-) -> None:
+def write_metadata(artifact_dir: Path, hash_ref: str, metadata: BlobMetadata) -> None:
     """Write metadata sidecar file for a blob.
 
     Metadata is write-once: if the file already exists, this function

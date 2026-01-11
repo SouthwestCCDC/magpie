@@ -12,9 +12,9 @@ test:
 test-cov:
     uv run pytest --cov=magpie --cov-report=term-missing --cov-report=html
 
-# Run tests with CI-style coverage (term + xml output)
+# Run tests with CI-style coverage (term + xml output), excluding e2e tests
 test-ci:
-    uv run pytest --cov=src/magpie --cov-report=term --cov-report=xml
+    uv run pytest -m "not e2e" --cov=src/magpie --cov-report=term --cov-report=xml
 
 # Run only unit tests
 test-unit:

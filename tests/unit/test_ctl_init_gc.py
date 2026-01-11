@@ -373,3 +373,125 @@ class TestGCCommand:
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "Artifacts scanned: 2" in result.output
         assert "Deleted: 2 blob(s)" in result.output
+
+    def test_gc_retention_days_flag_overrides_config(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --retention-days flag overrides config retention period."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        # Config has retention_days=30, but we'll override with flag
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=["untagged_hash_xyz"],
+            blob_ages_days={
+                "tagged_hash_abc": 0,
+                "untagged_hash_xyz": 15,  # 15 days old
+            },
+        )
+
+        blob_file = test_settings.storage_path / "test/artifact/blobs/untagged"
+        assert blob_file.exists()
+
+        # With --retention-days=10, the 15-day-old blob should be deleted
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--retention-days", "10"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "Deleted: 1 blob(s)" in result.output
+        assert not blob_file.exists()
+
+    def test_gc_retention_days_zero_deletes_all_untagged(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --retention-days=0 deletes all untagged blobs immediately."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=["brand_new_hash_xyz"],
+            blob_ages_days={
+                "tagged_hash_abc": 0,
+                "brand_new_hash_xyz": 0,  # Just uploaded
+            },
+        )
+
+        blob_file = test_settings.storage_path / "test/artifact/blobs/brand_ne"
+        assert blob_file.exists()
+
+        # With --retention-days=0, even new blobs should be deleted
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--retention-days", "0"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "Deleted: 1 blob(s)" in result.output
+        assert not blob_file.exists()
+
+    def test_gc_retention_days_flag_preserves_young_blobs(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --retention-days preserves blobs younger than specified days."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=["young_hash_xyz"],
+            blob_ages_days={
+                "tagged_hash_abc": 0,
+                "young_hash_xyz": 5,  # 5 days old
+            },
+        )
+
+        blob_file = test_settings.storage_path / "test/artifact/blobs/young_ha"
+        assert blob_file.exists()
+
+        # With --retention-days=7, the 5-day-old blob should be preserved
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--retention-days", "7"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "Deleted: 0 blob(s)" in result.output
+        assert blob_file.exists()
+
+    def test_gc_no_retention_days_flag_uses_config_default(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC without --retention-days flag uses config default."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        # test_settings.retention_days = 30
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=["old_hash_xyz"],
+            blob_ages_days={
+                "tagged_hash_abc": 0,
+                "old_hash_xyz": 50,  # 50 days old, older than config's 30
+            },
+        )
+
+        blob_file = test_settings.storage_path / "test/artifact/blobs/old_hash"
+        assert blob_file.exists()
+
+        # Without --retention-days, should use config's 30 days
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "Deleted: 1 blob(s)" in result.output
+        assert not blob_file.exists()
+
+    def test_gc_retention_days_rejects_negative_values(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --retention-days rejects negative values."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--retention-days", "-1"])
+
+        assert result.exit_code != 0
+        assert "Invalid value" in result.output or "is not in the range" in result.output

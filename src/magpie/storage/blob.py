@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
 
 from magpie.storage.exceptions import ArtifactNotFoundError
-from magpie.storage.hash import compute_hash, short_hash
+from magpie.storage.hash import short_hash
 from magpie.storage.paths import blob_path
 
 if TYPE_CHECKING:
