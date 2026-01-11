@@ -23,7 +23,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gosu && \
     rm -rf /var/lib/apt/lists/* && \
-    gosu nobody true  # verify it works
+    gosu nobody true && gosu 1000:1000 true  # verify it works
 
 COPY src/ ./src/
 COPY pyproject.toml uv.lock README.md ./

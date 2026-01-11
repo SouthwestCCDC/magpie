@@ -4,11 +4,11 @@
 
 set -e
 
-if [ -f /run/magpie-user ]; then
+if [ -f /run/magpie-user ] && command -v gosu >/dev/null 2>&1; then
     # Read the UID:GID that the entrypoint determined
     USER_INFO=$(cat /run/magpie-user)
     exec gosu "$USER_INFO" /app/.venv/bin/magpie-ctl "$@"
 else
-    # Fallback: run directly (happens if container started without entrypoint)
+    # Fallback: run directly (happens if container started without entrypoint or gosu not available)
     exec /app/.venv/bin/magpie-ctl "$@"
 fi
