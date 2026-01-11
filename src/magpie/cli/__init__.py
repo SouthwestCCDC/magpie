@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Callable, TypeVar
 import click
 
 from magpie.cli.client import get_client
-from magpie.cli.config import get_server, get_token
+from magpie.cli.config import get_server, get_timeout, get_token
 from magpie.config import get_settings
 
 if TYPE_CHECKING:
@@ -55,14 +55,16 @@ class CLIContext:
         server: str,
         token: str,
         debug: bool = False,
+        timeout: float = 600.0,
     ) -> None:
         self.server = server
         self.token = token
         self.debug = debug
+        self.timeout = timeout
 
     def get_client(self) -> "httpx.Client":
         """Get configured httpx client."""
-        return get_client(self.server, self.token)
+        return get_client(self.server, self.token, self.timeout)
 
 
 pass_context = click.make_pass_decorator(CLIContext)
@@ -80,6 +82,12 @@ pass_context = click.make_pass_decorator(CLIContext)
     help="Authentication token (overrides config file).",
 )
 @click.option(
+    "--timeout",
+    type=float,
+    envvar="MAGPIE_TIMEOUT",
+    help="HTTP request timeout in seconds (default: 600).",
+)
+@click.option(
     "--debug",
     is_flag=True,
     default=False,
@@ -90,21 +98,25 @@ def cli(
     ctx: click.Context,
     server: str | None,
     token: str | None,
+    timeout: float | None,
     debug: bool,
 ) -> None:
     """Magpie: Content-addressed artifact storage client."""
     resolved_server = get_server(cli_override=server)
     resolved_token = get_token(cli_override=token)
+    resolved_timeout = get_timeout(cli_override=timeout)
 
     ctx.obj = CLIContext(
         server=resolved_server,
         token=resolved_token,
         debug=debug,
+        timeout=resolved_timeout,
     )
 
     if debug:
         click.echo(f"Server: {resolved_server}", err=True)
         click.echo(f"Token: {'***' if resolved_token else '(none)'}", err=True)
+        click.echo(f"Timeout: {resolved_timeout}s", err=True)
 
 
 @cli.command()
