@@ -109,7 +109,17 @@ def push(
         click.echo(f"Uploaded: {data['hash']}")
 
     click.echo(f"Hash ref: {data['hash_ref']}")
-    click.echo(f"Download: {ctx.server}{data['download_url']}")
+    if not no_latest:
+        click.echo("Tagged:   latest")
+        # Use /latest in download URL instead of hash ref
+        download_url = f"/artifacts/{artifact_path}/latest"
+    else:
+        download_url = data["download_url"]
+    click.echo(f"Download: {ctx.server}{download_url}")
+
+    if not source_uri:
+        click.echo()
+        click.echo("Info: No --source-uri provided. Consider adding provenance metadata.")
 
 
 def _handle_error(response: "httpx.Response") -> None:
