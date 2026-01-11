@@ -114,17 +114,18 @@ def parse_artifact_path(artifact_input: str) -> str:
 
     This is for commands that only accept a path (like `ls`). If the user
     provides a ref (path:ref format), the ref is stripped and only the
-    path is returned.
+    path is returned. Leading slashes are also normalized away.
 
     Examples:
         "images/ubuntu" -> "images/ubuntu"
         "images/ubuntu:latest" -> "images/ubuntu" (ref stripped)
+        "/images/ubuntu" -> "images/ubuntu" (leading slash stripped)
 
     Args:
         artifact_input: Artifact path or path:ref string.
 
     Returns:
-        Just the artifact path.
+        Just the artifact path (normalized).
 
     Raises:
         ParseError: If the path format is invalid.
@@ -132,13 +133,14 @@ def parse_artifact_path(artifact_input: str) -> str:
     if not artifact_input:
         raise ParseError("Artifact path cannot be empty")
 
+    # Normalize: strip leading slashes
+    path = artifact_input.lstrip("/")
+
     # If there's a colon, extract just the path
-    if ":" in artifact_input:
-        idx = artifact_input.rfind(":")
-        path = artifact_input[:idx]
+    if ":" in path:
+        idx = path.rfind(":")
+        path = path[:idx]
         # Note: We silently accept and strip the ref for UX
-    else:
-        path = artifact_input
 
     if not path:
         raise ParseError(f"Empty path in input: {artifact_input}")

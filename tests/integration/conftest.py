@@ -42,15 +42,15 @@ def _noop_require_admin_scope_header() -> None:
 
 
 @pytest.fixture(autouse=True)
-def override_auth_dependencies():
+def override_auth_dependencies(request):
     """Override auth dependencies for integration tests.
 
     Integration tests run against the FastAPI app directly without Caddy,
     so there are no Authorization headers. This fixture disables auth
     checking for all integration tests.
 
-    For tests that specifically test auth behavior, use the e2e tests
-    which run against the full stack including Caddy.
+    Test modules that define their own token fixtures (admin_token, read_token,
+    write_token) are testing authentication behavior and are skipped.
     """
     app.dependency_overrides[require_admin_scope] = _noop_require_admin_scope
     app.dependency_overrides[require_admin_scope_header] = _noop_require_admin_scope_header

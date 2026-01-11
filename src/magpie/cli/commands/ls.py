@@ -12,50 +12,105 @@ if TYPE_CHECKING:
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_path
 
+if TYPE_CHECKING:
+    import httpx
+
 
 @click.command(name="ls")
-@click.argument("artifact_path")
+@click.argument("artifact_path", required=False)
 @click.pass_obj
-def ls(ctx: CLIContext, artifact_path: str) -> None:
-    """List all versions of an artifact.
+def ls(ctx: CLIContext, artifact_path: str | None) -> None:
+    """List artifacts or versions.
 
-    ARTIFACT_PATH is the artifact path to list (e.g., "images/ubuntu").
+    With no arguments, lists all available artifact paths.
+    With a partial path, lists artifact paths under that prefix.
+    With a full artifact path, lists all versions of that artifact.
 
     Examples:
 
-        magpie ls images/ubuntu
+        magpie ls                    # List all artifact paths
 
-        magpie ls builds/app
+        magpie ls test               # List paths under test/
+
+        magpie ls test/myartifact    # List versions of test/myartifact
+
+        magpie ls /test/myartifact   # Leading slash is normalized
     """
     if not ctx.server:
         raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
 
-    # Parse path, stripping any ref if accidentally provided
-    try:
-        path = parse_artifact_path(artifact_path)
-    except ParseError as e:
-        raise click.ClickException(str(e))
-
     with ctx.get_client() as client:
-        if ctx.debug:
-            click.echo(f"Listing versions for {path}...", err=True)
-
-        response = client.get(f"/api/v1/artifacts/{path}")
-
-        if response.status_code == 404:
-            click.echo(f"No artifact found at: {path}")
+        # Case 1: No path provided - list all artifact paths
+        if not artifact_path:
+            _list_paths(ctx, client, "")
             return
-        if response.status_code != 200:
-            _handle_error(response)
 
-        data = response.json()
+        # Parse path, stripping any ref if accidentally provided (e.g., path:tag)
+        try:
+            normalized_path = parse_artifact_path(artifact_path)
+        except ParseError as e:
+            raise click.ClickException(str(e))
 
-    versions = data.get("versions", [])
+        if ctx.debug:
+            click.echo(f"Listing for path: {normalized_path}...", err=True)
 
-    if not versions:
-        click.echo(f"No versions found for: {path}")
+        # Case 2: Try to list versions at the exact path
+        response = client.get(f"/api/v1/artifacts/{normalized_path}")
+
+        if response.status_code == 200:
+            data = response.json()
+            versions = data.get("versions", [])
+
+            if versions:
+                # Found versions - display them in table format
+                _display_versions_table(versions)
+                return
+            # No versions but path exists - fall through to prefix listing
+
+        # Case 3: Treat as prefix and list matching paths
+        _list_paths(ctx, client, normalized_path)
+
+
+def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str) -> None:
+    """List artifact paths matching a prefix.
+
+    Args:
+        ctx: CLI context.
+        client: HTTP client.
+        prefix: Path prefix to filter by (empty string for all).
+    """
+    if ctx.debug:
+        if prefix:
+            click.echo(f"Listing paths with prefix: {prefix}...", err=True)
+        else:
+            click.echo("Listing all artifact paths...", err=True)
+
+    response = client.get("/api/v1/artifacts", params={"prefix": prefix})
+
+    if response.status_code != 200:
+        _handle_error(response)
+
+    data = response.json()
+    paths = data.get("paths", [])
+
+    if not paths:
+        if prefix:
+            click.echo(f"No artifacts found matching: {prefix}")
+        else:
+            click.echo("No artifacts found.")
         return
 
+    # Display paths one per line
+    for path in paths:
+        click.echo(path)
+
+
+def _display_versions_table(versions: list[dict]) -> None:
+    """Display versions in table format.
+
+    Args:
+        versions: List of version dictionaries from API response.
+    """
     # Print table header
     click.echo(f"{'HASH':<12} {'TAGS':<20} {'UPLOADED_BY':<15} {'UPLOADED_AT'}")
     click.echo("-" * 70)

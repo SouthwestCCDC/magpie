@@ -114,7 +114,8 @@ class TestLsCommand:
             )
 
         assert result.exit_code == 0
-        assert "No versions found" in result.output or "No artifact found" in result.output
+        # New behavior: treats non-existent path as prefix search
+        assert "No artifacts found" in result.output
 
     def test_ls_shows_tags(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Ls command shows tags for versions."""
@@ -138,6 +139,110 @@ class TestLsCommand:
 
         assert result.exit_code != 0
         assert "No server configured" in result.output
+
+    def test_ls_without_path_lists_all_paths(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Ls without path argument lists all artifact paths."""
+        # Upload artifacts at different paths
+        upload_test_artifact(api_client, "test/artifact1", b"content1")
+        upload_test_artifact(api_client, "test/artifact2", b"content2")
+        upload_test_artifact(api_client, "images/ubuntu", b"content3")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "ls"],
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        # Should list all paths, one per line
+        assert "test/artifact1" in result.output
+        assert "test/artifact2" in result.output
+        assert "images/ubuntu" in result.output
+        # Should NOT show table headers (not listing versions)
+        assert "HASH" not in result.output
+
+    def test_ls_with_partial_path_lists_matching_paths(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Ls with partial path lists artifact paths under that prefix."""
+        upload_test_artifact(api_client, "test/artifact1", b"content1")
+        upload_test_artifact(api_client, "test/artifact2", b"content2")
+        upload_test_artifact(api_client, "images/ubuntu", b"content3")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "ls", "test"],
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        # Should list paths under test/
+        assert "test/artifact1" in result.output
+        assert "test/artifact2" in result.output
+        # Should NOT list other paths
+        assert "images/ubuntu" not in result.output
+
+    def test_ls_with_leading_slash_normalizes(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Ls with leading slash normalizes path correctly."""
+        upload_test_artifact(api_client, "test/artifact", b"content")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "ls", "/test/artifact"],
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        # Should show versions table (exact match)
+        assert "HASH" in result.output
+        assert "@" in result.output
+
+    def test_ls_with_exact_path_shows_versions(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Ls with exact artifact path shows version table."""
+        upload_test_artifact(api_client, "test/artifact", b"content")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "ls", "test/artifact"],
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        # Should show versions table
+        assert "HASH" in result.output
+        assert "TAGS" in result.output
+        assert "latest" in result.output
+
+    def test_ls_with_nonexistent_prefix(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Ls with non-matching prefix shows appropriate message."""
+        upload_test_artifact(api_client, "test/artifact", b"content")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "ls", "images"],
+            )
+
+        assert result.exit_code == 0
+        assert "No artifacts found" in result.output
 
 
 class TestInfoCommand:
