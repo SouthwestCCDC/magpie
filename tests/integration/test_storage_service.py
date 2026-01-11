@@ -387,9 +387,7 @@ class TestListArtifactPaths:
         assert "test/artifact2" in paths
         assert "images/ubuntu" not in paths
 
-    def test_list_paths_normalizes_leading_slash(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_list_paths_normalizes_leading_slash(self, storage_service: StorageService) -> None:
         """list_artifact_paths should normalize leading slashes."""
         storage_service.store_artifact(
             artifact_path="test/artifact",
@@ -403,16 +401,12 @@ class TestListArtifactPaths:
         assert len(paths) == 1
         assert "test/artifact" in paths
 
-    def test_list_paths_empty_returns_empty(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_list_paths_empty_returns_empty(self, storage_service: StorageService) -> None:
         """list_artifact_paths should return empty list when no artifacts."""
         paths = storage_service.list_artifact_paths()
         assert paths == []
 
-    def test_list_paths_no_match_returns_empty(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_list_paths_no_match_returns_empty(self, storage_service: StorageService) -> None:
         """list_artifact_paths should return empty list for non-matching prefix."""
         storage_service.store_artifact(
             artifact_path="test/artifact",

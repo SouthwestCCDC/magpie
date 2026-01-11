@@ -87,6 +87,7 @@ def _upload_artifact(
         f"/api/v1/upload/{path}",
         files=files,
         params={"uploaded_by": uploaded_by},
+        headers={"X-Magpie-Scope": "write"},
     )
     assert response.status_code == 200
     return response.json()
