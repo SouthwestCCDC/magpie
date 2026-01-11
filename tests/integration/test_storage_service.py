@@ -237,15 +237,22 @@ class TestListArtifacts:
             uploaded_by="user",
         )
 
-        # List should show latest points to version 2
+        # List should return both versions
         artifacts = storage_service.list_artifacts(artifact_path)
 
-        # Should have 2 unique blobs (v1 has no tags anymore, v2 has latest)
-        # Actually, v1 loses its "latest" tag when v2 is stored
-        # So only v2 should appear in list since v1 has no tags
-        assert len(artifacts) == 1
-        assert artifacts[0].hash == info2.hash
-        assert "latest" in artifacts[0].tags
+        # Should have 2 unique blobs (v1 untagged, v2 has latest)
+        assert len(artifacts) == 2
+
+        # Find each version by hash
+        artifacts_by_hash = {a.hash: a for a in artifacts}
+
+        # v1 should exist but have no tags (empty list)
+        assert info1.hash in artifacts_by_hash
+        assert artifacts_by_hash[info1.hash].tags == []
+
+        # v2 should have "latest" tag
+        assert info2.hash in artifacts_by_hash
+        assert "latest" in artifacts_by_hash[info2.hash].tags
 
     def test_list_empty_path_returns_empty(self, storage_service: StorageService) -> None:
         """list_artifacts should return empty list for non-existent path."""
@@ -277,6 +284,58 @@ class TestListArtifacts:
         assert len(artifacts) == 1
         assert "latest" in artifacts[0].tags
         assert "v1.0" in artifacts[0].tags
+
+    def test_list_shows_untagged_blobs(self, storage_service: StorageService) -> None:
+        """list_artifacts should show blobs that have lost all tags."""
+        artifact_path = "test/untagged"
+
+        # Store first version (gets "latest" tag)
+        info1, _ = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(b"version 1"),
+            uploaded_by="user1",
+        )
+
+        # Store second version (steals "latest" tag, v1 becomes untagged)
+        info2, _ = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(b"version 2"),
+            uploaded_by="user2",
+        )
+
+        # Both versions should appear in list
+        artifacts = storage_service.list_artifacts(artifact_path)
+        assert len(artifacts) == 2
+
+        # Verify v1 has empty tags list (not missing, just empty)
+        v1 = next(a for a in artifacts if a.hash == info1.hash)
+        assert v1.tags == []
+        assert v1.uploaded_by == "user1"
+
+        # Verify v2 has latest tag
+        v2 = next(a for a in artifacts if a.hash == info2.hash)
+        assert v2.tags == ["latest"]
+        assert v2.uploaded_by == "user2"
+
+    def test_list_after_untag_shows_orphaned_blob(self, storage_service: StorageService) -> None:
+        """list_artifacts should show blobs after their only tag is removed."""
+        artifact_path = "test/untag-orphan"
+
+        # Store artifact (gets "latest" tag)
+        info, _ = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="user",
+        )
+
+        # Remove the only tag
+        storage_service.remove_tag(artifact_path, "latest")
+
+        # Blob should still appear in list with empty tags
+        artifacts = storage_service.list_artifacts(artifact_path)
+        assert len(artifacts) == 1
+        assert artifacts[0].hash == info.hash
+        assert artifacts[0].tags == []
 
 
 class TestEdgeCases:

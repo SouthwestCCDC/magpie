@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     import httpx
 
 from magpie.cli import CLIContext
+from magpie.cli.commands.parse import ParseError, parse_artifact_path
 
 if TYPE_CHECKING:
     import httpx
@@ -44,8 +45,11 @@ def ls(ctx: CLIContext, artifact_path: str | None) -> None:
             _list_paths(ctx, client, "")
             return
 
-        # Normalize path: strip leading slashes
-        normalized_path = artifact_path.lstrip("/")
+        # Parse path, stripping any ref if accidentally provided (e.g., path:tag)
+        try:
+            normalized_path = parse_artifact_path(artifact_path)
+        except ParseError as e:
+            raise click.ClickException(str(e))
 
         if ctx.debug:
             click.echo(f"Listing for path: {normalized_path}...", err=True)

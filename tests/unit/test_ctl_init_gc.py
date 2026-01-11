@@ -302,7 +302,9 @@ class TestGCCommand:
             result = cli_runner.invoke(cli, ["gc", "--reconcile-only"])
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        assert "Symlinks reconciled: 1 artifact(s)" in result.output
+        # Should show symlinks checked and fixed counts
+        assert "Symlinks checked: 1" in result.output
+        assert "Symlinks fixed: 1" in result.output
         # Blob should still exist
         assert blob_file.exists()
         # Symlink should exist pointing to blob
