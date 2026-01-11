@@ -65,6 +65,12 @@ class AmendMetadataRequest(BaseModel):
     source_uri: str | None = None  # New source URI (None to leave unchanged)
 
 
+class ArtifactPathsResponse(BaseModel):
+    """Response model for listing artifact paths."""
+
+    paths: list[str]  # List of artifact paths matching the prefix
+
+
 # NOTE: Info endpoint must be registered BEFORE list endpoint
 # because {path:path} is greedy and would capture the /info suffix
 @router.get("/api/v1/artifacts/{path:path}/{ref}/info")
@@ -233,6 +239,27 @@ async def amend_metadata(
         source_uri=info.source_uri,
         tags=info.tags,
     )
+
+
+@router.get("/api/v1/artifacts")
+async def list_artifact_paths(
+    storage_service: Annotated[StorageService, Depends(get_storage_service)],
+    prefix: str = "",
+) -> ArtifactPathsResponse:
+    """List artifact paths matching a prefix.
+
+    Returns all artifact paths (directories with .magpie manifests) under
+    the storage root. Useful for discovery and tab-completion.
+
+    Args:
+        prefix: Optional path prefix to filter by (default: "" lists all).
+               Leading slashes are normalized.
+
+    Returns:
+        ArtifactPathsResponse with list of matching artifact paths.
+    """
+    paths = storage_service.list_artifact_paths(prefix)
+    return ArtifactPathsResponse(paths=paths)
 
 
 @router.get("/api/v1/artifacts/{path:path}")
