@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, UploadFile
 from pydantic import BaseModel
 
-from magpie.server.deps import get_storage_service
+from magpie.server.deps import get_storage_service, require_write_scope
 from magpie.storage.service import StorageService
 
 logger = logging.getLogger(__name__)
@@ -31,11 +31,14 @@ async def upload_artifact(
     path: str,
     file: UploadFile,
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
+    _write_scope_check: Annotated[None, Depends(require_write_scope)] = None,
     source_uri: str | None = None,
     uploaded_by: str = "anonymous",
     x_magpie_user: Annotated[str | None, Header(alias="X-Magpie-User")] = None,
 ) -> UploadResponse:
     """Upload an artifact to the storage system.
+
+    Requires write or admin scope. Read-only tokens will be rejected with 403.
 
     Stores the uploaded file at the specified artifact path. If an artifact
     with identical content already exists at this path, returns the existing
@@ -57,6 +60,8 @@ async def upload_artifact(
         and duplicate detection status.
 
     Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
+        HTTPException 403: If token has read scope (insufficient permissions).
         StorageError: If storage operation fails.
     """
     # Use X-Magpie-User header if present (authenticated via Caddy)

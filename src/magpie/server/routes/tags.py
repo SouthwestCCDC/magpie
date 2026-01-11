@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from magpie.server.deps import get_storage_service
+from magpie.server.deps import get_storage_service, require_admin_scope_header
 from magpie.storage.service import StorageService
 
 router = APIRouter()
@@ -36,11 +36,13 @@ async def flush_tag(
         Query(description="If true, return preview without actually removing tags"),
     ] = False,
     storage_service: Annotated[StorageService, Depends(get_storage_service)] = None,
+    _admin_scope_check: Annotated[None, Depends(require_admin_scope_header)] = None,
 ) -> FlushTagResponse:
     """Remove a tag from all artifacts globally.
 
-    This is a potentially destructive operation that walks the entire storage
-    tree and removes the specified tag from every artifact that has it.
+    Requires admin scope. This is a potentially destructive operation that walks
+    the entire storage tree and removes the specified tag from every artifact that
+    has it.
 
     The confirm_walk_filesystem parameter must be explicitly set to true to
     acknowledge that this operation will scan the entire storage filesystem.
@@ -54,6 +56,8 @@ async def flush_tag(
         FlushTagResponse with list of affected artifacts and count.
 
     Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
+        HTTPException 403: If token doesn't have admin scope.
         HTTPException 400: If confirm_walk_filesystem is not true.
     """
     if confirm_walk_filesystem is not True:
