@@ -27,65 +27,47 @@ class TestValidateArtifactPath:
 
     def test_reject_reserved_blobs(self) -> None:
         """Reject path containing 'blobs' segment."""
-        with pytest.raises(
-            InvalidArtifactPathError, match="'blobs' is a reserved name"
-        ):
+        with pytest.raises(InvalidArtifactPathError, match="'blobs' is a reserved name"):
             validate_artifact_path("test/artifact/blobs")
 
     def test_reject_reserved_metadata(self) -> None:
         """Reject path containing 'metadata' segment."""
-        with pytest.raises(
-            InvalidArtifactPathError, match="'metadata' is a reserved name"
-        ):
+        with pytest.raises(InvalidArtifactPathError, match="'metadata' is a reserved name"):
             validate_artifact_path("test/metadata/file")
 
     def test_reject_reserved_magpie(self) -> None:
         """Reject path containing '.magpie' segment."""
-        with pytest.raises(
-            InvalidArtifactPathError, match="'.magpie' is a reserved name"
-        ):
+        with pytest.raises(InvalidArtifactPathError, match="'.magpie' is a reserved name"):
             validate_artifact_path("test/.magpie")
 
     def test_reject_hidden_segment(self) -> None:
         """Reject path with segment starting with dot."""
-        with pytest.raises(
-            InvalidArtifactPathError, match="Path segments cannot start with '.'"
-        ):
+        with pytest.raises(InvalidArtifactPathError, match="Path segments cannot start with '.'"):
             validate_artifact_path("test/.hidden/file")
 
     def test_reject_empty_path(self) -> None:
         """Reject empty path."""
-        with pytest.raises(
-            InvalidArtifactPathError, match="Artifact path cannot be empty"
-        ):
+        with pytest.raises(InvalidArtifactPathError, match="Artifact path cannot be empty"):
             validate_artifact_path("")
 
     def test_reject_whitespace_only(self) -> None:
         """Reject whitespace-only path."""
-        with pytest.raises(
-            InvalidArtifactPathError, match="Artifact path cannot be empty"
-        ):
+        with pytest.raises(InvalidArtifactPathError, match="Artifact path cannot be empty"):
             validate_artifact_path("   ")
 
     def test_reject_empty_segment(self) -> None:
         """Reject path with empty segment."""
-        with pytest.raises(
-            InvalidArtifactPathError, match="cannot contain empty segments"
-        ):
+        with pytest.raises(InvalidArtifactPathError, match="cannot contain empty segments"):
             validate_artifact_path("test//artifact")
 
     def test_reserved_at_start(self) -> None:
         """Reject reserved name at start of path."""
-        with pytest.raises(
-            InvalidArtifactPathError, match="'blobs' is a reserved name"
-        ):
+        with pytest.raises(InvalidArtifactPathError, match="'blobs' is a reserved name"):
             validate_artifact_path("blobs/something")
 
     def test_reserved_in_middle(self) -> None:
         """Reject reserved name in middle of path."""
-        with pytest.raises(
-            InvalidArtifactPathError, match="'metadata' is a reserved name"
-        ):
+        with pytest.raises(InvalidArtifactPathError, match="'metadata' is a reserved name"):
             validate_artifact_path("project/metadata/artifact")
 
 

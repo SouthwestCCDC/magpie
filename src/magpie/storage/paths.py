@@ -94,6 +94,10 @@ def validate_artifact_path(artifact_path: str) -> None:
         if not segment or segment.strip() == "":
             raise InvalidArtifactPathError("Artifact path cannot contain empty segments")
 
+        # Reject path traversal attempts
+        if segment == "..":
+            raise InvalidArtifactPathError("Path traversal '..' is not allowed in artifact paths")
+
         if segment in RESERVED_SEGMENTS:
             raise InvalidArtifactPathError(
                 f"'{segment}' is a reserved name and cannot be used in artifact paths"
@@ -110,6 +114,14 @@ def check_artifact_nesting(base: Path, artifact_path: str) -> None:
     1. Are children of existing artifacts (e.g., test/myartifact/nested when
        test/myartifact exists)
     2. Are parents of existing artifacts (e.g., test when test/myartifact exists)
+
+    Note:
+        The parent check uses rglob to search for nested .magpie manifests.
+        For high-level paths with many nested artifacts, this may have
+        performance implications. In practice, this is acceptable because:
+        1. This check only runs on artifact creation (not reads)
+        2. Deep nesting is uncommon in typical usage patterns
+        3. The check prevents data corruption from conflicting paths
 
     Args:
         base: Base storage directory path.

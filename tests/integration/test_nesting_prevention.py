@@ -129,9 +129,7 @@ class TestNestingPrevention:
 
         # Try to create child artifact
         child_content = b"child artifact"
-        child_files = {
-            "file": ("test.bin", io.BytesIO(child_content), "application/octet-stream")
-        }
+        child_files = {"file": ("test.bin", io.BytesIO(child_content), "application/octet-stream")}
 
         response = client.post(
             "/api/v1/upload/test/myartifact/nested",
@@ -160,9 +158,7 @@ class TestNestingPrevention:
 
         # Try to create deeply nested child
         child_content = b"deeply nested"
-        child_files = {
-            "file": ("test.bin", io.BytesIO(child_content), "application/octet-stream")
-        }
+        child_files = {"file": ("test.bin", io.BytesIO(child_content), "application/octet-stream")}
 
         response = client.post(
             "/api/v1/upload/project/component/sub/nested/deep",
@@ -210,9 +206,7 @@ class TestNestingPrevention:
         """Allow creating sibling artifacts in same directory."""
         # Create first artifact
         content1 = b"artifact 1"
-        files1 = {
-            "file": ("test.bin", io.BytesIO(content1), "application/octet-stream")
-        }
+        files1 = {"file": ("test.bin", io.BytesIO(content1), "application/octet-stream")}
 
         response = client.post(
             "/api/v1/upload/project/artifact1",
@@ -223,9 +217,7 @@ class TestNestingPrevention:
 
         # Create sibling artifact (should succeed)
         content2 = b"artifact 2"
-        files2 = {
-            "file": ("test.bin", io.BytesIO(content2), "application/octet-stream")
-        }
+        files2 = {"file": ("test.bin", io.BytesIO(content2), "application/octet-stream")}
 
         response = client.post(
             "/api/v1/upload/project/artifact2",
@@ -238,9 +230,7 @@ class TestNestingPrevention:
         """Allow creating artifacts in completely different directory trees."""
         # Create artifact in first tree
         content1 = b"tree 1 artifact"
-        files1 = {
-            "file": ("test.bin", io.BytesIO(content1), "application/octet-stream")
-        }
+        files1 = {"file": ("test.bin", io.BytesIO(content1), "application/octet-stream")}
 
         response = client.post(
             "/api/v1/upload/org/team1/project",
@@ -251,9 +241,7 @@ class TestNestingPrevention:
 
         # Create artifact in different tree (should succeed)
         content2 = b"tree 2 artifact"
-        files2 = {
-            "file": ("test.bin", io.BytesIO(content2), "application/octet-stream")
-        }
+        files2 = {"file": ("test.bin", io.BytesIO(content2), "application/octet-stream")}
 
         response = client.post(
             "/api/v1/upload/org/team2/project",
@@ -266,9 +254,7 @@ class TestNestingPrevention:
         """Allow re-uploading to the same artifact path."""
         # Create initial artifact
         content1 = b"version 1"
-        files1 = {
-            "file": ("test.bin", io.BytesIO(content1), "application/octet-stream")
-        }
+        files1 = {"file": ("test.bin", io.BytesIO(content1), "application/octet-stream")}
 
         response = client.post(
             "/api/v1/upload/test/artifact",
@@ -279,9 +265,7 @@ class TestNestingPrevention:
 
         # Re-upload to same path (should succeed)
         content2 = b"version 2"
-        files2 = {
-            "file": ("test.bin", io.BytesIO(content2), "application/octet-stream")
-        }
+        files2 = {"file": ("test.bin", io.BytesIO(content2), "application/octet-stream")}
 
         response = client.post(
             "/api/v1/upload/test/artifact",
