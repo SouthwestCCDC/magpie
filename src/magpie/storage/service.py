@@ -105,7 +105,7 @@ class StorageService:
         # symlinks will extract first 8 chars for the actual blob path
         manifest = update_tag(artifact_dir, "latest", full_hash)
 
-        # Reconcile symlinks to match manifest
+        # Reconcile symlinks to match manifest (ignore stats in normal flow)
         reconcile_symlinks(artifact_dir, manifest)
 
         # Build artifact info
@@ -254,7 +254,7 @@ class StorageService:
         # Update manifest with tag (uses full hash for verification)
         manifest = update_tag(artifact_dir, tag_name, full_hash)
 
-        # Reconcile symlinks to match manifest
+        # Reconcile symlinks to match manifest (ignore stats in normal flow)
         reconcile_symlinks(artifact_dir, manifest)
 
         # Get all tags pointing to this hash
@@ -295,7 +295,7 @@ class StorageService:
         # Remove tag from manifest
         manifest = remove_tag(artifact_dir, tag_name)
 
-        # Reconcile symlinks to remove the symlink
+        # Reconcile symlinks to remove the symlink (ignore stats in normal flow)
         reconcile_symlinks(artifact_dir, manifest)
 
         return True

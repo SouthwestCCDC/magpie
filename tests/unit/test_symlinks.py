@@ -133,12 +133,15 @@ class TestReconcileSymlinks:
             }
         )
 
-        reconcile_symlinks(artifact_dir, manifest)
+        checked, fixed = reconcile_symlinks(artifact_dir, manifest)
 
         assert (artifact_dir / "latest").is_symlink()
         assert (artifact_dir / "v1.0").is_symlink()
         assert (artifact_dir / "latest").read_text() == "content1"
         assert (artifact_dir / "v1.0").read_text() == "content2"
+        # No existing symlinks, 2 created
+        assert checked == 0
+        assert fixed == 2
 
     def test_reconcile_removes_orphan_symlinks(self, artifact_dir: Path) -> None:
         """reconcile_symlinks should remove symlinks not in manifest."""
@@ -236,10 +239,35 @@ class TestReconcileSymlinks:
             }
         )
 
-        reconcile_symlinks(artifact_dir, manifest)
+        checked, fixed = reconcile_symlinks(artifact_dir, manifest)
 
         # Verify results
         assert (artifact_dir / "keep").read_text() == "content1"
         assert (artifact_dir / "update").read_text() == "content2"
         assert (artifact_dir / "add").read_text() == "content3"
         assert not (artifact_dir / "remove").exists()
+        # 3 symlinks checked, 3 fixed (1 added, 1 removed, 1 updated)
+        assert checked == 3
+        assert fixed == 3
+
+    def test_reconcile_returns_stats(self, artifact_dir: Path) -> None:
+        """reconcile_symlinks should return correct statistics."""
+        # Create blobs
+        (artifact_dir / "blobs" / "hash1").write_text("content1")
+        (artifact_dir / "blobs" / "hash2").write_text("content2")
+
+        # Create existing correct symlink
+        create_symlink(artifact_dir, "existing", "hash1")
+
+        manifest = Manifest(
+            tags={
+                "existing": "@hash1",  # Already correct
+                "new": "@hash2",  # New symlink
+            }
+        )
+
+        checked, fixed = reconcile_symlinks(artifact_dir, manifest)
+
+        # 1 existing symlink checked, 1 new created
+        assert checked == 1
+        assert fixed == 1

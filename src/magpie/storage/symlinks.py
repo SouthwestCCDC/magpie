@@ -53,7 +53,7 @@ def remove_symlink(artifact_dir: Path, tag_name: str) -> None:
         symlink_path.unlink()
 
 
-def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> None:
+def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> tuple[int, int]:
     """Reconcile symlinks to match manifest tags exactly.
 
     Creates missing symlinks for tags in manifest, removes orphan symlinks
@@ -62,7 +62,15 @@ def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> None:
     Args:
         artifact_dir: Path to artifact directory.
         manifest: Manifest containing authoritative tag mappings.
+
+    Returns:
+        Tuple of (symlinks_checked, symlinks_fixed) where:
+            - symlinks_checked: Total number of symlinks examined
+            - symlinks_fixed: Number of symlinks created, removed, or updated
     """
+    symlinks_checked = 0
+    symlinks_fixed = 0
+
     # Get set of expected tag names from manifest
     expected_tags = set(manifest.tags.keys())
 
@@ -72,17 +80,20 @@ def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> None:
         for item in artifact_dir.iterdir():
             if item.is_symlink():
                 existing_symlinks.add(item.name)
+                symlinks_checked += 1
 
     # Create missing symlinks
     missing_tags = expected_tags - existing_symlinks
     for tag_name in missing_tags:
         hash_ref = manifest.tags[tag_name]
         create_symlink(artifact_dir, tag_name, hash_ref)
+        symlinks_fixed += 1
 
     # Remove orphan symlinks (symlinks not in manifest)
     orphan_symlinks = existing_symlinks - expected_tags
     for tag_name in orphan_symlinks:
         remove_symlink(artifact_dir, tag_name)
+        symlinks_fixed += 1
 
     # Update existing symlinks that point to wrong target
     for tag_name in expected_tags & existing_symlinks:
@@ -94,6 +105,10 @@ def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> None:
             current_target = symlink_path.readlink()
             if current_target != expected_target:
                 create_symlink(artifact_dir, tag_name, manifest.tags[tag_name])
+                symlinks_fixed += 1
         except OSError:
             # If we can't read the symlink, recreate it
             create_symlink(artifact_dir, tag_name, manifest.tags[tag_name])
+            symlinks_fixed += 1
+
+    return symlinks_checked, symlinks_fixed

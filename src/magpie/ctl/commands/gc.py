@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,8 +26,19 @@ from magpie.storage.symlinks import reconcile_symlinks
     is_flag=True,
     help="Only reconcile symlinks, don't delete blobs.",
 )
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Output machine-readable JSON statistics.",
+)
+@click.option(
+    "--quiet",
+    is_flag=True,
+    help="Suppress progress output (no effect with --json).",
+)
 @click.pass_obj
-def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
+def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool, json_output: bool, quiet: bool) -> None:
     """Garbage collect untagged blobs older than retention period.
 
     Walks all artifact directories and:
@@ -35,6 +48,8 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
 
     Use --dry-run to see what would be deleted without making changes.
     Use --reconcile-only to only fix symlinks without deleting blobs.
+    Use --json to output machine-readable statistics.
+    Use --quiet to suppress progress bars.
 
     Examples:
 
@@ -43,6 +58,8 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
         magpie-ctl gc
 
         magpie-ctl gc --reconcile-only
+
+        magpie-ctl gc --json
     """
     settings = ctx.settings
     storage_path = settings.storage_path
@@ -51,7 +68,7 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
     if not storage_path.exists():
         raise click.ClickException(f"Storage path does not exist: {storage_path}")
 
-    if ctx.debug:
+    if ctx.debug and not json_output:
         click.echo(f"Storage path: {storage_path}", err=True)
         click.echo(f"Retention days: {retention_days}", err=True)
 
@@ -62,16 +79,37 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
     deleted_blobs = 0
     deleted_bytes = 0
     reconciled_artifacts = 0
+    symlinks_checked = 0
+    symlinks_fixed = 0
 
     now = datetime.now(timezone.utc)
 
-    # Find all artifact directories (containing .magpie manifest)
-    for manifest_file in storage_path.rglob(".magpie"):
+    # Collect all manifest files first for progress tracking
+    manifest_files = list(storage_path.rglob(".magpie"))
+
+    # Determine if we should show progress
+    show_progress = (
+        not json_output
+        and not quiet
+        and sys.stdout.isatty()
+    )
+
+    # Process artifacts with optional progress bar
+    artifacts_iter = manifest_files
+    if show_progress:
+        artifacts_iter = click.progressbar(
+            manifest_files,
+            label="Scanning artifacts",
+            show_pos=True,
+            item_show_func=lambda x: str(x.parent.relative_to(storage_path)) if x else "",
+        )
+
+    for manifest_file in artifacts_iter:
         artifact_dir = manifest_file.parent
         artifact_path = str(artifact_dir.relative_to(storage_path))
         total_artifacts += 1
 
-        if ctx.debug:
+        if ctx.debug and not json_output:
             click.echo(f"Processing artifact: {artifact_path}", err=True)
 
         # Read manifest to get tagged hashes
@@ -80,7 +118,9 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
         tagged_hashes = {h[:8] for h in manifest.tags.values()}
 
         # Reconcile symlinks for this artifact
-        reconcile_symlinks(artifact_dir, manifest)
+        checked, fixed = reconcile_symlinks(artifact_dir, manifest)
+        symlinks_checked += checked
+        symlinks_fixed += fixed
         reconciled_artifacts += 1
 
         if reconcile_only:
@@ -109,13 +149,13 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
 
             if blob_age_days is None:
                 # Can't determine age, skip
-                if ctx.debug:
+                if ctx.debug and not json_output:
                     click.echo(f"  Skipping blob {blob_hash[:12]}... (unknown age)", err=True)
                 continue
 
             # Check if blob is older than retention period
             if blob_age_days < retention_days:
-                if ctx.debug:
+                if ctx.debug and not json_output:
                     click.echo(
                         f"  Keeping blob {blob_hash[:12]}... ({blob_age_days} days old < {retention_days})",
                         err=True,
@@ -126,12 +166,13 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
             blob_size = blob_file.stat().st_size
 
             if dry_run:
-                click.echo(
-                    f"Would delete: {artifact_path}/blobs/{blob_hash[:12]}... "
-                    f"({blob_age_days} days old, {_format_size(blob_size)})"
-                )
+                if not json_output:
+                    click.echo(
+                        f"Would delete: {artifact_path}/blobs/{blob_hash[:12]}... "
+                        f"({blob_age_days} days old, {_format_size(blob_size)})"
+                    )
             else:
-                if ctx.debug:
+                if ctx.debug and not json_output:
                     click.echo(
                         f"  Deleting blob {blob_hash[:12]}... ({blob_age_days} days old)",
                         err=True,
@@ -146,17 +187,32 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
             deleted_blobs += 1
             deleted_bytes += blob_size
 
-    # Print summary
-    click.echo("")
-    click.echo("GC Summary:")
-    click.echo(f"  Artifacts scanned: {total_artifacts}")
-    click.echo(f"  Blobs found: {total_blobs_found}")
-    click.echo(f"  Untagged blobs: {untagged_blobs}")
-    click.echo(f"  Symlinks reconciled: {reconciled_artifacts} artifact(s)")
+    # Output results
+    if json_output:
+        # JSON output mode
+        output = {
+            "artifacts_scanned": total_artifacts,
+            "blobs_deleted": deleted_blobs,
+            "bytes_reclaimed": deleted_bytes,
+            "symlinks_checked": symlinks_checked,
+            "symlinks_fixed": symlinks_fixed,
+            "dry_run": dry_run,
+        }
+        click.echo(json.dumps(output, indent=2))
+    else:
+        # Human-readable output mode
+        click.echo("")
+        click.echo("GC Summary:")
+        click.echo(f"  Artifacts scanned: {total_artifacts}")
+        click.echo(f"  Blobs found: {total_blobs_found}")
+        click.echo(f"  Untagged blobs: {untagged_blobs}")
+        click.echo(f"  Symlinks reconciled: {reconciled_artifacts} artifact(s)")
+        click.echo(f"  Symlinks checked: {symlinks_checked}")
+        click.echo(f"  Symlinks fixed: {symlinks_fixed}")
 
-    if not reconcile_only:
-        action = "Would delete" if dry_run else "Deleted"
-        click.echo(f"  {action}: {deleted_blobs} blob(s), {_format_size(deleted_bytes)}")
+        if not reconcile_only:
+            action = "Would delete" if dry_run else "Deleted"
+            click.echo(f"  {action}: {deleted_blobs} blob(s), {_format_size(deleted_bytes)}")
 
 
 def _get_blob_age_days(artifact_dir: Path, blob_hash: str, now: datetime) -> int | None:

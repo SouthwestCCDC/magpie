@@ -373,3 +373,74 @@ class TestGCCommand:
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "Artifacts scanned: 2" in result.output
         assert "Deleted: 2 blob(s)" in result.output
+
+    def test_gc_json_output(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC with --json outputs machine-readable statistics."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=["old_untagged_xyz"],
+            blob_ages_days={"tagged_hash_abc": 0, "old_untagged_xyz": 100},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--json"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+
+        # Parse JSON output
+        output = json.loads(result.output)
+        assert output["artifacts_scanned"] == 1
+        assert output["blobs_deleted"] == 1
+        assert output["bytes_reclaimed"] > 0
+        assert output["symlinks_checked"] >= 0
+        assert output["symlinks_fixed"] >= 0
+        assert output["dry_run"] is False
+
+    def test_gc_json_dry_run(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC with --json --dry-run shows dry_run: true."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=["old_untagged_xyz"],
+            blob_ages_days={"tagged_hash_abc": 0, "old_untagged_xyz": 100},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--json", "--dry-run"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+
+        # Parse JSON output
+        output = json.loads(result.output)
+        assert output["dry_run"] is True
+        assert output["blobs_deleted"] == 1  # Would delete count
+
+    def test_gc_quiet_flag(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC with --quiet suppresses progress output."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=["old_untagged_xyz"],
+            blob_ages_days={"tagged_hash_abc": 0, "old_untagged_xyz": 100},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--quiet"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        # Still shows summary but no progress bar
+        assert "GC Summary:" in result.output
+        assert "Artifacts scanned:" in result.output

@@ -70,7 +70,7 @@ async def trigger_gc(
             manifest = read_manifest(artifact_dir)
             tagged_hashes = set(manifest.tags.values())
 
-            # Reconcile symlinks for this artifact
+            # Reconcile symlinks for this artifact (ignore stats in API endpoint)
             reconcile_symlinks(artifact_dir, manifest)
 
             # Find all blobs in blobs/ directory
