@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from unittest.mock import patch
 
-from magpie.cli.progress import is_tty, transfer_progress
+from magpie.cli.progress import count_progress, is_tty, transfer_progress
 
 
 class TestIsTty:
@@ -73,3 +73,49 @@ class TestTransferProgress:
                 assert progress is not None
                 task = progress.tasks[task_id]
                 assert task.total == 123456
+
+
+class TestCountProgress:
+    """Tests for count_progress context manager."""
+
+    def test_progress_suppressed_with_quiet_flag(self) -> None:
+        """Test that progress is suppressed when quiet=True."""
+        with patch("magpie.cli.progress.is_tty", return_value=True):
+            with count_progress("Scanning", 100, quiet=True) as (progress, task_id):
+                assert progress is None
+                assert task_id is None
+
+    def test_progress_suppressed_when_not_tty(self) -> None:
+        """Test that progress is suppressed when stdout is not a TTY."""
+        with patch("magpie.cli.progress.is_tty", return_value=False):
+            with count_progress("Scanning", 100, quiet=False) as (progress, task_id):
+                assert progress is None
+                assert task_id is None
+
+    def test_progress_displayed_in_tty_mode(self) -> None:
+        """Test that progress is displayed in normal TTY conditions."""
+        with patch("magpie.cli.progress.is_tty", return_value=True):
+            with count_progress("Scanning", 100, quiet=False) as (progress, task_id):
+                # Progress should be a rich Progress instance (not None)
+                assert progress is not None
+                assert task_id is not None
+                # Verify we can update the progress (basic functionality check)
+                progress.update(task_id, advance=10)
+
+    def test_progress_description_passed_correctly(self) -> None:
+        """Test that description is passed to progress bar correctly."""
+        with patch("magpie.cli.progress.is_tty", return_value=True):
+            with count_progress("Scanning artifacts", 50, quiet=False) as (progress, task_id):
+                assert progress is not None
+                task = progress.tasks[task_id]
+                assert task.description == "Scanning artifacts"
+                assert task.total == 50
+
+    def test_progress_with_none_total(self) -> None:
+        """Test that count_progress works with indeterminate total."""
+        with patch("magpie.cli.progress.is_tty", return_value=True):
+            with count_progress("Processing", total=None, quiet=False) as (progress, task_id):
+                assert progress is not None
+                assert task_id is not None
+                task = progress.tasks[task_id]
+                assert task.total is None
