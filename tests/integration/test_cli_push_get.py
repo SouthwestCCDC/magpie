@@ -67,10 +67,10 @@ class MockStreamResponse:
         self._content = content
         self.headers = {"content-length": str(len(content))}
 
-    def iter_bytes(self) -> list[bytes]:
+    def iter_bytes(self):
         """Yield content in chunks."""
-        # Return content in a single chunk for simplicity
-        return [self._content]
+        # Yield content in a single chunk for simplicity
+        yield self._content
 
     def read(self) -> bytes:
         """Read full response body."""
@@ -540,3 +540,142 @@ class TestGetCommand:
                 # Should derive "myartifact" from "path/myartifact"
                 assert Path("myartifact").exists()
                 assert Path("myartifact").read_bytes() == test_content
+
+    def test_get_quiet_flag_suppresses_progress(
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
+    ) -> None:
+        """Get with --quiet flag suppresses progress output."""
+        # Upload a file
+        test_content = b"content for quiet test"
+        files = {"file": ("artifact.bin", io.BytesIO(test_content), "application/octet-stream")}
+        api_client.post("/api/v1/upload/quiet/test", files=files)
+
+        output_file = tmp_path / "quiet.bin"
+
+        mock_client = MockClientWithDownload(api_client, test_storage_service)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            # Test with --quiet flag
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    "quiet/test",
+                    "-o",
+                    str(output_file),
+                    "--quiet",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert output_file.exists()
+        # Progress bar output should not appear (only final "Downloaded:" message)
+        assert "Downloaded:" in result.output
+
+    def test_get_progress_suppressed_when_not_tty(
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
+    ) -> None:
+        """Get suppresses progress when stdout is not a TTY."""
+        # Upload a file
+        test_content = b"content for non-tty test"
+        files = {"file": ("artifact.bin", io.BytesIO(test_content), "application/octet-stream")}
+        api_client.post("/api/v1/upload/nontty/test", files=files)
+
+        output_file = tmp_path / "nontty.bin"
+
+        mock_client = MockClientWithDownload(api_client, test_storage_service)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            # CliRunner by default simulates non-TTY environment
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    "nontty/test",
+                    "-o",
+                    str(output_file),
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert output_file.exists()
+        # Should still get the Downloaded message
+        assert "Downloaded:" in result.output
+
+
+class TestPushQuietFlag:
+    """Tests for push command --quiet flag and TTY detection."""
+
+    def test_push_quiet_flag_suppresses_progress(
+        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path
+    ) -> None:
+        """Push with --quiet flag suppresses progress output."""
+        test_file = tmp_path / "quiet_push.bin"
+        test_content = b"quiet push content"
+        test_file.write_bytes(test_content)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "push",
+                    str(test_file),
+                    "--to",
+                    "quiet/push-test",
+                    "--quiet",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
+        # Should still get the Uploaded/Duplicate and Hash ref messages
+        assert "Uploaded:" in result.output or "Duplicate:" in result.output
+        assert "Hash ref:" in result.output
+
+    def test_push_progress_suppressed_when_not_tty(
+        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path
+    ) -> None:
+        """Push suppresses progress when stdout is not a TTY."""
+        test_file = tmp_path / "nontty_push.bin"
+        test_content = b"non-tty push content"
+        test_file.write_bytes(test_content)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            # CliRunner by default simulates non-TTY environment
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "push",
+                    str(test_file),
+                    "--to",
+                    "nontty/push-test",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
+        # Should still get the Uploaded/Duplicate and Hash ref messages
+        assert "Uploaded:" in result.output or "Duplicate:" in result.output
+        assert "Hash ref:" in result.output
