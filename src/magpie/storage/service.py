@@ -145,6 +145,7 @@ class StorageService:
 
         Returns:
             List of ArtifactInfo for each unique blob, with tags grouped by hash.
+            Includes blobs without tags (shown with empty tags list).
             Returns empty list if artifact path doesn't exist.
         """
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
@@ -152,25 +153,37 @@ class StorageService:
         if not artifact_dir.exists():
             return []
 
-        manifest = read_manifest(artifact_dir)
-
-        if not manifest.tags:
+        metadata_dir = artifact_dir / "metadata"
+        if not metadata_dir.exists():
             return []
 
-        # Group tags by hash (manifest stores full hashes)
+        # Read manifest to build hash-to-tags mapping
+        manifest = read_manifest(artifact_dir)
         hash_to_tags: dict[str, list[str]] = {}
         for tag_name, full_hash in manifest.tags.items():
             if full_hash not in hash_to_tags:
                 hash_to_tags[full_hash] = []
             hash_to_tags[full_hash].append(tag_name)
 
-        # Build ArtifactInfo for each unique hash
+        # Enumerate all metadata files to find all blobs (including untagged)
         results: list[ArtifactInfo] = []
-        for full_hash, tags in hash_to_tags.items():
+        for metadata_file in metadata_dir.iterdir():
+            if not metadata_file.is_file():
+                continue
+            if metadata_file.suffix != ".json":
+                continue
+
+            # Extract short hash from filename (e.g., "abc12345.json" -> "abc12345")
+            short_hash_name = metadata_file.stem
+            hash_ref = f"@{short_hash_name}"
+
             try:
-                # Metadata is indexed by short hash (first 8 chars)
-                hash_ref = short_hash(full_hash)
                 metadata = read_metadata(artifact_dir, hash_ref)
+                full_hash = metadata.hash
+
+                # Look up tags for this hash (empty list if untagged)
+                tags = hash_to_tags.get(full_hash, [])
+
                 info = ArtifactInfo(
                     hash=full_hash,
                     hash_ref=hash_ref,
@@ -181,7 +194,7 @@ class StorageService:
                 )
                 results.append(info)
             except ArtifactNotFoundError:
-                # Skip blobs with missing metadata
+                # Skip files that can't be read as metadata
                 continue
 
         return results
