@@ -12,6 +12,7 @@ from magpie.storage.exceptions import (
     ArtifactNotFoundError,
     BlobExistsError,
     HashMismatchError,
+    InvalidArtifactPathError,
     ManifestCorruptError,
     StorageError,
 )
@@ -56,6 +57,13 @@ async def hash_mismatch_handler(request: "Request", exc: HashMismatchError) -> "
     return _make_error_response(400, "HashMismatchError", str(exc))
 
 
+async def invalid_artifact_path_handler(
+    request: "Request", exc: InvalidArtifactPathError
+) -> "JSONResponse":
+    """Handle InvalidArtifactPathError -> HTTP 400."""
+    return _make_error_response(400, "InvalidArtifactPathError", str(exc))
+
+
 async def manifest_corrupt_handler(request: "Request", exc: ManifestCorruptError) -> "JSONResponse":
     """Handle ManifestCorruptError -> HTTP 500."""
     return _make_error_response(500, "ManifestCorruptError", str(exc))
@@ -83,6 +91,7 @@ def register_exception_handlers(app: "FastAPI") -> None:
     app.add_exception_handler(ArtifactNotFoundError, artifact_not_found_handler)
     app.add_exception_handler(BlobExistsError, blob_exists_handler)
     app.add_exception_handler(HashMismatchError, hash_mismatch_handler)
+    app.add_exception_handler(InvalidArtifactPathError, invalid_artifact_path_handler)
     app.add_exception_handler(ManifestCorruptError, manifest_corrupt_handler)
     app.add_exception_handler(StorageError, storage_error_handler)
     app.add_exception_handler(Exception, generic_exception_handler)
