@@ -28,8 +28,8 @@ class TestUnauthenticatedAccess:
         """Verify unauthenticated upload returns 401."""
         response = http_client.post(
             "/api/v1/upload/e2e-tests/unauth-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
 
         assert response.status_code == 401
@@ -68,8 +68,8 @@ class TestUnauthenticatedAccess:
         # First upload something with authenticated client
         authenticated_client.post(
             "/api/v1/upload/e2e-tests/public-list-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
 
         # Unauthenticated GET should work
@@ -98,8 +98,8 @@ class TestReadTokenPermissions:
         # Upload something first (with admin)
         authenticated_client.post(
             "/api/v1/upload/e2e-tests/read-list-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
 
         # List with read token (should work - GET is public anyway)
@@ -124,11 +124,8 @@ class TestReadTokenPermissions:
         # Try to upload with read token
         response = http_client.post(
             "/api/v1/upload/e2e-tests/read-upload-test",
-            content=test_artifact_content,
-            headers={
-                "Content-Type": "application/octet-stream",
-                "Authorization": f"Bearer {read_token}",
-            },
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            headers={"Authorization": f"Bearer {read_token}"},
         )
 
         assert response.status_code == 403
@@ -149,8 +146,8 @@ class TestReadTokenPermissions:
         # Upload artifact with admin
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/read-tag-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -209,9 +206,8 @@ class TestWriteTokenPermissions:
 
         response = http_client.post(
             "/api/v1/upload/e2e-tests/write-upload-test",
-            content=test_artifact_content,
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
             headers={
-                "Content-Type": "application/octet-stream",
                 "Authorization": f"Bearer {write_token}",
             },
         )
@@ -233,9 +229,8 @@ class TestWriteTokenPermissions:
         # Upload artifact
         upload_response = http_client.post(
             "/api/v1/upload/e2e-tests/write-tag-test",
-            content=test_artifact_content,
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
             headers={
-                "Content-Type": "application/octet-stream",
                 "Authorization": f"Bearer {write_token}",
             },
         )
@@ -332,8 +327,8 @@ class TestAdminTokenPermissions:
         """Verify admin token can upload artifacts."""
         response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/admin-upload-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
 
         assert response.status_code == 200
@@ -352,9 +347,8 @@ class TestInvalidToken:
         """Verify invalid token is rejected with 401."""
         response = http_client.post(
             "/api/v1/upload/e2e-tests/invalid-token-test",
-            content=test_artifact_content,
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
             headers={
-                "Content-Type": "application/octet-stream",
                 "Authorization": "Bearer invalid_token_12345",
             },
         )
@@ -370,9 +364,8 @@ class TestInvalidToken:
         # Missing "Bearer" prefix
         response = http_client.post(
             "/api/v1/upload/e2e-tests/malformed-auth-test",
-            content=test_artifact_content,
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
             headers={
-                "Content-Type": "application/octet-stream",
                 "Authorization": "mgp_some_token",
             },
         )

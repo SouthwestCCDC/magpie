@@ -123,8 +123,8 @@ class TestArtifactUpload:
 
         response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/api-upload-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
 
         assert response.status_code == 200
@@ -150,8 +150,8 @@ class TestArtifactListing:
         # First upload an artifact
         authenticated_client.post(
             "/api/v1/upload/e2e-tests/ls-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
 
         # Run magpie ls command
@@ -179,8 +179,8 @@ class TestArtifactListing:
         # Upload an artifact first
         authenticated_client.post(
             "/api/v1/upload/e2e-tests/api-ls-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
 
         # List artifacts
@@ -209,8 +209,8 @@ class TestArtifactDownload:
         # Upload artifact first
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/get-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -264,8 +264,8 @@ class TestTagging:
         # Upload artifact first
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/tag-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -298,8 +298,8 @@ class TestTagging:
         # Upload artifact
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/api-tag-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -330,8 +330,8 @@ class TestArtifactInfo:
         # Upload artifact
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/info-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -364,8 +364,8 @@ class TestArtifactInfo:
         # Upload artifact
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/api-info-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            
         )
         artifact_hash = upload_response.json()["hash"]
 
