@@ -133,27 +133,27 @@ class TestParseArtifactRef:
 
     def test_parse_with_ref(self) -> None:
         """Parse artifact reference with explicit ref."""
-        path, ref = parse_artifact_ref("images/ubuntu:latest")
-        assert path == "images/ubuntu"
-        assert ref == "latest"
+        result = parse_artifact_ref("images/ubuntu:latest")
+        assert result.path == "images/ubuntu"
+        assert result.ref == "latest"
 
     def test_parse_with_hash_ref(self) -> None:
         """Parse artifact reference with hash ref."""
-        path, ref = parse_artifact_ref("images/ubuntu:@abc12345")
-        assert path == "images/ubuntu"
-        assert ref == "@abc12345"
+        result = parse_artifact_ref("images/ubuntu:@abc12345")
+        assert result.path == "images/ubuntu"
+        assert result.ref == "@abc12345"
 
     def test_parse_without_ref_defaults_to_latest(self) -> None:
         """Parse artifact reference without ref defaults to latest."""
-        path, ref = parse_artifact_ref("images/ubuntu")
-        assert path == "images/ubuntu"
-        assert ref == "latest"
+        result = parse_artifact_ref("images/ubuntu")
+        assert result.path == "images/ubuntu"
+        assert result.ref == "latest"
 
     def test_parse_nested_path_with_ref(self) -> None:
         """Parse nested path with ref."""
-        path, ref = parse_artifact_ref("project/images/ubuntu:v1.0")
-        assert path == "project/images/ubuntu"
-        assert ref == "v1.0"
+        result = parse_artifact_ref("project/images/ubuntu:v1.0")
+        assert result.path == "project/images/ubuntu"
+        assert result.ref == "v1.0"
 
 
 class TestPushCommand:

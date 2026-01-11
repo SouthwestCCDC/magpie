@@ -36,19 +36,19 @@ def url(ctx: CLIContext, artifact_ref: str) -> None:
         raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
 
     try:
-        path, ref = parse_artifact_ref(artifact_ref)
+        parsed = parse_artifact_ref(artifact_ref)
     except ParseError as e:
         raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
         if ctx.debug:
-            click.echo(f"Resolving {path}:{ref}...", err=True)
+            click.echo(f"Resolving {parsed.path}:{parsed.ref}...", err=True)
 
         # Get info to resolve ref to hash_ref
-        response = client.get(f"/api/v1/artifacts/{path}/{ref}/info")
+        response = client.get(f"/api/v1/artifacts/{parsed.path}/{parsed.ref}/info")
 
         if response.status_code == 404:
-            raise click.ClickException(f"Artifact not found: {path}:{ref}")
+            raise click.ClickException(f"Artifact not found: {parsed.path}:{parsed.ref}")
         if response.status_code != 200:
             _handle_error(response)
 
@@ -56,7 +56,7 @@ def url(ctx: CLIContext, artifact_ref: str) -> None:
         hash_ref = data["hash_ref"]
 
     # Output bare URL (no newline issues - click.echo adds one)
-    download_url = f"{ctx.server}/artifacts/{path}/{hash_ref}"
+    download_url = f"{ctx.server}/artifacts/{parsed.path}/{hash_ref}"
     click.echo(download_url)
 
 

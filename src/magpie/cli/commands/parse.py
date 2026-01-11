@@ -7,12 +7,15 @@ and ref:
     path:ref
 
 Examples:
-    images/ubuntu:latest       -> (images/ubuntu, latest)
-    images/ubuntu:@abc12345    -> (images/ubuntu, @abc12345)
-    images/ubuntu              -> (images/ubuntu, latest)  [default ref]
+    images/ubuntu:latest       -> ArtifactRef("images/ubuntu", "latest")
+    images/ubuntu:@abc12345    -> ArtifactRef("images/ubuntu", "@abc12345")
+    images/ubuntu              -> ArtifactRef("images/ubuntu", "latest")  [default ref]
 
 The @ prefix is used for hash references (short hashes), while bare names
 are tag references.
+
+---
+AI-generated: This module was authored with Claude Code (Opus 4.5).
 """
 
 from __future__ import annotations
@@ -56,7 +59,7 @@ class ArtifactRef:
         return self.ref.startswith("@")
 
 
-def parse_artifact_ref(artifact_ref: str, default_ref: str = "latest") -> tuple[str, str]:
+def parse_artifact_ref(artifact_ref: str, default_ref: str = "latest") -> ArtifactRef:
     """Parse artifact reference into path and ref.
 
     Format: path:ref or path (defaults to provided default_ref)
@@ -65,17 +68,17 @@ def parse_artifact_ref(artifact_ref: str, default_ref: str = "latest") -> tuple[
     canonical format that should be used consistently across all CLI commands.
 
     Examples:
-        "images/ubuntu:latest" -> ("images/ubuntu", "latest")
-        "images/ubuntu:@abc12345" -> ("images/ubuntu", "@abc12345")
-        "images/ubuntu" -> ("images/ubuntu", "latest")
-        "project/images/ubuntu:v1.0" -> ("project/images/ubuntu", "v1.0")
+        "images/ubuntu:latest" -> ArtifactRef(path="images/ubuntu", ref="latest")
+        "images/ubuntu:@abc12345" -> ArtifactRef(path="images/ubuntu", ref="@abc12345")
+        "images/ubuntu" -> ArtifactRef(path="images/ubuntu", ref="latest")
+        "project/images/ubuntu:v1.0" -> ArtifactRef(path="project/images/ubuntu", ref="v1.0")
 
     Args:
         artifact_ref: Artifact reference string in path:ref format.
         default_ref: Default ref if none specified (default: "latest").
 
     Returns:
-        Tuple of (path, ref).
+        ArtifactRef with parsed path and ref.
 
     Raises:
         ParseError: If the reference format is invalid.
@@ -87,7 +90,7 @@ def parse_artifact_ref(artifact_ref: str, default_ref: str = "latest") -> tuple[
     _validate_no_double_colon(artifact_ref)
 
     if ":" in artifact_ref:
-        # Split on last colon to support paths with colons (edge case)
+        # Split on last colon to find the path-ref separator colon
         idx = artifact_ref.rfind(":")
         path = artifact_ref[:idx]
         ref = artifact_ref[idx + 1 :]
@@ -106,7 +109,7 @@ def parse_artifact_ref(artifact_ref: str, default_ref: str = "latest") -> tuple[
     # Validate ref
     _validate_ref(ref)
 
-    return path, ref
+    return ArtifactRef(path=path, ref=ref)
 
 
 def parse_artifact_path(artifact_input: str) -> str:
@@ -132,6 +135,9 @@ def parse_artifact_path(artifact_input: str) -> str:
     """
     if not artifact_input:
         raise ParseError("Artifact path cannot be empty")
+
+    # Check for common mistakes
+    _validate_no_double_colon(artifact_input)
 
     # Normalize: strip leading slashes
     path = artifact_input.lstrip("/")
