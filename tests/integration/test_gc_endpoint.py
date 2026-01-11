@@ -216,6 +216,8 @@ class TestGCEndpointFunctionality:
             "blobs_found",
             "blobs_deleted",
             "space_reclaimed_bytes",
+            "symlinks_checked",
+            "symlinks_fixed",
         }
         assert required_fields == set(data.keys())
 
@@ -232,6 +234,8 @@ class TestGCEndpointFunctionality:
         assert data["blobs_found"] == 0
         assert data["blobs_deleted"] == 0
         assert data["space_reclaimed_bytes"] == 0
+        assert data["symlinks_checked"] == 0
+        assert data["symlinks_fixed"] == 0
 
 
 class TestGCDeletesUntaggedBlobs:

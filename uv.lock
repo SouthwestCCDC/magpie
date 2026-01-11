@@ -393,6 +393,7 @@ dependencies = [
     { name = "opentelemetry-instrumentation-fastapi" },
     { name = "pydantic-settings" },
     { name = "python-multipart" },
+    { name = "rich" },
     { name = "sentry-sdk", extra = ["fastapi"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -417,6 +418,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-fastapi" },
     { name = "pydantic-settings" },
     { name = "python-multipart" },
+    { name = "rich" },
     { name = "sentry-sdk", extras = ["fastapi"] },
     { name = "uvicorn", extras = ["standard"] },
 ]

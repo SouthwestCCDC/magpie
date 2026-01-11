@@ -141,6 +141,8 @@ class TestGCCommand:
         assert "GC Complete:" in result.output
         assert "Artifacts scanned:" in result.output
         assert "Blobs found:" in result.output
+        assert "Symlinks checked:" in result.output
+        assert "Symlinks fixed:" in result.output
 
     def test_gc_dry_run(
         self, cli_runner: CliRunner, api_client: TestClient, admin_token: str
@@ -218,6 +220,8 @@ class TestGCCommand:
         assert result.exit_code == 0
         assert "Artifacts scanned:" in result.output
         assert "Blobs found:" in result.output
+        assert "Symlinks checked:" in result.output
+        assert "Symlinks fixed:" in result.output
         assert "Deleted:" in result.output
 
     def test_gc_unauthorized_shows_error(

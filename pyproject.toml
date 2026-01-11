@@ -16,6 +16,7 @@ dependencies = [
     "sentry-sdk[fastapi]",
     "opentelemetry-instrumentation-fastapi",
     "opentelemetry-exporter-otlp",
+    "rich",
 ]
 
 [project.scripts]
