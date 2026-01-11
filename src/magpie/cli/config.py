@@ -127,6 +127,11 @@ def get_timeout(cli_override: float | None = None) -> float:
 
     Precedence: CLI override > MAGPIE_TIMEOUT env var > default (600 seconds).
 
+    Unlike other CLI settings (server, token), timeout is intentionally not read
+    from the config file. This ensures long-lived global configuration cannot
+    silently affect network behavior; only explicit CLI flags or the
+    MAGPIE_TIMEOUT environment variable can override the default.
+
     Args:
         cli_override: Value from --timeout CLI option.
 
