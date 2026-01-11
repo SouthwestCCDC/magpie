@@ -53,7 +53,9 @@ async def trigger_gc(
     """
     storage_path = settings.storage_path
     # Use query parameter if provided, otherwise fall back to config
-    retention_days = retention_days_override if retention_days_override is not None else settings.retention_days
+    retention_days = (
+        retention_days_override if retention_days_override is not None else settings.retention_days
+    )
 
     # Track statistics
     total_artifacts = 0
