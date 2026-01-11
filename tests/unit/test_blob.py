@@ -62,25 +62,26 @@ class TestStoreBlob:
         content = b"test blob content"
         stream = io.BytesIO(content)
 
-        hash_ref, is_duplicate = store_blob(artifact_dir, stream, test_config)
+        full_hash, hash_ref, is_duplicate = store_blob(artifact_dir, stream, test_config)
 
-        # Verify file was created
-        full_hash = compute_hash(content)
-        expected_path = artifact_dir / "blobs" / full_hash
+        # Verify file was created (blob uses first 8 chars of hash)
+        expected_path = artifact_dir / "blobs" / full_hash[:8]
         assert expected_path.exists()
         assert expected_path.read_bytes() == content
 
     def test_store_blob_returns_correct_hash(
         self, artifact_dir: Path, test_config: MagpieSettings
     ) -> None:
-        """store_blob should return correct short hash reference."""
+        """store_blob should return correct full hash and short hash reference."""
         content = b"test blob content"
         stream = io.BytesIO(content)
 
-        hash_ref, is_duplicate = store_blob(artifact_dir, stream, test_config)
+        full_hash, hash_ref, is_duplicate = store_blob(artifact_dir, stream, test_config)
 
-        expected_hash = short_hash(compute_hash(content))
-        assert hash_ref == expected_hash
+        expected_full = compute_hash(content)
+        expected_short = short_hash(expected_full)
+        assert full_hash == expected_full
+        assert hash_ref == expected_short
         assert hash_ref.startswith("@")
 
     def test_store_blob_new_returns_not_duplicate(
@@ -90,7 +91,7 @@ class TestStoreBlob:
         content = b"unique content"
         stream = io.BytesIO(content)
 
-        hash_ref, is_duplicate = store_blob(artifact_dir, stream, test_config)
+        full_hash, hash_ref, is_duplicate = store_blob(artifact_dir, stream, test_config)
 
         assert is_duplicate is False
 
@@ -102,14 +103,15 @@ class TestStoreBlob:
 
         # First store
         stream1 = io.BytesIO(content)
-        hash_ref1, is_duplicate1 = store_blob(artifact_dir, stream1, test_config)
+        full_hash1, hash_ref1, is_duplicate1 = store_blob(artifact_dir, stream1, test_config)
         assert is_duplicate1 is False
 
         # Second store of same content
         stream2 = io.BytesIO(content)
-        hash_ref2, is_duplicate2 = store_blob(artifact_dir, stream2, test_config)
+        full_hash2, hash_ref2, is_duplicate2 = store_blob(artifact_dir, stream2, test_config)
         assert is_duplicate2 is True
         assert hash_ref1 == hash_ref2
+        assert full_hash1 == full_hash2
 
     def test_store_blob_temp_file_cleanup_on_duplicate(
         self, artifact_dir: Path, test_config: MagpieSettings
@@ -163,11 +165,10 @@ class TestStoreBlob:
         content = b"x" * 50000
         stream = io.BytesIO(content)
 
-        hash_ref, is_duplicate = store_blob(artifact_dir, stream, test_config)
+        full_hash, hash_ref, is_duplicate = store_blob(artifact_dir, stream, test_config)
 
-        # Verify content integrity
-        full_hash = compute_hash(content)
-        blob_file = artifact_dir / "blobs" / full_hash
+        # Verify content integrity (blob uses first 8 chars of hash)
+        blob_file = artifact_dir / "blobs" / full_hash[:8]
         assert blob_file.read_bytes() == content
 
 
@@ -180,9 +181,9 @@ class TestReadBlob:
         """read_blob should return path for existing blob."""
         content = b"readable content"
         stream = io.BytesIO(content)
-        hash_ref, _ = store_blob(artifact_dir, stream, test_config)
+        full_hash, hash_ref, _ = store_blob(artifact_dir, stream, test_config)
 
-        full_hash = compute_hash(content)
+        # read_blob accepts full hash and converts to short internally
         result = read_blob(artifact_dir, full_hash)
 
         assert result.exists()
@@ -194,12 +195,10 @@ class TestReadBlob:
         """read_blob should work with short hash reference."""
         content = b"short hash content"
         stream = io.BytesIO(content)
-        hash_ref, _ = store_blob(artifact_dir, stream, test_config)
+        full_hash, hash_ref, _ = store_blob(artifact_dir, stream, test_config)
 
-        # Note: read_blob uses blob_path which strips @ prefix
-        # But the actual file is stored with full hash
-        full_hash = compute_hash(content)
-        result = read_blob(artifact_dir, full_hash)
+        # read_blob works with short hash (strips @ prefix, uses first 8 chars)
+        result = read_blob(artifact_dir, hash_ref)
 
         assert result.exists()
 
@@ -214,11 +213,10 @@ class TestReadBlob:
         """read_blob should handle hash refs with @ prefix."""
         content = b"at prefix content"
         stream = io.BytesIO(content)
-        store_blob(artifact_dir, stream, test_config)
+        full_hash, hash_ref, _ = store_blob(artifact_dir, stream, test_config)
 
-        full_hash = compute_hash(content)
-        # Use @ prefix - blob_path strips it
-        result = read_blob(artifact_dir, f"@{full_hash}")
+        # Use @ prefix - blob_path strips it and uses first 8 chars
+        result = read_blob(artifact_dir, hash_ref)
 
         assert result.exists()
 
@@ -232,9 +230,9 @@ class TestCheckBlobExists:
         """check_blob_exists should return True for existing blob."""
         content = b"existing content"
         stream = io.BytesIO(content)
-        store_blob(artifact_dir, stream, test_config)
+        full_hash, hash_ref, _ = store_blob(artifact_dir, stream, test_config)
 
-        full_hash = compute_hash(content)
+        # check_blob_exists works with full hash (converts to short internally)
         result = check_blob_exists(artifact_dir, full_hash)
 
         assert result is True
@@ -250,9 +248,9 @@ class TestCheckBlobExists:
         """check_blob_exists should handle @ prefix."""
         content = b"prefix check content"
         stream = io.BytesIO(content)
-        store_blob(artifact_dir, stream, test_config)
+        full_hash, hash_ref, _ = store_blob(artifact_dir, stream, test_config)
 
-        full_hash = compute_hash(content)
-        result = check_blob_exists(artifact_dir, f"@{full_hash}")
+        # Works with @ prefix (strips prefix and uses first 8 chars)
+        result = check_blob_exists(artifact_dir, hash_ref)
 
         assert result is True

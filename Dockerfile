@@ -20,7 +20,7 @@ COPY --from=deps /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
 COPY src/ ./src/
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock README.md ./
 
 # Install the project itself
 RUN uv sync --frozen --no-dev

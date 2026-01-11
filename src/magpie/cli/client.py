@@ -18,4 +18,6 @@ def get_client(server: str, token: str | None = None) -> httpx.Client:
     headers: dict[str, str] = {}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    return httpx.Client(base_url=server, headers=headers)
+    # Long timeout for large file uploads (30 min)
+    timeout = httpx.Timeout(30.0, read=1800.0, write=1800.0)
+    return httpx.Client(base_url=server, headers=headers, timeout=timeout)

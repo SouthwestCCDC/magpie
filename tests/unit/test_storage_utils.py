@@ -144,11 +144,12 @@ class TestBlobPath:
         assert result == Path("/data/artifacts/project/blobs/abc12345")
 
     def test_blob_path_full_hash(self) -> None:
-        """blob_path should work with full hash."""
+        """blob_path should truncate full hash to first 8 chars."""
         artifact_dir = Path("/data/artifacts/project")
         full_hash = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         result = blob_path(artifact_dir, full_hash)
-        assert result == Path(f"/data/artifacts/project/blobs/{full_hash}")
+        # Blobs are stored with short hash (first 8 chars)
+        assert result == Path(f"/data/artifacts/project/blobs/{full_hash[:8]}")
 
 
 class TestMetadataPath:

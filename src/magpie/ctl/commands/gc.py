@@ -75,8 +75,9 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
             click.echo(f"Processing artifact: {artifact_path}", err=True)
 
         # Read manifest to get tagged hashes
+        # Manifest stores full hashes, but blobs are stored with short hashes (8 chars)
         manifest = read_manifest(artifact_dir)
-        tagged_hashes = set(manifest.tags.values())
+        tagged_hashes = {h[:8] for h in manifest.tags.values()}
 
         # Reconcile symlinks for this artifact
         reconcile_symlinks(artifact_dir, manifest)

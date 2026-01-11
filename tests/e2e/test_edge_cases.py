@@ -35,8 +35,7 @@ class TestDuplicateUpload:
         # First upload
         response1 = authenticated_client.post(
             "/api/v1/upload/e2e-tests/duplicate-test-1",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
         )
         assert response1.status_code == 200
         hash1 = response1.json()["hash"]
@@ -44,8 +43,7 @@ class TestDuplicateUpload:
         # Second upload of same content to different path
         response2 = authenticated_client.post(
             "/api/v1/upload/e2e-tests/duplicate-test-2",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
         )
         assert response2.status_code == 200
         hash2 = response2.json()["hash"]
@@ -64,8 +62,7 @@ class TestDuplicateUpload:
         # First upload
         response1 = authenticated_client.post(
             "/api/v1/upload/e2e-tests/same-path-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
         )
         assert response1.status_code == 200
         hash1 = response1.json()["hash"]
@@ -73,8 +70,7 @@ class TestDuplicateUpload:
         # Second upload to same path
         response2 = authenticated_client.post(
             "/api/v1/upload/e2e-tests/same-path-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
         )
         assert response2.status_code == 200
         hash2 = response2.json()["hash"]
@@ -98,8 +94,7 @@ class TestTagUpdate:
         # Upload v1
         response1 = authenticated_client.post(
             "/api/v1/upload/e2e-tests/tag-update-test",
-            content=content_v1,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", content_v1, "application/octet-stream")},
         )
         hash_v1 = response1.json()["hash"]
 
@@ -112,8 +107,7 @@ class TestTagUpdate:
         # Upload v2
         response2 = authenticated_client.post(
             "/api/v1/upload/e2e-tests/tag-update-test",
-            content=content_v2,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", content_v2, "application/octet-stream")},
         )
         hash_v2 = response2.json()["hash"]
 
@@ -148,8 +142,7 @@ class TestTagRemoval:
         # Upload artifact
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/untag-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -185,8 +178,7 @@ class TestTagRemoval:
         # Upload artifact
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/cli-untag-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -238,8 +230,7 @@ class TestGarbageCollection:
         content = b"GC test content - should be cleaned"
         authenticated_client.post(
             "/api/v1/upload/e2e-tests/gc-test",
-            content=content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", content, "application/octet-stream")},
         )
 
         env = os.environ.copy()
@@ -271,8 +262,7 @@ class TestGarbageCollection:
         # Upload and tag artifact
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/gc-preserve-test",
-            content=test_artifact_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -320,16 +310,14 @@ class TestContentOverwrite:
         # Upload content A
         response_a = authenticated_client.post(
             "/api/v1/upload/e2e-tests/overwrite-test",
-            content=content_a,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", content_a, "application/octet-stream")},
         )
         hash_a = response_a.json()["hash"]
 
         # Upload content B to same path
         response_b = authenticated_client.post(
             "/api/v1/upload/e2e-tests/overwrite-test",
-            content=content_b,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", content_b, "application/octet-stream")},
         )
         hash_b = response_b.json()["hash"]
 
@@ -355,8 +343,7 @@ class TestLargeArtifact:
 
         response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/large-artifact-test",
-            content=large_content,
-            headers={"Content-Type": "application/octet-stream"},
+            files={"file": ("artifact", large_content, "application/octet-stream")},
             timeout=60.0,
         )
 

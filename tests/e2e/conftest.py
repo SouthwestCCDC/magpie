@@ -154,8 +154,9 @@ def admin_token(docker_services: dict[str, str]) -> str:
     env["COMPOSE_PROJECT_NAME"] = docker_services["project_name"]
 
     # Run magpie-ctl init inside the container
+    # Use --reset-admin-token to ensure we get a fresh token even if data persists
     result = subprocess.run(
-        [*compose_cmd, "exec", "-T", "magpie", "magpie-ctl", "init"],
+        [*compose_cmd, "exec", "-T", "magpie", "magpie-ctl", "init", "--reset-admin-token"],
         cwd=PROJECT_ROOT,
         env=env,
         capture_output=True,
@@ -238,6 +239,30 @@ def read_token(http_client: httpx.Client, admin_token: str) -> str:
 def write_token(http_client: httpx.Client, admin_token: str) -> str:
     """Create a write token for testing."""
     return create_token_via_api(http_client, admin_token, "test-writer", "write")
+
+
+def upload_artifact(
+    client: httpx.Client,
+    path: str,
+    content: bytes,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    """Upload artifact content using multipart form data.
+
+    Args:
+        client: HTTP client instance.
+        path: Artifact path (e.g., "e2e-tests/my-artifact").
+        content: Binary content to upload.
+        headers: Optional additional headers (e.g., Authorization).
+
+    Returns:
+        HTTP response from the upload endpoint.
+    """
+    return client.post(
+        f"/api/v1/upload/{path}",
+        files={"file": ("artifact", content, "application/octet-stream")},
+        headers=headers,
+    )
 
 
 @pytest.fixture

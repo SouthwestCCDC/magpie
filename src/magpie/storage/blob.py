@@ -32,12 +32,16 @@ def get_temp_path(config: MagpieSettings) -> Path:
 
 def store_blob(
     artifact_dir: Path, file_stream: BinaryIO, config: MagpieSettings
-) -> tuple[str, bool]:
+) -> tuple[str, str, bool]:
     """Store blob content with streaming upload and duplicate detection.
 
     Streams content to a temp file while computing SHA-256 hash, then
     atomically moves to final location. Detects duplicates by checking
     if blob already exists.
+
+    Blobs are stored using the first 8 characters of the hash as the filename
+    to save space and improve readability, while the full hash is preserved
+    in metadata for verification.
 
     Args:
         artifact_dir: Path to artifact directory.
@@ -45,7 +49,8 @@ def store_blob(
         config: MagpieSettings instance for temp path configuration.
 
     Returns:
-        Tuple of (hash_ref, is_duplicate):
+        Tuple of (full_hash, hash_ref, is_duplicate):
+        - full_hash: Full SHA-256 hex digest (64 chars)
         - hash_ref: Short hash reference like '@abc12345'
         - is_duplicate: True if blob already existed, False if newly stored
     """
@@ -60,18 +65,18 @@ def store_blob(
         full_hash = _stream_to_temp(fd, file_stream)
         hash_ref = short_hash(full_hash)
 
-        # Check if blob already exists
-        dest_path = blob_path(artifact_dir, full_hash)
+        # Check if blob already exists (use short hash for storage path)
+        dest_path = blob_path(artifact_dir, hash_ref)
 
         if dest_path.exists():
             # Duplicate detected - clean up temp file
             temp_file.unlink(missing_ok=True)
-            return (hash_ref, True)
+            return (full_hash, hash_ref, True)
 
         # New blob - atomic move to destination
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(temp_file), dest_path)
-        return (hash_ref, False)
+        return (full_hash, hash_ref, False)
 
     except Exception:
         # Clean up temp file on any error
