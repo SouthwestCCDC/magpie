@@ -200,6 +200,7 @@ class TestGCEndpointFunctionality:
             "blobs_found",
             "blobs_deleted",
             "space_reclaimed_bytes",
+            "directories_cleaned",
         }
         assert required_fields == set(data.keys())
 
