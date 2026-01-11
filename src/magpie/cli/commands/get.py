@@ -76,6 +76,26 @@ def get(
             click.echo(f"Hash ref: {hash_ref}", err=True)
             click.echo(f"Size: {file_size} bytes", err=True)
 
+        # Determine output path early so we can check for existing file before download
+        if output is None:
+            # Derive from artifact path (use last component)
+            output = Path(parsed.path.split("/")[-1])
+
+        # Check if output file exists before downloading to avoid wasting bandwidth
+        if output.exists():
+            # If local file has same hash as remote, skip download entirely
+            local_hash = hashlib.sha256(output.read_bytes()).hexdigest()
+            if local_hash == expected_hash:
+                click.echo(f"File already exists with matching hash: {output}")
+                return
+
+            # File exists but has different hash - require --force
+            if not force:
+                raise click.ClickException(
+                    f"Output file already exists: {output}\n"
+                    "Use --force to overwrite existing files."
+                )
+
         # Download the artifact
         # Hash refs use blobs/ subdirectory, tags are symlinks at root
         if hash_ref.startswith("@"):
@@ -119,17 +139,6 @@ def get(
             )
         if ctx.debug:
             click.echo("Hash verified.", err=True)
-
-    # Determine output path
-    if output is None:
-        # Derive from artifact path (use last component)
-        output = Path(parsed.path.split("/")[-1])
-
-    # Check if output file exists and --force not specified
-    if output.exists() and not force:
-        raise click.ClickException(
-            f"Output file already exists: {output}\nUse --force to overwrite existing files."
-        )
 
     # Write file
     output.write_bytes(content)
