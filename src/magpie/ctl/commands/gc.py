@@ -61,7 +61,8 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
     untagged_blobs = 0
     deleted_blobs = 0
     deleted_bytes = 0
-    reconciled_artifacts = 0
+    total_symlinks_checked = 0
+    total_symlinks_fixed = 0
 
     now = datetime.now(timezone.utc)
 
@@ -80,8 +81,9 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
         tagged_hashes = {h[:8] for h in manifest.tags.values()}
 
         # Reconcile symlinks for this artifact
-        reconcile_symlinks(artifact_dir, manifest)
-        reconciled_artifacts += 1
+        checked, fixed = reconcile_symlinks(artifact_dir, manifest)
+        total_symlinks_checked += checked
+        total_symlinks_fixed += fixed
 
         if reconcile_only:
             continue
@@ -152,7 +154,8 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
     click.echo(f"  Artifacts scanned: {total_artifacts}")
     click.echo(f"  Blobs found: {total_blobs_found}")
     click.echo(f"  Untagged blobs: {untagged_blobs}")
-    click.echo(f"  Symlinks reconciled: {reconciled_artifacts} artifact(s)")
+    click.echo(f"  Symlinks checked: {total_symlinks_checked} artifact(s)")
+    click.echo(f"  Symlinks fixed: {total_symlinks_fixed}")
 
     if not reconcile_only:
         action = "Would delete" if dry_run else "Deleted"
