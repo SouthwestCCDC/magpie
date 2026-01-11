@@ -106,3 +106,31 @@ uv run ruff format .                       # Format
 - Imports: ruff with isort rules
 - No emojis in code/docs unless requested
 - Align with `scoring/` repo conventions
+
+## MANDATORY: Be transparent about AI use
+
+Disclose when AI generates content that humans will read and might attribute to a specific person.
+
+**What requires disclosure:**
+
+- GitHub issues and PR descriptions
+- GitHub comments (on issues, PRs, or commits)
+- Documentation files (markdown, mkdocs, READMEs, guides)
+- Commit messages with substantive explanations
+- Technical writing (runbooks, ADRs, design docs)
+- Narrative comments in code (extensive docstrings, module-level documentation blocks)
+
+**How to disclose:**
+
+- Match the format to the context:
+  - Commits: `Co-Authored-By:` line with AI identity
+  - Documentation: admonition block or footer note
+  - Comments/issues: brief closing sentence
+- Include tool and model when known (e.g., "Copilot w/ GPT-4.5", "Claude Code w/ Opus 4.5")
+
+**Exceptions (no disclosure needed):**
+
+- Mechanical operations: git merge/rebase/stash, conflict resolution, simple summary commit messages
+- Human-driven content: AI only reformatted, quoted, or arranged what the user wrote
+- Source code and config: code, configuration files, scripts, brief inline comments
+- Trivial changes: typo fixes, formatting, single-line edits
