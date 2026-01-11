@@ -497,3 +497,42 @@ class TestGCCommand:
 
         assert result.exit_code != 0
         assert "Invalid value" in result.output or "is not in the range" in result.output
+
+    def test_gc_quiet_flag_accepted(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --quiet flag is accepted and works."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=[],
+            blob_ages_days={"tagged_hash_abc": 0},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--quiet"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        # Summary should still be printed
+        assert "GC Summary:" in result.output
+
+    def test_gc_quiet_short_flag_accepted(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC -q short flag is accepted and works."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=[],
+            blob_ages_days={"tagged_hash_abc": 0},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "-q"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "GC Summary:" in result.output
