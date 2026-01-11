@@ -26,6 +26,8 @@ class GCResponse(BaseModel):
     blobs_found: int
     blobs_deleted: int
     space_reclaimed_bytes: int
+    symlinks_checked: int
+    symlinks_fixed: int
 
 
 @router.post("/api/v1/gc")
@@ -62,6 +64,8 @@ async def trigger_gc(
     total_blobs_found = 0
     deleted_blobs = 0
     deleted_bytes = 0
+    symlinks_checked = 0
+    symlinks_fixed = 0
 
     now = datetime.now(timezone.utc)
 
@@ -76,7 +80,9 @@ async def trigger_gc(
             tagged_hashes = set(manifest.tags.values())
 
             # Reconcile symlinks for this artifact
-            reconcile_symlinks(artifact_dir, manifest)
+            stats = reconcile_symlinks(artifact_dir, manifest)
+            symlinks_checked += stats.checked
+            symlinks_fixed += stats.fixed
 
             # Find all blobs in blobs/ directory
             blobs_dir = artifact_dir / "blobs"
@@ -125,6 +131,8 @@ async def trigger_gc(
         blobs_found=total_blobs_found,
         blobs_deleted=deleted_blobs,
         space_reclaimed_bytes=deleted_bytes,
+        symlinks_checked=symlinks_checked,
+        symlinks_fixed=symlinks_fixed,
     )
 
 
