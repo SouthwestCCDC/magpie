@@ -317,7 +317,7 @@ class TestFlushTagCommand:
         self, cli_runner: CliRunner
     ) -> None:
         """Flush-tag on protected tags requires --force flag."""
-        # Test several protected tags
+        # Test several protected tags (lowercase)
         protected_tags = ["latest", "stable", "production", "prod", "release"]
 
         for tag in protected_tags:
@@ -327,6 +327,23 @@ class TestFlushTagCommand:
             )
 
             assert result.exit_code != 0, f"Tag '{tag}' should require --force"
+            assert "protected" in result.output.lower()
+            assert "--force" in result.output
+
+    def test_flush_tag_protected_tag_case_insensitive(
+        self, cli_runner: CliRunner
+    ) -> None:
+        """Flush-tag protection is case-insensitive."""
+        # Test mixed-case variants of protected tags
+        mixed_case_tags = ["LATEST", "Stable", "PRODUCTION", "Prod", "Release"]
+
+        for tag in mixed_case_tags:
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "flush-tag", tag, "--yes"],
+            )
+
+            assert result.exit_code != 0, f"Tag '{tag}' should require --force (case-insensitive)"
             assert "protected" in result.output.lower()
             assert "--force" in result.output
 

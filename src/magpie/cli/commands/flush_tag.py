@@ -56,7 +56,7 @@ def flush_tag(
         raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
 
     # Refuse to flush protected tags without --force
-    if tag_name in PROTECTED_TAGS and not force:
+    if tag_name.lower() in PROTECTED_TAGS and not force:
         raise click.ClickException(
             f"Tag '{tag_name}' is protected. Use --force to confirm you want to remove "
             f"this tag from ALL artifacts. Protected tags: {', '.join(sorted(PROTECTED_TAGS))}"
