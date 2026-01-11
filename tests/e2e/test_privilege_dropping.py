@@ -139,8 +139,8 @@ class TestPrivilegeDropping:
                 capture_output=True,
             )
 
-    def test_container_validates_invalid_uid(self) -> None:
-        """Test that container rejects invalid UID values."""
+    def test_container_rejects_negative_uid(self) -> None:
+        """Test that container rejects a negative UID value."""
         # Build the image
         subprocess.run(
             ["docker", "build", "-t", "magpie-privtest-invalid:latest", "."],
@@ -181,8 +181,8 @@ class TestPrivilegeDropping:
                 capture_output=True,
             )
 
-    def test_container_validates_invalid_gid(self) -> None:
-        """Test that container rejects invalid GID values."""
+    def test_container_rejects_non_numeric_gid(self) -> None:
+        """Test that container rejects non-numeric GID values."""
         # Build the image
         subprocess.run(
             ["docker", "build", "-t", "magpie-privtest-invalidgid:latest", "."],
@@ -352,12 +352,8 @@ class TestPrivilegeDropping:
             actual_uid = int(lines[0])
             actual_gid = int(lines[1])
 
-            assert actual_uid == 1000, (
-                f"Container should fall back to UID 1000, got: {actual_uid}"
-            )
-            assert actual_gid == 1000, (
-                f"Container should fall back to GID 1000, got: {actual_gid}"
-            )
+            assert actual_uid == 1000, f"Container should fall back to UID 1000, got: {actual_uid}"
+            assert actual_gid == 1000, f"Container should fall back to GID 1000, got: {actual_gid}"
 
         finally:
             # Cleanup
@@ -366,7 +362,7 @@ class TestPrivilegeDropping:
                 capture_output=True,
             )
 
-    def test_entrypoint_with_data_fallback(self) -> None:
+    def test_container_falls_back_to_data_directory(self) -> None:
         """Test UID/GID detection falls back from /data/artifacts to /data."""
         # Build the image
         subprocess.run(
@@ -421,3 +417,63 @@ class TestPrivilegeDropping:
                 ["docker", "rmi", "magpie-privtest-datafallback:latest"],
                 capture_output=True,
             )
+
+    def test_container_mixed_uid_env_gid_detection(self) -> None:
+        """Test that MAGPIE_UID from env works with GID from directory detection."""
+        with tempfile.TemporaryDirectory(prefix="magpie_mixed_") as temp_dir:
+            temp_path = Path(temp_dir)
+            artifacts_dir = temp_path / "artifacts"
+            artifacts_dir.mkdir(parents=True)
+
+            # Get GID from directory ownership
+            stat_info = os.stat(artifacts_dir)
+            expected_gid = stat_info.st_gid
+
+            # Build the image
+            subprocess.run(
+                ["docker", "build", "-t", "magpie-privtest-mixed:latest", "."],
+                cwd=PROJECT_ROOT,
+                check=True,
+                capture_output=True,
+            )
+
+            try:
+                # Set only MAGPIE_UID, let GID come from volume detection
+                test_uid = 4000
+
+                result = subprocess.run(
+                    [
+                        "docker",
+                        "run",
+                        "--rm",
+                        "-e",
+                        f"MAGPIE_UID={test_uid}",
+                        "-v",
+                        f"{artifacts_dir}:/data/artifacts",
+                        "magpie-privtest-mixed:latest",
+                        "sh",
+                        "-c",
+                        "id -u && id -g",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+
+                lines = result.stdout.strip().split("\n")
+                actual_uid = int(lines[0])
+                actual_gid = int(lines[1])
+
+                assert actual_uid == test_uid, (
+                    f"Container UID {actual_uid} does not match MAGPIE_UID {test_uid}"
+                )
+                assert actual_gid == expected_gid, (
+                    f"Container GID {actual_gid} does not match detected GID {expected_gid}"
+                )
+
+            finally:
+                # Cleanup
+                subprocess.run(
+                    ["docker", "rmi", "magpie-privtest-mixed:latest"],
+                    capture_output=True,
+                )
