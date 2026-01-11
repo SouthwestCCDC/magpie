@@ -64,9 +64,7 @@ def create_tag(client: TestClient, artifact_path: str, ref: str, tag_name: str) 
 class TestDryRunPreview:
     """Tests for dry_run mode returning preview without modification."""
 
-    def test_dry_run_returns_preview_without_modification(
-        self, client: TestClient
-    ) -> None:
+    def test_dry_run_returns_preview_without_modification(self, client: TestClient) -> None:
         """Dry run returns affected artifacts without actually removing tags."""
         # Upload artifacts and create "release" tag on both
         upload_data1 = upload_artifact(client, "flush-test/artifact1", b"content1")
@@ -128,14 +126,10 @@ class TestConfirmedFlush:
         assert data["dry_run"] is False
 
         # Verify tags are actually removed
-        info1 = client.get(
-            f"/api/v1/artifacts/flush-confirm/art1/{upload_data1['hash_ref']}/info"
-        )
+        info1 = client.get(f"/api/v1/artifacts/flush-confirm/art1/{upload_data1['hash_ref']}/info")
         assert "to-flush" not in info1.json()["tags"]
 
-        info2 = client.get(
-            f"/api/v1/artifacts/flush-confirm/art2/{upload_data2['hash_ref']}/info"
-        )
+        info2 = client.get(f"/api/v1/artifacts/flush-confirm/art2/{upload_data2['hash_ref']}/info")
         assert "to-flush" not in info2.json()["tags"]
 
 
@@ -150,9 +144,7 @@ class TestMissingConfirmation:
         data = response.json()
         assert "confirm_walk_filesystem" in data["detail"].lower()
 
-    def test_confirm_walk_filesystem_false_returns_400(
-        self, client: TestClient
-    ) -> None:
+    def test_confirm_walk_filesystem_false_returns_400(self, client: TestClient) -> None:
         """confirm_walk_filesystem=false returns 400."""
         response = client.post(
             "/api/v1/tags/some-tag/flush",
@@ -188,9 +180,7 @@ class TestFlushUnknownTag:
 class TestResponseFormat:
     """Tests for response format and content."""
 
-    def test_response_includes_correct_count_and_artifacts(
-        self, client: TestClient
-    ) -> None:
+    def test_response_includes_correct_count_and_artifacts(self, client: TestClient) -> None:
         """Response includes correct count and affected_artifacts list."""
         # Upload 3 artifacts, only tag 2 of them with "partial"
         upload_data1 = upload_artifact(client, "flush-count/art1", b"content1")

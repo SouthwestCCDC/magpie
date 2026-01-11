@@ -27,9 +27,7 @@ class TestComputeHash:
     """Tests for compute_hash function."""
 
     # Known SHA-256 hash for "hello world"
-    HELLO_WORLD_HASH = (
-        "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
-    )
+    HELLO_WORLD_HASH = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
 
     def test_compute_hash_bytes(self) -> None:
         """compute_hash should return correct SHA-256 for bytes input."""

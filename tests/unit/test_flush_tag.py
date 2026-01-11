@@ -47,9 +47,7 @@ class TestFlushTagBasic:
         # Create multiple artifacts with the same tag
         paths = ["project/artifact1", "project/artifact2", "other/artifact3"]
         for path in paths:
-            _, hash_ref = store_test_artifact(
-                storage_service, path, f"content for {path}".encode()
-            )
+            _, hash_ref = store_test_artifact(storage_service, path, f"content for {path}".encode())
             storage_service.create_tag(path, hash_ref, "release")
 
         # Verify tags exist
@@ -93,20 +91,14 @@ class TestFlushTagBasic:
     ) -> None:
         """flush_tag should only affect artifacts that have the tag."""
         # Create artifacts - some with target tag, some without
-        _, ref1 = store_test_artifact(
-            storage_service, "with-tag/artifact1", b"content1"
-        )
+        _, ref1 = store_test_artifact(storage_service, "with-tag/artifact1", b"content1")
         storage_service.create_tag("with-tag/artifact1", ref1, "target-tag")
 
-        _, ref2 = store_test_artifact(
-            storage_service, "with-tag/artifact2", b"content2"
-        )
+        _, ref2 = store_test_artifact(storage_service, "with-tag/artifact2", b"content2")
         storage_service.create_tag("with-tag/artifact2", ref2, "target-tag")
 
         # This artifact does NOT have the target tag
-        store_test_artifact(
-            storage_service, "without-tag/artifact", b"content3"
-        )
+        store_test_artifact(storage_service, "without-tag/artifact", b"content3")
 
         # Flush the tag
         result = storage_service.flush_tag("target-tag")
@@ -118,9 +110,7 @@ class TestFlushTagBasic:
         assert "without-tag/artifact" not in result.affected_artifacts
 
         # Verify "latest" tag still exists on artifact without target tag
-        artifact_dir = artifact_dir_path(
-            test_config.storage_path, "without-tag/artifact"
-        )
+        artifact_dir = artifact_dir_path(test_config.storage_path, "without-tag/artifact")
         manifest = read_manifest(artifact_dir)
         assert "latest" in manifest.tags
 
@@ -151,9 +141,7 @@ class TestFlushTagDryRun:
         # Create artifacts with a tag
         paths = ["project/a", "project/b"]
         for path in paths:
-            _, ref = store_test_artifact(
-                storage_service, path, f"content for {path}".encode()
-            )
+            _, ref = store_test_artifact(storage_service, path, f"content for {path}".encode())
             storage_service.create_tag(path, ref, "to-flush")
 
         # Dry run
@@ -174,9 +162,7 @@ class TestFlushTagDryRun:
     ) -> None:
         """dry_run should preview, then actual flush should remove tags."""
         # Create artifact with tag
-        _, ref = store_test_artifact(
-            storage_service, "test/artifact", b"content"
-        )
+        _, ref = store_test_artifact(storage_service, "test/artifact", b"content")
         storage_service.create_tag("test/artifact", ref, "preview-tag")
 
         # Dry run first
@@ -201,9 +187,7 @@ class TestFlushTagDryRun:
     ) -> None:
         """flush_tag with dry_run=True should not remove symlinks."""
         # Create artifact with tag
-        _, ref = store_test_artifact(
-            storage_service, "symlink/test", b"content"
-        )
+        _, ref = store_test_artifact(storage_service, "symlink/test", b"content")
         storage_service.create_tag("symlink/test", ref, "keep-symlink")
 
         artifact_dir = artifact_dir_path(test_config.storage_path, "symlink/test")
@@ -220,18 +204,14 @@ class TestFlushTagDryRun:
 class TestFlushTagEdgeCases:
     """Edge case tests for flush_tag."""
 
-    def test_flush_tag_empty_storage(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_flush_tag_empty_storage(self, storage_service: StorageService) -> None:
         """flush_tag on empty storage should return empty result."""
         result = storage_service.flush_tag("any-tag")
 
         assert result.count == 0
         assert result.affected_artifacts == []
 
-    def test_flush_tag_nested_artifact_paths(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_flush_tag_nested_artifact_paths(self, storage_service: StorageService) -> None:
         """flush_tag should work with deeply nested artifact paths."""
         nested_paths = [
             "a/b/c/artifact",
@@ -240,9 +220,7 @@ class TestFlushTagEdgeCases:
         ]
 
         for path in nested_paths:
-            _, ref = store_test_artifact(
-                storage_service, path, f"content for {path}".encode()
-            )
+            _, ref = store_test_artifact(storage_service, path, f"content for {path}".encode())
             storage_service.create_tag(path, ref, "deep-tag")
 
         result = storage_service.flush_tag("deep-tag")
@@ -256,9 +234,7 @@ class TestFlushTagEdgeCases:
     ) -> None:
         """flush_tag should not affect other tags on the same artifacts."""
         # Create artifact with multiple tags
-        _, ref = store_test_artifact(
-            storage_service, "multi-tag/artifact", b"content"
-        )
+        _, ref = store_test_artifact(storage_service, "multi-tag/artifact", b"content")
         storage_service.create_tag("multi-tag/artifact", ref, "flush-me")
         storage_service.create_tag("multi-tag/artifact", ref, "keep-me")
         storage_service.create_tag("multi-tag/artifact", ref, "also-keep")
@@ -267,22 +243,16 @@ class TestFlushTagEdgeCases:
         storage_service.flush_tag("flush-me")
 
         # Other tags should remain
-        artifact_dir = artifact_dir_path(
-            test_config.storage_path, "multi-tag/artifact"
-        )
+        artifact_dir = artifact_dir_path(test_config.storage_path, "multi-tag/artifact")
         manifest = read_manifest(artifact_dir)
         assert "flush-me" not in manifest.tags
         assert "keep-me" in manifest.tags
         assert "also-keep" in manifest.tags
         assert "latest" in manifest.tags
 
-    def test_flush_result_dataclass_fields(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_flush_result_dataclass_fields(self, storage_service: StorageService) -> None:
         """FlushResult should have correct field values."""
-        _, ref = store_test_artifact(
-            storage_service, "result/test", b"content"
-        )
+        _, ref = store_test_artifact(storage_service, "result/test", b"content")
         storage_service.create_tag("result/test", ref, "check-result")
 
         result = storage_service.flush_tag("check-result")

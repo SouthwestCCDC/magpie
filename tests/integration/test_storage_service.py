@@ -59,9 +59,7 @@ class TestStoreListGetFlow:
         assert retrieved.uploaded_by == info.uploaded_by
 
         # Get by hash_ref
-        retrieved_by_hash = storage_service.get_artifact_info(
-            artifact_path, info.hash_ref
-        )
+        retrieved_by_hash = storage_service.get_artifact_info(artifact_path, info.hash_ref)
         assert retrieved_by_hash.hash == info.hash
 
     def test_store_returns_artifact_info(self, storage_service: StorageService) -> None:
@@ -110,9 +108,7 @@ class TestDuplicateHandling:
         assert info1.hash == info2.hash
         assert info1.hash_ref == info2.hash_ref
 
-    def test_duplicate_preserves_original_metadata(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_duplicate_preserves_original_metadata(self, storage_service: StorageService) -> None:
         """Duplicate upload should preserve original uploader info."""
         artifact_path = "test/preserve"
         content = b"preserve metadata content"
@@ -142,9 +138,7 @@ class TestDuplicateHandling:
 class TestArtifactIsolation:
     """Tests for artifact path isolation."""
 
-    def test_different_artifact_paths_isolated(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_different_artifact_paths_isolated(self, storage_service: StorageService) -> None:
         """Different artifact paths should not interfere with each other."""
         content = b"shared content"
 
@@ -253,9 +247,7 @@ class TestListArtifacts:
         assert artifacts[0].hash == info2.hash
         assert "latest" in artifacts[0].tags
 
-    def test_list_empty_path_returns_empty(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_list_empty_path_returns_empty(self, storage_service: StorageService) -> None:
         """list_artifacts should return empty list for non-existent path."""
         artifacts = storage_service.list_artifacts("nonexistent/path")
         assert artifacts == []
@@ -276,9 +268,7 @@ class TestListArtifacts:
         from magpie.storage.paths import artifact_dir_path
         from magpie.storage.symlinks import reconcile_symlinks
 
-        artifact_dir = artifact_dir_path(
-            storage_service.config.storage_path, artifact_path
-        )
+        artifact_dir = artifact_dir_path(storage_service.config.storage_path, artifact_path)
         manifest = update_tag(artifact_dir, "v1.0", info.hash)  # Use full hash
         reconcile_symlinks(artifact_dir, manifest)
 
