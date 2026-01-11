@@ -83,7 +83,11 @@ def get(
             click.echo(f"Hash ref: {hash_ref}", err=True)
 
         # Download the artifact
-        download_url = f"/artifacts/{path}/{hash_ref}"
+        # Hash refs use blobs/ subdirectory, tags are symlinks at root
+        if hash_ref.startswith("@"):
+            download_url = f"/artifacts/{path}/blobs/{hash_ref.lstrip('@')}"
+        else:
+            download_url = f"/artifacts/{path}/{hash_ref}"
 
         if ctx.debug:
             click.echo(f"Downloading from {download_url}...", err=True)
