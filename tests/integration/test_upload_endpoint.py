@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from magpie.config import MagpieSettings, get_settings
+from magpie.config import MagpieSettings
 from magpie.server.app import app
 from magpie.server.deps import get_storage_service
 from magpie.storage.service import StorageService
