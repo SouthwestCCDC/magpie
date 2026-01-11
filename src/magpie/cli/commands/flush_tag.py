@@ -6,6 +6,9 @@ import click
 
 from magpie.cli import CLIContext
 
+# Tags that require --force to flush due to their common importance
+PROTECTED_TAGS = frozenset({"latest", "stable", "production", "prod", "release"})
+
 
 @click.command(name="flush-tag")
 @click.argument("tag_name")
@@ -22,8 +25,17 @@ from magpie.cli import CLIContext
     default=False,
     help="Skip confirmation prompt.",
 )
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Required to flush protected tags (latest, stable, production, etc).",
+)
 @click.pass_obj
-def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool) -> None:
+def flush_tag(
+    ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: bool
+) -> None:
     """Remove a tag from all artifacts globally.
 
     TAG_NAME is the tag to remove from all artifacts.
@@ -37,9 +49,18 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool) -> None:
         magpie flush-tag old-release --dry-run
 
         magpie flush-tag deprecated --yes
+
+        magpie flush-tag latest --force --yes
     """
     if not ctx.server:
         raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
+
+    # Refuse to flush protected tags without --force
+    if tag_name in PROTECTED_TAGS and not force:
+        raise click.ClickException(
+            f"Tag '{tag_name}' is protected. Use --force to confirm you want to remove "
+            f"this tag from ALL artifacts. Protected tags: {', '.join(sorted(PROTECTED_TAGS))}"
+        )
 
     # Confirm before proceeding (unless --yes or --dry-run)
     if not dry_run and not yes:
