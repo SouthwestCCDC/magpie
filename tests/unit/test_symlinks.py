@@ -103,9 +103,7 @@ class TestRemoveSymlink:
         # Should not raise
         remove_symlink(artifact_dir, "nonexistent")
 
-    def test_remove_symlink_does_not_remove_regular_file(
-        self, artifact_dir: Path
-    ) -> None:
+    def test_remove_symlink_does_not_remove_regular_file(self, artifact_dir: Path) -> None:
         """remove_symlink should only remove symlinks, not regular files."""
         regular_file = artifact_dir / "regular"
         regular_file.write_text("regular content")

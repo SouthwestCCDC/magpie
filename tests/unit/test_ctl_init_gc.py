@@ -374,9 +374,7 @@ class TestGCCommand:
         assert "Artifacts scanned: 2" in result.output
         assert "Deleted: 2 blob(s)" in result.output
 
-    def test_gc_json_output(
-        self, cli_runner: CliRunner, test_settings: MagpieSettings
-    ) -> None:
+    def test_gc_json_output(self, cli_runner: CliRunner, test_settings: MagpieSettings) -> None:
         """GC with --json outputs machine-readable statistics."""
         test_settings.storage_path.mkdir(parents=True, exist_ok=True)
         create_artifact_with_blobs(
@@ -401,9 +399,7 @@ class TestGCCommand:
         assert output["symlinks_fixed"] >= 0
         assert output["dry_run"] is False
 
-    def test_gc_json_dry_run(
-        self, cli_runner: CliRunner, test_settings: MagpieSettings
-    ) -> None:
+    def test_gc_json_dry_run(self, cli_runner: CliRunner, test_settings: MagpieSettings) -> None:
         """GC with --json --dry-run shows dry_run: true."""
         test_settings.storage_path.mkdir(parents=True, exist_ok=True)
         create_artifact_with_blobs(
@@ -424,9 +420,7 @@ class TestGCCommand:
         assert output["dry_run"] is True
         assert output["blobs_deleted"] == 1  # Would delete count
 
-    def test_gc_quiet_flag(
-        self, cli_runner: CliRunner, test_settings: MagpieSettings
-    ) -> None:
+    def test_gc_quiet_flag(self, cli_runner: CliRunner, test_settings: MagpieSettings) -> None:
         """GC with --quiet suppresses progress output."""
         test_settings.storage_path.mkdir(parents=True, exist_ok=True)
         create_artifact_with_blobs(

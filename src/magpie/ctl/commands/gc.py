@@ -10,7 +10,7 @@ from pathlib import Path
 import click
 
 from magpie.ctl import CTLContext
-from magpie.storage.manifest import Manifest, read_manifest
+from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
 from magpie.storage.symlinks import reconcile_symlinks
 
@@ -38,7 +38,9 @@ from magpie.storage.symlinks import reconcile_symlinks
     help="Suppress progress output (no effect with --json).",
 )
 @click.pass_obj
-def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool, json_output: bool, quiet: bool) -> None:
+def gc(
+    ctx: CTLContext, dry_run: bool, reconcile_only: bool, json_output: bool, quiet: bool
+) -> None:
     """Garbage collect untagged blobs older than retention period.
 
     Walks all artifact directories and:
@@ -88,11 +90,7 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool, json_output: bool, 
     manifest_files = list(storage_path.rglob(".magpie"))
 
     # Determine if we should show progress
-    show_progress = (
-        not json_output
-        and not quiet
-        and sys.stdout.isatty()
-    )
+    show_progress = not json_output and not quiet and sys.stdout.isatty()
 
     # Process artifacts with optional progress bar
     artifacts_iter = manifest_files
