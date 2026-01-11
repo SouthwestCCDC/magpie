@@ -168,7 +168,9 @@ class StorageService:
         # Enumerate all metadata files to find all blobs (including untagged)
         results: list[ArtifactInfo] = []
         for metadata_file in metadata_dir.iterdir():
-            if not metadata_file.suffix == ".json":
+            if not metadata_file.is_file():
+                continue
+            if metadata_file.suffix != ".json":
                 continue
 
             # Extract short hash from filename (e.g., "abc12345.json" -> "abc12345")
