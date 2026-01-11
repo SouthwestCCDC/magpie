@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from magpie.auth.service import TokenInfo
 from magpie.config import MagpieSettings, get_settings
 from magpie.server.deps import require_admin_scope
+from magpie.storage.cleanup import cleanup_empty_artifact_dir
 from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
 from magpie.storage.symlinks import reconcile_symlinks
@@ -26,6 +27,7 @@ class GCResponse(BaseModel):
     blobs_found: int
     blobs_deleted: int
     space_reclaimed_bytes: int
+    directories_cleaned: int
 
 
 @router.post("/api/v1/gc")
@@ -57,8 +59,12 @@ async def trigger_gc(
     total_blobs_found = 0
     deleted_blobs = 0
     deleted_bytes = 0
+    cleaned_directories = 0
 
     now = datetime.now(timezone.utc)
+
+    # Collect artifact directories for cleanup after processing
+    artifact_dirs_to_cleanup = []
 
     # Find all artifact directories (containing .magpie manifest)
     if storage_path.exists():
@@ -114,12 +120,21 @@ async def trigger_gc(
                 deleted_blobs += 1
                 deleted_bytes += blob_size
 
+            # Add this artifact directory to cleanup list
+            artifact_dirs_to_cleanup.append(artifact_dir)
+
+        # Cleanup phase: remove empty directories after blob deletion
+        for artifact_dir in artifact_dirs_to_cleanup:
+            if cleanup_empty_artifact_dir(artifact_dir, dry_run=dry_run):
+                cleaned_directories += 1
+
     return GCResponse(
         dry_run=dry_run,
         artifacts_scanned=total_artifacts,
         blobs_found=total_blobs_found,
         blobs_deleted=deleted_blobs,
         space_reclaimed_bytes=deleted_bytes,
+        directories_cleaned=cleaned_directories,
     )
 
 

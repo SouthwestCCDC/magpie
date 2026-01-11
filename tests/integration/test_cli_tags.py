@@ -76,9 +76,7 @@ def upload_test_artifact(
 class TestTagCommand:
     """Integration tests for tag command."""
 
-    def test_tag_creates_new_tag(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_tag_creates_new_tag(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Tag command creates a new tag on an artifact."""
         upload_data = upload_test_artifact(api_client, "test/tag", b"tag test content")
         hash_ref = upload_data["hash_ref"]
@@ -95,9 +93,7 @@ class TestTagCommand:
         assert "v1.0" in result.output
         assert hash_ref in result.output
 
-    def test_tag_on_latest(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_tag_on_latest(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Tag command works with :latest ref."""
         upload_test_artifact(api_client, "test/latest-tag", b"latest tag test")
 
@@ -112,9 +108,7 @@ class TestTagCommand:
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "stable" in result.output
 
-    def test_tag_shows_all_tags(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_tag_shows_all_tags(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Tag command displays all tags after creation."""
         upload_test_artifact(api_client, "test/all-tags", b"all tags test")
 
@@ -132,9 +126,7 @@ class TestTagCommand:
         assert "latest" in result.output
         assert "v1.0" in result.output
 
-    def test_tag_not_found(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_tag_not_found(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Tag on non-existent artifact returns error."""
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
@@ -158,9 +150,7 @@ class TestTagCommand:
 class TestUntagCommand:
     """Integration tests for untag command."""
 
-    def test_untag_removes_tag(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_untag_removes_tag(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Untag command removes a tag from an artifact."""
         # Upload and create a custom tag
         upload_test_artifact(api_client, "test/untag", b"untag test content")
@@ -182,9 +172,7 @@ class TestUntagCommand:
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "Removed tag 'removeme'" in result.output
 
-    def test_untag_not_found(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_untag_not_found(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Untag on non-existent tag returns error."""
         upload_test_artifact(api_client, "test/untag-missing", b"untag missing test")
 
@@ -240,9 +228,7 @@ class TestFlushTagCommand:
         assert "Removed tag 'common-tag'" in result.output
         assert "2 artifact" in result.output
 
-    def test_flush_tag_dry_run(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_flush_tag_dry_run(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Flush-tag dry-run shows what would be affected."""
         # Upload artifact with tag
         upload_test_artifact(api_client, "test/flush-dry", b"dry run test")
@@ -264,9 +250,7 @@ class TestFlushTagCommand:
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "Would remove tag 'to-flush'" in result.output
 
-    def test_flush_tag_no_matches(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_flush_tag_no_matches(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Flush-tag with no matching artifacts reports 0."""
         # Upload artifact (only has 'latest' tag)
         upload_test_artifact(api_client, "test/flush-none", b"single version")

@@ -8,7 +8,8 @@ from pathlib import Path
 import click
 
 from magpie.ctl import CTLContext
-from magpie.storage.manifest import Manifest, read_manifest
+from magpie.storage.cleanup import cleanup_empty_artifact_dir
+from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
 from magpie.storage.symlinks import reconcile_symlinks
 
@@ -62,8 +63,12 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
     deleted_blobs = 0
     deleted_bytes = 0
     reconciled_artifacts = 0
+    cleaned_directories = 0
 
     now = datetime.now(timezone.utc)
+
+    # Collect artifact directories for cleanup after processing
+    artifact_dirs_to_cleanup = []
 
     # Find all artifact directories (containing .magpie manifest)
     for manifest_file in storage_path.rglob(".magpie"):
@@ -146,6 +151,22 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
             deleted_blobs += 1
             deleted_bytes += blob_size
 
+        # Add this artifact directory to cleanup list
+        artifact_dirs_to_cleanup.append(artifact_dir)
+
+    # Cleanup phase: remove empty directories after blob deletion
+    if not reconcile_only:
+        for artifact_dir in artifact_dirs_to_cleanup:
+            artifact_path = str(artifact_dir.relative_to(storage_path))
+
+            if cleanup_empty_artifact_dir(artifact_dir, dry_run=dry_run):
+                cleaned_directories += 1
+
+                if dry_run:
+                    click.echo(f"Would clean up empty directories in: {artifact_path}")
+                elif ctx.debug:
+                    click.echo(f"  Cleaned up empty directories in: {artifact_path}", err=True)
+
     # Print summary
     click.echo("")
     click.echo("GC Summary:")
@@ -157,6 +178,9 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool) -> None:
     if not reconcile_only:
         action = "Would delete" if dry_run else "Deleted"
         click.echo(f"  {action}: {deleted_blobs} blob(s), {_format_size(deleted_bytes)}")
+
+        cleanup_action = "Would clean up" if dry_run else "Cleaned up"
+        click.echo(f"  {cleanup_action}: {cleaned_directories} empty artifact directory(ies)")
 
 
 def _get_blob_age_days(artifact_dir: Path, blob_hash: str, now: datetime) -> int | None:

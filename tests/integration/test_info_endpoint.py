@@ -163,9 +163,7 @@ class TestResponseIncludesTags:
         from magpie.storage.paths import artifact_dir_path
         from magpie.storage.symlinks import reconcile_symlinks
 
-        artifact_dir = artifact_dir_path(
-            test_storage_service.config.storage_path, artifact_path
-        )
+        artifact_dir = artifact_dir_path(test_storage_service.config.storage_path, artifact_path)
         manifest = update_tag(artifact_dir, "v1.0", upload_data["hash"])
         reconcile_symlinks(artifact_dir, manifest)
 

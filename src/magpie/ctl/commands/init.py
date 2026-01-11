@@ -67,7 +67,7 @@ def init(ctx: CTLContext, reset_admin_token: bool) -> None:
         if revoked:
             click.echo(f"Revoked existing admin token: {ADMIN_TOKEN_NAME}")
         else:
-            click.echo(f"No existing admin token found to revoke")
+            click.echo("No existing admin token found to revoke")
 
         # Create new admin token
         plaintext_token = token_service.create_token(ADMIN_TOKEN_NAME, TokenScope.ADMIN)

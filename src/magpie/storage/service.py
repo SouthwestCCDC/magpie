@@ -87,9 +87,7 @@ class StorageService:
 
         # Store blob (handles streaming and hashing)
         # Returns full hash for metadata, short hash ref for display
-        full_hash, hash_ref, is_duplicate = store_blob(
-            artifact_dir, file_stream, self.config
-        )
+        full_hash, hash_ref, is_duplicate = store_blob(artifact_dir, file_stream, self.config)
 
         # Write metadata sidecar (only for new blobs, write_metadata is write-once)
         # Use hash_ref (short hash) for filename, but store full_hash inside
@@ -190,9 +188,7 @@ class StorageService:
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
 
         if not artifact_dir.exists():
-            raise ArtifactNotFoundError(
-                f"Artifact path not found: {artifact_path}"
-            )
+            raise ArtifactNotFoundError(f"Artifact path not found: {artifact_path}")
 
         manifest = read_manifest(artifact_dir)
 
@@ -206,9 +202,7 @@ class StorageService:
         else:
             # Tag name - look up in manifest (stores full hash)
             if ref not in manifest.tags:
-                raise ArtifactNotFoundError(
-                    f"Tag '{ref}' not found in artifact {artifact_path}"
-                )
+                raise ArtifactNotFoundError(f"Tag '{ref}' not found in artifact {artifact_path}")
             full_hash = manifest.tags[ref]
             # Convert to short hash for metadata lookup
             hash_ref = short_hash(full_hash)
@@ -226,9 +220,7 @@ class StorageService:
             source_uri=metadata.source_uri,
         )
 
-    def create_tag(
-        self, artifact_path: str, hash_ref: str, tag_name: str
-    ) -> ArtifactInfo:
+    def create_tag(self, artifact_path: str, hash_ref: str, tag_name: str) -> ArtifactInfo:
         """Create or update a tag pointing to a specific blob.
 
         Args:
@@ -421,9 +413,5 @@ class StorageService:
             Sorted list of tag names pointing to this hash.
         """
         manifest = read_manifest(artifact_dir)
-        tags = [
-            tag_name
-            for tag_name, ref in manifest.tags.items()
-            if ref == hash_ref
-        ]
+        tags = [tag_name for tag_name, ref in manifest.tags.items() if ref == hash_ref]
         return sorted(tags)
