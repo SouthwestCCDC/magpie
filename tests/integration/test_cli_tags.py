@@ -312,3 +312,77 @@ class TestFlushTagCommand:
 
         assert result.exit_code != 0
         assert "No server configured" in result.output
+
+    def test_flush_tag_protected_tag_requires_force(
+        self, cli_runner: CliRunner
+    ) -> None:
+        """Flush-tag on protected tags requires --force flag."""
+        # Test several protected tags (lowercase)
+        protected_tags = ["latest", "stable", "production", "prod", "release"]
+
+        for tag in protected_tags:
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "flush-tag", tag, "--yes"],
+            )
+
+            assert result.exit_code != 0, f"Tag '{tag}' should require --force"
+            assert "protected" in result.output.lower()
+            assert "--force" in result.output
+
+    def test_flush_tag_protected_tag_case_insensitive(
+        self, cli_runner: CliRunner
+    ) -> None:
+        """Flush-tag protection is case-insensitive."""
+        # Test mixed-case variants of protected tags
+        mixed_case_tags = ["LATEST", "Stable", "PRODUCTION", "Prod", "Release"]
+
+        for tag in mixed_case_tags:
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "flush-tag", tag, "--yes"],
+            )
+
+            assert result.exit_code != 0, f"Tag '{tag}' should require --force (case-insensitive)"
+            assert "protected" in result.output.lower()
+            assert "--force" in result.output
+
+    def test_flush_tag_protected_tag_with_force_succeeds(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Flush-tag on protected tags succeeds with --force flag."""
+        # Upload artifact (auto-tagged as 'latest')
+        upload_test_artifact(api_client, "test/force-flush", b"content")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "flush-tag", "latest", "--force", "--yes"],
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "Removed tag 'latest'" in result.output
+
+    def test_flush_tag_non_protected_tag_no_force_needed(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Flush-tag on non-protected tags works without --force."""
+        upload_test_artifact(api_client, "test/normal-tag", b"content")
+
+        api_client.post(
+            "/api/v1/artifacts/test/normal-tag/latest/tags",
+            json={"tag_name": "custom-tag"},
+        )
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "flush-tag", "custom-tag", "--yes"],
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "Removed tag 'custom-tag'" in result.output
