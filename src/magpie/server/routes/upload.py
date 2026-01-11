@@ -30,7 +30,7 @@ def validate_artifact_path(path: str) -> None:
     """
     segments = path.split("/")
     for original_segment in segments:
-        if original_segment.lower() in RESERVED_SEGMENTS:
+        if original_segment in RESERVED_SEGMENTS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Path contains reserved segment '{original_segment}'. "
