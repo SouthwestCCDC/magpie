@@ -12,6 +12,10 @@ test:
 test-cov:
     uv run pytest --cov=magpie --cov-report=term-missing --cov-report=html
 
+# Run tests with CI-style coverage (term + xml output), excluding e2e tests
+test-ci:
+    uv run pytest -m "not e2e" --cov=src/magpie --cov-report=term --cov-report=xml
+
 # Run only unit tests
 test-unit:
     uv run pytest tests/unit
@@ -32,6 +36,10 @@ lint:
 fmt:
     uv run ruff format .
 
+# Check code formatting without modifying files
+fmt-check:
+    uv run ruff format --check .
+
 # Run security scanning with bandit
 security:
     uv run bandit -r src/magpie
@@ -41,6 +49,17 @@ check:
     uv run ruff check .
     uv run ruff format --check .
     uv run pytest
+
+# Run all CI checks (lint, format check, security, and tests with coverage)
+ci:
+    @echo "Running lint checks..."
+    just lint
+    @echo "Running format checks..."
+    just fmt-check
+    @echo "Running security scan..."
+    just security
+    @echo "Running tests with coverage..."
+    just test-ci
 
 # Start development server with auto-reload
 serve:

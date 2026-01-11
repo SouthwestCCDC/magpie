@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import click
+
+if TYPE_CHECKING:
+    import httpx
 
 from magpie.cli import CLIContext
 
@@ -35,7 +40,9 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
         raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
 
     if not ctx.token:
-        raise click.ClickException("No token configured. Use --token or set MAGPIE_TOKEN. Admin token required.")
+        raise click.ClickException(
+            "No token configured. Use --token or set MAGPIE_TOKEN. Admin token required."
+        )
 
     with ctx.get_client() as client:
         if ctx.debug:
@@ -68,7 +75,9 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
 
     action = "Would delete" if dry_run else "Deleted"
     click.echo(f"  {action}: {data['blobs_deleted']} blob(s)")
-    click.echo(f"  Space {'reclaimable' if dry_run else 'reclaimed'}: {_format_size(data['space_reclaimed_bytes'])}")
+    click.echo(
+        f"  Space {'reclaimable' if dry_run else 'reclaimed'}: {_format_size(data['space_reclaimed_bytes'])}"
+    )
 
 
 def _handle_error(response: "httpx.Response", message: str | None = None) -> None:

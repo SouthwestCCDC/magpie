@@ -29,7 +29,6 @@ class TestUnauthenticatedAccess:
         response = http_client.post(
             "/api/v1/upload/e2e-tests/unauth-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
 
         assert response.status_code == 401
@@ -69,7 +68,6 @@ class TestUnauthenticatedAccess:
         authenticated_client.post(
             "/api/v1/upload/e2e-tests/public-list-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
 
         # Unauthenticated GET should work
@@ -91,15 +89,12 @@ class TestReadTokenPermissions:
     ) -> None:
         """Verify read token can list artifacts."""
         # Create read token
-        read_token = create_token_via_api(
-            http_client, admin_token, "auth-test-reader", "read"
-        )
+        read_token = create_token_via_api(http_client, admin_token, "auth-test-reader", "read")
 
         # Upload something first (with admin)
         authenticated_client.post(
             "/api/v1/upload/e2e-tests/read-list-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
 
         # List with read token (should work - GET is public anyway)
@@ -147,7 +142,6 @@ class TestReadTokenPermissions:
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/read-tag-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -328,7 +322,6 @@ class TestAdminTokenPermissions:
         response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/admin-upload-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
 
         assert response.status_code == 200

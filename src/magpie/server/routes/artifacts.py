@@ -179,9 +179,7 @@ async def remove_tag(
     removed = storage_service.remove_tag(path, tag_name)
 
     if not removed:
-        raise ArtifactNotFoundError(
-            f"Tag '{tag_name}' not found in artifact {path}"
-        )
+        raise ArtifactNotFoundError(f"Tag '{tag_name}' not found in artifact {path}")
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

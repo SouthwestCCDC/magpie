@@ -6,9 +6,14 @@ This CLI is for server-side administration and uses MagpieSettings
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import click
 
 from magpie.config import get_settings
+
+if TYPE_CHECKING:
+    from magpie.config import MagpieSettings
 
 
 class CTLContext:
@@ -56,7 +61,7 @@ def version() -> None:
 
 
 # Register subcommands
-from magpie.ctl.commands import gc, init, token
+from magpie.ctl.commands import gc, init, token  # noqa: E402
 
 cli.add_command(init)
 cli.add_command(gc)
