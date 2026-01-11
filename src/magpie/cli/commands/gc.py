@@ -72,6 +72,8 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
 
     click.echo(f"  Artifacts scanned: {data['artifacts_scanned']}")
     click.echo(f"  Blobs found: {data['blobs_found']}")
+    click.echo(f"  Symlinks checked: {data['symlinks_checked']}")
+    click.echo(f"  Symlinks fixed: {data['symlinks_fixed']}")
 
     action = "Would delete" if dry_run else "Deleted"
     click.echo(f"  {action}: {data['blobs_deleted']} blob(s)")
