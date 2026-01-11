@@ -45,12 +45,20 @@ def require_write_scope(
 
     Raises:
         HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
-        HTTPException 403: If token has read scope (insufficient permissions).
+        HTTPException 403: If token has invalid or read scope (insufficient permissions).
     """
     if x_magpie_scope is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
+        )
+
+    # Validate scope value is one of the allowed scopes
+    valid_scopes = {scope.value for scope in TokenScope}
+    if x_magpie_scope not in valid_scopes:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Invalid scope: {x_magpie_scope}",
         )
 
     if x_magpie_scope == TokenScope.READ.value:
@@ -73,12 +81,20 @@ def require_admin_scope_header(
 
     Raises:
         HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
-        HTTPException 403: If token doesn't have admin scope.
+        HTTPException 403: If token has invalid or non-admin scope (insufficient permissions).
     """
     if x_magpie_scope is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
+        )
+
+    # Validate scope value is one of the allowed scopes
+    valid_scopes = {scope.value for scope in TokenScope}
+    if x_magpie_scope not in valid_scopes:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Invalid scope: {x_magpie_scope}",
         )
 
     if x_magpie_scope != TokenScope.ADMIN.value:
