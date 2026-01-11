@@ -536,3 +536,245 @@ class TestGCCommand:
 
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "GC Summary:" in result.output
+
+
+class TestGCDirectoryCleanup:
+    """Tests for GC directory cleanup after blob deletion."""
+
+    def test_gc_removes_empty_blobs_dir(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC removes empty blobs/ directory after deleting last blob."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        # Create artifact with only untagged blob that will be deleted
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/cleanup",
+            tagged_hashes={},  # No tags
+            untagged_hashes=["old_hash_xyz"],
+            blob_ages_days={"old_hash_xyz": 100},
+        )
+
+        blobs_dir = test_settings.storage_path / "test/cleanup/blobs"
+        assert blobs_dir.exists()
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "Deleted: 1 blob(s)" in result.output
+        # blobs/ directory should be removed
+        assert not blobs_dir.exists()
+
+    def test_gc_removes_empty_metadata_dir(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC removes empty metadata/ directory after deleting last blob."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/cleanup",
+            tagged_hashes={},
+            untagged_hashes=["old_hash_xyz"],
+            blob_ages_days={"old_hash_xyz": 100},
+        )
+
+        metadata_dir = test_settings.storage_path / "test/cleanup/metadata"
+        assert metadata_dir.exists()
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc"])
+
+        assert result.exit_code == 0
+        # metadata/ directory should be removed
+        assert not metadata_dir.exists()
+
+    def test_gc_removes_manifest_with_no_tags(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC removes .magpie file when no tags remain."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/cleanup",
+            tagged_hashes={},  # No tags
+            untagged_hashes=["old_hash_xyz"],
+            blob_ages_days={"old_hash_xyz": 100},
+        )
+
+        manifest_file = test_settings.storage_path / "test/cleanup/.magpie"
+        assert manifest_file.exists()
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc"])
+
+        assert result.exit_code == 0
+        # .magpie should be removed when no tags remain
+        assert not manifest_file.exists()
+
+    def test_gc_preserves_manifest_with_tags(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC preserves .magpie file when tags still exist."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/cleanup",
+            tagged_hashes={"latest": "tagged_hash_abc"},  # Has tags
+            untagged_hashes=["old_hash_xyz"],
+            blob_ages_days={"tagged_hash_abc": 0, "old_hash_xyz": 100},
+        )
+
+        manifest_file = test_settings.storage_path / "test/cleanup/.magpie"
+        assert manifest_file.exists()
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc"])
+
+        assert result.exit_code == 0
+        # .magpie should be preserved because "latest" tag exists
+        assert manifest_file.exists()
+
+    def test_gc_removes_empty_artifact_dir(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC removes artifact directory when completely empty."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/cleanup",
+            tagged_hashes={},
+            untagged_hashes=["old_hash_xyz"],
+            blob_ages_days={"old_hash_xyz": 100},
+        )
+
+        artifact_dir = test_settings.storage_path / "test/cleanup"
+        assert artifact_dir.exists()
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc"])
+
+        assert result.exit_code == 0
+        # Artifact directory should be removed when empty
+        assert not artifact_dir.exists()
+
+    def test_gc_removes_empty_parent_dirs(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC removes empty parent directories up to storage root."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "deep/nested/path/artifact",
+            tagged_hashes={},
+            untagged_hashes=["old_hash_xyz"],
+            blob_ages_days={"old_hash_xyz": 100},
+        )
+
+        parent_dir = test_settings.storage_path / "deep"
+        assert parent_dir.exists()
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc"])
+
+        assert result.exit_code == 0
+        # All empty parent directories should be removed
+        assert not parent_dir.exists()
+
+    def test_gc_preserves_non_empty_parent(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC preserves parent directories that have other content."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        # Create two artifacts under same parent
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "parent/artifact1",
+            tagged_hashes={},
+            untagged_hashes=["old_hash_xyz"],
+            blob_ages_days={"old_hash_xyz": 100},
+        )
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "parent/artifact2",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=[],
+            blob_ages_days={"tagged_hash_abc": 0},
+        )
+
+        parent_dir = test_settings.storage_path / "parent"
+        artifact2_dir = test_settings.storage_path / "parent/artifact2"
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc"])
+
+        assert result.exit_code == 0
+        # artifact1 removed but parent preserved for artifact2
+        assert not (test_settings.storage_path / "parent/artifact1").exists()
+        assert artifact2_dir.exists()
+        assert parent_dir.exists()
+
+    def test_gc_dry_run_shows_directories_to_remove(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --dry-run shows directories that would be removed."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/cleanup",
+            tagged_hashes={},
+            untagged_hashes=["old_hash_xyz"],
+            blob_ages_days={"old_hash_xyz": 100},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--dry-run"])
+
+        assert result.exit_code == 0
+        assert "Would remove" in result.output
+
+    def test_gc_dry_run_does_not_remove_directories(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --dry-run does not actually remove directories."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/cleanup",
+            tagged_hashes={},
+            untagged_hashes=["old_hash_xyz"],
+            blob_ages_days={"old_hash_xyz": 100},
+        )
+
+        artifact_dir = test_settings.storage_path / "test/cleanup"
+        blobs_dir = artifact_dir / "blobs"
+        manifest_file = artifact_dir / ".magpie"
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--dry-run"])
+
+        assert result.exit_code == 0
+        # Nothing should be removed in dry run
+        assert blobs_dir.exists()
+        assert manifest_file.exists()
+        assert artifact_dir.exists()
+
+    def test_gc_reports_directory_cleanup_count(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC reports number of directories removed in summary."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/cleanup",
+            tagged_hashes={},
+            untagged_hashes=["old_hash_xyz"],
+            blob_ages_days={"old_hash_xyz": 100},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc"])
+
+        assert result.exit_code == 0
+        # Should report removed directories
+        assert "Removed empty directories:" in result.output

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -11,6 +12,7 @@ from pydantic import BaseModel
 from magpie.auth.service import TokenInfo
 from magpie.config import MagpieSettings, get_settings
 from magpie.server.deps import require_admin_scope
+from magpie.storage.cleanup import cleanup_artifact_directories
 from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
 from magpie.storage.symlinks import reconcile_symlinks
@@ -28,6 +30,7 @@ class GCResponse(BaseModel):
     space_reclaimed_bytes: int
     symlinks_checked: int
     symlinks_fixed: int
+    directories_removed: int = 0
 
 
 @router.post("/api/v1/gc")
@@ -66,8 +69,12 @@ async def trigger_gc(
     deleted_bytes = 0
     symlinks_checked = 0
     symlinks_fixed = 0
+    directories_removed = 0
 
     now = datetime.now(timezone.utc)
+
+    # Collect artifact directories for cleanup pass
+    artifact_dirs_to_cleanup: list[Path] = []
 
     # Find all artifact directories (containing .magpie manifest)
     if storage_path.exists():
@@ -83,6 +90,9 @@ async def trigger_gc(
             stats = reconcile_symlinks(artifact_dir, manifest)
             symlinks_checked += stats.checked
             symlinks_fixed += stats.fixed
+
+            # Track artifact directory for cleanup pass
+            artifact_dirs_to_cleanup.append(artifact_dir)
 
             # Find all blobs in blobs/ directory
             blobs_dir = artifact_dir / "blobs"
@@ -125,6 +135,11 @@ async def trigger_gc(
                 deleted_blobs += 1
                 deleted_bytes += blob_size
 
+        # Cleanup pass: remove empty directories after blob deletion
+        for artifact_dir in artifact_dirs_to_cleanup:
+            stats = cleanup_artifact_directories(artifact_dir, storage_path, dry_run)
+            directories_removed += stats.total_removed
+
     return GCResponse(
         dry_run=dry_run,
         artifacts_scanned=total_artifacts,
@@ -133,6 +148,7 @@ async def trigger_gc(
         space_reclaimed_bytes=deleted_bytes,
         symlinks_checked=symlinks_checked,
         symlinks_fixed=symlinks_fixed,
+        directories_removed=directories_removed,
     )
 
 

@@ -6,6 +6,10 @@ from magpie.storage.blob import (
     read_blob,
     store_blob,
 )
+from magpie.storage.cleanup import (
+    CleanupStats,
+    cleanup_artifact_directories,
+)
 from magpie.storage.exceptions import (
     ArtifactNotFoundError,
     BlobExistsError,
@@ -73,6 +77,9 @@ __all__ = [
     "create_symlink",
     "remove_symlink",
     "reconcile_symlinks",
+    # Cleanup operations
+    "CleanupStats",
+    "cleanup_artifact_directories",
     # Exceptions
     "StorageError",
     "ArtifactNotFoundError",
