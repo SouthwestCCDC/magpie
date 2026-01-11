@@ -27,6 +27,7 @@ dev = [
     "ruff",
     "pytest",
     "pytest-asyncio",
+    "pytest-cov",
     "bandit[toml]",
     "pre-commit",
 ]
