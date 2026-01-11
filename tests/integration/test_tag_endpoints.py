@@ -172,9 +172,7 @@ class TestRemoveTag:
         )
 
         # Remove the tag
-        response = client.delete(
-            f"/api/v1/artifacts/{artifact_path}/tags/to-remove"
-        )
+        response = client.delete(f"/api/v1/artifacts/{artifact_path}/tags/to-remove")
 
         assert response.status_code == 204
 
@@ -194,9 +192,7 @@ class TestRemoveTagNonexistent:
         artifact_path = "tag-test/remove-nonexistent"
         upload_artifact(client, artifact_path, b"content for nonexistent tag test")
 
-        response = client.delete(
-            f"/api/v1/artifacts/{artifact_path}/tags/nonexistent-tag"
-        )
+        response = client.delete(f"/api/v1/artifacts/{artifact_path}/tags/nonexistent-tag")
 
         assert response.status_code == 404
         data = response.json()

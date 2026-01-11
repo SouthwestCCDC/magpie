@@ -33,9 +33,7 @@ def compute_hash(file_or_path: BinaryIO | Path | bytes) -> str:
     elif hasattr(file_or_path, "read"):
         _hash_file_chunks(file_or_path, hasher)
     else:
-        raise TypeError(
-            f"Expected BinaryIO, Path, or bytes, got {type(file_or_path).__name__}"
-        )
+        raise TypeError(f"Expected BinaryIO, Path, or bytes, got {type(file_or_path).__name__}")
 
     return hasher.hexdigest()
 

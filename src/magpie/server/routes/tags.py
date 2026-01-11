@@ -27,9 +27,7 @@ async def flush_tag(
     tag_name: str,
     confirm_walk_filesystem: Annotated[
         bool | None,
-        Query(
-            description="Must be true to confirm this operation walks the entire filesystem"
-        ),
+        Query(description="Must be true to confirm this operation walks the entire filesystem"),
     ] = None,
     dry_run: Annotated[
         bool,

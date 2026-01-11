@@ -91,9 +91,7 @@ class TestGetServer:
         config_file.write_text('[client]\nserver = "https://config.example.com"')
         monkeypatch.setenv("MAGPIE_SERVER", "https://env.example.com")
 
-        result = get_server(
-            cli_override="https://cli.example.com", config_path=config_file
-        )
+        result = get_server(cli_override="https://cli.example.com", config_path=config_file)
 
         assert result == "https://cli.example.com"
 

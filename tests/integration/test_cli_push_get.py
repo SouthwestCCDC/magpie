@@ -103,9 +103,7 @@ class MockClientWithDownload:
             info = self.storage_service.get_artifact_info(path, hash_ref)
 
             # Read the blob using the full hash
-            artifact_dir = artifact_dir_path(
-                self.storage_service.config.storage_path, path
-            )
+            artifact_dir = artifact_dir_path(self.storage_service.config.storage_path, path)
             blob_file = read_blob(artifact_dir, info.hash)
             content = blob_file.read_bytes()
 
@@ -181,8 +179,11 @@ class TestPushCommand:
         assert "Hash ref:" in result.output
 
     def test_push_with_source_uri(
-        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path,
-        test_storage_service: StorageService
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
     ) -> None:
         """Push with --source-uri includes it in metadata."""
         test_file = tmp_path / "source_uri_test.bin"
@@ -195,10 +196,14 @@ class TestPushCommand:
             result = cli_runner.invoke(
                 cli,
                 [
-                    "--server", "http://test",
-                    "push", str(test_file),
-                    "--to", "source/uri-test",
-                    "--source-uri", "git://repo@v1.0"
+                    "--server",
+                    "http://test",
+                    "push",
+                    str(test_file),
+                    "--to",
+                    "source/uri-test",
+                    "--source-uri",
+                    "git://repo@v1.0",
                 ],
             )
 
@@ -256,8 +261,11 @@ class TestGetCommand:
     """Integration tests for get command."""
 
     def test_get_downloads_and_verifies_hash(
-        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path,
-        test_storage_service: StorageService
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
     ) -> None:
         """Get command downloads artifact and verifies hash."""
         # First upload a file
@@ -276,9 +284,12 @@ class TestGetCommand:
             result = cli_runner.invoke(
                 cli,
                 [
-                    "--server", "http://test",
-                    "get", "get/test:latest",
-                    "-o", str(output_file),
+                    "--server",
+                    "http://test",
+                    "get",
+                    "get/test:latest",
+                    "-o",
+                    str(output_file),
                 ],
             )
 
@@ -288,8 +299,11 @@ class TestGetCommand:
         assert output_file.read_bytes() == test_content
 
     def test_get_with_no_verify_skips_verification(
-        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path,
-        test_storage_service: StorageService
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
     ) -> None:
         """Get with --no-verify skips hash verification."""
         # Upload a file
@@ -307,9 +321,12 @@ class TestGetCommand:
             result = cli_runner.invoke(
                 cli,
                 [
-                    "--server", "http://test",
-                    "get", "noverify/test",
-                    "-o", str(output_file),
+                    "--server",
+                    "http://test",
+                    "get",
+                    "noverify/test",
+                    "-o",
+                    str(output_file),
                     "--no-verify",
                 ],
             )
@@ -360,9 +377,12 @@ class TestGetCommand:
             result = cli_runner.invoke(
                 cli,
                 [
-                    "--server", "http://test",
-                    "get", "mismatch/test",
-                    "-o", str(output_file),
+                    "--server",
+                    "http://test",
+                    "get",
+                    "mismatch/test",
+                    "-o",
+                    str(output_file),
                 ],
             )
 
@@ -370,8 +390,11 @@ class TestGetCommand:
         assert "Hash mismatch" in result.output
 
     def test_get_defaults_to_latest_ref(
-        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path,
-        test_storage_service: StorageService
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
     ) -> None:
         """Get without explicit ref uses 'latest'."""
         # Upload a file
@@ -390,9 +413,12 @@ class TestGetCommand:
             result = cli_runner.invoke(
                 cli,
                 [
-                    "--server", "http://test",
-                    "get", "latest/test",
-                    "-o", str(output_file),
+                    "--server",
+                    "http://test",
+                    "get",
+                    "latest/test",
+                    "-o",
+                    str(output_file),
                 ],
             )
 
@@ -411,9 +437,12 @@ class TestGetCommand:
             result = cli_runner.invoke(
                 cli,
                 [
-                    "--server", "http://test",
-                    "get", "nonexistent/artifact",
-                    "-o", str(output_file),
+                    "--server",
+                    "http://test",
+                    "get",
+                    "nonexistent/artifact",
+                    "-o",
+                    str(output_file),
                 ],
             )
 
@@ -433,8 +462,11 @@ class TestGetCommand:
         assert "No server configured" in result.output
 
     def test_get_derives_output_filename_from_path(
-        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path,
-        test_storage_service: StorageService
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
     ) -> None:
         """Get without -o derives output filename from artifact path."""
         # Upload a file
@@ -452,8 +484,10 @@ class TestGetCommand:
                 result = cli_runner.invoke(
                     cli,
                     [
-                        "--server", "http://test",
-                        "get", "path/myartifact",
+                        "--server",
+                        "http://test",
+                        "get",
+                        "path/myartifact",
                     ],
                 )
 

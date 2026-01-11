@@ -195,7 +195,10 @@ class TestTagRemoval:
         # Remove tag via CLI
         result = subprocess.run(
             [
-                "uv", "run", "magpie", "untag",
+                "uv",
+                "run",
+                "magpie",
+                "untag",
                 "e2e-tests/cli-untag-test",
                 "cli-remove",
             ],

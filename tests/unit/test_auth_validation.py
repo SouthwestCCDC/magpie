@@ -45,9 +45,7 @@ def client(token_service: TokenService) -> TestClient:
 class TestValidTokenReturns200:
     """Tests for valid token returning 200 with correct headers."""
 
-    def test_valid_token_returns_200(
-        self, client: TestClient, token_service: TokenService
-    ) -> None:
+    def test_valid_token_returns_200(self, client: TestClient, token_service: TokenService) -> None:
         """Valid token should return 200 OK."""
         plaintext = token_service.create_token("test-user", TokenScope.WRITE)
 
@@ -120,9 +118,7 @@ class TestMissingAuthorizationHeader:
 
         assert response.status_code == 401
 
-    def test_missing_authorization_returns_json_error(
-        self, client: TestClient
-    ) -> None:
+    def test_missing_authorization_returns_json_error(self, client: TestClient) -> None:
         """Missing Authorization header should return JSON error with message."""
         response = client.get("/api/v1/auth/validate")
 
@@ -213,9 +209,7 @@ class TestDisabledTokenReturns401:
 class TestResponseHeadersCorrectValues:
     """Tests for response headers containing correct user and scope values."""
 
-    def test_read_scope_in_header(
-        self, client: TestClient, token_service: TokenService
-    ) -> None:
+    def test_read_scope_in_header(self, client: TestClient, token_service: TokenService) -> None:
         """READ scope token should return 'read' in X-Magpie-Scope header."""
         plaintext = token_service.create_token("read-svc", TokenScope.READ)
 
@@ -227,9 +221,7 @@ class TestResponseHeadersCorrectValues:
         assert response.status_code == 200
         assert response.headers["X-Magpie-Scope"] == "read"
 
-    def test_write_scope_in_header(
-        self, client: TestClient, token_service: TokenService
-    ) -> None:
+    def test_write_scope_in_header(self, client: TestClient, token_service: TokenService) -> None:
         """WRITE scope token should return 'write' in X-Magpie-Scope header."""
         plaintext = token_service.create_token("write-svc", TokenScope.WRITE)
 
@@ -241,9 +233,7 @@ class TestResponseHeadersCorrectValues:
         assert response.status_code == 200
         assert response.headers["X-Magpie-Scope"] == "write"
 
-    def test_admin_scope_in_header(
-        self, client: TestClient, token_service: TokenService
-    ) -> None:
+    def test_admin_scope_in_header(self, client: TestClient, token_service: TokenService) -> None:
         """ADMIN scope token should return 'admin' in X-Magpie-Scope header."""
         plaintext = token_service.create_token("admin-svc", TokenScope.ADMIN)
 
@@ -270,9 +260,7 @@ class TestResponseHeadersCorrectValues:
         assert response.status_code == 200
         assert response.headers["X-Magpie-User"] == token_name
 
-    def test_both_headers_present(
-        self, client: TestClient, token_service: TokenService
-    ) -> None:
+    def test_both_headers_present(self, client: TestClient, token_service: TokenService) -> None:
         """Both X-Magpie-User and X-Magpie-Scope headers should be present."""
         plaintext = token_service.create_token("dual-header", TokenScope.WRITE)
 

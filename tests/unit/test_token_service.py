@@ -27,36 +27,28 @@ def token_service(test_config: MagpieSettings) -> TokenService:
 class TestCreateToken:
     """Tests for TokenService.create_token method."""
 
-    def test_create_token_returns_proper_format(
-        self, token_service: TokenService
-    ) -> None:
+    def test_create_token_returns_proper_format(self, token_service: TokenService) -> None:
         """create_token should return token with mgp_ prefix."""
         token = token_service.create_token("test-token", TokenScope.READ)
 
         assert token.startswith("mgp_")
         assert len(token) > 10  # prefix + random part
 
-    def test_create_token_read_scope_has_mgp_prefix(
-        self, token_service: TokenService
-    ) -> None:
+    def test_create_token_read_scope_has_mgp_prefix(self, token_service: TokenService) -> None:
         """create_token for READ scope should use mgp_ prefix."""
         token = token_service.create_token("read-token", TokenScope.READ)
 
         assert token.startswith("mgp_")
         assert not token.startswith("mgp_ADMIN_")
 
-    def test_create_token_write_scope_has_mgp_prefix(
-        self, token_service: TokenService
-    ) -> None:
+    def test_create_token_write_scope_has_mgp_prefix(self, token_service: TokenService) -> None:
         """create_token for WRITE scope should use mgp_ prefix."""
         token = token_service.create_token("write-token", TokenScope.WRITE)
 
         assert token.startswith("mgp_")
         assert not token.startswith("mgp_ADMIN_")
 
-    def test_create_token_admin_uses_admin_prefix(
-        self, token_service: TokenService
-    ) -> None:
+    def test_create_token_admin_uses_admin_prefix(self, token_service: TokenService) -> None:
         """create_token for ADMIN scope should use mgp_ADMIN_ prefix."""
         token = token_service.create_token("admin-token", TokenScope.ADMIN)
 
@@ -78,18 +70,14 @@ class TestCreateToken:
         assert row["token_hash"] != plaintext
         assert len(row["token_hash"]) == 64  # SHA-256 hex length
 
-    def test_create_token_duplicate_name_raises(
-        self, token_service: TokenService
-    ) -> None:
+    def test_create_token_duplicate_name_raises(self, token_service: TokenService) -> None:
         """create_token should raise ValueError for duplicate name."""
         token_service.create_token("duplicate", TokenScope.READ)
 
         with pytest.raises(ValueError, match="already exists"):
             token_service.create_token("duplicate", TokenScope.WRITE)
 
-    def test_create_token_generates_unique_tokens(
-        self, token_service: TokenService
-    ) -> None:
+    def test_create_token_generates_unique_tokens(self, token_service: TokenService) -> None:
         """create_token should generate unique tokens each time."""
         token1 = token_service.create_token("token1", TokenScope.READ)
         token2 = token_service.create_token("token2", TokenScope.READ)
@@ -100,9 +88,7 @@ class TestCreateToken:
 class TestValidateToken:
     """Tests for TokenService.validate_token method."""
 
-    def test_validate_token_success_returns_token_info(
-        self, token_service: TokenService
-    ) -> None:
+    def test_validate_token_success_returns_token_info(self, token_service: TokenService) -> None:
         """validate_token should return TokenInfo for valid token."""
         plaintext = token_service.create_token("valid-token", TokenScope.WRITE)
 
@@ -113,9 +99,7 @@ class TestValidateToken:
         assert result.name == "valid-token"
         assert result.scope == TokenScope.WRITE
 
-    def test_validate_token_invalid_returns_none(
-        self, token_service: TokenService
-    ) -> None:
+    def test_validate_token_invalid_returns_none(self, token_service: TokenService) -> None:
         """validate_token should return None for invalid token."""
         result = token_service.validate_token("mgp_invalid_token_xyz")
 
@@ -137,9 +121,7 @@ class TestValidateToken:
 
         assert result is None
 
-    def test_validate_token_preserves_scope(
-        self, token_service: TokenService
-    ) -> None:
+    def test_validate_token_preserves_scope(self, token_service: TokenService) -> None:
         """validate_token should return correct scope."""
         read_token = token_service.create_token("read", TokenScope.READ)
         write_token = token_service.create_token("write", TokenScope.WRITE)
@@ -149,9 +131,7 @@ class TestValidateToken:
         assert token_service.validate_token(write_token).scope == TokenScope.WRITE
         assert token_service.validate_token(admin_token).scope == TokenScope.ADMIN
 
-    def test_validate_token_empty_string_returns_none(
-        self, token_service: TokenService
-    ) -> None:
+    def test_validate_token_empty_string_returns_none(self, token_service: TokenService) -> None:
         """validate_token should return None for empty string."""
         result = token_service.validate_token("")
 
@@ -161,9 +141,7 @@ class TestValidateToken:
 class TestRevokeToken:
     """Tests for TokenService.revoke_token method."""
 
-    def test_revoke_token_removes_token(
-        self, token_service: TokenService
-    ) -> None:
+    def test_revoke_token_removes_token(self, token_service: TokenService) -> None:
         """revoke_token should remove the token from database."""
         plaintext = token_service.create_token("to-revoke", TokenScope.READ)
 
@@ -172,9 +150,7 @@ class TestRevokeToken:
         assert result is True
         assert token_service.validate_token(plaintext) is None
 
-    def test_revoke_token_returns_true_on_success(
-        self, token_service: TokenService
-    ) -> None:
+    def test_revoke_token_returns_true_on_success(self, token_service: TokenService) -> None:
         """revoke_token should return True when token is revoked."""
         token_service.create_token("revokable", TokenScope.READ)
 
@@ -182,17 +158,13 @@ class TestRevokeToken:
 
         assert result is True
 
-    def test_revoke_token_returns_false_for_nonexistent(
-        self, token_service: TokenService
-    ) -> None:
+    def test_revoke_token_returns_false_for_nonexistent(self, token_service: TokenService) -> None:
         """revoke_token should return False for non-existent token."""
         result = token_service.revoke_token("nonexistent")
 
         assert result is False
 
-    def test_revoked_token_no_longer_validates(
-        self, token_service: TokenService
-    ) -> None:
+    def test_revoked_token_no_longer_validates(self, token_service: TokenService) -> None:
         """A revoked token should no longer validate."""
         plaintext = token_service.create_token("revoke-validate", TokenScope.WRITE)
 
@@ -209,33 +181,25 @@ class TestRevokeToken:
 class TestHasScope:
     """Tests for TokenService.has_scope method."""
 
-    def test_has_scope_admin_has_all_scopes(
-        self, token_service: TokenService
-    ) -> None:
+    def test_has_scope_admin_has_all_scopes(self, token_service: TokenService) -> None:
         """ADMIN scope should satisfy all required scopes."""
         assert token_service.has_scope(TokenScope.ADMIN, TokenScope.READ) is True
         assert token_service.has_scope(TokenScope.ADMIN, TokenScope.WRITE) is True
         assert token_service.has_scope(TokenScope.ADMIN, TokenScope.ADMIN) is True
 
-    def test_has_scope_write_has_read_and_write(
-        self, token_service: TokenService
-    ) -> None:
+    def test_has_scope_write_has_read_and_write(self, token_service: TokenService) -> None:
         """WRITE scope should satisfy READ and WRITE requirements."""
         assert token_service.has_scope(TokenScope.WRITE, TokenScope.READ) is True
         assert token_service.has_scope(TokenScope.WRITE, TokenScope.WRITE) is True
         assert token_service.has_scope(TokenScope.WRITE, TokenScope.ADMIN) is False
 
-    def test_has_scope_read_only_has_read(
-        self, token_service: TokenService
-    ) -> None:
+    def test_has_scope_read_only_has_read(self, token_service: TokenService) -> None:
         """READ scope should only satisfy READ requirement."""
         assert token_service.has_scope(TokenScope.READ, TokenScope.READ) is True
         assert token_service.has_scope(TokenScope.READ, TokenScope.WRITE) is False
         assert token_service.has_scope(TokenScope.READ, TokenScope.ADMIN) is False
 
-    def test_has_scope_hierarchy_is_correct(
-        self, token_service: TokenService
-    ) -> None:
+    def test_has_scope_hierarchy_is_correct(self, token_service: TokenService) -> None:
         """Scope hierarchy should be: admin > write > read."""
         # Each scope should satisfy itself
         for scope in TokenScope:
@@ -250,9 +214,7 @@ class TestHasScope:
 class TestTokenServiceInitialization:
     """Tests for TokenService initialization."""
 
-    def test_service_initializes_database(
-        self, test_config: MagpieSettings
-    ) -> None:
+    def test_service_initializes_database(self, test_config: MagpieSettings) -> None:
         """TokenService should initialize database on creation."""
         # Database should not exist yet
         assert not test_config.database_path.exists()
@@ -263,9 +225,7 @@ class TestTokenServiceInitialization:
         # Database should now exist
         assert test_config.database_path.exists()
 
-    def test_service_can_be_created_multiple_times(
-        self, test_config: MagpieSettings
-    ) -> None:
+    def test_service_can_be_created_multiple_times(self, test_config: MagpieSettings) -> None:
         """Multiple TokenService instances should work correctly."""
         service1 = TokenService(test_config)
         service2 = TokenService(test_config)

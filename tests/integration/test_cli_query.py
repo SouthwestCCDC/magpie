@@ -116,9 +116,7 @@ class TestLsCommand:
         assert result.exit_code == 0
         assert "No versions found" in result.output or "No artifact found" in result.output
 
-    def test_ls_shows_tags(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_ls_shows_tags(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Ls command shows tags for versions."""
         # Upload an artifact (will have 'latest' tag)
         upload_test_artifact(api_client, "test/tags", b"content with tags")
@@ -212,9 +210,7 @@ class TestInfoCommand:
         assert result.exit_code == 0
         assert hash_ref in result.output
 
-    def test_info_not_found(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_info_not_found(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Info for non-existent artifact returns error."""
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
@@ -238,9 +234,7 @@ class TestInfoCommand:
 class TestUrlCommand:
     """Integration tests for url command."""
 
-    def test_url_outputs_bare_url(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_url_outputs_bare_url(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Url command outputs bare URL for scripting."""
         upload_data = upload_test_artifact(api_client, "test/url", b"url test content")
         hash_ref = upload_data["hash_ref"]
@@ -260,9 +254,7 @@ class TestUrlCommand:
         assert hash_ref in output
         assert "test/url" in output
 
-    def test_url_suitable_for_curl(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_url_suitable_for_curl(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Url output is suitable for curl/wget (single line, no extra text)."""
         upload_test_artifact(api_client, "test/curl", b"curl test")
 
@@ -283,9 +275,7 @@ class TestUrlCommand:
         # Should not have any extra text
         assert output.count("http") == 1
 
-    def test_url_resolves_tag_to_hash(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_url_resolves_tag_to_hash(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Url resolves tag to hash ref in output."""
         upload_data = upload_test_artifact(api_client, "test/resolve", b"resolve test")
         hash_ref = upload_data["hash_ref"]
@@ -303,9 +293,7 @@ class TestUrlCommand:
         assert hash_ref in result.output
         assert ":latest" not in result.output
 
-    def test_url_not_found(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_url_not_found(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Url for non-existent artifact returns error."""
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
