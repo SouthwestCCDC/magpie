@@ -31,6 +31,7 @@ class GCResponse(BaseModel):
 @router.post("/api/v1/gc")
 async def trigger_gc(
     dry_run: Annotated[bool, Query()] = False,
+    retention_days: Annotated[int | None, Query()] = None,
     admin: Annotated[TokenInfo, Depends(require_admin_scope)] = None,
     settings: Annotated[MagpieSettings, Depends(get_settings)] = None,
 ) -> GCResponse:
@@ -43,6 +44,7 @@ async def trigger_gc(
 
     Args:
         dry_run: If True, preview what would be deleted without making changes.
+        retention_days: Override retention period (days). Defaults to config value.
         admin: Validated admin token (injected by dependency).
         settings: Application settings (injected by dependency).
 
@@ -50,7 +52,8 @@ async def trigger_gc(
         GCResponse with GC operation statistics.
     """
     storage_path = settings.storage_path
-    retention_days = settings.retention_days
+    # Use query parameter if provided, otherwise fall back to config
+    retention_days = retention_days if retention_days is not None else settings.retention_days
 
     # Track statistics
     total_artifacts = 0
