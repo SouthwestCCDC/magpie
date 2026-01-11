@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, Header, UploadFile
 from pydantic import BaseModel
 
 from magpie.server.deps import get_storage_service
@@ -14,28 +14,6 @@ from magpie.storage.service import StorageService
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Reserved path segments that conflict with internal storage structure
-RESERVED_SEGMENTS = frozenset({"blobs", "metadata", ".magpie"})
-
-
-def validate_artifact_path(path: str) -> None:
-    """Validate that artifact path doesn't use reserved segments.
-
-    Args:
-        path: The artifact path to validate.
-
-    Raises:
-        HTTPException 400: If path contains reserved segments.
-    """
-    segments = path.split("/")
-    for original_segment in segments:
-        if original_segment in RESERVED_SEGMENTS:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Path contains reserved segment '{original_segment}'. "
-                f"Reserved segments: {', '.join(sorted(RESERVED_SEGMENTS))}",
-            )
 
 
 class UploadResponse(BaseModel):
@@ -79,12 +57,8 @@ async def upload_artifact(
         and duplicate detection status.
 
     Raises:
-        HTTPException 400: If path contains reserved segments.
         StorageError: If storage operation fails.
     """
-    # Validate path doesn't use reserved segments
-    validate_artifact_path(path)
-
     # Use X-Magpie-User header if present (authenticated via Caddy)
     # Fall back to query parameter for direct API access
     if x_magpie_user is not None:

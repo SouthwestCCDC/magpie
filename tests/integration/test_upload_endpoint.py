@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from magpie.config import MagpieSettings
+from magpie.config import MagpieSettings, get_settings
 from magpie.server.app import app
 from magpie.server.deps import get_storage_service
 from magpie.storage.service import StorageService
@@ -306,73 +306,3 @@ class TestAuthHeaderHandling:
         # Verify anonymous was used as default
         info = test_storage_service.get_artifact_info("auth/anonymous-test", "latest")
         assert info.uploaded_by == "anonymous"
-
-
-class TestPathValidation:
-    """Tests for artifact path validation."""
-
-    def test_reserved_segment_blobs_rejected(self, client: TestClient) -> None:
-        """Upload with 'blobs' in path is rejected."""
-        content = b"test content"
-        files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
-
-        response = client.post("/api/v1/upload/test/blobs/evil", files=files)
-
-        assert response.status_code == 400
-        assert "reserved" in response.json()["detail"].lower()
-        assert "blobs" in response.json()["detail"]
-
-    def test_reserved_segment_metadata_rejected(self, client: TestClient) -> None:
-        """Upload with 'metadata' in path is rejected."""
-        content = b"test content"
-        files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
-
-        response = client.post("/api/v1/upload/metadata/test", files=files)
-
-        assert response.status_code == 400
-        assert "reserved" in response.json()["detail"].lower()
-        assert "metadata" in response.json()["detail"]
-
-    def test_reserved_segment_dotmagpie_rejected(self, client: TestClient) -> None:
-        """Upload with '.magpie' in path is rejected."""
-        content = b"test content"
-        files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
-
-        response = client.post("/api/v1/upload/test/.magpie/config", files=files)
-
-        assert response.status_code == 400
-        assert "reserved" in response.json()["detail"].lower()
-        assert ".magpie" in response.json()["detail"]
-
-    def test_reserved_segment_case_sensitive(self, client: TestClient) -> None:
-        """Reserved segments are blocked case-sensitively - only exact matches are rejected."""
-        content = b"test content"
-
-        # Test uppercase BLOBS - should be ALLOWED (case-sensitive validation)
-        files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
-        response = client.post("/api/v1/upload/test/BLOBS/allowed", files=files)
-        assert response.status_code == 200
-
-        # Test mixed-case Metadata - should be ALLOWED
-        files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
-        response = client.post("/api/v1/upload/Metadata/allowed", files=files)
-        assert response.status_code == 200
-
-        # Test mixed-case Blobs - should be ALLOWED
-        files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
-        response = client.post("/api/v1/upload/Blobs/allowed", files=files)
-        assert response.status_code == 200
-
-        # Test uppercase .MAGPIE - should be ALLOWED
-        files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
-        response = client.post("/api/v1/upload/test/.MAGPIE/allowed", files=files)
-        assert response.status_code == 200
-
-    def test_valid_path_accepted(self, client: TestClient) -> None:
-        """Valid paths without reserved segments are accepted."""
-        content = b"test content"
-        files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
-
-        response = client.post("/api/v1/upload/project/component/artifact", files=files)
-
-        assert response.status_code == 200
