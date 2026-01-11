@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 
 from magpie.cli.config import (
+    DEFAULT_TIMEOUT,
     ClientConfig,
     get_server,
+    get_timeout,
     get_token,
     load_config,
 )
@@ -207,3 +209,56 @@ class TestClientConfig:
 
         assert config.server == ""
         assert config.token == ""
+
+
+class TestGetTimeout:
+    """Tests for get_timeout function."""
+
+    def test_cli_override_takes_precedence(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that CLI override takes precedence over env var."""
+        monkeypatch.setenv("MAGPIE_TIMEOUT", "120")
+
+        result = get_timeout(cli_override=300.0)
+
+        assert result == 300.0
+
+    def test_env_var_used_when_no_cli_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that env var is used when no CLI override."""
+        monkeypatch.setenv("MAGPIE_TIMEOUT", "180")
+
+        result = get_timeout(cli_override=None)
+
+        assert result == 180.0
+
+    def test_default_used_when_nothing_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that default value is used when nothing configured."""
+        monkeypatch.delenv("MAGPIE_TIMEOUT", raising=False)
+
+        result = get_timeout(cli_override=None)
+
+        assert result == DEFAULT_TIMEOUT
+        assert result == 600.0
+
+    def test_invalid_env_var_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that invalid env var value falls back to default."""
+        monkeypatch.setenv("MAGPIE_TIMEOUT", "not_a_number")
+
+        result = get_timeout(cli_override=None)
+
+        assert result == DEFAULT_TIMEOUT
+
+    def test_cli_override_zero_is_valid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that CLI override of 0 is valid (disables timeout)."""
+        monkeypatch.setenv("MAGPIE_TIMEOUT", "120")
+
+        result = get_timeout(cli_override=0.0)
+
+        assert result == 0.0
+
+    def test_env_var_float_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that env var accepts float values."""
+        monkeypatch.setenv("MAGPIE_TIMEOUT", "45.5")
+
+        result = get_timeout(cli_override=None)
+
+        assert result == 45.5

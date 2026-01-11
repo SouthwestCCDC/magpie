@@ -116,3 +116,32 @@ def get_token(
 
     config = load_config(config_path)
     return config.client.token
+
+
+# Default timeout in seconds (10 minutes) for large file uploads
+DEFAULT_TIMEOUT = 600.0
+
+
+def get_timeout(cli_override: float | None = None) -> float:
+    """Get HTTP client timeout with proper precedence.
+
+    Precedence: CLI override > MAGPIE_TIMEOUT env var > default (600 seconds).
+
+    Args:
+        cli_override: Value from --timeout CLI option.
+
+    Returns:
+        Timeout in seconds as a float.
+    """
+    if cli_override is not None:
+        return cli_override
+
+    env_timeout = os.environ.get("MAGPIE_TIMEOUT")
+    if env_timeout:
+        try:
+            return float(env_timeout)
+        except ValueError:
+            # Invalid env var value, fall back to default
+            pass
+
+    return DEFAULT_TIMEOUT
