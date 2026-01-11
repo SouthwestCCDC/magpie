@@ -5,8 +5,27 @@ from __future__ import annotations
 from pathlib import Path
 
 import click
+import tomli_w
 
 from magpie.cli import config as cli_config
+
+# Standard mask for hiding sensitive token values
+TOKEN_MASK = "********"
+
+
+def _mask_token(token: str) -> str:
+    """Mask a token for display, showing only last 4 characters.
+
+    Args:
+        token: The token to mask.
+
+    Returns:
+        Masked token string with last 4 chars visible, or just the mask
+        if token is 4 chars or shorter.
+    """
+    if len(token) > 4:
+        return TOKEN_MASK + token[-4:]
+    return TOKEN_MASK
 
 
 def _write_config(config_path: Path, server: str | None, token: str | None) -> None:
@@ -16,6 +35,10 @@ def _write_config(config_path: Path, server: str | None, token: str | None) -> N
         config_path: Path to the config file.
         server: Server URL to write (or None to keep existing).
         token: Token to write (or None to keep existing).
+
+    Note:
+        Empty string values are treated the same as the existing value, not as
+        a way to clear individual settings. Use --clear to remove all config.
     """
     # Load existing config to preserve values not being set
     existing = cli_config.load_config(config_path)
@@ -25,17 +48,15 @@ def _write_config(config_path: Path, server: str | None, token: str | None) -> N
     # Ensure parent directory exists
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write TOML manually (tomllib is read-only)
-    lines = ["[client]"]
+    # Build config dict for tomli_w
+    client_config: dict[str, str] = {}
     if final_server:
-        # Escape backslashes and quotes in TOML strings
-        escaped_server = final_server.replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f'server = "{escaped_server}"')
+        client_config["server"] = final_server
     if final_token:
-        escaped_token = final_token.replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f'token = "{escaped_token}"')
+        client_config["token"] = final_token
 
-    config_path.write_text("\n".join(lines) + "\n")
+    config_data = {"client": client_config}
+    config_path.write_bytes(tomli_w.dumps(config_data).encode())
 
 
 @click.command("config")
@@ -107,7 +128,7 @@ def config_cmd(
     if server:
         click.echo(f"Server set to: {server}")
     if token:
-        click.echo(f"Token set to: {'*' * 8}{token[-4:] if len(token) > 4 else '****'}")
+        click.echo(f"Token set to: {_mask_token(token)}")
 
     click.echo(f"Configuration saved to {config_path}")
 
@@ -129,9 +150,7 @@ def _show_config(config_path: Path) -> None:
         click.echo("  server = (not set)")
 
     if config.client.token:
-        # Mask token for security, show only last 4 chars
-        masked = "*" * 8 + config.client.token[-4:] if len(config.client.token) > 4 else "****"
-        click.echo(f"  token  = {masked}")
+        click.echo(f"  token  = {_mask_token(config.client.token)}")
     else:
         click.echo("  token  = (not set)")
 

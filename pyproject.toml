@@ -17,6 +17,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi",
     "opentelemetry-exporter-otlp",
     "rich",
+    "tomli_w",
 ]
 
 [project.scripts]

@@ -17,20 +17,20 @@ def runner() -> CliRunner:
 
 
 @pytest.fixture
-def config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Create a temporary config directory and patch the default path."""
-    config_path = tmp_path / ".magpie" / "config.toml"
+def config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Create a temporary config path and patch the default path."""
+    path = tmp_path / ".magpie" / "config.toml"
     monkeypatch.setattr(
         "magpie.cli.config.DEFAULT_CONFIG_PATH",
-        config_path,
+        path,
     )
-    return config_path
+    return path
 
 
 class TestConfigShow:
     """Tests for 'magpie config --show' command."""
 
-    def test_show_no_config_file(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_show_no_config_file(self, runner: CliRunner, config_path: Path) -> None:
         """Test --show with no config file."""
         result = runner.invoke(cli, ["config", "--show"])
 
@@ -38,10 +38,10 @@ class TestConfigShow:
         assert "No configuration file found" in result.output
         assert "magpie config --server" in result.output
 
-    def test_show_with_config(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_show_with_config(self, runner: CliRunner, config_path: Path) -> None:
         """Test --show with existing config."""
-        config_dir.parent.mkdir(parents=True, exist_ok=True)
-        config_dir.write_text(
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
             '[client]\nserver = "https://example.com"\ntoken = "mgp_testtoken123"\n'
         )
 
@@ -54,10 +54,10 @@ class TestConfigShow:
         assert "n123" in result.output  # Last 4 chars visible
         assert "********" in result.output or "****" in result.output
 
-    def test_show_partial_config(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_show_partial_config(self, runner: CliRunner, config_path: Path) -> None:
         """Test --show with only server configured."""
-        config_dir.parent.mkdir(parents=True, exist_ok=True)
-        config_dir.write_text('[client]\nserver = "https://partial.example.com"\n')
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text('[client]\nserver = "https://partial.example.com"\n')
 
         result = runner.invoke(cli, ["config", "--show"])
 
@@ -65,7 +65,7 @@ class TestConfigShow:
         assert "https://partial.example.com" in result.output
         assert "(not set)" in result.output
 
-    def test_default_behavior_shows_config(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_default_behavior_shows_config(self, runner: CliRunner, config_path: Path) -> None:
         """Test that running 'config' without options shows config."""
         result = runner.invoke(cli, ["config"])
 
@@ -76,18 +76,18 @@ class TestConfigShow:
 class TestConfigSet:
     """Tests for setting config values."""
 
-    def test_set_server(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_set_server(self, runner: CliRunner, config_path: Path) -> None:
         """Test setting server URL."""
         result = runner.invoke(cli, ["config", "--server", "https://myserver.com"])
 
         assert result.exit_code == 0
         assert "Server set to: https://myserver.com" in result.output
-        assert config_dir.exists()
+        assert config_path.exists()
 
-        content = config_dir.read_text()
+        content = config_path.read_text()
         assert 'server = "https://myserver.com"' in content
 
-    def test_set_token(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_set_token(self, runner: CliRunner, config_path: Path) -> None:
         """Test setting token."""
         result = runner.invoke(cli, ["config", "--token", "mgp_secrettoken"])
 
@@ -95,12 +95,12 @@ class TestConfigSet:
         assert "Token set to:" in result.output
         # Token should be masked in output
         assert "mgp_secrettoken" not in result.output
-        assert config_dir.exists()
+        assert config_path.exists()
 
-        content = config_dir.read_text()
+        content = config_path.read_text()
         assert 'token = "mgp_secrettoken"' in content
 
-    def test_set_both(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_set_both(self, runner: CliRunner, config_path: Path) -> None:
         """Test setting both server and token."""
         result = runner.invoke(
             cli, ["config", "--server", "https://both.example.com", "--token", "mgp_both"]
@@ -109,50 +109,50 @@ class TestConfigSet:
         assert result.exit_code == 0
         assert "Server set to: https://both.example.com" in result.output
         assert "Token set to:" in result.output
-        assert config_dir.exists()
+        assert config_path.exists()
 
-        content = config_dir.read_text()
+        content = config_path.read_text()
         assert 'server = "https://both.example.com"' in content
         assert 'token = "mgp_both"' in content
 
-    def test_update_preserves_existing(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_update_preserves_existing(self, runner: CliRunner, config_path: Path) -> None:
         """Test that updating one value preserves other values."""
-        config_dir.parent.mkdir(parents=True, exist_ok=True)
-        config_dir.write_text('[client]\nserver = "https://old.com"\ntoken = "mgp_oldtoken"\n')
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text('[client]\nserver = "https://old.com"\ntoken = "mgp_oldtoken"\n')
 
         result = runner.invoke(cli, ["config", "--server", "https://new.com"])
 
         assert result.exit_code == 0
-        content = config_dir.read_text()
+        content = config_path.read_text()
         assert 'server = "https://new.com"' in content
         assert 'token = "mgp_oldtoken"' in content
 
-    def test_creates_parent_directory(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_creates_parent_directory(self, runner: CliRunner, config_path: Path) -> None:
         """Test that config command creates parent directory if needed."""
-        assert not config_dir.parent.exists()
+        assert not config_path.parent.exists()
 
         result = runner.invoke(cli, ["config", "--server", "https://new.com"])
 
         assert result.exit_code == 0
-        assert config_dir.parent.exists()
-        assert config_dir.exists()
+        assert config_path.parent.exists()
+        assert config_path.exists()
 
 
 class TestConfigClear:
     """Tests for 'magpie config --clear' command."""
 
-    def test_clear_existing_config(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_clear_existing_config(self, runner: CliRunner, config_path: Path) -> None:
         """Test clearing existing config."""
-        config_dir.parent.mkdir(parents=True, exist_ok=True)
-        config_dir.write_text('[client]\nserver = "https://example.com"\n')
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text('[client]\nserver = "https://example.com"\n')
 
         result = runner.invoke(cli, ["config", "--clear"])
 
         assert result.exit_code == 0
         assert "Configuration cleared" in result.output
-        assert not config_dir.exists()
+        assert not config_path.exists()
 
-    def test_clear_no_config(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_clear_no_config(self, runner: CliRunner, config_path: Path) -> None:
         """Test clearing when no config exists."""
         result = runner.invoke(cli, ["config", "--clear"])
 
@@ -163,28 +163,28 @@ class TestConfigClear:
 class TestConfigValidation:
     """Tests for config command option validation."""
 
-    def test_clear_with_server_fails(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_clear_with_server_fails(self, runner: CliRunner, config_path: Path) -> None:
         """Test that --clear with --server fails."""
         result = runner.invoke(cli, ["config", "--clear", "--server", "https://example.com"])
 
         assert result.exit_code != 0
         assert "Cannot use --clear with --server or --token" in result.output
 
-    def test_clear_with_token_fails(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_clear_with_token_fails(self, runner: CliRunner, config_path: Path) -> None:
         """Test that --clear with --token fails."""
         result = runner.invoke(cli, ["config", "--clear", "--token", "mgp_test"])
 
         assert result.exit_code != 0
         assert "Cannot use --clear with --server or --token" in result.output
 
-    def test_show_with_server_fails(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_show_with_server_fails(self, runner: CliRunner, config_path: Path) -> None:
         """Test that --show with --server fails."""
         result = runner.invoke(cli, ["config", "--show", "--server", "https://example.com"])
 
         assert result.exit_code != 0
         assert "Cannot use --show with other options" in result.output
 
-    def test_show_with_clear_fails(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_show_with_clear_fails(self, runner: CliRunner, config_path: Path) -> None:
         """Test that --show with --clear fails."""
         result = runner.invoke(cli, ["config", "--show", "--clear"])
 
@@ -195,7 +195,7 @@ class TestConfigValidation:
 class TestConfigTomlOutput:
     """Tests for TOML output format."""
 
-    def test_toml_format_valid(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_toml_format_valid(self, runner: CliRunner, config_path: Path) -> None:
         """Test that output is valid TOML."""
         runner.invoke(cli, ["config", "--server", "https://test.com", "--token", "mgp_test123"])
 
@@ -205,13 +205,13 @@ class TestConfigTomlOutput:
         except ImportError:
             import tomli as tomllib  # type: ignore[import-not-found,no-redef]
 
-        content = config_dir.read_bytes()
+        content = config_path.read_bytes()
         data = tomllib.loads(content.decode())
 
         assert data["client"]["server"] == "https://test.com"
         assert data["client"]["token"] == "mgp_test123"
 
-    def test_special_chars_escaped(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_special_chars_escaped(self, runner: CliRunner, config_path: Path) -> None:
         """Test that special characters are properly escaped."""
         # Test with a token containing quotes
         runner.invoke(cli, ["config", "--token", 'mgp_test"quote'])
@@ -221,12 +221,12 @@ class TestConfigTomlOutput:
         except ImportError:
             import tomli as tomllib  # type: ignore[import-not-found,no-redef]
 
-        content = config_dir.read_bytes()
+        content = config_path.read_bytes()
         data = tomllib.loads(content.decode())
 
         assert data["client"]["token"] == 'mgp_test"quote'
 
-    def test_backslash_escaped(self, runner: CliRunner, config_dir: Path) -> None:
+    def test_backslash_escaped(self, runner: CliRunner, config_path: Path) -> None:
         """Test that backslashes are properly escaped."""
         runner.invoke(cli, ["config", "--server", "https://test.com\\path"])
 
@@ -235,7 +235,7 @@ class TestConfigTomlOutput:
         except ImportError:
             import tomli as tomllib  # type: ignore[import-not-found,no-redef]
 
-        content = config_dir.read_bytes()
+        content = config_path.read_bytes()
         data = tomllib.loads(content.decode())
 
         assert data["client"]["server"] == "https://test.com\\path"
