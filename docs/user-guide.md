@@ -216,8 +216,30 @@ docker compose up -d
 ```
 
 Services:
-- **Caddy** (port 8080): Reverse proxy, TLS termination, static file serving
+- **Caddy** (port 8080 by default): Reverse proxy, TLS termination, static file serving
 - **Magpie** (internal): FastAPI backend for API operations
+
+### Port Configuration
+
+The HTTP and HTTPS ports can be customized via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAGPIE_HTTP_PORT` | `8080` | External HTTP port |
+| `MAGPIE_HTTPS_PORT` | `8443` | External HTTPS port |
+
+Example with custom ports:
+
+```bash
+MAGPIE_HTTP_PORT=80 MAGPIE_HTTPS_PORT=443 docker compose up -d
+```
+
+Or create a `.env` file in the same directory as `docker-compose.yml`:
+
+```bash
+MAGPIE_HTTP_PORT=80
+MAGPIE_HTTPS_PORT=443
+```
 
 ### First-Time Initialization
 
@@ -402,6 +424,8 @@ The artifact was already stored; the existing hash was returned.
 |----------|-------|-------------|
 | `MAGPIE_SERVER` | Client | Server URL |
 | `MAGPIE_TOKEN` | Client | Auth token |
+| `MAGPIE_HTTP_PORT` | Deploy | External HTTP port (default: 8080) |
+| `MAGPIE_HTTPS_PORT` | Deploy | External HTTPS port (default: 8443) |
 | `MAGPIE_STORAGE_PATH` | Server | Storage directory |
 | `MAGPIE_RETENTION_DAYS` | Server | GC retention period |
 | `MAGPIE_DEBUG` | Both | Enable debug mode |
