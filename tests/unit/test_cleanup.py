@@ -169,7 +169,9 @@ class TestCleanupArtifactDirectories:
     def test_removes_manifest_with_no_tags(self, storage_root: Path) -> None:
         """Removes .magpie file when no tags remain."""
         artifact_dir = create_artifact_structure(
-            storage_root, "test/artifact", tags={}  # Empty tags
+            storage_root,
+            "test/artifact",
+            tags={},  # Empty tags
         )
 
         manifest_file = artifact_dir / ".magpie"
@@ -208,9 +210,7 @@ class TestCleanupArtifactDirectories:
 
     def test_removes_empty_parent_dirs(self, storage_root: Path) -> None:
         """Removes empty parent directories up to storage root."""
-        artifact_dir = create_artifact_structure(
-            storage_root, "deep/nested/path/artifact", tags={}
-        )
+        artifact_dir = create_artifact_structure(storage_root, "deep/nested/path/artifact", tags={})
 
         # Remove manifest to make artifact dir empty
         (artifact_dir / ".magpie").unlink()
@@ -236,9 +236,7 @@ class TestCleanupArtifactDirectories:
     def test_preserves_non_empty_parent(self, storage_root: Path) -> None:
         """Stops parent cleanup when reaching non-empty directory."""
         # Create two artifacts under same parent
-        artifact_dir1 = create_artifact_structure(
-            storage_root, "parent/artifact1", tags={}
-        )
+        artifact_dir1 = create_artifact_structure(storage_root, "parent/artifact1", tags={})
         artifact_dir2 = create_artifact_structure(
             storage_root, "parent/artifact2", tags={"latest": "abc12345"}
         )
