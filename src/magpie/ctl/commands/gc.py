@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 
 from magpie.ctl import CTLContext
-from magpie.storage.manifest import Manifest, read_manifest
+from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
 from magpie.storage.symlinks import reconcile_symlinks
 
