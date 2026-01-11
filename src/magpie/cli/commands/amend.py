@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     import httpx
 
 from magpie.cli import CLIContext
-from magpie.cli.commands.get import parse_artifact_ref
+from magpie.cli.commands.parse import ParseError, parse_artifact_ref
 
 
 @click.command()
@@ -39,11 +39,14 @@ def amend(ctx: CLIContext, artifact_ref: str, source_uri: str | None) -> None:
     if source_uri is None:
         raise click.ClickException("No metadata updates specified. Use --source-uri to update.")
 
-    path, ref = parse_artifact_ref(artifact_ref)
+    try:
+        parsed = parse_artifact_ref(artifact_ref)
+    except ParseError as e:
+        raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
         if ctx.debug:
-            click.echo(f"Amending metadata for {path}:{ref}...", err=True)
+            click.echo(f"Amending metadata for {parsed.path}:{parsed.ref}...", err=True)
 
         # Build request body
         body: dict[str, str | None] = {}
@@ -52,19 +55,19 @@ def amend(ctx: CLIContext, artifact_ref: str, source_uri: str | None) -> None:
             body["source_uri"] = source_uri if source_uri else None
 
         response = client.patch(
-            f"/api/v1/artifacts/{path}/{ref}",
+            f"/api/v1/artifacts/{parsed.path}/{parsed.ref}",
             json=body,
         )
 
         if response.status_code == 404:
-            raise click.ClickException(f"Artifact not found: {path}:{ref}")
+            raise click.ClickException(f"Artifact not found: {parsed.path}:{parsed.ref}")
         if response.status_code != 200:
             _handle_error(response)
 
         data = response.json()
 
     # Display updated metadata
-    click.echo(f"Updated: {path}:{data['hash_ref']}")
+    click.echo(f"Updated: {parsed.path}:{data['hash_ref']}")
     click.echo(f"  Source URI: {data.get('source_uri') or '(none)'}")
     click.echo(f"  Tags: {', '.join(data.get('tags', []))}")
 
