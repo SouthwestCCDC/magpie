@@ -94,7 +94,7 @@ class TestAmendMetadataEndpoint:
     def test_amend_preserves_immutable_fields(self, client: TestClient) -> None:
         """Amend preserves uploaded_by and uploaded_at."""
         # Upload artifact with initial source_uri
-        upload_data = _upload_artifact(
+        _upload_artifact(
             client,
             "amend/preserve-test",
             b"preserve test",

@@ -95,9 +95,7 @@ def _upload_artifact(
 class TestGCEndpointAuth:
     """Tests for GC endpoint authentication and authorization."""
 
-    def test_gc_requires_admin_scope(
-        self, client: TestClient, admin_token: str
-    ) -> None:
+    def test_gc_requires_admin_scope(self, client: TestClient, admin_token: str) -> None:
         """GC endpoint requires admin scope."""
         response = client.post(
             "/api/v1/gc",
@@ -106,9 +104,7 @@ class TestGCEndpointAuth:
 
         assert response.status_code == 200
 
-    def test_gc_with_read_scope_returns_403(
-        self, client: TestClient, read_token: str
-    ) -> None:
+    def test_gc_with_read_scope_returns_403(self, client: TestClient, read_token: str) -> None:
         """GC with read scope returns 403."""
         response = client.post(
             "/api/v1/gc",
@@ -118,9 +114,7 @@ class TestGCEndpointAuth:
         assert response.status_code == 403
         assert "Admin scope required" in response.json()["detail"]
 
-    def test_gc_with_write_scope_returns_403(
-        self, client: TestClient, write_token: str
-    ) -> None:
+    def test_gc_with_write_scope_returns_403(self, client: TestClient, write_token: str) -> None:
         """GC with write scope returns 403."""
         response = client.post(
             "/api/v1/gc",
@@ -139,9 +133,7 @@ class TestGCEndpointAuth:
 class TestGCEndpointFunctionality:
     """Tests for GC endpoint functionality."""
 
-    def test_gc_dry_run_returns_preview(
-        self, client: TestClient, admin_token: str
-    ) -> None:
+    def test_gc_dry_run_returns_preview(self, client: TestClient, admin_token: str) -> None:
         """GC with dry_run returns preview without modification."""
         # Upload an artifact first
         _upload_artifact(client, "gc-test/artifact", b"test content")
@@ -160,9 +152,7 @@ class TestGCEndpointFunctionality:
         assert "blobs_deleted" in data
         assert "space_reclaimed_bytes" in data
 
-    def test_gc_returns_zero_for_tagged_blobs(
-        self, client: TestClient, admin_token: str
-    ) -> None:
+    def test_gc_returns_zero_for_tagged_blobs(self, client: TestClient, admin_token: str) -> None:
         """GC returns zero deleted blobs when all blobs are tagged."""
         # Upload artifact (auto-tagged as "latest")
         _upload_artifact(client, "gc-test/tagged", b"tagged content")
@@ -177,9 +167,7 @@ class TestGCEndpointFunctionality:
         # Should not delete any blobs since they're all tagged
         assert data["blobs_deleted"] == 0
 
-    def test_gc_scans_artifacts(
-        self, client: TestClient, admin_token: str
-    ) -> None:
+    def test_gc_scans_artifacts(self, client: TestClient, admin_token: str) -> None:
         """GC scans uploaded artifacts."""
         # Upload multiple artifacts
         _upload_artifact(client, "gc-test/a1", b"content a1")
@@ -196,9 +184,7 @@ class TestGCEndpointFunctionality:
         assert data["artifacts_scanned"] >= 3
         assert data["blobs_found"] >= 3
 
-    def test_gc_response_format(
-        self, client: TestClient, admin_token: str
-    ) -> None:
+    def test_gc_response_format(self, client: TestClient, admin_token: str) -> None:
         """GC response includes all expected fields."""
         response = client.post(
             "/api/v1/gc",
@@ -217,9 +203,7 @@ class TestGCEndpointFunctionality:
         }
         assert required_fields == set(data.keys())
 
-    def test_gc_empty_storage(
-        self, client: TestClient, admin_token: str
-    ) -> None:
+    def test_gc_empty_storage(self, client: TestClient, admin_token: str) -> None:
         """GC on empty storage returns zero counts."""
         response = client.post(
             "/api/v1/gc",
