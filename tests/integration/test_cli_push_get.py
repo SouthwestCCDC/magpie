@@ -618,6 +618,250 @@ class TestGetCommand:
         # Should still get the Downloaded message
         assert "Downloaded:" in result.output
 
+    def test_get_refuses_to_overwrite_existing_file(
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
+    ) -> None:
+        """Get refuses to overwrite existing file without --force."""
+        # Upload a file
+        test_content = b"content for overwrite test"
+        files = {"file": ("artifact.bin", io.BytesIO(test_content), "application/octet-stream")}
+        api_client.post("/api/v1/upload/overwrite/test", files=files)
+
+        # Create existing output file
+        output_file = tmp_path / "existing.bin"
+        output_file.write_bytes(b"original content")
+
+        mock_client = MockClientWithDownload(api_client, test_storage_service)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    "overwrite/test",
+                    "-o",
+                    str(output_file),
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "already exists" in result.output
+        assert "--force" in result.output
+        # Original file should not be modified
+        assert output_file.read_bytes() == b"original content"
+
+    def test_get_overwrites_existing_file_with_force(
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
+    ) -> None:
+        """Get overwrites existing file when --force is specified."""
+        # Upload a file
+        test_content = b"new content for force test"
+        files = {"file": ("artifact.bin", io.BytesIO(test_content), "application/octet-stream")}
+        api_client.post("/api/v1/upload/force/test", files=files)
+
+        # Create existing output file
+        output_file = tmp_path / "force_overwrite.bin"
+        output_file.write_bytes(b"original content")
+
+        mock_client = MockClientWithDownload(api_client, test_storage_service)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    "force/test",
+                    "-o",
+                    str(output_file),
+                    "--force",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert "Downloaded:" in result.output
+        # File should be overwritten with new content
+        assert output_file.read_bytes() == test_content
+
+    def test_get_force_short_flag(
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
+    ) -> None:
+        """Get -f short flag works same as --force."""
+        # Upload a file
+        test_content = b"content for short flag test"
+        files = {"file": ("artifact.bin", io.BytesIO(test_content), "application/octet-stream")}
+        api_client.post("/api/v1/upload/shortflag/test", files=files)
+
+        # Create existing output file
+        output_file = tmp_path / "short_flag.bin"
+        output_file.write_bytes(b"original content")
+
+        mock_client = MockClientWithDownload(api_client, test_storage_service)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    "shortflag/test",
+                    "-o",
+                    str(output_file),
+                    "-f",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert output_file.read_bytes() == test_content
+
+    def test_get_no_force_needed_for_new_file(
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
+    ) -> None:
+        """Get does not require --force when output file does not exist."""
+        # Upload a file
+        test_content = b"content for new file test"
+        files = {"file": ("artifact.bin", io.BytesIO(test_content), "application/octet-stream")}
+        api_client.post("/api/v1/upload/newfile/test", files=files)
+
+        output_file = tmp_path / "new_file.bin"
+        # Ensure file does not exist
+        assert not output_file.exists()
+
+        mock_client = MockClientWithDownload(api_client, test_storage_service)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    "newfile/test",
+                    "-o",
+                    str(output_file),
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert output_file.exists()
+        assert output_file.read_bytes() == test_content
+
+    def test_get_skips_download_when_local_hash_matches(
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
+    ) -> None:
+        """Get skips download when local file has matching hash (no --force needed)."""
+        # Upload a file
+        test_content = b"content for hash match test"
+        files = {"file": ("artifact.bin", io.BytesIO(test_content), "application/octet-stream")}
+        api_client.post("/api/v1/upload/hashmatch/test", files=files)
+
+        # Create existing output file with SAME content (same hash)
+        output_file = tmp_path / "hash_match.bin"
+        output_file.write_bytes(test_content)
+
+        mock_client = MockClientWithDownload(api_client, test_storage_service)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    "hashmatch/test",
+                    "-o",
+                    str(output_file),
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert "already exists with matching hash" in result.output
+        # File should not have been modified (same content anyway)
+        assert output_file.read_bytes() == test_content
+
+    def test_get_skips_download_no_force_needed_for_identical_file(
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
+    ) -> None:
+        """Get does not require --force when existing file is identical to remote."""
+        # Upload a file
+        test_content = b"identical content test"
+        files = {"file": ("artifact.bin", io.BytesIO(test_content), "application/octet-stream")}
+        api_client.post("/api/v1/upload/identical/test", files=files)
+
+        # Create existing output file with SAME content
+        output_file = tmp_path / "identical.bin"
+        output_file.write_bytes(test_content)
+
+        mock_client = MockClientWithDownload(api_client, test_storage_service)
+
+        # Track if stream was called (should NOT be called for identical files)
+        original_stream = mock_client.stream
+        stream_called = []
+
+        def tracking_stream(method: str, url: str):
+            stream_called.append((method, url))
+            return original_stream(method, url)
+
+        mock_client.stream = tracking_stream
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    "identical/test",
+                    "-o",
+                    str(output_file),
+                ],
+            )
+
+        assert result.exit_code == 0
+        # Download should have been skipped
+        assert len(stream_called) == 0, "Download should have been skipped for identical file"
+        assert "already exists with matching hash" in result.output
+
 
 class TestPushQuietFlag:
     """Tests for push command --quiet flag and TTY detection."""

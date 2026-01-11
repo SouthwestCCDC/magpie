@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
 from magpie.cli.progress import transfer_progress
+from magpie.storage.hash import compute_hash
 
 
 @click.command()
@@ -21,6 +22,9 @@ from magpie.cli.progress import transfer_progress
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output file path.")
 @click.option("--no-verify", is_flag=True, help="Skip SHA-256 verification.")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress output.")
+@click.option(
+    "--force", "-f", is_flag=True, help="Overwrite existing output file without prompting."
+)
 @click.pass_obj
 def get(
     ctx: CLIContext,
@@ -28,6 +32,7 @@ def get(
     output: Path | None,
     no_verify: bool,
     quiet: bool,
+    force: bool,
 ) -> None:
     """Download an artifact from the server.
 
@@ -72,6 +77,27 @@ def get(
             click.echo(f"Hash ref: {hash_ref}", err=True)
             click.echo(f"Size: {file_size} bytes", err=True)
 
+        # Determine output path early so we can check for existing file before download
+        if output is None:
+            # Derive from artifact path (use last component)
+            output = Path(parsed.path.split("/")[-1])
+
+        # Check if output file exists before downloading to avoid wasting bandwidth
+        if output.exists():
+            # If local file has same hash as remote, skip download entirely
+            # Use compute_hash for streaming hash computation (handles large files)
+            local_hash = compute_hash(output)
+            if local_hash == expected_hash:
+                click.echo(f"File already exists with matching hash: {output}")
+                return
+
+            # File exists but has different hash - require --force
+            if not force:
+                raise click.ClickException(
+                    f"Output file already exists: {output}\n"
+                    "Use --force to overwrite existing files."
+                )
+
         # Download the artifact
         # Hash refs use blobs/ subdirectory, tags are symlinks at root
         if hash_ref.startswith("@"):
@@ -115,11 +141,6 @@ def get(
             )
         if ctx.debug:
             click.echo("Hash verified.", err=True)
-
-    # Determine output path
-    if output is None:
-        # Derive from artifact path (use last component)
-        output = Path(parsed.path.split("/")[-1])
 
     # Write file
     output.write_bytes(content)
