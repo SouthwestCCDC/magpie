@@ -55,9 +55,7 @@ class TestAmendMetadataBasic:
         )
 
         # Amend metadata with new source_uri
-        result = storage_service.amend_metadata(
-            artifact_path, hash_ref, source_uri="new-uri"
-        )
+        result = storage_service.amend_metadata(artifact_path, hash_ref, source_uri="new-uri")
 
         assert result.source_uri == "new-uri"
 
@@ -66,18 +64,12 @@ class TestAmendMetadataBasic:
         metadata = read_metadata(artifact_dir, full_hash)
         assert metadata.source_uri == "new-uri"
 
-    def test_amend_metadata_preserves_hash(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_amend_metadata_preserves_hash(self, storage_service: StorageService) -> None:
         """amend_metadata should preserve hash field."""
         artifact_path = "test/preserve-hash"
-        full_hash, hash_ref = store_test_artifact(
-            storage_service, artifact_path, b"content"
-        )
+        full_hash, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
 
-        result = storage_service.amend_metadata(
-            artifact_path, hash_ref, source_uri="new-uri"
-        )
+        result = storage_service.amend_metadata(artifact_path, hash_ref, source_uri="new-uri")
 
         assert result.hash == full_hash
 
@@ -86,13 +78,9 @@ class TestAmendMetadataBasic:
     ) -> None:
         """amend_metadata should preserve uploaded_by field."""
         artifact_path = "test/preserve-uploader"
-        full_hash, hash_ref = store_test_artifact(
-            storage_service, artifact_path, b"content"
-        )
+        full_hash, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
 
-        result = storage_service.amend_metadata(
-            artifact_path, hash_ref, source_uri="new-uri"
-        )
+        result = storage_service.amend_metadata(artifact_path, hash_ref, source_uri="new-uri")
 
         assert result.uploaded_by == "test-user"
 
@@ -106,9 +94,7 @@ class TestAmendMetadataBasic:
     ) -> None:
         """amend_metadata should preserve uploaded_at field."""
         artifact_path = "test/preserve-timestamp"
-        full_hash, hash_ref = store_test_artifact(
-            storage_service, artifact_path, b"content"
-        )
+        full_hash, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
 
         # Get original timestamp
         artifact_dir = artifact_dir_path(test_config.storage_path, artifact_path)
@@ -116,9 +102,7 @@ class TestAmendMetadataBasic:
         original_timestamp = original_metadata.uploaded_at
 
         # Amend metadata
-        result = storage_service.amend_metadata(
-            artifact_path, hash_ref, source_uri="new-uri"
-        )
+        result = storage_service.amend_metadata(artifact_path, hash_ref, source_uri="new-uri")
 
         assert result.uploaded_at == original_timestamp
 
@@ -145,9 +129,7 @@ class TestAmendMetadataBasic:
         metadata = read_metadata(artifact_dir, full_hash)
         assert metadata.source_uri == "original-uri"
 
-    def test_amend_metadata_raises_for_missing_ref(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_amend_metadata_raises_for_missing_ref(self, storage_service: StorageService) -> None:
         """amend_metadata should raise ArtifactNotFoundError for missing ref."""
         artifact_path = "test/missing"
         # Store an artifact so the directory exists
@@ -156,14 +138,10 @@ class TestAmendMetadataBasic:
         with pytest.raises(ArtifactNotFoundError):
             storage_service.amend_metadata(artifact_path, "@deadbeef", source_uri="uri")
 
-    def test_amend_metadata_raises_for_missing_path(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_amend_metadata_raises_for_missing_path(self, storage_service: StorageService) -> None:
         """amend_metadata should raise for non-existent artifact path."""
         with pytest.raises(ArtifactNotFoundError):
-            storage_service.amend_metadata(
-                "nonexistent/path", "@abc123", source_uri="uri"
-            )
+            storage_service.amend_metadata("nonexistent/path", "@abc123", source_uri="uri")
 
 
 class TestAmendMetadataMultiple:
@@ -179,21 +157,15 @@ class TestAmendMetadataMultiple:
         )
 
         # First amend
-        result1 = storage_service.amend_metadata(
-            artifact_path, hash_ref, source_uri="uri-2"
-        )
+        result1 = storage_service.amend_metadata(artifact_path, hash_ref, source_uri="uri-2")
         assert result1.source_uri == "uri-2"
 
         # Second amend
-        result2 = storage_service.amend_metadata(
-            artifact_path, hash_ref, source_uri="uri-3"
-        )
+        result2 = storage_service.amend_metadata(artifact_path, hash_ref, source_uri="uri-3")
         assert result2.source_uri == "uri-3"
 
         # Third amend
-        result3 = storage_service.amend_metadata(
-            artifact_path, hash_ref, source_uri="uri-4"
-        )
+        result3 = storage_service.amend_metadata(artifact_path, hash_ref, source_uri="uri-4")
         assert result3.source_uri == "uri-4"
 
         # Verify final state
@@ -205,9 +177,7 @@ class TestAmendMetadataMultiple:
         assert metadata.hash == full_hash
         assert metadata.uploaded_by == "test-user"
 
-    def test_amend_can_set_and_change_source_uri(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_amend_can_set_and_change_source_uri(self, storage_service: StorageService) -> None:
         """amend_metadata can set source_uri when originally None, then change it."""
         artifact_path = "test/set-then-change"
         _, hash_ref = store_test_artifact(
@@ -219,33 +189,25 @@ class TestAmendMetadataMultiple:
         assert info.source_uri is None
 
         # Set source_uri
-        result1 = storage_service.amend_metadata(
-            artifact_path, hash_ref, source_uri="first-uri"
-        )
+        result1 = storage_service.amend_metadata(artifact_path, hash_ref, source_uri="first-uri")
         assert result1.source_uri == "first-uri"
 
         # Change source_uri
-        result2 = storage_service.amend_metadata(
-            artifact_path, hash_ref, source_uri="second-uri"
-        )
+        result2 = storage_service.amend_metadata(artifact_path, hash_ref, source_uri="second-uri")
         assert result2.source_uri == "second-uri"
 
 
 class TestAmendMetadataArtifactInfo:
     """Tests for ArtifactInfo returned by amend_metadata."""
 
-    def test_amend_returns_complete_artifact_info(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_amend_returns_complete_artifact_info(self, storage_service: StorageService) -> None:
         """amend_metadata should return complete ArtifactInfo."""
         artifact_path = "test/complete-info"
         full_hash, hash_ref = store_test_artifact(
             storage_service, artifact_path, b"content", source_uri="original"
         )
 
-        result = storage_service.amend_metadata(
-            artifact_path, hash_ref, source_uri="updated"
-        )
+        result = storage_service.amend_metadata(artifact_path, hash_ref, source_uri="updated")
 
         assert result.hash == full_hash
         assert result.hash_ref == hash_ref
@@ -254,9 +216,7 @@ class TestAmendMetadataArtifactInfo:
         assert result.source_uri == "updated"
         assert "latest" in result.tags
 
-    def test_amend_preserves_tags_in_result(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_amend_preserves_tags_in_result(self, storage_service: StorageService) -> None:
         """amend_metadata should include all tags in returned ArtifactInfo."""
         artifact_path = "test/with-tags"
         _, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
@@ -265,9 +225,7 @@ class TestAmendMetadataArtifactInfo:
         storage_service.create_tag(artifact_path, hash_ref, "stable")
         storage_service.create_tag(artifact_path, hash_ref, "v1.0")
 
-        result = storage_service.amend_metadata(
-            artifact_path, hash_ref, source_uri="uri"
-        )
+        result = storage_service.amend_metadata(artifact_path, hash_ref, source_uri="uri")
 
         assert "latest" in result.tags
         assert "stable" in result.tags

@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel
 
-from magpie.server.deps import get_storage_service
+from magpie.server.deps import get_storage_service, require_write_scope
 from magpie.storage.exceptions import ArtifactNotFoundError
 from magpie.storage.service import StorageService
 
@@ -115,8 +115,11 @@ async def create_tag(
     ref: str,
     request: CreateTagRequest,
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
+    _write_scope_check: Annotated[None, Depends(require_write_scope)] = None,
 ) -> TagResponse:
     """Create or update a tag pointing to a specific artifact version.
+
+    Requires write or admin scope. Read-only tokens will be rejected with 403.
 
     Creates a named tag that points to the blob identified by ref. If the tag
     already exists, it will be updated to point to the new blob.
@@ -130,6 +133,8 @@ async def create_tag(
         TagResponse with the created tag info and updated tags list.
 
     Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
+        HTTPException 403: If token has read scope (insufficient permissions).
         ArtifactNotFoundError: If path doesn't exist or ref doesn't resolve.
             Automatically converted to HTTP 404 by error handlers.
     """
@@ -156,8 +161,11 @@ async def remove_tag(
     path: str,
     tag_name: str,
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
+    _write_scope_check: Annotated[None, Depends(require_write_scope)] = None,
 ) -> Response:
     """Remove a tag from an artifact.
+
+    Requires write or admin scope. Read-only tokens will be rejected with 403.
 
     Deletes the named tag from the artifact. The underlying blob is not affected.
 
@@ -169,15 +177,15 @@ async def remove_tag(
         204 No Content on success.
 
     Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
+        HTTPException 403: If token has read scope (insufficient permissions).
         ArtifactNotFoundError: If path doesn't exist or tag doesn't exist.
             Automatically converted to HTTP 404 by error handlers.
     """
     removed = storage_service.remove_tag(path, tag_name)
 
     if not removed:
-        raise ArtifactNotFoundError(
-            f"Tag '{tag_name}' not found in artifact {path}"
-        )
+        raise ArtifactNotFoundError(f"Tag '{tag_name}' not found in artifact {path}")
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -190,8 +198,11 @@ async def amend_metadata(
     ref: str,
     request: AmendMetadataRequest,
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
+    _write_scope_check: Annotated[None, Depends(require_write_scope)] = None,
 ) -> ArtifactInfoResponse:
     """Amend metadata for a specific artifact version.
+
+    Requires write or admin scope. Read-only tokens will be rejected with 403.
 
     Updates mutable metadata fields on an existing blob. Immutable fields
     (hash, uploaded_by, uploaded_at) are preserved.
@@ -205,6 +216,8 @@ async def amend_metadata(
         ArtifactInfoResponse with the updated metadata.
 
     Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
+        HTTPException 403: If token has read scope (insufficient permissions).
         ArtifactNotFoundError: If path doesn't exist or ref doesn't resolve.
             Automatically converted to HTTP 404 by error handlers.
     """

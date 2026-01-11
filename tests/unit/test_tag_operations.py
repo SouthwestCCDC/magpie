@@ -46,9 +46,7 @@ class TestCreateTag:
     ) -> None:
         """create_tag should create a new tag pointing to a blob."""
         artifact_path = "test/create-tag"
-        full_hash, hash_ref = store_test_artifact(
-            storage_service, artifact_path, b"test content"
-        )
+        full_hash, hash_ref = store_test_artifact(storage_service, artifact_path, b"test content")
 
         # Create a new tag
         info = storage_service.create_tag(artifact_path, hash_ref, "stable")
@@ -62,14 +60,10 @@ class TestCreateTag:
         manifest = read_manifest(artifact_dir)
         assert manifest.tags["stable"] == full_hash
 
-    def test_create_tag_with_full_hash(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_create_tag_with_full_hash(self, storage_service: StorageService) -> None:
         """create_tag should accept full SHA-256 hash."""
         artifact_path = "test/full-hash-tag"
-        full_hash, _ = store_test_artifact(
-            storage_service, artifact_path, b"content"
-        )
+        full_hash, _ = store_test_artifact(storage_service, artifact_path, b"content")
 
         # Create tag using full hash (no @ prefix)
         info = storage_service.create_tag(artifact_path, full_hash, "v1.0")
@@ -84,14 +78,10 @@ class TestCreateTag:
         artifact_path = "test/update-tag"
 
         # Store first version
-        hash1, ref1 = store_test_artifact(
-            storage_service, artifact_path, b"version 1"
-        )
+        hash1, ref1 = store_test_artifact(storage_service, artifact_path, b"version 1")
 
         # Store second version (different content = different hash)
-        hash2, ref2 = store_test_artifact(
-            storage_service, artifact_path, b"version 2"
-        )
+        hash2, ref2 = store_test_artifact(storage_service, artifact_path, b"version 2")
 
         # Create "stable" tag pointing to first version
         storage_service.create_tag(artifact_path, ref1, "stable")
@@ -107,9 +97,7 @@ class TestCreateTag:
         manifest = read_manifest(artifact_dir)
         assert manifest.tags["stable"] == hash2
 
-    def test_create_tag_with_nonexistent_hash_raises(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_create_tag_with_nonexistent_hash_raises(self, storage_service: StorageService) -> None:
         """create_tag should raise ArtifactNotFoundError for non-existent hash."""
         artifact_path = "test/nonexistent-hash"
 
@@ -132,9 +120,7 @@ class TestCreateTag:
     ) -> None:
         """create_tag should return complete ArtifactInfo."""
         artifact_path = "test/complete-info"
-        full_hash, hash_ref = store_test_artifact(
-            storage_service, artifact_path, b"content"
-        )
+        full_hash, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
 
         info = storage_service.create_tag(artifact_path, hash_ref, "tagged")
 
@@ -153,9 +139,7 @@ class TestRemoveTag:
     ) -> None:
         """remove_tag should remove an existing tag and return True."""
         artifact_path = "test/remove-tag"
-        full_hash, hash_ref = store_test_artifact(
-            storage_service, artifact_path, b"content"
-        )
+        full_hash, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
 
         # Create a tag to remove
         storage_service.create_tag(artifact_path, hash_ref, "to-remove")
@@ -222,9 +206,7 @@ class TestTagSymlinks:
     ) -> None:
         """create_tag should create a symlink for the new tag."""
         artifact_path = "test/tag-symlink"
-        _, hash_ref = store_test_artifact(
-            storage_service, artifact_path, b"symlink content"
-        )
+        _, hash_ref = store_test_artifact(storage_service, artifact_path, b"symlink content")
 
         storage_service.create_tag(artifact_path, hash_ref, "my-tag")
 
@@ -241,12 +223,8 @@ class TestTagSymlinks:
         artifact_path = "test/update-symlink"
 
         # Store two versions
-        hash1, ref1 = store_test_artifact(
-            storage_service, artifact_path, b"version 1"
-        )
-        hash2, ref2 = store_test_artifact(
-            storage_service, artifact_path, b"version 2"
-        )
+        hash1, ref1 = store_test_artifact(storage_service, artifact_path, b"version 1")
+        hash2, ref2 = store_test_artifact(storage_service, artifact_path, b"version 2")
 
         # Create tag pointing to first version
         storage_service.create_tag(artifact_path, ref1, "switchable")
@@ -265,9 +243,7 @@ class TestTagSymlinks:
     ) -> None:
         """remove_tag should remove the symlink for the tag."""
         artifact_path = "test/remove-symlink"
-        _, hash_ref = store_test_artifact(
-            storage_service, artifact_path, b"content"
-        )
+        _, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
 
         # Create a tag with symlink
         storage_service.create_tag(artifact_path, hash_ref, "temp-tag")
@@ -286,9 +262,7 @@ class TestTagSymlinks:
     ) -> None:
         """remove_tag should not affect other tag symlinks."""
         artifact_path = "test/preserve-symlinks"
-        _, hash_ref = store_test_artifact(
-            storage_service, artifact_path, b"content"
-        )
+        _, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
 
         # Create multiple tags
         storage_service.create_tag(artifact_path, hash_ref, "keep-this")

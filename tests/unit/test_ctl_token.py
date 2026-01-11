@@ -129,12 +129,8 @@ class TestTokenList:
         """Token list displays all tokens."""
         with patch("magpie.ctl.get_settings", return_value=test_settings):
             # Create some tokens first
-            cli_runner.invoke(
-                cli, ["token", "create", "--name", "reader", "--scope", "read"]
-            )
-            cli_runner.invoke(
-                cli, ["token", "create", "--name", "writer", "--scope", "write"]
-            )
+            cli_runner.invoke(cli, ["token", "create", "--name", "reader", "--scope", "read"])
+            cli_runner.invoke(cli, ["token", "create", "--name", "writer", "--scope", "write"])
 
             # List tokens
             result = cli_runner.invoke(cli, ["token", "list"])
@@ -150,9 +146,7 @@ class TestTokenList:
     ) -> None:
         """Token list shows enabled status."""
         with patch("magpie.ctl.get_settings", return_value=test_settings):
-            cli_runner.invoke(
-                cli, ["token", "create", "--name", "active-token", "--scope", "read"]
-            )
+            cli_runner.invoke(cli, ["token", "create", "--name", "active-token", "--scope", "read"])
 
             result = cli_runner.invoke(cli, ["token", "list"])
 
@@ -184,6 +178,7 @@ class TestTokenList:
             assert token_line not in result.output
         # No 64-character hex strings (SHA-256 hashes)
         import re
+
         hash_pattern = re.compile(r"[a-f0-9]{64}", re.IGNORECASE)
         assert not hash_pattern.search(result.output)
 
@@ -207,9 +202,7 @@ class TestTokenList:
     ) -> None:
         """Token list shows proper table headers."""
         with patch("magpie.ctl.get_settings", return_value=test_settings):
-            cli_runner.invoke(
-                cli, ["token", "create", "--name", "test", "--scope", "read"]
-            )
+            cli_runner.invoke(cli, ["token", "create", "--name", "test", "--scope", "read"])
             result = cli_runner.invoke(cli, ["token", "list"])
 
         assert result.exit_code == 0
@@ -228,9 +221,7 @@ class TestTokenRevoke:
         """Token revoke removes the token."""
         with patch("magpie.ctl.get_settings", return_value=test_settings):
             # Create a token
-            cli_runner.invoke(
-                cli, ["token", "create", "--name", "to-revoke", "--scope", "read"]
-            )
+            cli_runner.invoke(cli, ["token", "create", "--name", "to-revoke", "--scope", "read"])
 
             # Verify it exists
             list_result1 = cli_runner.invoke(cli, ["token", "list"])
@@ -270,9 +261,7 @@ class TestTokenRevoke:
     ) -> None:
         """Token revoke shows success message with token name."""
         with patch("magpie.ctl.get_settings", return_value=test_settings):
-            cli_runner.invoke(
-                cli, ["token", "create", "--name", "my-token", "--scope", "write"]
-            )
+            cli_runner.invoke(cli, ["token", "create", "--name", "my-token", "--scope", "write"])
 
             result = cli_runner.invoke(cli, ["token", "revoke", "my-token"])
 

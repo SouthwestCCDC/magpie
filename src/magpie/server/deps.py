@@ -32,6 +32,87 @@ def get_token_service() -> TokenService:
     return TokenService(settings)
 
 
+def _validate_scope_header(x_magpie_scope: str | None) -> str:
+    """Validate and return the scope header value.
+
+    Shared helper function for scope validation that checks if the
+    X-Magpie-Scope header is present and contains a valid scope value.
+
+    Args:
+        x_magpie_scope: Scope header value from Caddy forward_auth.
+
+    Returns:
+        The validated scope value.
+
+    Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
+        HTTPException 403: If scope value is not a valid TokenScope enum value.
+    """
+    if x_magpie_scope is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+
+    # Validate scope value is one of the allowed scopes
+    valid_scopes = {scope.value for scope in TokenScope}
+    if x_magpie_scope not in valid_scopes:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Invalid scope: {x_magpie_scope}",
+        )
+
+    return x_magpie_scope
+
+
+def require_write_scope(
+    x_magpie_scope: Annotated[str | None, Header(alias="X-Magpie-Scope")] = None,
+) -> None:
+    """Dependency that requires write or admin scope from Caddy forward_auth.
+
+    Checks the X-Magpie-Scope header set by Caddy's forward_auth middleware
+    and ensures the token has write or admin scope. Read-only tokens are rejected.
+
+    Args:
+        x_magpie_scope: Scope header value from Caddy forward_auth.
+
+    Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
+        HTTPException 403: If token has invalid or read scope (insufficient permissions).
+    """
+    validated_scope = _validate_scope_header(x_magpie_scope)
+
+    if validated_scope == TokenScope.READ.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Write or admin scope required",
+        )
+
+
+def require_admin_scope_header(
+    x_magpie_scope: Annotated[str | None, Header(alias="X-Magpie-Scope")] = None,
+) -> None:
+    """Dependency that requires admin scope from Caddy forward_auth.
+
+    Checks the X-Magpie-Scope header set by Caddy's forward_auth middleware
+    and ensures the token has admin scope.
+
+    Args:
+        x_magpie_scope: Scope header value from Caddy forward_auth.
+
+    Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
+        HTTPException 403: If token has invalid or non-admin scope (insufficient permissions).
+    """
+    validated_scope = _validate_scope_header(x_magpie_scope)
+
+    if validated_scope != TokenScope.ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin scope required",
+        )
+
+
 def require_admin_scope(
     authorization: Annotated[str | None, Header()] = None,
     token_service: Annotated[TokenService, Depends(get_token_service)] = None,

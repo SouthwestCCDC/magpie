@@ -61,9 +61,7 @@ def client(token_service: TokenService) -> TestClient:
 class TestCreateTokenEndpoint:
     """Tests for POST /api/v1/tokens endpoint."""
 
-    def test_create_token_returns_plaintext(
-        self, client: TestClient, admin_token: str
-    ) -> None:
+    def test_create_token_returns_plaintext(self, client: TestClient, admin_token: str) -> None:
         """Create token returns plaintext token (only time visible)."""
         response = client.post(
             "/api/v1/tokens",
@@ -79,9 +77,7 @@ class TestCreateTokenEndpoint:
         assert "token" in data
         assert data["token"].startswith("mgp_")
 
-    def test_create_token_requires_admin_scope(
-        self, client: TestClient, admin_token: str
-    ) -> None:
+    def test_create_token_requires_admin_scope(self, client: TestClient, admin_token: str) -> None:
         """Create token requires admin scope."""
         response = client.post(
             "/api/v1/tokens",
@@ -116,9 +112,7 @@ class TestCreateTokenEndpoint:
 
         assert response.status_code == 403
 
-    def test_create_token_without_auth_returns_401(
-        self, client: TestClient
-    ) -> None:
+    def test_create_token_without_auth_returns_401(self, client: TestClient) -> None:
         """Create token without authorization returns 401."""
         response = client.post(
             "/api/v1/tokens",
@@ -237,9 +231,7 @@ class TestListTokensEndpoint:
             assert "enabled" in token
             assert "created_at" in token
 
-    def test_list_tokens_requires_admin_scope(
-        self, client: TestClient, read_token: str
-    ) -> None:
+    def test_list_tokens_requires_admin_scope(self, client: TestClient, read_token: str) -> None:
         """List tokens requires admin scope."""
         response = client.get(
             "/api/v1/tokens",
@@ -248,9 +240,7 @@ class TestListTokensEndpoint:
 
         assert response.status_code == 403
 
-    def test_list_tokens_without_auth_returns_401(
-        self, client: TestClient
-    ) -> None:
+    def test_list_tokens_without_auth_returns_401(self, client: TestClient) -> None:
         """List tokens without authorization returns 401."""
         response = client.get("/api/v1/tokens")
 
