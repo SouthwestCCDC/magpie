@@ -679,3 +679,173 @@ class TestPushQuietFlag:
         # Should still get the Uploaded/Duplicate and Hash ref messages
         assert "Uploaded:" in result.output or "Duplicate:" in result.output
         assert "Hash ref:" in result.output
+
+
+class TestPushOutputFeatures:
+    """Tests for push command output features (tagging, download URL, source-uri info)."""
+
+    def test_push_shows_tagged_latest_when_auto_tagging_enabled(
+        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path
+    ) -> None:
+        """Push without --no-latest shows 'Tagged: latest' in output."""
+        test_file = tmp_path / "auto_tag.bin"
+        test_content = b"auto tag content"
+        test_file.write_bytes(test_content)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "push",
+                    str(test_file),
+                    "--to",
+                    "autotag/test",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
+        assert "Tagged:   latest" in result.output
+
+    def test_push_no_tagged_latest_when_no_latest_flag_used(
+        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path
+    ) -> None:
+        """Push with --no-latest does NOT show 'Tagged: latest' in output."""
+        test_file = tmp_path / "no_tag.bin"
+        test_content = b"no tag content"
+        test_file.write_bytes(test_content)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "push",
+                    str(test_file),
+                    "--to",
+                    "notag/test",
+                    "--no-latest",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
+        assert "Tagged:" not in result.output
+
+    def test_push_download_url_uses_latest_when_auto_tagging(
+        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path
+    ) -> None:
+        """Push without --no-latest uses /latest in download URL."""
+        test_file = tmp_path / "download_latest.bin"
+        test_content = b"download latest content"
+        test_file.write_bytes(test_content)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "push",
+                    str(test_file),
+                    "--to",
+                    "download/latest-test",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
+        assert "Download: http://test/artifacts/download/latest-test/latest" in result.output
+
+    def test_push_download_url_uses_hash_ref_when_no_latest(
+        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path
+    ) -> None:
+        """Push with --no-latest uses hash ref in download URL."""
+        test_file = tmp_path / "download_hash.bin"
+        test_content = b"download hash content"
+        test_file.write_bytes(test_content)
+
+        expected_hash = hashlib.sha256(test_content).hexdigest()
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "push",
+                    str(test_file),
+                    "--to",
+                    "download/hash-test",
+                    "--no-latest",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
+        # Download URL should contain the hash ref (short hash prefixed with @)
+        assert "Download: http://test/artifacts/download/hash-test/@" in result.output
+        # Verify the hash ref is derived from the full hash
+        assert expected_hash[:8] in result.output
+
+    def test_push_shows_source_uri_info_when_not_provided(
+        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path
+    ) -> None:
+        """Push without --source-uri shows info message about provenance."""
+        test_file = tmp_path / "no_source_uri.bin"
+        test_content = b"no source uri content"
+        test_file.write_bytes(test_content)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "push",
+                    str(test_file),
+                    "--to",
+                    "nosourceuri/test",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
+        assert "Info: No --source-uri provided" in result.output
+        assert "provenance" in result.output.lower()
+
+    def test_push_no_source_uri_info_when_provided(
+        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path
+    ) -> None:
+        """Push with --source-uri does NOT show info message."""
+        test_file = tmp_path / "with_source_uri.bin"
+        test_content = b"with source uri content"
+        test_file.write_bytes(test_content)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "push",
+                    str(test_file),
+                    "--to",
+                    "withsourceuri/test",
+                    "--source-uri",
+                    "git://repo@v1.0",
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
+        assert "Info: No --source-uri provided" not in result.output
