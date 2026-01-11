@@ -18,7 +18,11 @@ from magpie.storage.metadata import (
     update_metadata,
     write_metadata,
 )
-from magpie.storage.paths import artifact_dir_path
+from magpie.storage.paths import (
+    artifact_dir_path,
+    check_artifact_nesting,
+    validate_artifact_path,
+)
 from magpie.storage.symlinks import reconcile_symlinks
 
 logger = logging.getLogger(__name__)
@@ -82,7 +86,17 @@ class StorageService:
             Tuple of (ArtifactInfo, is_duplicate):
             - ArtifactInfo with full artifact details
             - is_duplicate: True if blob already existed
+
+        Raises:
+            InvalidArtifactPathError: If path contains reserved names or conflicts
+                with existing artifacts.
         """
+        # Validate artifact path for reserved names
+        validate_artifact_path(artifact_path)
+
+        # Check for nesting conflicts with existing artifacts
+        check_artifact_nesting(self.config.storage_path, artifact_path)
+
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
 
         # Store blob (handles streaming and hashing)

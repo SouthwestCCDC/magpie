@@ -56,7 +56,14 @@ def admin_token(token_service: TokenService) -> str:
 def api_client(
     token_service: TokenService, storage_service: StorageService, test_config: MagpieSettings
 ) -> TestClient:
-    """Create test API client with overridden dependencies."""
+    """Create test API client with overridden dependencies.
+
+    Note: This fixture removes auth overrides from the autouse conftest fixture
+    so that actual token authentication is tested.
+    """
+    # Clear any auth overrides from the autouse conftest fixture
+    # so that real authentication is tested
+    app.dependency_overrides.clear()
 
     def override_token_service() -> TokenService:
         return token_service

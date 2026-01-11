@@ -59,7 +59,14 @@ def write_token(token_service: TokenService) -> str:
 def client(
     token_service: TokenService, storage_service: StorageService, test_config: MagpieSettings
 ) -> TestClient:
-    """Create test client with overridden dependencies."""
+    """Create test client with overridden dependencies.
+
+    Note: This fixture removes auth overrides from the autouse conftest fixture
+    so that actual token authentication is tested.
+    """
+    # Clear any auth overrides from the autouse conftest fixture
+    # so that real authentication is tested
+    app.dependency_overrides.clear()
 
     def override_token_service() -> TokenService:
         return token_service
@@ -78,16 +85,24 @@ def client(
 
 
 def _upload_artifact(
-    client: TestClient, path: str, content: bytes, uploaded_by: str = "test-user"
+    client: TestClient,
+    path: str,
+    content: bytes,
+    uploaded_by: str = "test-user",
+    scope: str = "write",
 ) -> dict:
-    """Helper to upload an artifact and return the response data."""
+    """Helper to upload an artifact and return the response data.
+
+    Uses X-Magpie-Scope header to simulate Caddy forward_auth for scope checking.
+    """
     files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
+    headers = {"X-Magpie-Scope": scope}
 
     response = client.post(
         f"/api/v1/upload/{path}",
         files=files,
         params={"uploaded_by": uploaded_by},
-        headers={"X-Magpie-Scope": "write"},
+        headers=headers,
     )
     assert response.status_code == 200
     return response.json()
@@ -233,6 +248,7 @@ class TestGCDeletesUntaggedBlobs:
         # Remove the "latest" tag to make blob untagged
         client.delete(
             "/api/v1/artifacts/gc-delete-test/artifact/tags/latest",
+            headers={"X-Magpie-Scope": "write"},
         )
 
         # Manually age the blob by modifying metadata
@@ -273,7 +289,10 @@ class TestGCDeletesUntaggedBlobs:
         hash_value = upload_data["hash"]
 
         # Remove the tag
-        client.delete("/api/v1/artifacts/gc-dryrun-test/artifact/tags/latest")
+        client.delete(
+            "/api/v1/artifacts/gc-dryrun-test/artifact/tags/latest",
+            headers={"X-Magpie-Scope": "write"},
+        )
 
         # Age the blob
         # Metadata files use short hash (first 8 chars) as filename

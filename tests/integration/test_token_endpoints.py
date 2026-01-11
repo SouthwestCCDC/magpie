@@ -48,7 +48,14 @@ def write_token(token_service: TokenService) -> str:
 
 @pytest.fixture
 def client(token_service: TokenService) -> TestClient:
-    """Create test client with overridden token service dependency."""
+    """Create test client with overridden token service dependency.
+
+    Note: This fixture removes auth overrides from the autouse conftest fixture
+    so that actual token authentication is tested.
+    """
+    # Clear any auth overrides from the autouse conftest fixture
+    # so that real authentication is tested
+    app.dependency_overrides.clear()
 
     def override_token_service() -> TokenService:
         return token_service
