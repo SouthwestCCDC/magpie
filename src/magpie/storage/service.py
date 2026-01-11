@@ -410,6 +410,39 @@ class StorageService:
 
         raise ArtifactNotFoundError(f"Blob not found for hash ref {hash_ref}")
 
+    def list_artifact_paths(self, prefix: str = "") -> list[str]:
+        """List artifact paths under a given prefix.
+
+        Args:
+            prefix: Path prefix to filter by (empty string lists all).
+                   Leading slashes are stripped for normalization.
+
+        Returns:
+            Sorted list of artifact paths matching the prefix.
+            Returns paths that have a .magpie manifest file.
+        """
+        # Normalize prefix by stripping leading slash
+        normalized_prefix = prefix.lstrip("/")
+
+        artifact_paths: list[str] = []
+
+        # Find all .magpie manifest files under storage_path
+        for manifest_file in self.config.storage_path.rglob(".magpie"):
+            # Get artifact directory (parent of .magpie file)
+            artifact_dir = manifest_file.parent
+
+            # Compute artifact path relative to storage_path
+            artifact_path = str(artifact_dir.relative_to(self.config.storage_path))
+
+            # Filter by prefix if provided
+            if normalized_prefix:
+                if artifact_path.startswith(normalized_prefix):
+                    artifact_paths.append(artifact_path)
+            else:
+                artifact_paths.append(artifact_path)
+
+        return sorted(artifact_paths)
+
     def _get_tags_for_hash(self, artifact_dir: Path, hash_ref: str) -> list[str]:
         """Get all tags pointing to a given hash reference.
 

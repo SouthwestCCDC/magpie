@@ -216,3 +216,99 @@ class TestResponseFormat:
         assert "artifact_path" in data
         assert "versions" in data
         assert isinstance(data["versions"], list)
+
+
+class TestListPathsEndpoint:
+    """Tests for GET /api/v1/artifacts (no path - list artifact paths)."""
+
+    def test_list_all_artifact_paths(self, client: TestClient) -> None:
+        """List all artifact paths returns all paths with manifests."""
+        # Upload artifacts at different paths
+        files1 = {"file": ("f1.bin", io.BytesIO(b"content1"), "application/octet-stream")}
+        files2 = {"file": ("f2.bin", io.BytesIO(b"content2"), "application/octet-stream")}
+        files3 = {"file": ("f3.bin", io.BytesIO(b"content3"), "application/octet-stream")}
+
+        client.post("/api/v1/upload/test/artifact1", files=files1)
+        client.post("/api/v1/upload/test/artifact2", files=files2)
+        client.post("/api/v1/upload/images/ubuntu", files=files3)
+
+        # List all paths
+        response = client.get("/api/v1/artifacts")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "paths" in data
+        assert len(data["paths"]) == 3
+        assert "test/artifact1" in data["paths"]
+        assert "test/artifact2" in data["paths"]
+        assert "images/ubuntu" in data["paths"]
+        # Should be sorted
+        assert data["paths"] == sorted(data["paths"])
+
+    def test_list_paths_with_prefix(self, client: TestClient) -> None:
+        """List paths with prefix filters correctly."""
+        # Upload artifacts
+        files1 = {"file": ("f1.bin", io.BytesIO(b"content1"), "application/octet-stream")}
+        files2 = {"file": ("f2.bin", io.BytesIO(b"content2"), "application/octet-stream")}
+        files3 = {"file": ("f3.bin", io.BytesIO(b"content3"), "application/octet-stream")}
+
+        client.post("/api/v1/upload/test/artifact1", files=files1)
+        client.post("/api/v1/upload/test/artifact2", files=files2)
+        client.post("/api/v1/upload/images/ubuntu", files=files3)
+
+        # List with prefix
+        response = client.get("/api/v1/artifacts", params={"prefix": "test"})
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert len(data["paths"]) == 2
+        assert "test/artifact1" in data["paths"]
+        assert "test/artifact2" in data["paths"]
+        assert "images/ubuntu" not in data["paths"]
+
+    def test_list_paths_normalizes_leading_slash(self, client: TestClient) -> None:
+        """List paths normalizes leading slash in prefix."""
+        files = {"file": ("f.bin", io.BytesIO(b"content"), "application/octet-stream")}
+        client.post("/api/v1/upload/test/artifact", files=files)
+
+        # Leading slash should be normalized
+        response = client.get("/api/v1/artifacts", params={"prefix": "/test"})
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert len(data["paths"]) == 1
+        assert "test/artifact" in data["paths"]
+
+    def test_list_paths_empty_storage(self, client: TestClient) -> None:
+        """List paths with no artifacts returns empty list."""
+        response = client.get("/api/v1/artifacts")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["paths"] == []
+
+    def test_list_paths_no_matching_prefix(self, client: TestClient) -> None:
+        """List paths with non-matching prefix returns empty list."""
+        files = {"file": ("f.bin", io.BytesIO(b"content"), "application/octet-stream")}
+        client.post("/api/v1/upload/test/artifact", files=files)
+
+        response = client.get("/api/v1/artifacts", params={"prefix": "images"})
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["paths"] == []
+
+    def test_list_paths_response_structure(self, client: TestClient) -> None:
+        """List paths response has correct structure."""
+        response = client.get("/api/v1/artifacts")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "paths" in data
+        assert isinstance(data["paths"], list)

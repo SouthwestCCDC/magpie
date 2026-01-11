@@ -336,3 +336,99 @@ class TestEdgeCases:
         assert symlink_path.is_symlink()
         # Symlink should resolve to blob content
         assert symlink_path.read_bytes() == b"content"
+
+
+class TestListArtifactPaths:
+    """Tests for list_artifact_paths functionality."""
+
+    def test_list_all_paths(self, storage_service: StorageService) -> None:
+        """list_artifact_paths should return all artifact paths."""
+        # Store artifacts at different paths
+        storage_service.store_artifact(
+            artifact_path="test/artifact1",
+            file_stream=io.BytesIO(b"content1"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test/artifact2",
+            file_stream=io.BytesIO(b"content2"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="images/ubuntu",
+            file_stream=io.BytesIO(b"content3"),
+            uploaded_by="user",
+        )
+
+        # List all paths
+        paths = storage_service.list_artifact_paths()
+
+        assert len(paths) == 3
+        assert "test/artifact1" in paths
+        assert "test/artifact2" in paths
+        assert "images/ubuntu" in paths
+        # Should be sorted
+        assert paths == sorted(paths)
+
+    def test_list_paths_with_prefix(self, storage_service: StorageService) -> None:
+        """list_artifact_paths should filter by prefix."""
+        # Store artifacts at different paths
+        storage_service.store_artifact(
+            artifact_path="test/artifact1",
+            file_stream=io.BytesIO(b"content1"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test/artifact2",
+            file_stream=io.BytesIO(b"content2"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="images/ubuntu",
+            file_stream=io.BytesIO(b"content3"),
+            uploaded_by="user",
+        )
+
+        # List with prefix
+        paths = storage_service.list_artifact_paths("test")
+
+        assert len(paths) == 2
+        assert "test/artifact1" in paths
+        assert "test/artifact2" in paths
+        assert "images/ubuntu" not in paths
+
+    def test_list_paths_normalizes_leading_slash(
+        self, storage_service: StorageService
+    ) -> None:
+        """list_artifact_paths should normalize leading slashes."""
+        storage_service.store_artifact(
+            artifact_path="test/artifact",
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="user",
+        )
+
+        # Leading slash should be normalized
+        paths = storage_service.list_artifact_paths("/test")
+
+        assert len(paths) == 1
+        assert "test/artifact" in paths
+
+    def test_list_paths_empty_returns_empty(
+        self, storage_service: StorageService
+    ) -> None:
+        """list_artifact_paths should return empty list when no artifacts."""
+        paths = storage_service.list_artifact_paths()
+        assert paths == []
+
+    def test_list_paths_no_match_returns_empty(
+        self, storage_service: StorageService
+    ) -> None:
+        """list_artifact_paths should return empty list for non-matching prefix."""
+        storage_service.store_artifact(
+            artifact_path="test/artifact",
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="user",
+        )
+
+        paths = storage_service.list_artifact_paths("images")
+        assert paths == []
