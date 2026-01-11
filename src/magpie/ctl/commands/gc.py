@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from magpie.ctl import CTLContext
+from magpie.storage.cleanup import CleanupStats, cleanup_artifact_directories
 from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
 from magpie.storage.symlinks import reconcile_symlinks
@@ -79,8 +80,12 @@ def gc(
     deleted_blobs = 0
     deleted_bytes = 0
     reconciled_artifacts = 0
+    cleanup_stats = CleanupStats()
 
     now = datetime.now(timezone.utc)
+
+    # Collect artifact directories for cleanup pass (after blob deletion)
+    artifact_dirs_to_cleanup: list[Path] = []
 
     # Find all artifact directories (containing .magpie manifest)
     for manifest_file in storage_path.rglob(".magpie"):
@@ -99,6 +104,9 @@ def gc(
         # Reconcile symlinks for this artifact
         reconcile_symlinks(artifact_dir, manifest)
         reconciled_artifacts += 1
+
+        # Track artifact directory for cleanup pass
+        artifact_dirs_to_cleanup.append(artifact_dir)
 
         if reconcile_only:
             continue
@@ -163,6 +171,22 @@ def gc(
             deleted_blobs += 1
             deleted_bytes += blob_size
 
+    # Cleanup pass: remove empty directories after blob deletion
+    if not reconcile_only:
+        for artifact_dir in artifact_dirs_to_cleanup:
+            stats = cleanup_artifact_directories(artifact_dir, storage_path, dry_run)
+            cleanup_stats.empty_blobs_dirs += stats.empty_blobs_dirs
+            cleanup_stats.empty_metadata_dirs += stats.empty_metadata_dirs
+            cleanup_stats.empty_manifests += stats.empty_manifests
+            cleanup_stats.empty_artifact_dirs += stats.empty_artifact_dirs
+            cleanup_stats.empty_parent_dirs += stats.empty_parent_dirs
+            cleanup_stats.removed_paths.extend(stats.removed_paths)
+
+        # Report directories that would be / were removed
+        if dry_run and cleanup_stats.removed_paths:
+            for path in cleanup_stats.removed_paths:
+                click.echo(f"Would remove: {path}")
+
     # Print summary
     click.echo("")
     click.echo("GC Summary:")
@@ -174,6 +198,26 @@ def gc(
     if not reconcile_only:
         action = "Would delete" if dry_run else "Deleted"
         click.echo(f"  {action}: {deleted_blobs} blob(s), {_format_size(deleted_bytes)}")
+
+        # Report directory cleanup
+        if cleanup_stats.total_removed > 0:
+            action = "Would remove" if dry_run else "Removed"
+            click.echo(f"  {action} empty directories: {cleanup_stats.total_removed}")
+            if ctx.debug:
+                if cleanup_stats.empty_blobs_dirs:
+                    click.echo(f"    - blobs/ dirs: {cleanup_stats.empty_blobs_dirs}", err=True)
+                if cleanup_stats.empty_metadata_dirs:
+                    click.echo(
+                        f"    - metadata/ dirs: {cleanup_stats.empty_metadata_dirs}", err=True
+                    )
+                if cleanup_stats.empty_manifests:
+                    click.echo(f"    - .magpie files: {cleanup_stats.empty_manifests}", err=True)
+                if cleanup_stats.empty_artifact_dirs:
+                    click.echo(
+                        f"    - artifact dirs: {cleanup_stats.empty_artifact_dirs}", err=True
+                    )
+                if cleanup_stats.empty_parent_dirs:
+                    click.echo(f"    - parent dirs: {cleanup_stats.empty_parent_dirs}", err=True)
 
 
 def _get_blob_age_days(artifact_dir: Path, blob_hash: str, now: datetime) -> int | None:

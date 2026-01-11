@@ -216,6 +216,7 @@ class TestGCEndpointFunctionality:
             "blobs_found",
             "blobs_deleted",
             "space_reclaimed_bytes",
+            "directories_removed",
         }
         assert required_fields == set(data.keys())
 
@@ -326,3 +327,133 @@ class TestGCDeletesUntaggedBlobs:
         # Verify blob still exists (blob files use short hash as filename)
         blob_file = artifact_dir / "blobs" / hash_value[:8]
         assert blob_file.exists(), "Blob should not be deleted in dry run mode"
+
+
+class TestGCDirectoryCleanup:
+    """Tests for GC endpoint directory cleanup after blob deletion."""
+
+    def test_gc_response_includes_directories_removed(
+        self, client: TestClient, admin_token: str
+    ) -> None:
+        """GC response includes directories_removed field."""
+        response = client.post(
+            "/api/v1/gc",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "directories_removed" in data
+
+    def test_gc_removes_empty_artifact_directories(
+        self, client: TestClient, admin_token: str, test_config: MagpieSettings
+    ) -> None:
+        """GC removes empty artifact directories after deleting all blobs."""
+        # Upload artifact
+        upload_data = _upload_artifact(client, "gc-cleanup-test/artifact", b"cleanup content")
+        hash_value = upload_data["hash"]
+
+        # Remove the "latest" tag to make blob untagged
+        client.delete(
+            "/api/v1/artifacts/gc-cleanup-test/artifact/tags/latest",
+            headers={"X-Magpie-Scope": "write"},
+        )
+
+        # Age the blob
+        artifact_dir = test_config.storage_path / "gc-cleanup-test" / "artifact"
+        metadata_file = artifact_dir / "metadata" / f"{hash_value[:8]}.json"
+
+        if metadata_file.exists():
+            import json
+
+            with open(metadata_file) as f:
+                metadata = json.load(f)
+
+            old_time = datetime.now(timezone.utc) - timedelta(days=100)
+            metadata["uploaded_at"] = old_time.isoformat()
+
+            with open(metadata_file, "w") as f:
+                json.dump(metadata, f)
+
+        # Run GC
+        response = client.post(
+            "/api/v1/gc",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["blobs_deleted"] >= 1
+        assert data["directories_removed"] >= 1
+
+        # Artifact directory should be cleaned up
+        assert not artifact_dir.exists()
+
+    def test_gc_dry_run_reports_directories_to_remove(
+        self, client: TestClient, admin_token: str, test_config: MagpieSettings
+    ) -> None:
+        """GC dry run reports directories that would be removed."""
+        # Upload artifact
+        upload_data = _upload_artifact(client, "gc-dryrun-cleanup/artifact", b"dryrun cleanup")
+        hash_value = upload_data["hash"]
+
+        # Remove tag
+        client.delete(
+            "/api/v1/artifacts/gc-dryrun-cleanup/artifact/tags/latest",
+            headers={"X-Magpie-Scope": "write"},
+        )
+
+        # Age the blob
+        artifact_dir = test_config.storage_path / "gc-dryrun-cleanup" / "artifact"
+        metadata_file = artifact_dir / "metadata" / f"{hash_value[:8]}.json"
+
+        if metadata_file.exists():
+            import json
+
+            with open(metadata_file) as f:
+                metadata = json.load(f)
+
+            old_time = datetime.now(timezone.utc) - timedelta(days=100)
+            metadata["uploaded_at"] = old_time.isoformat()
+
+            with open(metadata_file, "w") as f:
+                json.dump(metadata, f)
+
+        # Run GC in dry run mode
+        response = client.post(
+            "/api/v1/gc",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            params={"dry_run": "true"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["dry_run"] is True
+        assert data["directories_removed"] >= 1
+
+        # Artifact directory should still exist (dry run)
+        assert artifact_dir.exists()
+
+    def test_gc_preserves_artifact_with_tags(
+        self, client: TestClient, admin_token: str, test_config: MagpieSettings
+    ) -> None:
+        """GC preserves artifact directories when tags still exist."""
+        # Upload artifact (has "latest" tag)
+        _upload_artifact(client, "gc-preserve-test/artifact", b"preserve content")
+
+        artifact_dir = test_config.storage_path / "gc-preserve-test" / "artifact"
+        assert artifact_dir.exists()
+
+        # Run GC
+        response = client.post(
+            "/api/v1/gc",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["blobs_deleted"] == 0
+
+        # Artifact directory should still exist
+        assert artifact_dir.exists()
+        assert (artifact_dir / ".magpie").exists()
