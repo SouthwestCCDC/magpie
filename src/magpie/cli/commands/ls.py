@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     import httpx
 
 from magpie.cli import CLIContext
+from magpie.cli.commands.parse import ParseError, parse_artifact_path
 
 
 @click.command(name="ls")
@@ -29,14 +30,20 @@ def ls(ctx: CLIContext, artifact_path: str) -> None:
     if not ctx.server:
         raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
 
+    # Parse path, stripping any ref if accidentally provided
+    try:
+        path = parse_artifact_path(artifact_path)
+    except ParseError as e:
+        raise click.ClickException(str(e))
+
     with ctx.get_client() as client:
         if ctx.debug:
-            click.echo(f"Listing versions for {artifact_path}...", err=True)
+            click.echo(f"Listing versions for {path}...", err=True)
 
-        response = client.get(f"/api/v1/artifacts/{artifact_path}")
+        response = client.get(f"/api/v1/artifacts/{path}")
 
         if response.status_code == 404:
-            click.echo(f"No artifact found at: {artifact_path}")
+            click.echo(f"No artifact found at: {path}")
             return
         if response.status_code != 200:
             _handle_error(response)
@@ -46,7 +53,7 @@ def ls(ctx: CLIContext, artifact_path: str) -> None:
     versions = data.get("versions", [])
 
     if not versions:
-        click.echo(f"No versions found for: {artifact_path}")
+        click.echo(f"No versions found for: {path}")
         return
 
     # Print table header

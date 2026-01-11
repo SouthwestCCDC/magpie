@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     import httpx
 
 from magpie.cli import CLIContext
-from magpie.cli.commands.get import parse_artifact_ref
+from magpie.cli.commands.parse import ParseError, parse_artifact_ref
 
 
 @click.command()
@@ -39,7 +39,10 @@ def amend(ctx: CLIContext, artifact_ref: str, source_uri: str | None) -> None:
     if source_uri is None:
         raise click.ClickException("No metadata updates specified. Use --source-uri to update.")
 
-    path, ref = parse_artifact_ref(artifact_ref)
+    try:
+        path, ref = parse_artifact_ref(artifact_ref)
+    except ParseError as e:
+        raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
         if ctx.debug:

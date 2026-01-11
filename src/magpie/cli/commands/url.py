@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     import httpx
 
 from magpie.cli import CLIContext
-from magpie.cli.commands.get import parse_artifact_ref
+from magpie.cli.commands.parse import ParseError, parse_artifact_ref
 
 
 @click.command()
@@ -35,7 +35,10 @@ def url(ctx: CLIContext, artifact_ref: str) -> None:
     if not ctx.server:
         raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
 
-    path, ref = parse_artifact_ref(artifact_ref)
+    try:
+        path, ref = parse_artifact_ref(artifact_ref)
+    except ParseError as e:
+        raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
         if ctx.debug:

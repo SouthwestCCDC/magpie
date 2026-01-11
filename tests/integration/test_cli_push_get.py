@@ -16,7 +16,7 @@ from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
 from magpie.cli import cli
-from magpie.cli.commands.get import parse_artifact_ref
+from magpie.cli.commands.parse import parse_artifact_ref
 from magpie.config import MagpieSettings
 from magpie.server.app import app
 from magpie.server.deps import get_storage_service

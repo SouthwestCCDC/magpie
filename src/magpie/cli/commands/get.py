@@ -12,29 +12,7 @@ if TYPE_CHECKING:
     import httpx
 
 from magpie.cli import CLIContext
-
-
-def parse_artifact_ref(artifact_ref: str) -> tuple[str, str]:
-    """Parse artifact reference into path and ref.
-
-    Format: path:ref or path (defaults to "latest")
-
-    Examples:
-        "images/ubuntu:latest" -> ("images/ubuntu", "latest")
-        "images/ubuntu:@abc123" -> ("images/ubuntu", "@abc123")
-        "images/ubuntu" -> ("images/ubuntu", "latest")
-
-    Args:
-        artifact_ref: Artifact reference string.
-
-    Returns:
-        Tuple of (path, ref).
-    """
-    if ":" in artifact_ref:
-        # Split on last colon to support paths with colons
-        idx = artifact_ref.rfind(":")
-        return artifact_ref[:idx], artifact_ref[idx + 1 :]
-    return artifact_ref, "latest"
+from magpie.cli.commands.parse import ParseError, parse_artifact_ref
 
 
 @click.command()
@@ -64,7 +42,10 @@ def get(
     if not ctx.server:
         raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
 
-    path, ref = parse_artifact_ref(artifact_ref)
+    try:
+        path, ref = parse_artifact_ref(artifact_ref)
+    except ParseError as e:
+        raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
         # Fetch metadata to get hash for verification
