@@ -31,7 +31,7 @@ class GCResponse(BaseModel):
 @router.post("/api/v1/gc")
 async def trigger_gc(
     dry_run: Annotated[bool, Query()] = False,
-    retention_days: Annotated[int | None, Query()] = None,
+    retention_days_override: Annotated[int | None, Query(ge=0, alias="retention_days")] = None,
     admin: Annotated[TokenInfo, Depends(require_admin_scope)] = None,
     settings: Annotated[MagpieSettings, Depends(get_settings)] = None,
 ) -> GCResponse:
@@ -53,7 +53,7 @@ async def trigger_gc(
     """
     storage_path = settings.storage_path
     # Use query parameter if provided, otherwise fall back to config
-    retention_days = retention_days if retention_days is not None else settings.retention_days
+    retention_days = retention_days_override if retention_days_override is not None else settings.retention_days
 
     # Track statistics
     total_artifacts = 0

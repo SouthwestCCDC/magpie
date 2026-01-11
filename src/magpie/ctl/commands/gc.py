@@ -31,7 +31,7 @@ from magpie.storage.symlinks import reconcile_symlinks
     help="Override retention period (days). Defaults to config value.",
 )
 @click.pass_obj
-def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool, retention_days: int | None) -> None:
+def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool, retention_days_override: int | None) -> None:
     """Garbage collect untagged blobs older than retention period.
 
     Walks all artifact directories and:
@@ -58,7 +58,7 @@ def gc(ctx: CTLContext, dry_run: bool, reconcile_only: bool, retention_days: int
     settings = ctx.settings
     storage_path = settings.storage_path
     # Use CLI argument if provided, otherwise fall back to config
-    retention_days = retention_days if retention_days is not None else settings.retention_days
+    retention_days = retention_days_override if retention_days_override is not None else settings.retention_days
 
     if not storage_path.exists():
         raise click.ClickException(f"Storage path does not exist: {storage_path}")
