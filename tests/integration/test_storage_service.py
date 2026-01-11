@@ -317,9 +317,7 @@ class TestListArtifacts:
         assert v2.tags == ["latest"]
         assert v2.uploaded_by == "user2"
 
-    def test_list_after_untag_shows_orphaned_blob(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_list_after_untag_shows_orphaned_blob(self, storage_service: StorageService) -> None:
         """list_artifacts should show blobs after their only tag is removed."""
         artifact_path = "test/untag-orphan"
 
