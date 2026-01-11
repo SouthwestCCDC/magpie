@@ -128,7 +128,19 @@ def version() -> None:
 
 
 # Register subcommands
-from magpie.cli.commands import amend, flush_tag, gc, get, info, ls, push, tag, untag, url  # noqa: E402, I001
+from magpie.cli.commands import (  # noqa: E402
+    amend,
+    config_cmd,
+    flush_tag,
+    gc,
+    get,
+    info,
+    ls,
+    push,
+    tag,
+    untag,
+    url,
+)
 
 cli.add_command(push)
 cli.add_command(get)
@@ -140,6 +152,7 @@ cli.add_command(untag)
 cli.add_command(flush_tag)
 cli.add_command(amend)
 cli.add_command(gc)
+cli.add_command(config_cmd, name="config")
 
 
 # Keep the old 'main' as an alias for backwards compatibility with entry point

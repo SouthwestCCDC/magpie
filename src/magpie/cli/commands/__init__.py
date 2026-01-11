@@ -1,6 +1,7 @@
 """CLI commands for magpie client."""
 
 from magpie.cli.commands.amend import amend
+from magpie.cli.commands.config_cmd import config_cmd
 from magpie.cli.commands.flush_tag import flush_tag
 from magpie.cli.commands.gc import gc
 from magpie.cli.commands.get import get
@@ -14,6 +15,7 @@ from magpie.cli.commands.url import url
 
 __all__ = [
     "amend",
+    "config_cmd",
     "flush_tag",
     "gc",
     "get",
