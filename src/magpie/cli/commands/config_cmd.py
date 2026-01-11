@@ -10,7 +10,7 @@ import tomli_w
 from magpie.cli import config as cli_config
 
 # Standard mask for hiding sensitive token values
-TOKEN_MASK = "********"
+TOKEN_MASK = "********"  # nosec B105 - display placeholder, not a real password
 
 
 def _mask_token(token: str) -> str:
