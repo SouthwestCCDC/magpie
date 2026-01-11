@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
 from magpie.cli.progress import transfer_progress
+from magpie.storage.hash import compute_hash
 
 
 @click.command()
@@ -84,7 +85,8 @@ def get(
         # Check if output file exists before downloading to avoid wasting bandwidth
         if output.exists():
             # If local file has same hash as remote, skip download entirely
-            local_hash = hashlib.sha256(output.read_bytes()).hexdigest()
+            # Use compute_hash for streaming hash computation (handles large files)
+            local_hash = compute_hash(output)
             if local_hash == expected_hash:
                 click.echo(f"File already exists with matching hash: {output}")
                 return
