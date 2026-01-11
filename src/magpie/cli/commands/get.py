@@ -21,6 +21,9 @@ from magpie.cli.progress import transfer_progress
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output file path.")
 @click.option("--no-verify", is_flag=True, help="Skip SHA-256 verification.")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress output.")
+@click.option(
+    "--force", "-f", is_flag=True, help="Overwrite existing output file without prompting."
+)
 @click.pass_obj
 def get(
     ctx: CLIContext,
@@ -28,6 +31,7 @@ def get(
     output: Path | None,
     no_verify: bool,
     quiet: bool,
+    force: bool,
 ) -> None:
     """Download an artifact from the server.
 
@@ -120,6 +124,12 @@ def get(
     if output is None:
         # Derive from artifact path (use last component)
         output = Path(parsed.path.split("/")[-1])
+
+    # Check if output file exists and --force not specified
+    if output.exists() and not force:
+        raise click.ClickException(
+            f"Output file already exists: {output}\nUse --force to overwrite existing files."
+        )
 
     # Write file
     output.write_bytes(content)
