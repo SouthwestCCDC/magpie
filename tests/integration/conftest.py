@@ -12,13 +12,11 @@ from magpie.server.deps import require_admin_scope
 def _noop_require_admin_scope() -> TokenInfo:
     """No-op override for require_admin_scope in tests."""
     # Return a dummy TokenInfo since tests don't need real auth
+    # TokenInfo only has 'name' and 'scope' fields
     from magpie.auth.models import TokenScope
     return TokenInfo(
-        id=1,
         name="test-token",
-        description="Test token",
         scope=TokenScope.ADMIN,
-        disabled=False,
     )
 
 
