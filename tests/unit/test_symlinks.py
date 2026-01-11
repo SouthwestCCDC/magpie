@@ -133,12 +133,15 @@ class TestReconcileSymlinks:
             }
         )
 
-        reconcile_symlinks(artifact_dir, manifest)
+        checked, fixed = reconcile_symlinks(artifact_dir, manifest)
 
         assert (artifact_dir / "latest").is_symlink()
         assert (artifact_dir / "v1.0").is_symlink()
         assert (artifact_dir / "latest").read_text() == "content1"
         assert (artifact_dir / "v1.0").read_text() == "content2"
+        # Should have checked 2 tags and fixed (created) 2 symlinks
+        assert checked == 2
+        assert fixed == 2
 
     def test_reconcile_removes_orphan_symlinks(self, artifact_dir: Path) -> None:
         """reconcile_symlinks should remove symlinks not in manifest."""
@@ -148,10 +151,13 @@ class TestReconcileSymlinks:
 
         manifest = Manifest(tags={})  # Empty manifest
 
-        reconcile_symlinks(artifact_dir, manifest)
+        checked, fixed = reconcile_symlinks(artifact_dir, manifest)
 
         assert not (artifact_dir / "old-tag").exists()
         assert not (artifact_dir / "another-old").exists()
+        # Should have checked 0 tags (empty manifest) and fixed (removed) 2 orphan symlinks
+        assert checked == 0
+        assert fixed == 2
 
     def test_reconcile_preserves_correct_symlinks(self, artifact_dir: Path) -> None:
         """reconcile_symlinks should preserve symlinks that match manifest."""
@@ -163,11 +169,14 @@ class TestReconcileSymlinks:
 
         manifest = Manifest(tags={"latest": f"@{hash_ref}"})
 
-        reconcile_symlinks(artifact_dir, manifest)
+        checked, fixed = reconcile_symlinks(artifact_dir, manifest)
 
         # Symlink should still exist and be correct
         assert (artifact_dir / "latest").is_symlink()
         assert (artifact_dir / "latest").read_text() == "content"
+        # Should have checked 1 tag, but fixed 0 (already correct)
+        assert checked == 1
+        assert fixed == 0
 
     def test_reconcile_ignores_regular_files(self, artifact_dir: Path) -> None:
         """reconcile_symlinks should not delete non-symlink files."""
@@ -181,12 +190,15 @@ class TestReconcileSymlinks:
 
         manifest = Manifest(tags={})  # Empty manifest
 
-        reconcile_symlinks(artifact_dir, manifest)
+        checked, fixed = reconcile_symlinks(artifact_dir, manifest)
 
         # Regular file and directory should still exist
         assert regular_file.exists()
         assert regular_file.read_text() == "This is a readme"
         assert subdir.is_dir()
+        # Should have checked 0 tags and fixed 0 (no symlinks to reconcile)
+        assert checked == 0
+        assert fixed == 0
 
     def test_reconcile_updates_wrong_symlinks(self, artifact_dir: Path) -> None:
         """reconcile_symlinks should update symlinks pointing to wrong target."""
@@ -200,10 +212,13 @@ class TestReconcileSymlinks:
         # Manifest says latest should point to new blob
         manifest = Manifest(tags={"latest": "@new456"})
 
-        reconcile_symlinks(artifact_dir, manifest)
+        checked, fixed = reconcile_symlinks(artifact_dir, manifest)
 
         # Symlink should now point to new blob
         assert (artifact_dir / "latest").read_text() == "new"
+        # Should have checked 1 tag and fixed 1 (updated existing symlink)
+        assert checked == 1
+        assert fixed == 1
 
     def test_reconcile_handles_empty_artifact_dir(self, tmp_path: Path) -> None:
         """reconcile_symlinks should handle non-existent artifact directory."""
@@ -211,9 +226,12 @@ class TestReconcileSymlinks:
         manifest = Manifest(tags={"latest": "@abc12345"})
 
         # Should not raise, should create symlink
-        reconcile_symlinks(artifact_dir, manifest)
+        checked, fixed = reconcile_symlinks(artifact_dir, manifest)
 
         assert (artifact_dir / "latest").is_symlink()
+        # Should have checked 1 tag and fixed 1 (created new symlink)
+        assert checked == 1
+        assert fixed == 1
 
     def test_reconcile_full_scenario(self, artifact_dir: Path) -> None:
         """reconcile_symlinks should handle add, remove, update in one call."""
@@ -236,10 +254,13 @@ class TestReconcileSymlinks:
             }
         )
 
-        reconcile_symlinks(artifact_dir, manifest)
+        checked, fixed = reconcile_symlinks(artifact_dir, manifest)
 
         # Verify results
         assert (artifact_dir / "keep").read_text() == "content1"
         assert (artifact_dir / "update").read_text() == "content2"
         assert (artifact_dir / "add").read_text() == "content3"
         assert not (artifact_dir / "remove").exists()
+        # Should have checked 3 tags and fixed 3 (1 added, 1 updated, 1 removed)
+        assert checked == 3
+        assert fixed == 3
