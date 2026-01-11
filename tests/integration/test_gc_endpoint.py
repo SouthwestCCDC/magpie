@@ -251,8 +251,9 @@ class TestGCDeletesUntaggedBlobs:
         )
 
         # Manually age the blob by modifying metadata
+        # Metadata files use short hash (first 8 chars) as filename
         artifact_dir = test_config.storage_path / "gc-delete-test" / "artifact"
-        metadata_file = artifact_dir / "metadata" / f"{hash_value}.json"
+        metadata_file = artifact_dir / "metadata" / f"{hash_value[:8]}.json"
 
         if metadata_file.exists():
             import json
@@ -290,8 +291,9 @@ class TestGCDeletesUntaggedBlobs:
         client.delete("/api/v1/artifacts/gc-dryrun-test/artifact/tags/latest")
 
         # Age the blob
+        # Metadata files use short hash (first 8 chars) as filename
         artifact_dir = test_config.storage_path / "gc-dryrun-test" / "artifact"
-        metadata_file = artifact_dir / "metadata" / f"{hash_value}.json"
+        metadata_file = artifact_dir / "metadata" / f"{hash_value[:8]}.json"
 
         if metadata_file.exists():
             import json
@@ -317,6 +319,6 @@ class TestGCDeletesUntaggedBlobs:
         assert data["dry_run"] is True
         assert data["blobs_deleted"] >= 1
 
-        # Verify blob still exists
-        blob_file = artifact_dir / "blobs" / hash_value
+        # Verify blob still exists (blob files use short hash as filename)
+        blob_file = artifact_dir / "blobs" / hash_value[:8]
         assert blob_file.exists(), "Blob should not be deleted in dry run mode"

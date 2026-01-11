@@ -86,22 +86,23 @@ class StorageService:
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
 
         # Store blob (handles streaming and hashing)
-        hash_ref_short, is_duplicate = store_blob(artifact_dir, file_stream, self.config)
-
-        # Get full hash from stored blob
-        full_hash = self._resolve_hash_ref_to_full(artifact_dir, hash_ref_short)
-        hash_ref = short_hash(full_hash)
+        # Returns full hash for metadata, short hash ref for display
+        full_hash, hash_ref, is_duplicate = store_blob(
+            artifact_dir, file_stream, self.config
+        )
 
         # Write metadata sidecar (only for new blobs, write_metadata is write-once)
+        # Use hash_ref (short hash) for filename, but store full_hash inside
         metadata = BlobMetadata(
             hash=full_hash,
             uploaded_by=uploaded_by,
             uploaded_at=datetime.now(timezone.utc),
             source_uri=source_uri,
         )
-        write_metadata(artifact_dir, full_hash, metadata)
+        write_metadata(artifact_dir, hash_ref, metadata)
 
-        # Update manifest with "latest" tag - use full hash for symlink resolution
+        # Update manifest with "latest" tag - store full hash for verification,
+        # symlinks will extract first 8 chars for the actual blob path
         manifest = update_tag(artifact_dir, "latest", full_hash)
 
         # Reconcile symlinks to match manifest
@@ -111,7 +112,7 @@ class StorageService:
         tags = self._get_tags_for_hash(artifact_dir, full_hash)
 
         # Re-read metadata to get actual stored values (in case it was duplicate)
-        stored_metadata = read_metadata(artifact_dir, full_hash)
+        stored_metadata = read_metadata(artifact_dir, hash_ref)
 
         info = ArtifactInfo(
             hash=full_hash,
@@ -155,10 +156,12 @@ class StorageService:
         results: list[ArtifactInfo] = []
         for full_hash, tags in hash_to_tags.items():
             try:
-                metadata = read_metadata(artifact_dir, full_hash)
+                # Metadata is indexed by short hash (first 8 chars)
+                hash_ref = short_hash(full_hash)
+                metadata = read_metadata(artifact_dir, hash_ref)
                 info = ArtifactInfo(
                     hash=full_hash,
-                    hash_ref=short_hash(full_hash),
+                    hash_ref=hash_ref,
                     tags=sorted(tags),
                     uploaded_by=metadata.uploaded_by,
                     uploaded_at=metadata.uploaded_at,
@@ -195,18 +198,21 @@ class StorageService:
 
         # Resolve ref to full hash
         if ref.startswith("@"):
-            # Direct hash reference - resolve to full hash
-            full_hash = self._resolve_hash_ref_to_full(artifact_dir, ref)
+            # Direct hash reference - use as short hash for lookup
+            hash_ref = ref
+            # Resolve to full hash from metadata (for verification)
+            metadata = read_metadata(artifact_dir, hash_ref)
+            full_hash = metadata.hash
         else:
-            # Tag name - look up in manifest
+            # Tag name - look up in manifest (stores full hash)
             if ref not in manifest.tags:
                 raise ArtifactNotFoundError(
                     f"Tag '{ref}' not found in artifact {artifact_path}"
                 )
             full_hash = manifest.tags[ref]
-
-        # Get metadata
-        metadata = read_metadata(artifact_dir, full_hash)
+            # Convert to short hash for metadata lookup
+            hash_ref = short_hash(full_hash)
+            metadata = read_metadata(artifact_dir, hash_ref)
 
         # Get all tags pointing to this hash
         tags = self._get_tags_for_hash(artifact_dir, full_hash)
@@ -238,13 +244,14 @@ class StorageService:
         """
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
 
-        # Resolve hash_ref to full hash (raises ArtifactNotFoundError if not found)
-        full_hash = self._resolve_hash_ref_to_full(artifact_dir, hash_ref)
+        # Validate blob exists and get short hash for metadata lookup
+        short_hash_name = self._validate_blob_exists(artifact_dir, hash_ref)
 
-        # Verify blob exists by checking metadata (also validates blob integrity)
-        metadata = read_metadata(artifact_dir, full_hash)
+        # Read metadata to get full hash and other info
+        metadata = read_metadata(artifact_dir, short_hash_name)
+        full_hash = metadata.hash
 
-        # Update manifest with tag (uses full hash)
+        # Update manifest with tag (uses full hash for verification)
         manifest = update_tag(artifact_dir, tag_name, full_hash)
 
         # Reconcile symlinks to match manifest
@@ -356,11 +363,12 @@ class StorageService:
         """
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
 
-        # Resolve hash_ref to full hash (raises ArtifactNotFoundError if not found)
-        full_hash = self._resolve_hash_ref_to_full(artifact_dir, hash_ref)
+        # Validate blob exists and get short hash for metadata lookup
+        short_hash_name = self._validate_blob_exists(artifact_dir, hash_ref)
 
         # Update metadata (preserves immutable fields)
-        updated_metadata = update_metadata(artifact_dir, full_hash, source_uri=source_uri)
+        updated_metadata = update_metadata(artifact_dir, short_hash_name, source_uri=source_uri)
+        full_hash = updated_metadata.hash
 
         # Get all tags pointing to this hash
         tags = self._get_tags_for_hash(artifact_dir, full_hash)
@@ -374,20 +382,22 @@ class StorageService:
             source_uri=updated_metadata.source_uri,
         )
 
-    def _resolve_hash_ref_to_full(self, artifact_dir: Path, hash_ref: str) -> str:
-        """Resolve a short hash_ref to the full hash by finding the blob file.
+    def _validate_blob_exists(self, artifact_dir: Path, hash_ref: str) -> str:
+        """Validate that a blob exists for the given hash reference.
 
         Args:
             artifact_dir: Artifact directory path.
-            hash_ref: Short hash reference (with or without @ prefix).
+            hash_ref: Hash reference (with or without @ prefix). Can be short (8 chars)
+                     or full hash (64 chars) - only first 8 chars are used for lookup.
 
         Returns:
-            Full SHA-256 hash string.
+            Short hash (8 chars, no @ prefix) of the matching blob.
 
         Raises:
             ArtifactNotFoundError: If no matching blob found.
         """
-        prefix = hash_ref.lstrip("@")
+        # Use first 8 chars for lookup (blobs are stored with short hash)
+        prefix = hash_ref.lstrip("@")[:8]
         blobs_dir = artifact_dir / "blobs"
 
         if not blobs_dir.exists():
@@ -395,7 +405,7 @@ class StorageService:
 
         # Find blob file matching prefix
         for blob_file in blobs_dir.iterdir():
-            if blob_file.name.startswith(prefix) or blob_file.name == prefix:
+            if blob_file.name == prefix:
                 return blob_file.name
 
         raise ArtifactNotFoundError(f"Blob not found for hash ref {hash_ref}")

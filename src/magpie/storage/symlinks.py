@@ -20,9 +20,10 @@ def create_symlink(artifact_dir: Path, tag_name: str, hash_ref: str) -> None:
     """
     symlink_path = artifact_dir / tag_name
 
-    # Strip @ prefix if present for the target path
-    target_name = hash_ref.lstrip("@")
-    # Use relative path: blobs/{hash}
+    # Strip @ prefix if present and use first 8 chars for the target path
+    # (blobs are stored with 8-char short hash, but manifest may have full hash)
+    target_name = hash_ref.lstrip("@")[:8]
+    # Use relative path: blobs/{short_hash}
     target = Path("blobs") / target_name
 
     # Remove existing symlink if present (atomic update)
@@ -86,7 +87,7 @@ def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> None:
     # Update existing symlinks that point to wrong target
     for tag_name in expected_tags & existing_symlinks:
         symlink_path = artifact_dir / tag_name
-        expected_target = Path("blobs") / manifest.tags[tag_name].lstrip("@")
+        expected_target = Path("blobs") / manifest.tags[tag_name].lstrip("@")[:8]
 
         # Check if current target matches expected
         try:

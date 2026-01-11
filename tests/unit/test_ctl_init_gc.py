@@ -38,6 +38,11 @@ def create_artifact_with_blobs(
 ) -> None:
     """Helper to create an artifact directory with blobs and manifest.
 
+    Simulates the actual storage scheme where:
+    - Manifest stores full hashes
+    - Blob files use first 8 chars of hash
+    - Metadata files use first 8 chars of hash (but contain full hash inside)
+
     Args:
         storage_path: Base storage path.
         artifact_path: Relative artifact path.
@@ -51,7 +56,7 @@ def create_artifact_with_blobs(
     blobs_dir.mkdir(parents=True, exist_ok=True)
     metadata_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create manifest
+    # Create manifest (stores full hashes)
     manifest = {
         "version": 1,
         "tags": tagged_hashes,
@@ -64,20 +69,23 @@ def create_artifact_with_blobs(
     blob_ages_days = blob_ages_days or {}
 
     for blob_hash in all_hashes:
-        # Create blob file
-        blob_file = blobs_dir / blob_hash
+        # Blob and metadata files use short hash (first 8 chars)
+        short_hash = blob_hash[:8]
+
+        # Create blob file with short hash name
+        blob_file = blobs_dir / short_hash
         blob_file.write_bytes(b"test content for " + blob_hash.encode())
 
-        # Create metadata with upload timestamp
+        # Create metadata with upload timestamp (short hash filename, full hash inside)
         age_days = blob_ages_days.get(blob_hash, 0)
         upload_time = datetime.now(timezone.utc) - timedelta(days=age_days)
         metadata = {
-            "hash": blob_hash,
+            "hash": blob_hash,  # Full hash stored inside metadata
             "uploaded_by": "test",
             "uploaded_at": upload_time.isoformat(),
             "source_uri": None,
         }
-        metadata_file = metadata_dir / f"{blob_hash}.json"
+        metadata_file = metadata_dir / f"{short_hash}.json"
         metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
 
 
@@ -207,7 +215,8 @@ class TestGCCommand:
             blob_ages_days={"tagged_hash_abc": 0, "untagged_hash_xyz": 100},
         )
 
-        blob_file = test_settings.storage_path / "test/artifact/blobs/untagged_hash_xyz"
+        # Blob files use short hash (first 8 chars)
+        blob_file = test_settings.storage_path / "test/artifact/blobs/untagged"
         assert blob_file.exists()
 
         with patch("magpie.ctl.get_settings", return_value=test_settings):
@@ -231,7 +240,8 @@ class TestGCCommand:
             blob_ages_days={"tagged_hash_abc": 0, "old_untagged_xyz": 100},
         )
 
-        blob_file = test_settings.storage_path / "test/artifact/blobs/old_untagged_xyz"
+        # Blob files use short hash (first 8 chars)
+        blob_file = test_settings.storage_path / "test/artifact/blobs/old_unta"
         assert blob_file.exists()
 
         with patch("magpie.ctl.get_settings", return_value=test_settings):
@@ -258,7 +268,8 @@ class TestGCCommand:
             },
         )
 
-        blob_file = test_settings.storage_path / "test/artifact/blobs/young_untagged_xyz"
+        # Blob files use short hash (first 8 chars)
+        blob_file = test_settings.storage_path / "test/artifact/blobs/young_un"
         assert blob_file.exists()
 
         with patch("magpie.ctl.get_settings", return_value=test_settings):
@@ -283,7 +294,8 @@ class TestGCCommand:
         )
 
         artifact_dir = test_settings.storage_path / "test/artifact"
-        blob_file = artifact_dir / "blobs/old_untagged_xyz"
+        # Blob files use short hash (first 8 chars)
+        blob_file = artifact_dir / "blobs/old_unta"
         assert blob_file.exists()
 
         with patch("magpie.ctl.get_settings", return_value=test_settings):
@@ -321,7 +333,8 @@ class TestGCCommand:
             blob_ages_days={"old_tagged_hash": 365},  # Very old but tagged
         )
 
-        blob_file = test_settings.storage_path / "test/artifact/blobs/old_tagged_hash"
+        # Blob files use short hash (first 8 chars)
+        blob_file = test_settings.storage_path / "test/artifact/blobs/old_tagg"
         assert blob_file.exists()
 
         with patch("magpie.ctl.get_settings", return_value=test_settings):
