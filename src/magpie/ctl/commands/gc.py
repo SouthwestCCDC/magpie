@@ -2,15 +2,29 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 import click
 
+from magpie.cli.progress import count_progress
 from magpie.ctl import CTLContext
 from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
 from magpie.storage.symlinks import reconcile_symlinks
+
+
+@dataclass
+class BlobToDelete:
+    """Information about a blob scheduled for deletion."""
+
+    blob_file: Path
+    artifact_path: str
+    blob_hash: str
+    age_days: int
+    size: int
+    metadata_file: Path | None
 
 
 @click.command()
@@ -31,9 +45,19 @@ from magpie.storage.symlinks import reconcile_symlinks
     default=None,
     help="Override retention period (days). Defaults to config value.",
 )
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Suppress progress output.",
+)
 @click.pass_obj
 def gc(
-    ctx: CTLContext, dry_run: bool, reconcile_only: bool, retention_days_flag: int | None
+    ctx: CTLContext,
+    dry_run: bool,
+    reconcile_only: bool,
+    retention_days_flag: int | None,
+    quiet: bool,
 ) -> None:
     """Garbage collect untagged blobs older than retention period.
 
@@ -45,6 +69,7 @@ def gc(
     Use --dry-run to see what would be deleted without making changes.
     Use --reconcile-only to only fix symlinks without deleting blobs.
     Use --retention-days to override the configured retention period.
+    Use --quiet to suppress progress bars.
 
     Examples:
 
@@ -57,6 +82,8 @@ def gc(
         magpie-ctl gc --retention-days 0
 
         magpie-ctl gc --retention-days 7
+
+        magpie-ctl gc --quiet
     """
     settings = ctx.settings
     storage_path = settings.storage_path
@@ -76,7 +103,6 @@ def gc(
     total_artifacts = 0
     total_blobs_found = 0
     untagged_blobs = 0
-    deleted_blobs = 0
     deleted_bytes = 0
     symlinks_checked = 0
     symlinks_fixed = 0
@@ -84,98 +110,141 @@ def gc(
 
     now = datetime.now(timezone.utc)
 
-    # Find all artifact directories (containing .magpie manifest)
-    for manifest_file in storage_path.rglob(".magpie"):
-        artifact_dir = manifest_file.parent
-        artifact_path = str(artifact_dir.relative_to(storage_path))
-        total_artifacts += 1
+    # Pre-scan to count artifacts for progress bar
+    manifest_files = list(storage_path.rglob(".magpie"))
+    total_manifest_count = len(manifest_files)
 
-        if ctx.debug:
-            click.echo(f"Processing artifact: {artifact_path}", err=True)
+    # Collect blobs to delete (for progress bar during deletion phase)
+    blobs_to_delete: list[BlobToDelete] = []
 
-        # Read manifest to get tagged hashes
-        # Manifest stores full hashes, but blobs are stored with short hashes (8 chars)
-        manifest = read_manifest(artifact_dir)
-        tagged_hashes = {h[:8] for h in manifest.tags.values()}
+    # Phase 1: Scan artifacts
+    with count_progress("Scanning artifacts", total_manifest_count, quiet=quiet) as (
+        progress,
+        task_id,
+    ):
+        for manifest_file in manifest_files:
+            artifact_dir = manifest_file.parent
+            artifact_path = str(artifact_dir.relative_to(storage_path))
+            total_artifacts += 1
 
-        # Reconcile symlinks for this artifact
-        stats = reconcile_symlinks(artifact_dir, manifest)
-        symlinks_checked += stats.checked
-        symlinks_fixed += stats.fixed
+            if ctx.debug:
+                click.echo(f"Processing artifact: {artifact_path}", err=True)
 
-        # Build detail string if there were fixes for this artifact
-        if stats.fixed > 0:
-            details_parts = []
-            if stats.created_tags:
-                details_parts.append(f"created '{', '.join(stats.created_tags)}'")
-            if stats.removed_tags:
-                details_parts.append(f"removed '{', '.join(stats.removed_tags)}'")
-            if stats.updated_tags:
-                details_parts.append(f"updated '{', '.join(stats.updated_tags)}'")
-            symlinks_fixed_details.append(f"{artifact_path}: {', '.join(details_parts)}")
+            # Read manifest to get tagged hashes
+            # Manifest stores full hashes, but blobs are stored with short hashes (8 chars)
+            manifest = read_manifest(artifact_dir)
+            tagged_hashes = {h[:8] for h in manifest.tags.values()}
 
-        if reconcile_only:
-            continue
+            # Reconcile symlinks for this artifact
+            stats = reconcile_symlinks(artifact_dir, manifest)
+            symlinks_checked += stats.checked
+            symlinks_fixed += stats.fixed
 
-        # Find all blobs in blobs/ directory
-        blobs_dir = artifact_dir / "blobs"
-        if not blobs_dir.exists():
-            continue
+            # Build detail string if there were fixes for this artifact
+            if stats.fixed > 0:
+                details_parts = []
+                if stats.created_tags:
+                    details_parts.append(f"created '{', '.join(stats.created_tags)}'")
+                if stats.removed_tags:
+                    details_parts.append(f"removed '{', '.join(stats.removed_tags)}'")
+                if stats.updated_tags:
+                    details_parts.append(f"updated '{', '.join(stats.updated_tags)}'")
+                symlinks_fixed_details.append(f"{artifact_path}: {', '.join(details_parts)}")
 
-        for blob_file in blobs_dir.iterdir():
-            if not blob_file.is_file():
-                continue
+            if not reconcile_only:
+                # Find all blobs in blobs/ directory
+                blobs_dir = artifact_dir / "blobs"
+                if blobs_dir.exists():
+                    for blob_file in blobs_dir.iterdir():
+                        if not blob_file.is_file():
+                            continue
 
-            total_blobs_found += 1
-            blob_hash = blob_file.name
+                        total_blobs_found += 1
+                        blob_hash = blob_file.name
 
-            # Check if blob is tagged
-            if blob_hash in tagged_hashes:
-                continue
+                        # Check if blob is tagged
+                        if blob_hash in tagged_hashes:
+                            continue
 
-            untagged_blobs += 1
+                        untagged_blobs += 1
 
-            # Get blob age from metadata or file mtime
-            blob_age_days = _get_blob_age_days(artifact_dir, blob_hash, now)
+                        # Get blob age from metadata or file mtime
+                        blob_age_days = _get_blob_age_days(artifact_dir, blob_hash, now)
 
-            if blob_age_days is None:
-                # Can't determine age, skip
-                if ctx.debug:
-                    click.echo(f"  Skipping blob {blob_hash[:12]}... (unknown age)", err=True)
-                continue
+                        if blob_age_days is None:
+                            # Can't determine age, skip
+                            if ctx.debug:
+                                click.echo(
+                                    f"  Skipping blob {blob_hash[:12]}... (unknown age)", err=True
+                                )
+                            continue
 
-            # Check if blob is older than retention period
-            if blob_age_days < retention_days:
-                if ctx.debug:
-                    click.echo(
-                        f"  Keeping blob {blob_hash[:12]}... ({blob_age_days} days old < {retention_days})",
-                        err=True,
-                    )
-                continue
+                        # Check if blob is older than retention period
+                        if blob_age_days < retention_days:
+                            if ctx.debug:
+                                click.echo(
+                                    f"  Keeping blob {blob_hash[:12]}... "
+                                    f"({blob_age_days} days old < {retention_days})",
+                                    err=True,
+                                )
+                            continue
 
-            # Delete old untagged blob
-            blob_size = blob_file.stat().st_size
+                        # Mark blob for deletion
+                        blob_size = blob_file.stat().st_size
+                        metadata_file = artifact_dir / "metadata" / f"{blob_hash}.json"
 
-            if dry_run:
+                        blobs_to_delete.append(
+                            BlobToDelete(
+                                blob_file=blob_file,
+                                artifact_path=artifact_path,
+                                blob_hash=blob_hash,
+                                age_days=blob_age_days,
+                                size=blob_size,
+                                metadata_file=metadata_file if metadata_file.exists() else None,
+                            )
+                        )
+
+            # Update progress
+            if progress is not None and task_id is not None:
+                progress.update(task_id, advance=1)
+
+    # Phase 2: Delete blobs (if not reconcile-only)
+    deleted_blobs = 0
+    if not reconcile_only and blobs_to_delete:
+        if dry_run:
+            # In dry-run mode, just print what would be deleted
+            for blob in blobs_to_delete:
                 click.echo(
-                    f"Would delete: {artifact_path}/blobs/{blob_hash[:12]}... "
-                    f"({blob_age_days} days old, {_format_size(blob_size)})"
+                    f"Would delete: {blob.artifact_path}/blobs/{blob.blob_hash[:12]}... "
+                    f"({blob.age_days} days old, {_format_size(blob.size)})"
                 )
-            else:
-                if ctx.debug:
-                    click.echo(
-                        f"  Deleting blob {blob_hash[:12]}... ({blob_age_days} days old)",
-                        err=True,
-                    )
-                blob_file.unlink()
+                deleted_bytes += blob.size
+            deleted_blobs = len(blobs_to_delete)
+        else:
+            # Actually delete blobs with progress bar
+            with count_progress("Deleting blobs", len(blobs_to_delete), quiet=quiet) as (
+                progress,
+                task_id,
+            ):
+                for blob in blobs_to_delete:
+                    if ctx.debug:
+                        click.echo(
+                            f"  Deleting blob {blob.blob_hash[:12]}... ({blob.age_days} days old)",
+                            err=True,
+                        )
 
-                # Also delete metadata sidecar if it exists
-                metadata_file = artifact_dir / "metadata" / f"{blob_hash}.json"
-                if metadata_file.exists():
-                    metadata_file.unlink()
+                    blob.blob_file.unlink()
 
-            deleted_blobs += 1
-            deleted_bytes += blob_size
+                    # Also delete metadata sidecar if it exists
+                    if blob.metadata_file is not None:
+                        blob.metadata_file.unlink()
+
+                    deleted_blobs += 1
+                    deleted_bytes += blob.size
+
+                    # Update progress
+                    if progress is not None and task_id is not None:
+                        progress.update(task_id, advance=1)
 
     # Print summary
     click.echo("")

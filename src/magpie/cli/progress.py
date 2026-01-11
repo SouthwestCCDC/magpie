@@ -1,4 +1,4 @@
-"""Progress bar utilities for CLI file transfers."""
+"""Progress bar utilities for CLI operations."""
 
 from __future__ import annotations
 
@@ -63,4 +63,50 @@ def transfer_progress(
 
     with progress:
         task_id = progress.add_task(description, total=total_bytes)
+        yield progress, task_id
+
+
+@contextmanager
+def count_progress(
+    description: str,
+    total: int | None = None,
+    quiet: bool = False,
+) -> Generator[tuple["Progress | None", "TaskID | None"], None, None]:
+    """Context manager for count-based progress display.
+
+    Shows a progress bar for iterating over items (not byte transfers).
+    Only shows progress bar in TTY environments and when not quiet.
+
+    Args:
+        description: Description to show (e.g., "Scanning artifacts").
+        total: Total number of items, or None for indeterminate progress.
+        quiet: If True, suppress progress output entirely.
+
+    Yields:
+        Tuple of (Progress instance or None, TaskID or None).
+        Both are None when progress display is suppressed.
+    """
+    if quiet or not is_tty():
+        yield None, None
+        return
+
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+    )
+
+    with progress:
+        task_id = progress.add_task(description, total=total)
         yield progress, task_id
