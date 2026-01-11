@@ -26,7 +26,7 @@ from magpie.storage.symlinks import reconcile_symlinks
 )
 @click.option(
     "--retention-days",
-    type=int,
+    type=click.IntRange(min=0),
     default=None,
     help="Override retention period (days). Defaults to config value.",
 )

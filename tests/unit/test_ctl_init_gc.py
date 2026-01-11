@@ -483,3 +483,15 @@ class TestGCCommand:
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "Deleted: 1 blob(s)" in result.output
         assert not blob_file.exists()
+
+    def test_gc_retention_days_rejects_negative_values(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --retention-days rejects negative values."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--retention-days", "-1"])
+
+        assert result.exit_code != 0
+        assert "Invalid value" in result.output or "is not in the range" in result.output
