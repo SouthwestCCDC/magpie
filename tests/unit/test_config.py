@@ -101,9 +101,7 @@ class TestMagpieSettingsEnvironmentOverride:
         settings = MagpieSettings()
         assert settings.database_path == Path("/env/db.sqlite")
 
-    def test_derived_paths_use_overridden_storage(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_derived_paths_use_overridden_storage(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Derived paths should use env-overridden storage_path."""
         monkeypatch.setenv("MAGPIE_STORAGE_PATH", "/env/storage")
         settings = MagpieSettings()

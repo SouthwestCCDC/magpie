@@ -55,9 +55,7 @@ class TestGetTempPath:
 class TestStoreBlob:
     """Tests for store_blob function."""
 
-    def test_store_blob_creates_file(
-        self, artifact_dir: Path, test_config: MagpieSettings
-    ) -> None:
+    def test_store_blob_creates_file(self, artifact_dir: Path, test_config: MagpieSettings) -> None:
         """store_blob should create blob file at correct path."""
         content = b"test blob content"
         stream = io.BytesIO(content)
@@ -175,9 +173,7 @@ class TestStoreBlob:
 class TestReadBlob:
     """Tests for read_blob function."""
 
-    def test_read_blob_returns_path(
-        self, artifact_dir: Path, test_config: MagpieSettings
-    ) -> None:
+    def test_read_blob_returns_path(self, artifact_dir: Path, test_config: MagpieSettings) -> None:
         """read_blob should return path for existing blob."""
         content = b"readable content"
         stream = io.BytesIO(content)
@@ -242,9 +238,7 @@ class TestCheckBlobExists:
         result = check_blob_exists(artifact_dir, "nonexistent123")
         assert result is False
 
-    def test_check_with_at_prefix(
-        self, artifact_dir: Path, test_config: MagpieSettings
-    ) -> None:
+    def test_check_with_at_prefix(self, artifact_dir: Path, test_config: MagpieSettings) -> None:
         """check_blob_exists should handle @ prefix."""
         content = b"prefix check content"
         stream = io.BytesIO(content)

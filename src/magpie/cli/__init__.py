@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import sys
 from functools import wraps
-from typing import Callable, TypeVar
+from typing import TYPE_CHECKING, Callable, TypeVar
 
 import click
 
 from magpie.cli.client import get_client
 from magpie.cli.config import get_server, get_token
 from magpie.config import get_settings
+
+if TYPE_CHECKING:
+    import httpx
 
 F = TypeVar("F", bound=Callable[..., object])
 
@@ -114,7 +116,7 @@ def version() -> None:
 
 
 # Register subcommands
-from magpie.cli.commands import amend, flush_tag, gc, get, info, ls, push, tag, untag, url
+from magpie.cli.commands import amend, flush_tag, gc, get, info, ls, push, tag, untag, url  # noqa: E402, I001
 
 cli.add_command(push)
 cli.add_command(get)

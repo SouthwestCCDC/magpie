@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
+
+if TYPE_CHECKING:
+    import httpx
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
@@ -97,6 +101,7 @@ class TestGCCommand:
         self, cli_runner: CliRunner, api_client: TestClient, admin_token: str
     ) -> None:
         """GC command calls the GC endpoint."""
+
         # Create a mock client that wraps api_client and adds auth header
         class MockClientWithAuth:
             def __init__(self, client: TestClient, token: str) -> None:
@@ -166,8 +171,11 @@ class TestGCCommand:
         assert "Would delete:" in result.output
 
     def test_gc_displays_stats(
-        self, cli_runner: CliRunner, api_client: TestClient, admin_token: str,
-        storage_service: StorageService
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        admin_token: str,
+        storage_service: StorageService,
     ) -> None:
         """GC displays statistics from server response."""
         # Upload some artifacts first

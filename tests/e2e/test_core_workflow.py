@@ -50,9 +50,7 @@ class TestTokenManagement:
         admin_token: str,
     ) -> None:
         """Create a read-only token via API."""
-        token = create_token_via_api(
-            http_client, admin_token, "e2e-read-test", "read"
-        )
+        token = create_token_via_api(http_client, admin_token, "e2e-read-test", "read")
         assert token
         assert token.startswith("mgp_")
 
@@ -62,9 +60,7 @@ class TestTokenManagement:
         admin_token: str,
     ) -> None:
         """Create a write token via API."""
-        token = create_token_via_api(
-            http_client, admin_token, "e2e-write-test", "write"
-        )
+        token = create_token_via_api(http_client, admin_token, "e2e-write-test", "write")
         assert token
         assert token.startswith("mgp_")
 
@@ -96,9 +92,13 @@ class TestArtifactUpload:
 
             result = subprocess.run(
                 [
-                    "uv", "run", "magpie", "push",
+                    "uv",
+                    "run",
+                    "magpie",
+                    "push",
                     temp_file,
-                    "--path", "e2e-tests/push-test",
+                    "--path",
+                    "e2e-tests/push-test",
                 ],
                 cwd=PROJECT_ROOT,
                 env=env,
@@ -124,7 +124,6 @@ class TestArtifactUpload:
         response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/api-upload-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
 
         assert response.status_code == 200
@@ -151,7 +150,6 @@ class TestArtifactListing:
         authenticated_client.post(
             "/api/v1/upload/e2e-tests/ls-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
 
         # Run magpie ls command
@@ -180,7 +178,6 @@ class TestArtifactListing:
         authenticated_client.post(
             "/api/v1/upload/e2e-tests/api-ls-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
 
         # List artifacts
@@ -210,7 +207,6 @@ class TestArtifactDownload:
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/get-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -224,7 +220,10 @@ class TestArtifactDownload:
 
             result = subprocess.run(
                 [
-                    "uv", "run", "magpie", "get",
+                    "uv",
+                    "run",
+                    "magpie",
+                    "get",
                     "e2e-tests/get-test",
                     str(output_file),
                 ],
@@ -265,7 +264,6 @@ class TestTagging:
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/tag-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -276,7 +274,10 @@ class TestTagging:
         # Create tag via CLI
         result = subprocess.run(
             [
-                "uv", "run", "magpie", "tag",
+                "uv",
+                "run",
+                "magpie",
+                "tag",
                 "e2e-tests/tag-test",
                 artifact_hash,
                 "latest",
@@ -299,7 +300,6 @@ class TestTagging:
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/api-tag-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -331,7 +331,6 @@ class TestArtifactInfo:
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/info-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
         artifact_hash = upload_response.json()["hash"]
 
@@ -341,7 +340,10 @@ class TestArtifactInfo:
 
         result = subprocess.run(
             [
-                "uv", "run", "magpie", "info",
+                "uv",
+                "run",
+                "magpie",
+                "info",
                 "e2e-tests/info-test",
                 artifact_hash,
             ],
@@ -365,7 +367,6 @@ class TestArtifactInfo:
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/api-info-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            
         )
         artifact_hash = upload_response.json()["hash"]
 

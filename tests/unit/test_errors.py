@@ -30,9 +30,7 @@ class TestErrorResponseModel:
 
     def test_serialization_with_detail(self) -> None:
         """ErrorResponse serializes with optional detail field."""
-        response = ErrorResponse(
-            error="TestError", message="Test message", detail={"key": "value"}
-        )
+        response = ErrorResponse(error="TestError", message="Test message", detail={"key": "value"})
         data = response.model_dump()
         assert data["detail"] == {"key": "value"}
 
