@@ -78,15 +78,25 @@ class MockClientWithDownload:
         return self.api_client.post(url, **kwargs)
 
     def _handle_download(self, url: str) -> MagicMock:
-        """Handle download from /artifacts/{path}/{hash_ref}."""
+        """Handle download from /artifacts/{path}/{hash_ref} or /artifacts/{path}/blobs/{hash}."""
         from magpie.storage.blob import read_blob
         from magpie.storage.paths import artifact_dir_path
 
-        # Parse: /artifacts/{path}/{hash_ref}
+        # Parse URL - handle both patterns:
+        # /artifacts/{path}/{tag}  (tag symlinks)
+        # /artifacts/{path}/blobs/{hash}  (direct blob access)
         parts = url.split("/")
-        # parts = ['', 'artifacts', path_parts..., hash_ref]
-        hash_ref = parts[-1]
-        path = "/".join(parts[2:-1])
+        # parts = ['', 'artifacts', path_parts..., ref_or_blobs, maybe_hash]
+
+        if "blobs" in parts:
+            # Pattern: /artifacts/{path}/blobs/{hash}
+            blobs_idx = parts.index("blobs")
+            path = "/".join(parts[2:blobs_idx])
+            hash_ref = "@" + parts[blobs_idx + 1]  # Add @ prefix for lookup
+        else:
+            # Pattern: /artifacts/{path}/{hash_ref}
+            hash_ref = parts[-1]
+            path = "/".join(parts[2:-1])
 
         try:
             # Get the full hash from storage service
