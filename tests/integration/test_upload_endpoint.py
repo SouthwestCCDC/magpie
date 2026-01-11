@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from magpie.config import MagpieSettings, get_settings
+from magpie.config import MagpieSettings
 from magpie.server.app import app
 from magpie.server.deps import get_storage_service
 from magpie.storage.service import StorageService
@@ -331,6 +331,7 @@ class TestPathValidation:
 
         assert response.status_code == 400
         assert "reserved" in response.json()["detail"].lower()
+        assert "metadata" in response.json()["detail"]
 
     def test_reserved_segment_dotmagpie_rejected(self, client: TestClient) -> None:
         """Upload with '.magpie' in path is rejected."""
@@ -341,6 +342,32 @@ class TestPathValidation:
 
         assert response.status_code == 400
         assert "reserved" in response.json()["detail"].lower()
+        assert ".magpie" in response.json()["detail"]
+
+    def test_reserved_segment_case_insensitive(self, client: TestClient) -> None:
+        """Reserved segments are blocked case-insensitively and error shows original case."""
+        content = b"test content"
+
+        # Test uppercase BLOBS
+        files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
+        response = client.post("/api/v1/upload/test/BLOBS/evil", files=files)
+        assert response.status_code == 400
+        assert "reserved" in response.json()["detail"].lower()
+        assert "BLOBS" in response.json()["detail"]
+
+        # Test mixed-case Metadata
+        files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
+        response = client.post("/api/v1/upload/Metadata/test", files=files)
+        assert response.status_code == 400
+        assert "reserved" in response.json()["detail"].lower()
+        assert "Metadata" in response.json()["detail"]
+
+        # Test uppercase .MAGPIE
+        files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
+        response = client.post("/api/v1/upload/test/.MAGPIE/config", files=files)
+        assert response.status_code == 400
+        assert "reserved" in response.json()["detail"].lower()
+        assert ".MAGPIE" in response.json()["detail"]
 
     def test_valid_path_accepted(self, client: TestClient) -> None:
         """Valid paths without reserved segments are accepted."""

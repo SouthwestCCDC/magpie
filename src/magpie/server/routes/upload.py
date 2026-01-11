@@ -28,12 +28,12 @@ def validate_artifact_path(path: str) -> None:
     Raises:
         HTTPException 400: If path contains reserved segments.
     """
-    segments = path.lower().split("/")
-    for segment in segments:
-        if segment in RESERVED_SEGMENTS:
+    segments = path.split("/")
+    for original_segment in segments:
+        if original_segment.lower() in RESERVED_SEGMENTS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Path contains reserved segment '{segment}'. "
+                detail=f"Path contains reserved segment '{original_segment}'. "
                 f"Reserved segments: {', '.join(sorted(RESERVED_SEGMENTS))}",
             )
 
