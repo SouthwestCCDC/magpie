@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import click
+
+if TYPE_CHECKING:
+    import httpx
 
 from magpie.cli import CLIContext
 
@@ -33,9 +38,7 @@ PROTECTED_TAGS = frozenset({"latest", "stable", "production", "prod", "release"}
     help="Required to flush protected tags (latest, stable, production, etc).",
 )
 @click.pass_obj
-def flush_tag(
-    ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: bool
-) -> None:
+def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: bool) -> None:
     """Remove a tag from all artifacts globally.
 
     TAG_NAME is the tag to remove from all artifacts.
