@@ -51,7 +51,7 @@ def ls(ctx: CLIContext, artifact_path: str) -> None:
     # Print each version
     for version in versions:
         hash_ref = version["hash_ref"]
-        tags = ", ".join(version.get("tags", [])) or "(none)"
+        tags = ", ".join(version.get("tags", [])) or "(untagged)"
         uploaded_by = version.get("uploaded_by", "unknown")
         uploaded_at = _format_datetime(version.get("uploaded_at", ""))
 

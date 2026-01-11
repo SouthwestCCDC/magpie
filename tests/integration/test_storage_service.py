@@ -243,15 +243,16 @@ class TestListArtifacts:
             uploaded_by="user",
         )
 
-        # List should show latest points to version 2
+        # List should show both versions
         artifacts = storage_service.list_artifacts(artifact_path)
 
-        # Should have 2 unique blobs (v1 has no tags anymore, v2 has latest)
-        # Actually, v1 loses its "latest" tag when v2 is stored
-        # So only v2 should appear in list since v1 has no tags
-        assert len(artifacts) == 1
+        # Should have 2 unique blobs (v1 becomes untagged, v2 has latest)
+        # Both should be visible, sorted by upload date (newest first)
+        assert len(artifacts) == 2
         assert artifacts[0].hash == info2.hash
         assert "latest" in artifacts[0].tags
+        assert artifacts[1].hash == info1.hash
+        assert artifacts[1].tags == []
 
     def test_list_empty_path_returns_empty(
         self, storage_service: StorageService

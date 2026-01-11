@@ -101,11 +101,11 @@ class TestMultipleVersions:
     def test_list_multiple_versions(
         self, client: TestClient, test_storage_service: StorageService
     ) -> None:
-        """List artifact with multiple distinct versions shows latest only.
+        """List artifact with multiple distinct versions shows all blobs.
 
-        Note: The storage system only keeps tags in manifest. When a new version
-        is uploaded, "latest" tag moves to the new version, and the old version
-        loses its tag (becomes orphaned from listing perspective).
+        When a new version is uploaded, the "latest" tag moves to the new version,
+        and the old version becomes untagged (empty tags list). Both versions are
+        visible in the listing, sorted by upload date (newest first).
         """
         artifact_path = "multi/version"
 
@@ -113,6 +113,7 @@ class TestMultipleVersions:
         files1 = {"file": ("v1.bin", io.BytesIO(b"version 1 content"), "application/octet-stream")}
         response1 = client.post(f"/api/v1/upload/{artifact_path}", files=files1)
         assert response1.status_code == 200
+        data1 = response1.json()
 
         # Upload second version (different content)
         files2 = {"file": ("v2.bin", io.BytesIO(b"version 2 content"), "application/octet-stream")}
@@ -120,15 +121,21 @@ class TestMultipleVersions:
         assert response2.status_code == 200
         data2 = response2.json()
 
-        # List should show only the version with "latest" tag
+        # List should show both versions
         response = client.get(f"/api/v1/artifacts/{artifact_path}")
         assert response.status_code == 200
         data = response.json()
 
-        # Only one version visible (the one with "latest" tag)
-        assert len(data["versions"]) == 1
+        # Both versions should be visible
+        assert len(data["versions"]) == 2
+
+        # First version (newest) has "latest" tag
         assert data["versions"][0]["hash"] == data2["hash"]
         assert "latest" in data["versions"][0]["tags"]
+
+        # Second version (older) has no tags
+        assert data["versions"][1]["hash"] == data1["hash"]
+        assert data["versions"][1]["tags"] == []
 
     def test_duplicate_upload_same_version(self, client: TestClient) -> None:
         """Duplicate upload doesn't create additional versions."""

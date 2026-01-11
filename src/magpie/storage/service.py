@@ -133,6 +133,7 @@ class StorageService:
 
         Returns:
             List of ArtifactInfo for each unique blob, with tags grouped by hash.
+            Includes both tagged and untagged blobs, sorted by upload date (newest first).
             Returns empty list if artifact path doesn't exist.
         """
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
@@ -140,29 +141,39 @@ class StorageService:
         if not artifact_dir.exists():
             return []
 
-        manifest = read_manifest(artifact_dir)
-
-        if not manifest.tags:
+        blobs_dir = artifact_dir / "blobs"
+        if not blobs_dir.exists():
             return []
 
-        # Group tags by hash (manifest stores full hashes)
+        # Read manifest to get tags (may be empty)
+        manifest = read_manifest(artifact_dir)
+
+        # Group tags by full hash (manifest stores full hashes)
         hash_to_tags: dict[str, list[str]] = {}
         for tag_name, full_hash in manifest.tags.items():
             if full_hash not in hash_to_tags:
                 hash_to_tags[full_hash] = []
             hash_to_tags[full_hash].append(tag_name)
 
-        # Build ArtifactInfo for each unique hash
+        # Scan blobs directory to find all blobs (tagged and untagged)
         results: list[ArtifactInfo] = []
-        for full_hash, tags in hash_to_tags.items():
+        for blob_file in blobs_dir.iterdir():
+            if not blob_file.is_file():
+                continue
+
             try:
-                # Metadata is indexed by short hash (first 8 chars)
-                hash_ref = short_hash(full_hash)
+                # blob_file.name is the short hash (8 chars)
+                hash_ref = blob_file.name
                 metadata = read_metadata(artifact_dir, hash_ref)
+                full_hash = metadata.hash
+
+                # Get tags for this hash (empty list if untagged)
+                tags = sorted(hash_to_tags.get(full_hash, []))
+
                 info = ArtifactInfo(
                     hash=full_hash,
-                    hash_ref=hash_ref,
-                    tags=sorted(tags),
+                    hash_ref=f"@{hash_ref}",
+                    tags=tags,
                     uploaded_by=metadata.uploaded_by,
                     uploaded_at=metadata.uploaded_at,
                     source_uri=metadata.source_uri,
@@ -170,7 +181,15 @@ class StorageService:
                 results.append(info)
             except ArtifactNotFoundError:
                 # Skip blobs with missing metadata
+                logger.warning(
+                    "Blob %s in %s has no metadata, skipping",
+                    blob_file.name,
+                    artifact_path,
+                )
                 continue
+
+        # Sort by upload date, newest first
+        results.sort(key=lambda x: x.uploaded_at, reverse=True)
 
         return results
 
