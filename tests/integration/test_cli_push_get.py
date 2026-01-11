@@ -59,6 +59,30 @@ def cli_runner() -> CliRunner:
     return CliRunner()
 
 
+class MockStreamResponse:
+    """Mock streaming response for download tests."""
+
+    def __init__(self, status_code: int, content: bytes) -> None:
+        self.status_code = status_code
+        self._content = content
+        self.headers = {"content-length": str(len(content))}
+
+    def iter_bytes(self) -> list[bytes]:
+        """Yield content in chunks."""
+        # Return content in a single chunk for simplicity
+        return [self._content]
+
+    def read(self) -> bytes:
+        """Read full response body."""
+        return self._content
+
+    def __enter__(self) -> "MockStreamResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        pass
+
+
 class MockClientWithDownload:
     """Wrapper around TestClient that handles download endpoints.
 
@@ -77,12 +101,20 @@ class MockClientWithDownload:
             return self._handle_download(url)
         return self.api_client.get(url)
 
+    def stream(self, method: str, url: str) -> MockStreamResponse:
+        """Handle streaming requests for downloads."""
+        if method == "GET" and url.startswith("/artifacts/"):
+            return self._handle_stream_download(url)
+        # For non-artifact requests, delegate to api_client
+        response = self.api_client.get(url)
+        return MockStreamResponse(response.status_code, response.content)
+
     def post(self, url: str, **kwargs: object) -> "httpx.Response":
         """Delegate POST to api_client."""
         return self.api_client.post(url, **kwargs)
 
-    def _handle_download(self, url: str) -> MagicMock:
-        """Handle download from /artifacts/{path}/{hash_ref} or /artifacts/{path}/blobs/{hash}."""
+    def _get_download_content(self, url: str) -> tuple[int, bytes]:
+        """Get download content and status code for a URL."""
         from magpie.storage.blob import read_blob
         from magpie.storage.paths import artifact_dir_path
 
@@ -110,16 +142,22 @@ class MockClientWithDownload:
             artifact_dir = artifact_dir_path(self.storage_service.config.storage_path, path)
             blob_file = read_blob(artifact_dir, info.hash)
             content = blob_file.read_bytes()
-
-            response = MagicMock()
-            response.status_code = 200
-            response.content = content
-            return response
+            return 200, content
         except Exception:
-            response = MagicMock()
-            response.status_code = 404
-            response.content = b""
-            return response
+            return 404, b""
+
+    def _handle_download(self, url: str) -> MagicMock:
+        """Handle download from /artifacts/{path}/{hash_ref} or /artifacts/{path}/blobs/{hash}."""
+        status_code, content = self._get_download_content(url)
+        response = MagicMock()
+        response.status_code = status_code
+        response.content = content
+        return response
+
+    def _handle_stream_download(self, url: str) -> MockStreamResponse:
+        """Handle streaming download from /artifacts/ URLs."""
+        status_code, content = self._get_download_content(url)
+        return MockStreamResponse(status_code, content)
 
     def __enter__(self) -> "MockClientWithDownload":
         return self
@@ -361,17 +399,20 @@ class TestGetCommand:
             "hash_ref": upload_data["hash_ref"],
         }
 
-        # Mock download response with corrupted content
-        download_response = MagicMock()
-        download_response.status_code = 200
-        download_response.content = b"CORRUPTED CONTENT"
-
         def mock_get(url: str) -> MagicMock:
             if "/info" in url:
                 return info_response
-            return download_response
+            # Fallback for any other GET requests
+            fallback = MagicMock()
+            fallback.status_code = 404
+            return fallback
+
+        # Mock streaming response with corrupted content
+        def mock_stream(method: str, url: str) -> MockStreamResponse:
+            return MockStreamResponse(200, b"CORRUPTED CONTENT")
 
         mock_client.get = mock_get
+        mock_client.stream = mock_stream
         mock_client.__enter__ = MagicMock(return_value=mock_client)
         mock_client.__exit__ = MagicMock(return_value=None)
 

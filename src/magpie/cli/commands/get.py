@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     import httpx
 
 from magpie.cli import CLIContext
+from magpie.cli.progress import transfer_progress
 
 
 def parse_artifact_ref(artifact_ref: str) -> tuple[str, str]:
@@ -41,12 +42,14 @@ def parse_artifact_ref(artifact_ref: str) -> tuple[str, str]:
 @click.argument("artifact_ref")
 @click.option("-o", "--output", type=click.Path(path_type=Path), help="Output file path.")
 @click.option("--no-verify", is_flag=True, help="Skip SHA-256 verification.")
+@click.option("--quiet", "-q", is_flag=True, help="Suppress progress output.")
 @click.pass_obj
 def get(
     ctx: CLIContext,
     artifact_ref: str,
     output: Path | None,
     no_verify: bool,
+    quiet: bool,
 ) -> None:
     """Download an artifact from the server.
 
@@ -67,7 +70,7 @@ def get(
     path, ref = parse_artifact_ref(artifact_ref)
 
     with ctx.get_client() as client:
-        # Fetch metadata to get hash for verification
+        # Fetch metadata to get hash and size for verification/progress
         if ctx.debug:
             click.echo(f"Fetching metadata for {path}:{ref}...", err=True)
 
@@ -81,10 +84,12 @@ def get(
         info = info_response.json()
         expected_hash = info["hash"]
         hash_ref = info["hash_ref"]
+        file_size = info.get("size", 0)
 
         if ctx.debug:
             click.echo(f"Hash: {expected_hash}", err=True)
             click.echo(f"Hash ref: {hash_ref}", err=True)
+            click.echo(f"Size: {file_size} bytes", err=True)
 
         # Download the artifact
         # Hash refs use blobs/ subdirectory, tags are symlinks at root
@@ -96,14 +101,28 @@ def get(
         if ctx.debug:
             click.echo(f"Downloading from {download_url}...", err=True)
 
-        download_response = client.get(download_url)
+        # Use streaming download with progress
+        chunks: list[bytes] = []
+        with client.stream("GET", download_url) as response:
+            if response.status_code == 404:
+                raise click.ClickException(f"Artifact blob not found: {hash_ref}")
+            if response.status_code != 200:
+                # Read response body for error message
+                response.read()
+                _handle_error(response, "download")
 
-        if download_response.status_code == 404:
-            raise click.ClickException(f"Artifact blob not found: {hash_ref}")
-        if download_response.status_code != 200:
-            _handle_error(download_response, "download")
+            # Get content length from header if available (may be more accurate)
+            content_length = response.headers.get("content-length")
+            if content_length:
+                file_size = int(content_length)
 
-        content = download_response.content
+            with transfer_progress("Downloading", file_size, quiet=quiet) as (progress, task_id):
+                for chunk in response.iter_bytes():
+                    chunks.append(chunk)
+                    if progress is not None and task_id is not None:
+                        progress.update(task_id, advance=len(chunk))
+
+        content = b"".join(chunks)
 
     # Verify hash unless --no-verify
     if not no_verify:
