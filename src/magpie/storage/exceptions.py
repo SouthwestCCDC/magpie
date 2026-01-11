@@ -31,3 +31,9 @@ class HashMismatchError(StorageError):
     """Computed hash does not match expected hash."""
 
     pass
+
+
+class InvalidArtifactPathError(StorageError):
+    """Artifact path is invalid or conflicts with existing artifacts."""
+
+    pass
