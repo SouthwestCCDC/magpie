@@ -104,7 +104,7 @@ class TestAmendCommand:
     ) -> None:
         """Amend command displays updated metadata including tags."""
         upload_data = upload_test_artifact(
-            api_client, "test/metadata", b"metadata test"
+            api_client, "test/amend-meta", b"metadata test"
         )
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
@@ -114,7 +114,7 @@ class TestAmendCommand:
                 cli,
                 [
                     "--server", "http://test",
-                    "amend", "test/metadata:latest",
+                    "amend", "test/amend-meta:latest",
                     "--source-uri", "https://example.com/source",
                 ],
             )
