@@ -1,4 +1,4 @@
-"""Tests for CLI utility functions."""
+"""Tests for CLI error handling utilities."""
 
 from __future__ import annotations
 
@@ -7,7 +7,35 @@ from unittest.mock import Mock
 import click
 import pytest
 
-from magpie.cli.utils import TOKEN_MASK, format_auth_error, handle_http_error, mask_token
+from magpie.cli.errors import TOKEN_MASK, format_auth_error, handle_http_error, mask_token
+
+
+class TestBackwardCompatibility:
+    """Tests for backward compatibility with utils module re-exports."""
+
+    def test_utils_reexports_token_mask(self) -> None:
+        """TOKEN_MASK is re-exported from utils for backward compatibility."""
+        from magpie.cli.utils import TOKEN_MASK as utils_mask
+
+        assert utils_mask == TOKEN_MASK
+
+    def test_utils_reexports_mask_token(self) -> None:
+        """mask_token is re-exported from utils for backward compatibility."""
+        from magpie.cli.utils import mask_token as utils_mask_token
+
+        assert utils_mask_token is mask_token
+
+    def test_utils_reexports_format_auth_error(self) -> None:
+        """format_auth_error is re-exported from utils for backward compatibility."""
+        from magpie.cli.utils import format_auth_error as utils_format
+
+        assert utils_format is format_auth_error
+
+    def test_utils_reexports_handle_http_error(self) -> None:
+        """handle_http_error is re-exported from utils for backward compatibility."""
+        from magpie.cli.utils import handle_http_error as utils_handle
+
+        assert utils_handle is handle_http_error
 
 
 class TestMaskToken:

@@ -11,8 +11,8 @@ if TYPE_CHECKING:
     from rich.progress import Progress, TaskID
 
 from magpie.cli import CLIContext
+from magpie.cli.errors import handle_http_error
 from magpie.cli.progress import transfer_progress
-from magpie.cli.utils import handle_http_error
 from magpie.storage.exceptions import InvalidArtifactPathError
 from magpie.storage.paths import normalize_artifact_path
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import click
 
 from magpie.cli import CLIContext
-from magpie.cli.utils import handle_http_error
+from magpie.cli.errors import handle_http_error
 
 # Tags that require --force to flush due to their common importance
 PROTECTED_TAGS = frozenset({"latest", "stable", "production", "prod", "release"})
