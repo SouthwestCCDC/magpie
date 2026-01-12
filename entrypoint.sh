@@ -35,6 +35,81 @@ mkdir -p /run
 echo "$RUN_UID:$RUN_GID" > /run/magpie-user
 chmod 644 /run/magpie-user
 
+# Auto-initialize database if it doesn't exist
+# This runs before starting the main service
+# Uses a lock file (held via flock on FD 200) to prevent race conditions when multiple
+# containers share /data/artifacts. The lock is held for the entire subshell duration
+# (both the existence check and the init command) and released when the subshell exits.
+# The lock file persists on disk as an empty marker; concurrent entrypoints serialize
+# correctly. A 30-second timeout prevents indefinite blocking.
+
+# Determine the storage path for the lock file. We need a directory that exists and is
+# writable. Check MAGPIE_STORAGE_PATH first, then fall back to /data/artifacts, then /data.
+if [ -n "$MAGPIE_STORAGE_PATH" ] && [ -d "$MAGPIE_STORAGE_PATH" ]; then
+    LOCK_DIR="$MAGPIE_STORAGE_PATH"
+elif [ -d /data/artifacts ]; then
+    LOCK_DIR=/data/artifacts
+elif [ -d /data ]; then
+    LOCK_DIR=/data
+else
+    echo "Error: No valid storage directory found for lock file (tried MAGPIE_STORAGE_PATH, /data/artifacts, /data)" >&2
+    exit 1
+fi
+DB_LOCK_FILE="${LOCK_DIR}/.magpie-init.lock"
+
+# Determine database path: MAGPIE_DATABASE_PATH takes precedence, otherwise derive from validated LOCK_DIR
+# NOTE: When MAGPIE_DATABASE_PATH points outside LOCK_DIR, the lock file and database
+# reside in different locations. This lock is designed for single-container use (preventing
+# race conditions between the entrypoint and concurrent docker exec invocations). If you
+# override MAGPIE_DATABASE_PATH in a multi-container deployment, you are responsible for
+# your own coordination to avoid concurrent database initialization.
+if [ -n "$MAGPIE_DATABASE_PATH" ]; then
+    DB_PATH="$MAGPIE_DATABASE_PATH"
+else
+    DB_PATH="${LOCK_DIR}/.magpie.db"
+fi
+
+# Verify gosu is available before we need it (only required when not running as root)
+if [ "$RUN_UID" != "0" ] && ! command -v gosu >/dev/null 2>&1; then
+    echo "Error: gosu is required to drop privileges but was not found in PATH" >&2
+    exit 1
+fi
+
+# Acquire the lock and check/initialize the database atomically
+# The flock subshell holds the lock for the entire duration of the init check.
+# Using -w 30 to timeout after 30 seconds instead of blocking indefinitely.
+(
+    flock_status=0
+    flock -x -w 30 200 || flock_status=$?
+    if [ "$flock_status" -ne 0 ]; then
+        if [ "$flock_status" -eq 1 ]; then
+            echo "Error: Failed to acquire database init lock on $DB_LOCK_FILE within 30 seconds (another process may be initializing the database)" >&2
+        else
+            echo "Error: flock failed with exit code $flock_status while trying to lock $DB_LOCK_FILE (is flock available and working?)" >&2
+        fi
+        exit 1
+    fi
+
+    if [ ! -f "$DB_PATH" ]; then
+        echo "Database not found at $DB_PATH, running magpie-ctl init..."
+        init_status=0
+        if [ "$RUN_UID" = "0" ]; then
+            /app/.venv/bin/python -m magpie.ctl init || init_status=$?
+        else
+            gosu "$RUN_UID:$RUN_GID" /app/.venv/bin/python -m magpie.ctl init || init_status=$?
+        fi
+        if [ "$init_status" -ne 0 ]; then
+            echo "Error: magpie-ctl init failed with exit code $init_status" >&2
+            # Remove potentially incomplete database file to allow retry on next start
+            if [ -f "$DB_PATH" ]; then
+                echo "Removing incomplete database file at $DB_PATH" >&2
+                rm -f "$DB_PATH"
+            fi
+            exit 1
+        fi
+    fi
+) 200>"$DB_LOCK_FILE"
+
 # Run as root if UID is 0 (no privilege drop needed)
 if [ "$RUN_UID" = "0" ]; then
     exec "$@"
