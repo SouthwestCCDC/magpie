@@ -327,11 +327,3 @@ class TestVerifyPathIsDescendant:
         """Double dots within filenames are allowed (not traversal)."""
         result = verify_path_is_descendant(tmp_path, "v1..2/artifact")
         assert result == tmp_path / "v1..2" / "artifact"
-
-    def test_path_stays_within_base(self, tmp_path: Path) -> None:
-        """Path that goes up then down but stays in base is valid."""
-        # Note: This tests that "project/../other" resolves to "other" which is valid
-        # The segment-based check in normalize_artifact_path would catch ".."
-        # but this test verifies the resolution behavior
-        result = verify_path_is_descendant(tmp_path, "project/../other")
-        assert result == tmp_path / "other"

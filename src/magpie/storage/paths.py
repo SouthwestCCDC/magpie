@@ -63,9 +63,16 @@ def verify_path_is_descendant(base: Path, artifact_path: str) -> Path:
     the resolved path rather than just token-based validation. After constructing
     the full path, this function verifies it remains within the base directory.
 
+    Note:
+        This function expects artifact_path to be pre-normalized via
+        normalize_artifact_path(). Paths containing ".." segments should be
+        rejected by normalize_artifact_path before reaching this function.
+        This function provides an additional safety layer to catch any
+        traversal attempts that might bypass token-based validation.
+
     Args:
         base: Base storage directory path (must be absolute).
-        artifact_path: Normalized artifact path string.
+        artifact_path: Normalized artifact path string (no ".." segments).
 
     Returns:
         The resolved full path if it is a valid descendant.
@@ -77,8 +84,6 @@ def verify_path_is_descendant(base: Path, artifact_path: str) -> Path:
         >>> base = Path("/storage/artifacts")
         >>> verify_path_is_descendant(base, "project/artifact")
         PosixPath('/storage/artifacts/project/artifact')
-        >>> verify_path_is_descendant(base, "../escape")
-        Raises InvalidArtifactPathError
     """
     # Construct the full path
     full_path = (base / artifact_path).resolve()
