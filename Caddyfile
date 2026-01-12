@@ -32,7 +32,7 @@
 #   - GET    /api/v1/artifacts/*           - List artifacts, get info
 #   - GET    /api/v1/auth/validate         - Auth validation endpoint
 #   - GET    /health                       - Health check
-#   - GET    /artifacts/*                  - Static file downloads
+#   - GET    /artifacts/*                  - Static file downloads + directory browsing
 #
 # =============================================================================
 # HEADER PROPAGATION
@@ -74,9 +74,10 @@
 
 	# Static artifact downloads - served directly by Caddy for performance
 	# Files accessed via /artifacts/{artifact_path}/{ref} symlinks
+	# Directory browsing enabled for discovery and debugging
 	handle /artifacts/* {
 		root * /data
-		file_server
+		file_server browse
 	}
 
 	# =========================================================================
