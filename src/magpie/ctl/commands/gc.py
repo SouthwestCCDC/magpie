@@ -96,15 +96,17 @@ def gc(
     use_json = json_output or is_json_output()
 
     if not storage_path.exists():
+        msg = f"Storage path does not exist: {storage_path}"
         if json_output:
             # For subprocess --json-output, return an error structure directly
-            error_data = {"error": f"Storage path does not exist: {storage_path}"}
+            error_data = {"error": msg}
             click.echo(json.dumps(error_data))
             raise SystemExit(1)
         elif is_json_output():
             # For --format json, use the unified error output
-            output_error(ErrorCode.IO_ERROR, f"Storage path does not exist: {storage_path}")
-        raise click.ClickException(f"Storage path does not exist: {storage_path}")
+            output_error(ErrorCode.IO_ERROR, msg)
+        else:
+            raise click.ClickException(msg)
 
     if ctx.debug and not use_json:
         click.echo(f"Storage path: {storage_path}", err=True)

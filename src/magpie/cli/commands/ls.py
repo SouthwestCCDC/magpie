@@ -43,11 +43,11 @@ def ls(ctx: CLIContext, artifact_path: str | None) -> None:
         magpie ls /test/myartifact   # Leading slash is normalized
     """
     if not ctx.server:
+        msg = "No server configured. Use --server or set MAGPIE_SERVER."
         if is_json_output():
-            output_error(
-                ErrorCode.CONFIG_ERROR, "No server configured. Use --server or set MAGPIE_SERVER."
-            )
-        raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+        else:
+            raise click.ClickException(msg)
 
     with ctx.get_client() as client:
         # Case 1: No path provided - list all artifact paths
@@ -61,7 +61,8 @@ def ls(ctx: CLIContext, artifact_path: str | None) -> None:
         except ParseError as e:
             if is_json_output():
                 output_error(ErrorCode.VALIDATION_ERROR, str(e))
-            raise click.ClickException(str(e))
+            else:
+                raise click.ClickException(str(e))
 
         if ctx.debug:
             click.echo(f"Listing for path: {normalized_path}...", err=True)
@@ -125,7 +126,8 @@ def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str) -> None:
             except Exception:
                 detail = response.text
             output_error(http_status_to_error_code(response.status_code), detail)
-        handle_http_error(response, "List", ctx.token)
+        else:
+            handle_http_error(response, "List", ctx.token)
 
     data = response.json()
     paths = data.get("paths", [])

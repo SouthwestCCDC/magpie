@@ -35,18 +35,19 @@ def info(ctx: CLIContext, artifact_ref: str) -> None:
         magpie info builds/app
     """
     if not ctx.server:
+        msg = "No server configured. Use --server or set MAGPIE_SERVER."
         if is_json_output():
-            output_error(
-                ErrorCode.CONFIG_ERROR, "No server configured. Use --server or set MAGPIE_SERVER."
-            )
-        raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+        else:
+            raise click.ClickException(msg)
 
     try:
         parsed = parse_artifact_ref(artifact_ref)
     except ParseError as e:
         if is_json_output():
             output_error(ErrorCode.VALIDATION_ERROR, str(e))
-        raise click.ClickException(str(e))
+        else:
+            raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
         if ctx.debug:
@@ -55,9 +56,11 @@ def info(ctx: CLIContext, artifact_ref: str) -> None:
         response = client.get(f"/api/v1/artifacts/{parsed.path}/{parsed.ref}/info")
 
         if response.status_code == 404:
+            msg = f"Artifact not found: {parsed.path}:{parsed.ref}"
             if is_json_output():
-                output_error(ErrorCode.NOT_FOUND, f"Artifact not found: {parsed.path}:{parsed.ref}")
-            raise click.ClickException(f"Artifact not found: {parsed.path}:{parsed.ref}")
+                output_error(ErrorCode.NOT_FOUND, msg)
+            else:
+                raise click.ClickException(msg)
         if response.status_code != 200:
             if is_json_output():
                 try:
@@ -65,7 +68,8 @@ def info(ctx: CLIContext, artifact_ref: str) -> None:
                 except Exception:
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
-            handle_http_error(response, "Info", ctx.token)
+            else:
+                handle_http_error(response, "Info", ctx.token)
 
         data = response.json()
 
