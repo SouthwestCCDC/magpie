@@ -38,10 +38,10 @@ chmod 644 /run/magpie-user
 # Auto-initialize database if it doesn't exist
 # This runs before starting the main service
 # Uses a lock file (held via flock on FD 200) to prevent race conditions when multiple
-# containers share /data/artifacts. The lock is only held for the duration of the subshell
-# below (database check and init) and is automatically released when FD 200 closes at
-# subshell exit. The lock file itself persists on disk as an empty, harmless marker;
-# concurrent entrypoints will block on the lock and serialize correctly rather than deadlocking.
+# containers share /data/artifacts. The lock is held for the entire subshell duration
+# (both the existence check and the init command) and released when the subshell exits.
+# The lock file persists on disk as an empty marker; concurrent entrypoints serialize
+# correctly. A 30-second timeout prevents indefinite blocking.
 
 # Determine the storage path for the lock file. We need a directory that exists and is
 # writable. Check MAGPIE_STORAGE_PATH first, then fall back to /data/artifacts, then /data.
@@ -64,17 +64,15 @@ else
     DB_PATH="${MAGPIE_STORAGE_PATH:-/data/artifacts}/.magpie.db"
 fi
 
-# Acquire the lock before checking/initializing the database
-# We separate the flock step from the init step to provide clear error messages
-if ! flock -x 200 2>/dev/null; then
-    echo "Error: Failed to acquire database init lock on $DB_LOCK_FILE (file system error or flock unavailable)" >&2
-    exit 1
-fi 200>"$DB_LOCK_FILE"
-
-# Now check and initialize the database (lock is held on FD 200)
-# The subshell closes FD 200 (releasing the lock) after the init completes.
-# If the subshell exits non-zero, set -e propagates the failure to the main script.
+# Acquire the lock and check/initialize the database atomically
+# The flock subshell holds the lock for the entire duration of the init check.
+# Using -w 30 to timeout after 30 seconds instead of blocking indefinitely.
 (
+    if ! flock -x -w 30 200; then
+        echo "Error: Failed to acquire database init lock on $DB_LOCK_FILE (timeout or flock unavailable)" >&2
+        exit 1
+    fi
+
     if [ ! -f "$DB_PATH" ]; then
         echo "Database not found at $DB_PATH, running magpie-ctl init..."
         if [ "$RUN_UID" = "0" ]; then
@@ -83,7 +81,7 @@ fi 200>"$DB_LOCK_FILE"
             gosu "$RUN_UID:$RUN_GID" /app/.venv/bin/python -m magpie.ctl init
         fi
     fi
-) 200>&-
+) 200>"$DB_LOCK_FILE"
 
 # Run as root if UID is 0 (no privilege drop needed)
 if [ "$RUN_UID" = "0" ]; then
