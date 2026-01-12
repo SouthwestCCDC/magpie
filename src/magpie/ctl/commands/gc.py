@@ -200,14 +200,22 @@ def _run_gc_with_progress(
         state.scan_progress = scan_prog
         state.scan_task_id = scan_tid
 
-        # Run GC - callbacks will update both progress bars as appropriate
-        result, blobs_to_delete = run_gc(
-            storage_path=storage_path,
-            retention_days=retention_days,
-            dry_run=False,
-            reconcile_only=False,
-            progress_callback=progress_callback,
-        )
+        # Delete progress bar starts with total=0; callback will set total when known.
+        with count_progress("Deleting blobs", 0, quiet=quiet) as (
+            delete_prog,
+            delete_tid,
+        ):
+            state.delete_progress = delete_prog
+            state.delete_task_id = delete_tid
+
+            # Run GC - callbacks will update both progress bars as appropriate
+            result, blobs_to_delete = run_gc(
+                storage_path=storage_path,
+                retention_days=retention_days,
+                dry_run=False,
+                reconcile_only=False,
+                progress_callback=progress_callback,
+            )
 
     return result, blobs_to_delete
 
