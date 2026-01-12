@@ -341,8 +341,7 @@ class TestUrlCommand:
 
     def test_url_outputs_bare_url(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Url command outputs bare URL for scripting."""
-        upload_data = upload_test_artifact(api_client, "test/url", b"url test content")
-        hash_ref = upload_data["hash_ref"]
+        upload_test_artifact(api_client, "test/url", b"url test content")
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
@@ -353,11 +352,9 @@ class TestUrlCommand:
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        # Check output is a bare URL
+        # Check output is a bare URL with tag symlink path
         output = result.output.strip()
-        assert output.startswith("http://test/artifacts/")
-        assert hash_ref in output
-        assert "test/url" in output
+        assert output == "http://test/artifacts/test/url/latest"
 
     def test_url_suitable_for_curl(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Url output is suitable for curl/wget (single line, no extra text)."""
@@ -380,10 +377,11 @@ class TestUrlCommand:
         # Should not have any extra text
         assert output.count("http") == 1
 
-    def test_url_resolves_tag_to_hash(self, cli_runner: CliRunner, api_client: TestClient) -> None:
-        """Url resolves tag to hash ref in output."""
-        upload_data = upload_test_artifact(api_client, "test/resolve", b"resolve test")
-        hash_ref = upload_data["hash_ref"]
+    def test_url_uses_tag_symlink_when_tag_requested(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Url uses tag symlink path when user requests by tag name."""
+        upload_test_artifact(api_client, "test/resolve", b"resolve test")
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
@@ -394,9 +392,30 @@ class TestUrlCommand:
             )
 
         assert result.exit_code == 0
-        # URL should contain hash_ref, not "latest"
-        assert hash_ref in result.output
-        assert ":latest" not in result.output
+        # URL should use tag symlink path (not blobs/ path)
+        output = result.output.strip()
+        assert output == "http://test/artifacts/test/resolve/latest"
+
+    def test_url_uses_blobs_path_when_hash_requested(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Url uses blobs/ path when user requests by hash ref."""
+        upload_data = upload_test_artifact(api_client, "test/hash-url", b"hash url test")
+        hash_ref = upload_data["hash_ref"]
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "url", f"test/hash-url:{hash_ref}"],
+            )
+
+        assert result.exit_code == 0
+        # URL should use blobs/ path (hash without @ prefix)
+        output = result.output.strip()
+        blob_name = hash_ref.lstrip("@")
+        assert output == f"http://test/artifacts/test/hash-url/blobs/{blob_name}"
 
     def test_url_not_found(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Url for non-existent artifact returns error."""

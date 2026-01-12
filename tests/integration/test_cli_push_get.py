@@ -494,6 +494,113 @@ class TestGetCommand:
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
+    def test_get_by_hash_ref_uses_blobs_path(
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
+    ) -> None:
+        """Get by hash ref uses blobs/ path instead of tag symlink."""
+        # Upload a file
+        test_content = b"content for hash ref get test"
+        files = {"file": ("artifact.bin", io.BytesIO(test_content), "application/octet-stream")}
+        upload_response = api_client.post("/api/v1/upload/hashref/gettest", files=files)
+        assert upload_response.status_code == 200
+        upload_data = upload_response.json()
+        hash_ref = upload_data["hash_ref"]  # e.g., "@abc12345"
+
+        output_file = tmp_path / "hashref_downloaded.bin"
+
+        # Track what URL is used for download
+        urls_requested: list[str] = []
+
+        mock_client = MockClientWithDownload(api_client, test_storage_service)
+        original_stream = mock_client.stream
+
+        def tracking_stream(method: str, url: str) -> MockStreamResponse:
+            urls_requested.append(url)
+            return original_stream(method, url)
+
+        mock_client.stream = tracking_stream
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    f"hashref/gettest:{hash_ref}",  # Request by hash ref
+                    "-o",
+                    str(output_file),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
+        assert output_file.exists()
+        assert output_file.read_bytes() == test_content
+
+        # Verify download URL used blobs/ path
+        assert len(urls_requested) == 1
+        blob_name = hash_ref.lstrip("@")
+        expected_url = f"/artifacts/hashref/gettest/blobs/{blob_name}"
+        assert urls_requested[0] == expected_url
+
+    def test_get_by_tag_uses_tag_symlink_path(
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
+    ) -> None:
+        """Get by tag name uses tag symlink path (not blobs/)."""
+        # Upload a file
+        test_content = b"content for tag get test"
+        files = {"file": ("artifact.bin", io.BytesIO(test_content), "application/octet-stream")}
+        upload_response = api_client.post("/api/v1/upload/tagref/gettest", files=files)
+        assert upload_response.status_code == 200
+
+        output_file = tmp_path / "tagref_downloaded.bin"
+
+        # Track what URL is used for download
+        urls_requested: list[str] = []
+
+        mock_client = MockClientWithDownload(api_client, test_storage_service)
+        original_stream = mock_client.stream
+
+        def tracking_stream(method: str, url: str) -> MockStreamResponse:
+            urls_requested.append(url)
+            return original_stream(method, url)
+
+        mock_client.stream = tracking_stream
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    "tagref/gettest:latest",  # Request by tag name
+                    "-o",
+                    str(output_file),
+                ],
+            )
+
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
+        assert output_file.exists()
+        assert output_file.read_bytes() == test_content
+
+        # Verify download URL used tag symlink path (not blobs/)
+        assert len(urls_requested) == 1
+        expected_url = "/artifacts/tagref/gettest/latest"
+        assert urls_requested[0] == expected_url
+
     def test_get_requires_server(self, cli_runner: CliRunner, tmp_path: Path) -> None:
         """Get without server configured fails with error."""
         output_file = tmp_path / "noserver.bin"
@@ -1034,10 +1141,10 @@ class TestPushOutputFeatures:
             )
 
         assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
-        # Download URL should contain the hash ref (short hash prefixed with @)
-        assert "Download: http://test/artifacts/download/hash-test/@" in result.output
-        # Verify the hash ref is derived from the full hash
-        assert expected_hash[:8] in result.output
+        # Download URL should use blobs/ path with short hash (no @ prefix)
+        short_hash = expected_hash[:8]
+        expected_url = f"Download: http://test/artifacts/download/hash-test/blobs/{short_hash}"
+        assert expected_url in result.output
 
     def test_push_shows_source_uri_info_when_not_provided(
         self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path

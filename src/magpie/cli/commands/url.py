@@ -56,7 +56,14 @@ def url(ctx: CLIContext, artifact_ref: str) -> None:
         hash_ref = data["hash_ref"]
 
     # Output bare URL (no newline issues - click.echo adds one)
-    download_url = f"{ctx.server}/artifacts/{parsed.path}/{hash_ref}"
+    # Hash refs use blobs/ subdirectory, tags are symlinks at root
+    if parsed.ref.startswith("@"):
+        # User requested hash directly - use blobs path
+        blob_name = hash_ref.lstrip("@")
+        download_url = f"{ctx.server}/artifacts/{parsed.path}/blobs/{blob_name}"
+    else:
+        # User requested tag - use tag symlink path
+        download_url = f"{ctx.server}/artifacts/{parsed.path}/{parsed.ref}"
     click.echo(download_url)
 
 

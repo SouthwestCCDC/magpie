@@ -103,7 +103,7 @@ Output:
 ```
 Uploaded: a1b2c3d4e5f6...
 Hash ref: @a1b2c3d4
-Download: https://magpie.example.com/artifacts/images/ubuntu/@a1b2c3d4
+Download: https://magpie.example.com/artifacts/images/ubuntu/latest
 ```
 
 ### List Artifact Versions
@@ -466,8 +466,11 @@ curl https://magpie.example.com/api/v1/artifacts/images/ubuntu
 # Get metadata
 curl https://magpie.example.com/api/v1/artifacts/images/ubuntu/latest/info
 
-# Download file
-curl -O https://magpie.example.com/artifacts/images/ubuntu/@a1b2c3d4
+# Download file by tag
+curl -O https://magpie.example.com/artifacts/images/ubuntu/latest
+
+# Download file by hash
+curl -O https://magpie.example.com/artifacts/images/ubuntu/blobs/a1b2c3d4
 
 # Upload (requires token)
 curl -X POST \
