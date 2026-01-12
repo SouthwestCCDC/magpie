@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import click
 
+from magpie.cli.formatting import OutputFormat
 from magpie.config import get_settings
 
 if TYPE_CHECKING:
@@ -19,8 +20,13 @@ if TYPE_CHECKING:
 class CTLContext:
     """Context object passed to ctl commands."""
 
-    def __init__(self, debug: bool = False) -> None:
+    def __init__(
+        self,
+        debug: bool = False,
+        output_format: OutputFormat = OutputFormat.HUMAN,
+    ) -> None:
         self.debug = debug
+        self.output_format = output_format
         self._settings: "MagpieSettings | None" = None
 
     @property
@@ -41,15 +47,24 @@ pass_context = click.make_pass_decorator(CTLContext)
     default=False,
     help="Enable debug output.",
 )
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice([f.value for f in OutputFormat], case_sensitive=False),
+    default=OutputFormat.HUMAN.value,
+    help="Output format (default: human).",
+)
 @click.pass_context
-def cli(ctx: click.Context, debug: bool) -> None:
+def cli(ctx: click.Context, debug: bool, output_format: str) -> None:
     """Magpie server administration."""
-    ctx.obj = CTLContext(debug=debug)
+    resolved_format = OutputFormat(output_format)
+    ctx.obj = CTLContext(debug=debug, output_format=resolved_format)
 
     if debug:
         settings = get_settings()
         click.echo(f"Storage path: {settings.storage_path}", err=True)
         click.echo(f"Database path: {settings.database_path}", err=True)
+        click.echo(f"Format: {resolved_format.value}", err=True)
 
 
 @cli.command()

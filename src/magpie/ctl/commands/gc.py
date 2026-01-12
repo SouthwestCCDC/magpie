@@ -6,6 +6,13 @@ from pathlib import Path
 
 import click
 
+from magpie.cli.formatting import (
+    CommandResult,
+    ErrorCode,
+    is_json_output,
+    output_error,
+    output_result,
+)
 from magpie.cli.progress import count_progress
 from magpie.ctl import CTLContext
 from magpie.storage.gc import BlobToDelete, GCResult, format_size, run_gc
@@ -77,11 +84,16 @@ def gc(
     )
 
     if not storage_path.exists():
+        if is_json_output():
+            output_error(ErrorCode.IO_ERROR, f"Storage path does not exist: {storage_path}")
         raise click.ClickException(f"Storage path does not exist: {storage_path}")
 
     if ctx.debug:
         click.echo(f"Storage path: {storage_path}", err=True)
         click.echo(f"Retention days: {retention_days}", err=True)
+
+    # Suppress progress output in JSON mode
+    quiet_mode = quiet or is_json_output()
 
     # Run GC with progress display using a two-phase approach
     # Phase 1: Scan (with progress bar)
@@ -91,11 +103,31 @@ def gc(
         retention_days=retention_days,
         dry_run=dry_run,
         reconcile_only=reconcile_only,
-        quiet=quiet,
+        quiet=quiet_mode,
         debug=ctx.debug,
     )
 
-    # Print dry-run deletion preview
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "dry_run": dry_run,
+                    "blobs_removed": result.blobs_deleted,
+                    "bytes_reclaimed": result.space_reclaimed_bytes,
+                    "errors": [],  # Collect errors if any
+                    "artifacts_scanned": result.artifacts_scanned,
+                    "blobs_found": result.blobs_found,
+                    "symlinks_checked": result.symlinks_checked,
+                    "symlinks_fixed": result.symlinks_fixed,
+                    "items_removed": result.items_removed,
+                },
+                human_output="",
+            )
+        )
+        return
+
+    # Human output - Print dry-run deletion preview
     if dry_run and not reconcile_only and blobs_to_delete:
         for blob in blobs_to_delete:
             click.echo(

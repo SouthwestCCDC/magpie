@@ -7,6 +7,13 @@ import click
 from magpie.auth.database import get_connection, list_tokens
 from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenService
+from magpie.cli.formatting import (
+    CommandResult,
+    ErrorCode,
+    is_json_output,
+    output_error,
+    output_result,
+)
 from magpie.ctl import CTLContext
 
 
@@ -52,8 +59,25 @@ def token_create(ctx: CTLContext, name: str, scope: str) -> None:
     try:
         plaintext_token = token_service.create_token(name, token_scope)
     except ValueError as e:
+        if is_json_output():
+            output_error(ErrorCode.CONFLICT, str(e))
         raise click.ClickException(str(e))
 
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "token": plaintext_token,
+                    "name": name,
+                    "scope": scope.lower(),
+                },
+                human_output="",
+            )
+        )
+        return
+
+    # Human output
     click.echo("")
     click.echo("=" * 60)
     click.echo(f"TOKEN CREATED: {name} (scope: {scope})")
@@ -86,6 +110,27 @@ def token_list(ctx: CTLContext) -> None:
     finally:
         conn.close()
 
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "tokens": [
+                        {
+                            "name": tok.name,
+                            "scope": tok.scope.value,
+                            "created": tok.created_at.isoformat(),
+                            "enabled": tok.enabled,
+                        }
+                        for tok in tokens
+                    ],
+                },
+                human_output="",
+            )
+        )
+        return
+
+    # Human output
     if not tokens:
         click.echo("No tokens found.")
         return
@@ -131,6 +176,21 @@ def token_revoke(ctx: CTLContext, name: str) -> None:
     revoked = token_service.revoke_token(name)
 
     if revoked:
+        # JSON output
+        if is_json_output():
+            output_result(
+                CommandResult(
+                    data={
+                        "name": name,
+                        "revoked": True,
+                    },
+                    human_output="",
+                )
+            )
+            return
+        # Human output
         click.echo(f"Token '{name}' has been revoked.")
     else:
+        if is_json_output():
+            output_error(ErrorCode.NOT_FOUND, f"Token not found: {name}")
         raise click.ClickException(f"Token not found: {name}")
