@@ -62,7 +62,7 @@ def get(
         if info_response.status_code == 404:
             raise click.ClickException(f"Artifact not found: {parsed.path}:{parsed.ref}")
         if info_response.status_code != 200:
-            handle_http_error(info_response, "Metadata fetch", ctx.token)
+            handle_http_error(info_response, "Metadata", ctx.token)
 
         info = info_response.json()
         expected_hash = info["hash"]

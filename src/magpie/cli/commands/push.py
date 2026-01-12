@@ -84,14 +84,7 @@ def push(
     if ctx.debug:
         click.echo(f"Uploading {file} ({file_size} bytes) to {artifact_path}...", err=True)
 
-    # Pre-flight auth check before showing progress bar.
-    # This prevents the misleading UX where progress completes before auth error appears.
-    with ctx.get_client() as client:
-        preflight = client.head(f"/api/v1/upload/{artifact_path}")
-        if preflight.status_code in (401, 403):
-            handle_http_error(preflight, "Upload", ctx.token)
-
-    # Upload file with progress (auth already verified)
+    # Upload file with progress
     with transfer_progress("Uploading", file_size, quiet=quiet) as (progress, task_id):
         with ctx.get_client() as client:
             with file.open("rb") as f:
