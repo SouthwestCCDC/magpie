@@ -83,7 +83,9 @@ async def upload_artifact(
         source_uri=source_uri,
     )
 
-    download_url = f"/artifacts/{path}/{info.hash_ref}"
+    # Use blobs/ path for hash-based downloads (info.hash_ref has @ prefix)
+    blob_name = info.hash_ref.lstrip("@")
+    download_url = f"/artifacts/{path}/blobs/{blob_name}"
 
     return UploadResponse(
         hash=info.hash,

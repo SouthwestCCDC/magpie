@@ -63,7 +63,9 @@ class TestUploadEndpoint:
         assert data["hash_ref"].startswith("@")
         assert data["artifact_path"] == "project/component"
         assert data["is_duplicate"] is False
-        assert data["download_url"] == f"/artifacts/project/component/{data['hash_ref']}"
+        # download_url uses blobs/ path with hash (without @ prefix)
+        blob_name = data["hash_ref"].lstrip("@")
+        assert data["download_url"] == f"/artifacts/project/component/blobs/{blob_name}"
 
     def test_upload_default_uploaded_by(self, client: TestClient) -> None:
         """Upload without uploaded_by defaults to 'anonymous'."""
@@ -217,15 +219,17 @@ class TestResponseFormat:
         assert required_fields == set(data.keys())
 
     def test_download_url_format(self, client: TestClient) -> None:
-        """Download URL should follow expected format."""
+        """Download URL should follow expected format with blobs/ path."""
         content = b"download url test"
         files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
 
         response = client.post("/api/v1/upload/download/url", files=files)
 
         data = response.json()
-        expected_prefix = f"/artifacts/download/url/{data['hash_ref']}"
-        assert data["download_url"] == expected_prefix
+        # download_url uses blobs/ path with hash (without @ prefix)
+        blob_name = data["hash_ref"].lstrip("@")
+        expected_url = f"/artifacts/download/url/blobs/{blob_name}"
+        assert data["download_url"] == expected_url
 
 
 class TestAuthHeaderHandling:

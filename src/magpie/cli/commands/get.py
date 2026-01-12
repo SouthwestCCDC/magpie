@@ -104,10 +104,13 @@ def get(
 
         # Download the artifact
         # Hash refs use blobs/ subdirectory, tags are symlinks at root
-        if hash_ref.startswith("@"):
-            download_url = f"/artifacts/{parsed.path}/blobs/{hash_ref.lstrip('@')}"
+        if parsed.ref.startswith("@"):
+            # User requested hash directly - use blobs path
+            blob_name = hash_ref.lstrip("@")
+            download_url = f"/artifacts/{parsed.path}/blobs/{blob_name}"
         else:
-            download_url = f"/artifacts/{parsed.path}/{hash_ref}"
+            # User requested tag - use tag symlink path
+            download_url = f"/artifacts/{parsed.path}/{parsed.ref}"
 
         if ctx.debug:
             click.echo(f"Downloading from {download_url}...", err=True)
