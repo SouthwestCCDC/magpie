@@ -294,12 +294,27 @@ def _output_json(result: GCResult, dry_run: bool) -> None:
     """Output GC result as JSON for subprocess integration.
 
     Schema:
-        {"dry_run": bool, "blobs_removed": int, "bytes_reclaimed": int, "errors": [str]}
+        {
+            "dry_run": bool,
+            "artifacts_scanned": int,
+            "blobs_found": int,
+            "blobs_deleted": int,
+            "space_reclaimed_bytes": int,
+            "symlinks_checked": int,
+            "symlinks_fixed": int,
+            "items_removed": int,
+            "errors": [str]
+        }
     """
     output = {
         "dry_run": dry_run,
-        "blobs_removed": result.blobs_deleted,
-        "bytes_reclaimed": result.space_reclaimed_bytes,
+        "artifacts_scanned": result.artifacts_scanned,
+        "blobs_found": result.blobs_found,
+        "blobs_deleted": result.blobs_deleted,
+        "space_reclaimed_bytes": result.space_reclaimed_bytes,
+        "symlinks_checked": result.symlinks_checked,
+        "symlinks_fixed": result.symlinks_fixed,
+        "items_removed": result.items_removed,
         "errors": [],  # Errors are raised as exceptions, so this is always empty on success
     }
     click.echo(json.dumps(output))

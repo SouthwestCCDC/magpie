@@ -19,8 +19,13 @@ class GCResponse(BaseModel):
     """Response model for GC operation."""
 
     dry_run: bool
-    blobs_removed: int
-    bytes_reclaimed: int
+    artifacts_scanned: int
+    blobs_found: int
+    blobs_deleted: int
+    space_reclaimed_bytes: int
+    symlinks_checked: int
+    symlinks_fixed: int
+    items_removed: int = 0
 
 
 @router.post("/api/v1/gc")
@@ -54,8 +59,13 @@ async def trigger_gc(
     if not storage_path.exists():
         return GCResponse(
             dry_run=dry_run,
-            blobs_removed=0,
-            bytes_reclaimed=0,
+            artifacts_scanned=0,
+            blobs_found=0,
+            blobs_deleted=0,
+            space_reclaimed_bytes=0,
+            symlinks_checked=0,
+            symlinks_fixed=0,
+            items_removed=0,
         )
 
     # Build command
@@ -72,6 +82,11 @@ async def trigger_gc(
 
     return GCResponse(
         dry_run=result.get("dry_run", dry_run),
-        blobs_removed=result.get("blobs_removed", 0),
-        bytes_reclaimed=result.get("bytes_reclaimed", 0),
+        artifacts_scanned=result.get("artifacts_scanned", 0),
+        blobs_found=result.get("blobs_found", 0),
+        blobs_deleted=result.get("blobs_deleted", 0),
+        space_reclaimed_bytes=result.get("space_reclaimed_bytes", 0),
+        symlinks_checked=result.get("symlinks_checked", 0),
+        symlinks_fixed=result.get("symlinks_fixed", 0),
+        items_removed=result.get("items_removed", 0),
     )

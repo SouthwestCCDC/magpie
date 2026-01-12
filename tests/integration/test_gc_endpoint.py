@@ -173,8 +173,13 @@ class TestGCEndpointFunctionality:
         """GC with dry_run returns preview without modification."""
         mock_result = {
             "dry_run": True,
-            "blobs_removed": 0,
-            "bytes_reclaimed": 0,
+            "artifacts_scanned": 5,
+            "blobs_found": 3,
+            "blobs_deleted": 0,
+            "space_reclaimed_bytes": 0,
+            "symlinks_checked": 2,
+            "symlinks_fixed": 0,
+            "items_removed": 0,
             "errors": [],
         }
 
@@ -191,15 +196,20 @@ class TestGCEndpointFunctionality:
         assert response.status_code == 200
         data = response.json()
         assert data["dry_run"] is True
-        assert "blobs_removed" in data
-        assert "bytes_reclaimed" in data
+        assert "blobs_deleted" in data
+        assert "space_reclaimed_bytes" in data
 
     def test_gc_returns_zero_for_tagged_blobs(self, client: TestClient, admin_token: str) -> None:
         """GC returns zero removed blobs when all blobs are tagged."""
         mock_result = {
             "dry_run": False,
-            "blobs_removed": 0,
-            "bytes_reclaimed": 0,
+            "artifacts_scanned": 5,
+            "blobs_found": 3,
+            "blobs_deleted": 0,
+            "space_reclaimed_bytes": 0,
+            "symlinks_checked": 2,
+            "symlinks_fixed": 0,
+            "items_removed": 0,
             "errors": [],
         }
 
@@ -214,14 +224,19 @@ class TestGCEndpointFunctionality:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["blobs_removed"] == 0
+        assert data["blobs_deleted"] == 0
 
     def test_gc_response_format(self, client: TestClient, admin_token: str) -> None:
         """GC response includes all expected fields."""
         mock_result = {
             "dry_run": False,
-            "blobs_removed": 5,
-            "bytes_reclaimed": 1024,
+            "artifacts_scanned": 5,
+            "blobs_found": 3,
+            "blobs_deleted": 5,
+            "space_reclaimed_bytes": 1024,
+            "symlinks_checked": 2,
+            "symlinks_fixed": 0,
+            "items_removed": 0,
             "errors": [],
         }
 
@@ -239,8 +254,13 @@ class TestGCEndpointFunctionality:
 
         required_fields = {
             "dry_run",
-            "blobs_removed",
-            "bytes_reclaimed",
+            "artifacts_scanned",
+            "blobs_found",
+            "blobs_deleted",
+            "space_reclaimed_bytes",
+            "symlinks_checked",
+            "symlinks_fixed",
+            "items_removed",
         }
         assert required_fields == set(data.keys())
 
@@ -253,8 +273,13 @@ class TestGCEndpointFunctionality:
 
         mock_result = {
             "dry_run": False,
-            "blobs_removed": 0,
-            "bytes_reclaimed": 0,
+            "artifacts_scanned": 0,
+            "blobs_found": 0,
+            "blobs_deleted": 0,
+            "space_reclaimed_bytes": 0,
+            "symlinks_checked": 0,
+            "symlinks_fixed": 0,
+            "items_removed": 0,
             "errors": [],
         }
 
@@ -269,15 +294,20 @@ class TestGCEndpointFunctionality:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["blobs_removed"] == 0
-        assert data["bytes_reclaimed"] == 0
+        assert data["blobs_deleted"] == 0
+        assert data["space_reclaimed_bytes"] == 0
 
     def test_gc_reports_blobs_removed(self, client: TestClient, admin_token: str) -> None:
         """GC reports number of blobs removed."""
         mock_result = {
             "dry_run": False,
-            "blobs_removed": 10,
-            "bytes_reclaimed": 5120,
+            "artifacts_scanned": 5,
+            "blobs_found": 15,
+            "blobs_deleted": 10,
+            "space_reclaimed_bytes": 5120,
+            "symlinks_checked": 2,
+            "symlinks_fixed": 0,
+            "items_removed": 0,
             "errors": [],
         }
 
@@ -292,8 +322,8 @@ class TestGCEndpointFunctionality:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["blobs_removed"] == 10
-        assert data["bytes_reclaimed"] == 5120
+        assert data["blobs_deleted"] == 10
+        assert data["space_reclaimed_bytes"] == 5120
 
 
 class TestGCSubprocessIntegration:

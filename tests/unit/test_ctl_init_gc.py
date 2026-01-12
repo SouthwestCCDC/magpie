@@ -802,8 +802,9 @@ class TestGCJsonOutput:
         assert result.exit_code == 0, f"Output: {result.output}"
         output = json.loads(result.output.strip())
         assert "dry_run" in output
-        assert "blobs_removed" in output
-        assert "bytes_reclaimed" in output
+        assert "blobs_deleted" in output
+        assert "space_reclaimed_bytes" in output
+        assert "artifacts_scanned" in output
         assert "errors" in output
 
     def test_gc_json_output_dry_run_shows_correct_flag(
@@ -825,12 +826,12 @@ class TestGCJsonOutput:
         assert result.exit_code == 0, f"Output: {result.output}"
         output = json.loads(result.output.strip())
         assert output["dry_run"] is True
-        assert output["blobs_removed"] == 1
+        assert output["blobs_deleted"] == 1
 
     def test_gc_json_output_reports_deleted_blobs(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
-        """GC --json-output reports blobs_removed count."""
+        """GC --json-output reports blobs_deleted count."""
         test_settings.storage_path.mkdir(parents=True, exist_ok=True)
         create_artifact_with_blobs(
             test_settings.storage_path,
@@ -846,8 +847,8 @@ class TestGCJsonOutput:
         assert result.exit_code == 0, f"Output: {result.output}"
         output = json.loads(result.output.strip())
         assert output["dry_run"] is False
-        assert output["blobs_removed"] == 1
-        assert output["bytes_reclaimed"] > 0
+        assert output["blobs_deleted"] == 1
+        assert output["space_reclaimed_bytes"] > 0
 
     def test_gc_json_output_storage_not_found_exits_with_error(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
