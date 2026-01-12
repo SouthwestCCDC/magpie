@@ -101,6 +101,12 @@ def get_blob_age_days(artifact_dir: Path, blob_hash: str, now: datetime) -> int 
     Returns:
         Age in days, or None if age cannot be determined.
     """
+    import json
+
+    from magpie.storage.exceptions import ArtifactNotFoundError
+
+    blob_file = artifact_dir / "blobs" / blob_hash
+
     try:
         # Try to get age from metadata
         metadata = read_metadata(artifact_dir, blob_hash)
@@ -109,14 +115,19 @@ def get_blob_age_days(artifact_dir: Path, blob_hash: str, now: datetime) -> int 
             upload_time = upload_time.replace(tzinfo=timezone.utc)
         age = now - upload_time
         return age.days
-    except Exception:
-        # Fall back to file mtime
-        blob_file = artifact_dir / "blobs" / blob_hash
-        if blob_file.exists():
-            mtime = datetime.fromtimestamp(blob_file.stat().st_mtime, tz=timezone.utc)
-            age = now - mtime
-            return age.days
-        return None
+    except (FileNotFoundError, ArtifactNotFoundError, json.JSONDecodeError, KeyError, ValueError):
+        # Expected cases: metadata doesn't exist, is malformed, or missing fields
+        pass
+    except (PermissionError, OSError) as e:
+        # Unexpected I/O errors - log and fall back
+        logger.warning("Error reading metadata for blob %s: %s", blob_hash[:12], e)
+
+    # Fall back to file mtime
+    if blob_file.exists():
+        mtime = datetime.fromtimestamp(blob_file.stat().st_mtime, tz=timezone.utc)
+        age = now - mtime
+        return age.days
+    return None
 
 
 def _scan_artifacts(

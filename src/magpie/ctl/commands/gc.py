@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import click
 
 from magpie.cli.progress import count_progress
@@ -111,7 +113,7 @@ def gc(
 
 
 def _run_gc_with_progress(
-    storage_path,
+    storage_path: Path,
     retention_days: int,
     dry_run: bool,
     reconcile_only: bool,
@@ -120,99 +122,95 @@ def _run_gc_with_progress(
 ) -> tuple[GCResult, list[BlobToDelete]]:
     """Run GC with rich progress bars.
 
-    This wraps run_gc() with progress display for CTL.
+    This wraps run_gc() with progress display for CTL. The shared run_gc()
+    function handles all the actual work (scanning, deletion, cleanup) while
+    this wrapper manages progress bar display via the callback mechanism.
+
+    Args:
+        storage_path: Base storage path containing artifacts.
+        retention_days: Delete untagged blobs older than this many days.
+        dry_run: If True, preview what would be deleted without making changes.
+        reconcile_only: If True, only reconcile symlinks, don't delete blobs.
+        quiet: If True, suppress progress output.
+        debug: If True, output debug messages.
 
     Returns:
         Tuple of (GCResult, list of blobs to delete).
     """
-    # We need to run in phases to show progress bars properly
-    # Phase 1: Scan artifacts
+
+    # Pre-scan to get artifact count for progress bar
     scan_manifest_files = list(storage_path.rglob(".magpie"))
     scan_total = len(scan_manifest_files)
 
-    # Create progress tracking state
-    scan_progress_ctx = None
-    scan_task_id = None
-    delete_progress_ctx = None
-    delete_task_id = None
+    # Track progress state across phases
+    # We use a class to allow the nested callback to update state
+    class ProgressState:
+        scan_progress: object = None
+        scan_task_id: object = None
+        delete_progress: object = None
+        delete_task_id: object = None
+        delete_total: int = 0
 
-    # Use a two-pass approach:
-    # Pass 1: Scan with progress bar
+    state = ProgressState()
+
+    def progress_callback(phase: str, current: int, total: int) -> None:
+        """Handle progress updates from run_gc()."""
+        if phase == "scan" and state.scan_progress is not None and state.scan_task_id is not None:
+            state.scan_progress.update(state.scan_task_id, completed=current)
+        elif (
+            phase == "delete"
+            and state.delete_progress is not None
+            and state.delete_task_id is not None
+        ):
+            state.delete_progress.update(state.delete_task_id, completed=current)
+
+    # Phase 1: Run scan with progress bar
+    # For dry-run or reconcile-only, this is the only phase
+    # For actual deletion, run_gc() will also handle deletion and cleanup
     with count_progress("Scanning artifacts", scan_total, quiet=quiet) as (progress, task_id):
-        scan_progress_ctx = progress
-        scan_task_id = task_id
+        state.scan_progress = progress
+        state.scan_task_id = task_id
 
-        def scan_callback(phase: str, current: int, total: int) -> None:
-            if phase == "scan" and scan_progress_ctx is not None and scan_task_id is not None:
-                scan_progress_ctx.update(scan_task_id, completed=current)
+        # If not dry-run and there will be deletions, we need a second progress bar
+        # But we don't know how many blobs until after scan, so we do a pre-scan
+        # to count blobs, then run the actual GC
+        if not dry_run and not reconcile_only:
+            # First, do a dry-run scan to count blobs
+            _, preview_blobs = run_gc(
+                storage_path=storage_path,
+                retention_days=retention_days,
+                dry_run=True,
+                reconcile_only=reconcile_only,
+                progress_callback=progress_callback,
+            )
+            state.delete_total = len(preview_blobs)
 
-        # Run scan phase only (dry_run=True to skip deletion in first pass)
-        result, blobs_to_delete = run_gc(
-            storage_path=storage_path,
-            retention_days=retention_days,
-            dry_run=True,  # Always dry-run in scan phase
-            reconcile_only=reconcile_only,
-            progress_callback=scan_callback,
-        )
-
-    # Pass 2: Delete blobs with progress bar (if not dry-run and not reconcile-only)
-    if not dry_run and not reconcile_only and blobs_to_delete:
-        with count_progress("Deleting blobs", len(blobs_to_delete), quiet=quiet) as (
+    # Phase 2: If we have blobs to delete, run actual deletion with progress
+    if not dry_run and not reconcile_only and state.delete_total > 0:
+        with count_progress("Deleting blobs", state.delete_total, quiet=quiet) as (
             progress,
             task_id,
         ):
-            delete_progress_ctx = progress
-            delete_task_id = task_id
+            state.delete_progress = progress
+            state.delete_task_id = task_id
 
-            for idx, blob in enumerate(blobs_to_delete):
-                if debug:
-                    click.echo(
-                        f"  Deleting blob {blob.blob_hash[:12]}... ({blob.age_days} days old)",
-                        err=True,
-                    )
-
-                blob.blob_file.unlink()
-
-                # Also delete metadata sidecar if it exists
-                if blob.metadata_file is not None:
-                    blob.metadata_file.unlink()
-
-                # Update progress
-                if delete_progress_ctx is not None and delete_task_id is not None:
-                    delete_progress_ctx.update(delete_task_id, advance=1)
-
-        # Update result with actual deletion stats
-        result.blobs_deleted = len(blobs_to_delete)
-        result.space_reclaimed_bytes = sum(b.size for b in blobs_to_delete)
-
-        # Re-run cleanup after actual deletion
-        from magpie.storage.cleanup import cleanup_artifact_directories
-
-        # Collect artifact dirs from blobs_to_delete
-        artifact_dirs = set()
-        for blob in blobs_to_delete:
-            artifact_dirs.add(blob.blob_file.parent.parent)
-
-        # Also need to cleanup artifacts that had only symlink fixes
-        # Re-scan for all artifact dirs
-        for manifest_file in storage_path.rglob(".magpie"):
-            artifact_dirs.add(manifest_file.parent)
-
-        # Run cleanup
-        from magpie.storage.cleanup import CleanupStats
-
-        combined_stats = CleanupStats()
-        for artifact_dir in artifact_dirs:
-            stats = cleanup_artifact_directories(artifact_dir, storage_path, dry_run=False)
-            combined_stats.empty_blobs_dirs += stats.empty_blobs_dirs
-            combined_stats.empty_metadata_dirs += stats.empty_metadata_dirs
-            combined_stats.empty_manifests += stats.empty_manifests
-            combined_stats.empty_artifact_dirs += stats.empty_artifact_dirs
-            combined_stats.empty_parent_dirs += stats.empty_parent_dirs
-            combined_stats.removed_paths.extend(stats.removed_paths)
-
-        result.cleanup_stats = combined_stats
-        result.items_removed = combined_stats.total_removed
+            # Run actual GC with deletion
+            result, blobs_to_delete = run_gc(
+                storage_path=storage_path,
+                retention_days=retention_days,
+                dry_run=False,
+                reconcile_only=reconcile_only,
+                progress_callback=progress_callback,
+            )
+    else:
+        # Dry-run or reconcile-only: just return the scan results
+        result, blobs_to_delete = run_gc(
+            storage_path=storage_path,
+            retention_days=retention_days,
+            dry_run=dry_run,
+            reconcile_only=reconcile_only,
+            progress_callback=progress_callback,
+        )
 
     return result, blobs_to_delete
 
