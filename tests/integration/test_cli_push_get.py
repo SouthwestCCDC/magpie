@@ -862,6 +862,58 @@ class TestGetCommand:
         assert len(stream_called) == 0, "Download should have been skipped for identical file"
         assert "already exists with matching hash" in result.output
 
+    def test_get_force_redownloads_even_when_hash_matches(
+        self,
+        cli_runner: CliRunner,
+        api_client: TestClient,
+        tmp_path: Path,
+        test_storage_service: StorageService,
+    ) -> None:
+        """Get with --force re-downloads even when local file has matching hash."""
+        # Upload a file
+        test_content = b"content for force hash match test"
+        files = {"file": ("artifact.bin", io.BytesIO(test_content), "application/octet-stream")}
+        api_client.post("/api/v1/upload/forcehashmatch/test", files=files)
+
+        # Create existing output file with SAME content (same hash)
+        output_file = tmp_path / "force_hash_match.bin"
+        output_file.write_bytes(test_content)
+
+        mock_client = MockClientWithDownload(api_client, test_storage_service)
+
+        # Track if stream was called (SHOULD be called when --force is used)
+        original_stream = mock_client.stream
+        stream_called = []
+
+        def tracking_stream(method: str, url: str):
+            stream_called.append((method, url))
+            return original_stream(method, url)
+
+        mock_client.stream = tracking_stream
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    "forcehashmatch/test",
+                    "-o",
+                    str(output_file),
+                    "--force",
+                ],
+            )
+
+        assert result.exit_code == 0
+        # Download should have happened despite matching hash
+        assert len(stream_called) == 1, "Download should have occurred with --force"
+        assert "Downloaded:" in result.output
+        # File should still have correct content
+        assert output_file.read_bytes() == test_content
+
 
 class TestPushQuietFlag:
     """Tests for push command --quiet flag and TTY detection."""

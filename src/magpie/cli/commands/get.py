@@ -23,7 +23,10 @@ from magpie.storage.hash import compute_hash
 @click.option("--no-verify", is_flag=True, help="Skip SHA-256 verification.")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress output.")
 @click.option(
-    "--force", "-f", is_flag=True, help="Overwrite existing output file without prompting."
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Overwrite existing output file without prompting, and re-download even if local hash matches.",
 )
 @click.pass_obj
 def get(
@@ -85,9 +88,10 @@ def get(
         # Check if output file exists before downloading to avoid wasting bandwidth
         if output.exists():
             # If local file has same hash as remote, skip download entirely
+            # (unless --force is set, in which case we re-download anyway)
             # Use compute_hash for streaming hash computation (handles large files)
             local_hash = compute_hash(output)
-            if local_hash == expected_hash:
+            if local_hash == expected_hash and not force:
                 click.echo(f"File already exists with matching hash: {output}")
                 return
 
