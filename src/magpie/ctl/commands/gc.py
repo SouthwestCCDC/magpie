@@ -7,6 +7,13 @@ from pathlib import Path
 
 import click
 
+from magpie.cli.formatting import (
+    CommandResult,
+    ErrorCode,
+    is_json_output,
+    output_error,
+    output_result,
+)
 from magpie.cli.progress import count_progress
 from magpie.ctl import CTLContext
 from magpie.storage.gc import BlobToDelete, GCResult, format_size, run_gc
@@ -85,19 +92,25 @@ def gc(
         retention_days_flag if retention_days_flag is not None else settings.retention_days
     )
 
+    # Determine if we're in any JSON output mode (--json-output flag or --format json)
+    use_json = json_output or is_json_output()
+
     if not storage_path.exists():
         if json_output:
-            # For JSON output, return an error structure
+            # For subprocess --json-output, return an error structure directly
             error_data = {"error": f"Storage path does not exist: {storage_path}"}
             click.echo(json.dumps(error_data))
             raise SystemExit(1)
+        elif is_json_output():
+            # For --format json, use the unified error output
+            output_error(ErrorCode.IO_ERROR, f"Storage path does not exist: {storage_path}")
         raise click.ClickException(f"Storage path does not exist: {storage_path}")
 
-    if ctx.debug and not json_output:
+    if ctx.debug and not use_json:
         click.echo(f"Storage path: {storage_path}", err=True)
         click.echo(f"Retention days: {retention_days}", err=True)
 
-    # For JSON output, run without progress bars and return structured JSON
+    # For subprocess --json-output, run without progress bars and return structured JSON
     if json_output:
         result, _ = run_gc(
             storage_path=storage_path,
@@ -109,6 +122,9 @@ def gc(
         _output_json(result, dry_run)
         return
 
+    # Suppress progress output in JSON mode
+    quiet_mode = quiet or is_json_output()
+
     # Run GC with progress display using a two-phase approach
     # Phase 1: Scan (with progress bar)
     # Phase 2: Delete (with progress bar)
@@ -117,11 +133,31 @@ def gc(
         retention_days=retention_days,
         dry_run=dry_run,
         reconcile_only=reconcile_only,
-        quiet=quiet,
+        quiet=quiet_mode,
         debug=ctx.debug,
     )
 
-    # Print dry-run deletion preview
+    # JSON output via --format json
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "dry_run": dry_run,
+                    "blobs_removed": result.blobs_deleted,
+                    "bytes_reclaimed": result.space_reclaimed_bytes,
+                    "errors": [],  # Collect errors if any
+                    "artifacts_scanned": result.artifacts_scanned,
+                    "blobs_found": result.blobs_found,
+                    "symlinks_checked": result.symlinks_checked,
+                    "symlinks_fixed": result.symlinks_fixed,
+                    "items_removed": result.items_removed,
+                },
+                human_output="",
+            )
+        )
+        return
+
+    # Human output - Print dry-run deletion preview
     if dry_run and not reconcile_only and blobs_to_delete:
         for blob in blobs_to_delete:
             click.echo(
