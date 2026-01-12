@@ -360,3 +360,16 @@ class TestParseDuration:
 
         with pytest.raises(DurationParseError, match="Invalid duration format"):
             parse_duration("5m abc")
+
+    def test_negative_plain_seconds_raises(self) -> None:
+        """Test that negative plain seconds raise DurationParseError."""
+        with pytest.raises(DurationParseError, match="Negative durations are not allowed"):
+            parse_duration("-30")
+
+        with pytest.raises(DurationParseError, match="Negative durations are not allowed"):
+            parse_duration("-100")
+
+    def test_negative_float_seconds_raises(self) -> None:
+        """Test that negative float seconds raise DurationParseError."""
+        with pytest.raises(DurationParseError, match="Negative durations are not allowed"):
+            parse_duration("-45.5")

@@ -131,8 +131,6 @@ _DURATION_COMPONENT = re.compile(r"(\d+)([smh])", re.IGNORECASE)
 class DurationParseError(ValueError):
     """Raised when a duration string cannot be parsed."""
 
-    pass
-
 
 def parse_duration(value: str) -> int:
     """Parse a duration string to seconds.
@@ -159,9 +157,13 @@ def parse_duration(value: str) -> int:
 
     # Try plain number first (seconds)
     try:
-        return int(float(value))
+        seconds = int(float(value))
     except ValueError:
         pass
+    else:
+        if seconds < 0:
+            raise DurationParseError("Negative durations are not allowed")
+        return seconds
 
     # Try duration pattern (e.g., "30s", "5m", "1h", "1h30m")
     if not _DURATION_PATTERN.match(value):
