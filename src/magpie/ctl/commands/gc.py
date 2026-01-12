@@ -292,7 +292,7 @@ def gc(
         # Report directory cleanup
         if cleanup_stats.total_removed > 0:
             action = "Would remove" if dry_run else "Removed"
-            click.echo(f"  {action} empty directories: {cleanup_stats.total_removed}")
+            click.echo(f"  {action} empty items: {cleanup_stats.total_removed}")
             if ctx.debug:
                 if cleanup_stats.empty_blobs_dirs:
                     click.echo(f"    - blobs/ dirs: {cleanup_stats.empty_blobs_dirs}", err=True)
