@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import click
@@ -35,6 +36,11 @@ from magpie.storage.gc import BlobToDelete, GCResult, format_size, run_gc
     is_flag=True,
     help="Suppress progress output.",
 )
+@click.option(
+    "--json-output",
+    is_flag=True,
+    help="Output results as JSON (for server subprocess integration).",
+)
 @click.pass_obj
 def gc(
     ctx: CTLContext,
@@ -42,6 +48,7 @@ def gc(
     reconcile_only: bool,
     retention_days_flag: int | None,
     quiet: bool,
+    json_output: bool,
 ) -> None:
     """Garbage collect untagged blobs older than retention period.
 
@@ -68,6 +75,8 @@ def gc(
         magpie-ctl gc --retention-days 7
 
         magpie-ctl gc --quiet
+
+        magpie-ctl gc --json-output
     """
     settings = ctx.settings
     storage_path = settings.storage_path
@@ -77,11 +86,28 @@ def gc(
     )
 
     if not storage_path.exists():
+        if json_output:
+            # For JSON output, return an error structure
+            error_data = {"error": f"Storage path does not exist: {storage_path}"}
+            click.echo(json.dumps(error_data))
+            raise SystemExit(1)
         raise click.ClickException(f"Storage path does not exist: {storage_path}")
 
-    if ctx.debug:
+    if ctx.debug and not json_output:
         click.echo(f"Storage path: {storage_path}", err=True)
         click.echo(f"Retention days: {retention_days}", err=True)
+
+    # For JSON output, run without progress bars and return structured JSON
+    if json_output:
+        result, _ = run_gc(
+            storage_path=storage_path,
+            retention_days=retention_days,
+            dry_run=dry_run,
+            reconcile_only=reconcile_only,
+            progress_callback=None,
+        )
+        _output_json(result, dry_run)
+        return
 
     # Run GC with progress display using a two-phase approach
     # Phase 1: Scan (with progress bar)
@@ -262,3 +288,18 @@ def _print_summary(result: GCResult, dry_run: bool, reconcile_only: bool, debug:
                     click.echo(f"    - artifact dirs: {stats.empty_artifact_dirs}", err=True)
                 if stats.empty_parent_dirs:
                     click.echo(f"    - parent dirs: {stats.empty_parent_dirs}", err=True)
+
+
+def _output_json(result: GCResult, dry_run: bool) -> None:
+    """Output GC result as JSON for subprocess integration.
+
+    Schema:
+        {"dry_run": bool, "blobs_removed": int, "bytes_reclaimed": int, "errors": [str]}
+    """
+    output = {
+        "dry_run": dry_run,
+        "blobs_removed": result.blobs_deleted,
+        "bytes_reclaimed": result.space_reclaimed_bytes,
+        "errors": [],  # Errors are raised as exceptions, so this is always empty on success
+    }
+    click.echo(json.dumps(output))
