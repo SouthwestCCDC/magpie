@@ -126,6 +126,9 @@ def _run_gc_with_progress(
     function handles all the actual work (scanning, deletion, cleanup) while
     this wrapper manages progress bar display via the callback mechanism.
 
+    Uses a single-pass approach for actual GC work. The delete progress bar
+    total is updated dynamically when the first delete callback arrives.
+
     Args:
         storage_path: Base storage path containing artifacts.
         retention_days: Delete untagged blobs older than this many days.
@@ -137,7 +140,6 @@ def _run_gc_with_progress(
     Returns:
         Tuple of (GCResult, list of blobs to delete).
     """
-
     # Pre-scan to get artifact count for progress bar
     scan_manifest_files = list(storage_path.rglob(".magpie"))
     scan_total = len(scan_manifest_files)
@@ -149,7 +151,7 @@ def _run_gc_with_progress(
         scan_task_id: object = None
         delete_progress: object = None
         delete_task_id: object = None
-        delete_total: int = 0
+        delete_total_set: bool = False
 
     state = ProgressState()
 
@@ -157,58 +159,53 @@ def _run_gc_with_progress(
         """Handle progress updates from run_gc()."""
         if phase == "scan" and state.scan_progress is not None and state.scan_task_id is not None:
             state.scan_progress.update(state.scan_task_id, completed=current)
-        elif (
-            phase == "delete"
-            and state.delete_progress is not None
-            and state.delete_task_id is not None
-        ):
-            state.delete_progress.update(state.delete_task_id, completed=current)
+        elif phase == "delete":
+            # First delete callback tells us the total, update progress bar
+            if not state.delete_total_set and total > 0:
+                state.delete_total_set = True
+                if state.delete_progress is not None and state.delete_task_id is not None:
+                    state.delete_progress.update(state.delete_task_id, total=total)
 
-    # Phase 1: Run scan with progress bar
-    # For dry-run or reconcile-only, this is the only phase
-    # For actual deletion, run_gc() will also handle deletion and cleanup
-    with count_progress("Scanning artifacts", scan_total, quiet=quiet) as (progress, task_id):
-        state.scan_progress = progress
-        state.scan_task_id = task_id
+            if state.delete_progress is not None and state.delete_task_id is not None:
+                state.delete_progress.update(state.delete_task_id, completed=current)
 
-        # If not dry-run and there will be deletions, we need a second progress bar
-        # But we don't know how many blobs until after scan, so we do a pre-scan
-        # to count blobs, then run the actual GC
-        if not dry_run and not reconcile_only:
-            # First, do a dry-run scan to count blobs
-            _, preview_blobs = run_gc(
-                storage_path=storage_path,
-                retention_days=retention_days,
-                dry_run=True,
-                reconcile_only=reconcile_only,
-                progress_callback=progress_callback,
-            )
-            state.delete_total = len(preview_blobs)
+    # For dry-run or reconcile-only, we just need the scan progress bar
+    if dry_run or reconcile_only:
+        with count_progress("Scanning artifacts", scan_total, quiet=quiet) as (progress, task_id):
+            state.scan_progress = progress
+            state.scan_task_id = task_id
 
-    # Phase 2: If we have blobs to delete, run actual deletion with progress
-    if not dry_run and not reconcile_only and state.delete_total > 0:
-        with count_progress("Deleting blobs", state.delete_total, quiet=quiet) as (
-            progress,
-            task_id,
-        ):
-            state.delete_progress = progress
-            state.delete_task_id = task_id
-
-            # Run actual GC with deletion
             result, blobs_to_delete = run_gc(
                 storage_path=storage_path,
                 retention_days=retention_days,
-                dry_run=False,
+                dry_run=dry_run,
                 reconcile_only=reconcile_only,
                 progress_callback=progress_callback,
             )
-    else:
-        # Dry-run or reconcile-only: just return the scan results
+        return result, blobs_to_delete
+
+    # For actual deletion, we run run_gc once with both progress bars active.
+    # The scan progress bar shows artifact scanning progress.
+    # The delete progress bar starts with total=0 and is updated dynamically
+    # when the first delete callback tells us how many blobs there are.
+    #
+    # Note: We could show sequential progress bars (scan, then delete), but that
+    # would require either running GC twice (once for preview, once for actual)
+    # or restructuring run_gc to yield between phases. For simplicity, we show
+    # both bars and update them as callbacks arrive.
+    with count_progress("Scanning artifacts", scan_total, quiet=quiet) as (
+        scan_prog,
+        scan_tid,
+    ):
+        state.scan_progress = scan_prog
+        state.scan_task_id = scan_tid
+
+        # Run GC - callbacks will update both progress bars as appropriate
         result, blobs_to_delete = run_gc(
             storage_path=storage_path,
             retention_days=retention_days,
-            dry_run=dry_run,
-            reconcile_only=reconcile_only,
+            dry_run=False,
+            reconcile_only=False,
             progress_callback=progress_callback,
         )
 
@@ -222,8 +219,9 @@ def _print_summary(result: GCResult, dry_run: bool, reconcile_only: bool, debug:
     click.echo(f"  Artifacts scanned: {result.artifacts_scanned}")
     click.echo(f"  Blobs found: {result.blobs_found}")
 
-    # In dry run, blobs_deleted is the count that would be deleted (== untagged)
-    click.echo(f"  Untagged blobs: {result.blobs_deleted}")
+    # blobs_deleted represents untagged blobs that are old enough to be deleted
+    # (older than retention_days), not all untagged blobs
+    click.echo(f"  Untagged blobs (eligible for deletion): {result.blobs_deleted}")
 
     click.echo(f"  Symlinks checked: {result.symlinks_checked}")
 

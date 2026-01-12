@@ -200,7 +200,7 @@ class TestGCCommand:
             result = cli_runner.invoke(cli, ["gc", "--dry-run"])
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        assert "Untagged blobs: 1" in result.output
+        assert "Untagged blobs (eligible for deletion): 1" in result.output
 
     def test_gc_dry_run_does_not_modify(
         self, cli_runner: CliRunner, test_settings: MagpieSettings

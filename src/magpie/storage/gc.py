@@ -7,6 +7,7 @@ while this module contains the core logic.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 from magpie.storage.cleanup import CleanupStats, cleanup_artifact_directories
+from magpie.storage.exceptions import ArtifactNotFoundError
 from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
 from magpie.storage.symlinks import ReconcileStats, reconcile_symlinks
@@ -73,7 +75,13 @@ class GCResult:
     cleanup_stats: CleanupStats = field(default_factory=CleanupStats)
 
     def to_dict(self) -> dict:
-        """Convert to dictionary for JSON serialization."""
+        """Convert to dictionary for JSON serialization.
+
+        Note: symlink_fix_details and cleanup_stats are intentionally excluded
+        from the JSON output. These fields contain detailed information used
+        only for CLI/CTL display (e.g., which specific tags were fixed). The
+        server API returns just the summary statistics.
+        """
         return {
             "artifacts_scanned": self.artifacts_scanned,
             "blobs_found": self.blobs_found,
@@ -101,10 +109,6 @@ def get_blob_age_days(artifact_dir: Path, blob_hash: str, now: datetime) -> int 
     Returns:
         Age in days, or None if age cannot be determined.
     """
-    import json
-
-    from magpie.storage.exceptions import ArtifactNotFoundError
-
     blob_file = artifact_dir / "blobs" / blob_hash
 
     try:
