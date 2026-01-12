@@ -218,7 +218,7 @@ class TestGCEndpointFunctionality:
             "space_reclaimed_bytes",
             "symlinks_checked",
             "symlinks_fixed",
-            "directories_removed",
+            "items_removed",
         }
         assert required_fields == set(data.keys())
 
@@ -336,10 +336,10 @@ class TestGCDeletesUntaggedBlobs:
 class TestGCDirectoryCleanup:
     """Tests for GC endpoint directory cleanup after blob deletion."""
 
-    def test_gc_response_includes_directories_removed(
+    def test_gc_response_includes_items_removed(
         self, client: TestClient, admin_token: str
     ) -> None:
-        """GC response includes directories_removed field."""
+        """GC response includes items_removed field."""
         response = client.post(
             "/api/v1/gc",
             headers={"Authorization": f"Bearer {admin_token}"},
@@ -347,7 +347,7 @@ class TestGCDirectoryCleanup:
 
         assert response.status_code == 200
         data = response.json()
-        assert "directories_removed" in data
+        assert "items_removed" in data
 
     def test_gc_removes_empty_artifact_directories(
         self, client: TestClient, admin_token: str, test_config: MagpieSettings
@@ -388,7 +388,7 @@ class TestGCDirectoryCleanup:
         assert response.status_code == 200
         data = response.json()
         assert data["blobs_deleted"] >= 1
-        assert data["directories_removed"] >= 1
+        assert data["items_removed"] >= 1
 
         # Artifact directory should be cleaned up
         assert not artifact_dir.exists()
@@ -433,7 +433,7 @@ class TestGCDirectoryCleanup:
         assert response.status_code == 200
         data = response.json()
         assert data["dry_run"] is True
-        assert data["directories_removed"] >= 1
+        assert data["items_removed"] >= 1
 
         # Artifact directory should still exist (dry run)
         assert artifact_dir.exists()

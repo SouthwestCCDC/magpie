@@ -30,7 +30,7 @@ class GCResponse(BaseModel):
     space_reclaimed_bytes: int
     symlinks_checked: int
     symlinks_fixed: int
-    directories_removed: int = 0
+    items_removed: int = 0
 
 
 @router.post("/api/v1/gc")
@@ -69,7 +69,7 @@ async def trigger_gc(
     deleted_bytes = 0
     symlinks_checked = 0
     symlinks_fixed = 0
-    directories_removed = 0
+    items_removed = 0
 
     now = datetime.now(timezone.utc)
 
@@ -135,10 +135,10 @@ async def trigger_gc(
                 deleted_blobs += 1
                 deleted_bytes += blob_size
 
-        # Cleanup pass: remove empty directories after blob deletion
+        # Cleanup pass: remove empty directories and manifests after blob deletion
         for artifact_dir in artifact_dirs_to_cleanup:
             stats = cleanup_artifact_directories(artifact_dir, storage_path, dry_run)
-            directories_removed += stats.total_removed
+            items_removed += stats.total_removed
 
     return GCResponse(
         dry_run=dry_run,
@@ -148,7 +148,7 @@ async def trigger_gc(
         space_reclaimed_bytes=deleted_bytes,
         symlinks_checked=symlinks_checked,
         symlinks_fixed=symlinks_fixed,
-        directories_removed=directories_removed,
+        items_removed=items_removed,
     )
 
 

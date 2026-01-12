@@ -762,7 +762,7 @@ class TestGCDirectoryCleanup:
     def test_gc_reports_directory_cleanup_count(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
-        """GC reports number of directories removed in summary."""
+        """GC reports number of items removed in summary."""
         test_settings.storage_path.mkdir(parents=True, exist_ok=True)
         create_artifact_with_blobs(
             test_settings.storage_path,
@@ -776,5 +776,5 @@ class TestGCDirectoryCleanup:
             result = cli_runner.invoke(cli, ["gc"])
 
         assert result.exit_code == 0
-        # Should report removed directories
-        assert "Removed empty directories:" in result.output
+        # Should report removed items (directories + manifest files)
+        assert "Removed empty items:" in result.output

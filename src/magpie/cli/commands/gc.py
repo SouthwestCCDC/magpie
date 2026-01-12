@@ -81,6 +81,12 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
         f"  Space {'reclaimable' if dry_run else 'reclaimed'}: {_format_size(data['space_reclaimed_bytes'])}"
     )
 
+    # Display items removed (directories + manifest files)
+    items_removed = data.get("items_removed", 0)
+    if items_removed > 0:
+        action = "Would remove" if dry_run else "Removed"
+        click.echo(f"  {action} empty items: {items_removed}")
+
 
 def _handle_error(response: "httpx.Response", message: str | None = None) -> None:
     """Handle HTTP error responses."""
