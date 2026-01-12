@@ -17,6 +17,15 @@ from magpie.storage.exceptions import (
     ManifestCorruptError,
     StorageError,
 )
+from magpie.storage.gc import (
+    BlobToDelete,
+    GCResult,
+    ProgressCallback,
+    SymlinkFixDetail,
+    format_size,
+    get_blob_age_days,
+    run_gc,
+)
 from magpie.storage.hash import compute_hash, short_hash
 from magpie.storage.manifest import (
     Manifest,
@@ -80,6 +89,14 @@ __all__ = [
     # Cleanup operations
     "CleanupStats",
     "cleanup_artifact_directories",
+    # GC operations
+    "GCResult",
+    "BlobToDelete",
+    "SymlinkFixDetail",
+    "ProgressCallback",
+    "run_gc",
+    "get_blob_age_days",
+    "format_size",
     # Exceptions
     "StorageError",
     "ArtifactNotFoundError",

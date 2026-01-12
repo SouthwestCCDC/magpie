@@ -6,6 +6,7 @@ import click
 
 from magpie.cli import CLIContext
 from magpie.cli.errors import handle_http_error, mask_token
+from magpie.storage.gc import format_size
 
 
 @click.command()
@@ -76,7 +77,7 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
     action = "Would delete" if dry_run else "Deleted"
     click.echo(f"  {action}: {data['blobs_deleted']} blob(s)")
     click.echo(
-        f"  Space {'reclaimable' if dry_run else 'reclaimed'}: {_format_size(data['space_reclaimed_bytes'])}"
+        f"  Space {'reclaimable' if dry_run else 'reclaimed'}: {format_size(data['space_reclaimed_bytes'])}"
     )
 
     # Display items removed (directories + manifest files)
@@ -84,22 +85,3 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
     if items_removed > 0:
         action = "Would remove" if dry_run else "Removed"
         click.echo(f"  {action} empty items: {items_removed}")
-
-
-def _format_size(size_bytes: int) -> str:
-    """Format byte size as human-readable string.
-
-    Args:
-        size_bytes: Size in bytes.
-
-    Returns:
-        Human-readable size string (e.g., "1.5 MB").
-    """
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
