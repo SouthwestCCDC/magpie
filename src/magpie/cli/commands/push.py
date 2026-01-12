@@ -12,6 +12,14 @@ if TYPE_CHECKING:
 
 from magpie.cli import CLIContext
 from magpie.cli.errors import handle_http_error
+from magpie.cli.formatting import (
+    CommandResult,
+    ErrorCode,
+    http_status_to_error_code,
+    is_json_output,
+    output_error,
+    output_result,
+)
 from magpie.cli.progress import transfer_progress
 from magpie.storage.exceptions import InvalidArtifactPathError
 from magpie.storage.paths import normalize_artifact_path
@@ -117,12 +125,18 @@ def push(
         magpie push build.zip --to builds/app --source-uri git://repo@v1.0
     """
     if not ctx.server:
+        if is_json_output():
+            output_error(
+                ErrorCode.CONFIG_ERROR, "No server configured. Use --server or set MAGPIE_SERVER."
+            )
         raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
 
     # Normalize artifact path
     try:
         artifact_path = normalize_artifact_path(artifact_path)
     except InvalidArtifactPathError as e:
+        if is_json_output():
+            output_error(ErrorCode.VALIDATION_ERROR, str(e))
         raise click.ClickException(str(e))
 
     # Build query params
@@ -137,8 +151,11 @@ def push(
     if ctx.debug:
         click.echo(f"Uploading {file} ({file_size} bytes) to {artifact_path}...", err=True)
 
+    # Suppress progress output in JSON mode
+    quiet_mode = quiet or is_json_output()
+
     # Upload file with progress
-    with transfer_progress("Uploading", file_size, quiet=quiet) as (progress, task_id):
+    with transfer_progress("Uploading", file_size, quiet=quiet_mode) as (progress, task_id):
         with ctx.get_client() as client:
             with file.open("rb") as f:
                 # Container for processing task ID (mutable to allow callback to store it)
@@ -164,11 +181,43 @@ def push(
                     progress.update(processing_task[0], visible=False)
 
             if response.status_code != 200:
+                if is_json_output():
+                    try:
+                        detail = response.json().get("detail", response.text)
+                    except Exception:
+                        detail = response.text
+                    output_error(http_status_to_error_code(response.status_code), detail)
                 handle_http_error(response, "Upload", ctx.token)
 
             data = response.json()
 
-    # Display results
+    # Determine download URL
+    if not no_latest:
+        download_url = f"{ctx.server}/artifacts/{artifact_path}/latest"
+        tags = ["latest"]
+    else:
+        download_url = f"{ctx.server}{data['download_url']}"
+        tags = []
+
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "artifact": artifact_path,
+                    "version": data["hash_ref"],
+                    "hash": data["hash"],
+                    "size": file_size,
+                    "tags": tags,
+                    "url": download_url,
+                    "is_duplicate": data.get("is_duplicate", False),
+                },
+                human_output="",  # Not used for JSON
+            )
+        )
+        return
+
+    # Human output
     if data.get("is_duplicate"):
         click.echo(f"Duplicate: {data['hash']}")
     else:
@@ -178,10 +227,10 @@ def push(
     if not no_latest:
         click.echo("Tagged:   latest")
         # Use /latest in download URL instead of hash ref
-        download_url = f"/artifacts/{artifact_path}/latest"
+        display_download_url = f"/artifacts/{artifact_path}/latest"
     else:
-        download_url = data["download_url"]
-    click.echo(f"Download: {ctx.server}{download_url}")
+        display_download_url = data["download_url"]
+    click.echo(f"Download: {ctx.server}{display_download_url}")
 
     if not source_uri:
         click.echo()

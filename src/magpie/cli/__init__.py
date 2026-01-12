@@ -9,6 +9,7 @@ import click
 
 from magpie.cli.client import get_client
 from magpie.cli.config import get_server, get_timeout, get_token
+from magpie.cli.formatting import OutputFormat
 from magpie.config import get_settings
 
 if TYPE_CHECKING:
@@ -56,11 +57,13 @@ class CLIContext:
         token: str,
         debug: bool = False,
         timeout: float = 600.0,
+        output_format: OutputFormat = OutputFormat.HUMAN,
     ) -> None:
         self.server = server
         self.token = token
         self.debug = debug
         self.timeout = timeout
+        self.output_format = output_format
 
     def get_client(self) -> "httpx.Client":
         """Get configured httpx client."""
@@ -93,6 +96,13 @@ pass_context = click.make_pass_decorator(CLIContext)
     default=False,
     help="Enable debug output.",
 )
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice([f.value for f in OutputFormat], case_sensitive=False),
+    default=OutputFormat.HUMAN.value,
+    help="Output format (default: human).",
+)
 @click.pass_context
 def cli(
     ctx: click.Context,
@@ -100,23 +110,27 @@ def cli(
     token: str | None,
     timeout: float | None,
     debug: bool,
+    output_format: str,
 ) -> None:
     """Magpie: Content-addressed artifact storage client."""
     resolved_server = get_server(cli_override=server)
     resolved_token = get_token(cli_override=token)
     resolved_timeout = get_timeout(cli_override=timeout)
+    resolved_format = OutputFormat(output_format)
 
     ctx.obj = CLIContext(
         server=resolved_server,
         token=resolved_token,
         debug=debug,
         timeout=resolved_timeout,
+        output_format=resolved_format,
     )
 
     if debug:
         click.echo(f"Server: {resolved_server}", err=True)
         click.echo(f"Token: {'***' if resolved_token else '(none)'}", err=True)
         click.echo(f"Timeout: {resolved_timeout}s", err=True)
+        click.echo(f"Format: {resolved_format.value}", err=True)
 
 
 @cli.command()
