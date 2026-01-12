@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -18,6 +18,9 @@ from magpie.storage.service import StorageService
 
 # Patch path for get_client - must match where it's imported/used in the CLI module
 PATCH_GET_CLIENT = "magpie.cli.get_client"
+
+# Patch path for subprocess in server flush-tag route
+PATCH_FLUSH_TAG_CTL = "magpie.server.routes.tags.run_ctl_command"
 
 
 @pytest.fixture
@@ -139,9 +142,9 @@ class TestTagCommand:
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
-    def test_tag_requires_server(self, cli_runner: CliRunner) -> None:
+    def test_tag_requires_server(self, cli_runner_no_config: CliRunner) -> None:
         """Tag without server configured fails with error."""
-        result = cli_runner.invoke(cli, ["tag", "test/artifact:latest", "--as", "v1.0"])
+        result = cli_runner_no_config.invoke(cli, ["tag", "test/artifact:latest", "--as", "v1.0"])
 
         assert result.exit_code != 0
         assert "No server configured" in result.output
@@ -187,9 +190,9 @@ class TestUntagCommand:
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
-    def test_untag_requires_server(self, cli_runner: CliRunner) -> None:
+    def test_untag_requires_server(self, cli_runner_no_config: CliRunner) -> None:
         """Untag without server configured fails with error."""
-        result = cli_runner.invoke(cli, ["untag", "test/artifact", "v1.0"])
+        result = cli_runner_no_config.invoke(cli, ["untag", "test/artifact", "v1.0"])
 
         assert result.exit_code != 0
         assert "No server configured" in result.output
@@ -202,27 +205,22 @@ class TestFlushTagCommand:
         self, cli_runner: CliRunner, api_client: TestClient
     ) -> None:
         """Flush-tag removes a tag from all artifacts."""
-        # Upload artifacts with the same tag
-        upload_test_artifact(api_client, "test/flush1", b"version 1")
-        upload_test_artifact(api_client, "test/flush2", b"version 2")
-
-        # Create a common tag on both artifacts
-        api_client.post(
-            "/api/v1/artifacts/test/flush1/latest/tags",
-            json={"tag_name": "common-tag"},
-        )
-        api_client.post(
-            "/api/v1/artifacts/test/flush2/latest/tags",
-            json={"tag_name": "common-tag"},
-        )
+        # Mock the subprocess call to return flush-tag result
+        mock_flush_result = {
+            "tag_name": "common-tag",
+            "dry_run": False,
+            "count": 2,
+            "affected_artifacts": ["test/flush1", "test/flush2"],
+        }
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
 
-            result = cli_runner.invoke(
-                cli,
-                ["--server", "http://test", "flush-tag", "common-tag", "--yes"],
-            )
+            with patch(PATCH_FLUSH_TAG_CTL, new=AsyncMock(return_value=mock_flush_result)):
+                result = cli_runner.invoke(
+                    cli,
+                    ["--server", "http://test", "flush-tag", "common-tag", "--yes"],
+                )
 
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "Removed tag 'common-tag'" in result.output
@@ -230,38 +228,44 @@ class TestFlushTagCommand:
 
     def test_flush_tag_dry_run(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Flush-tag dry-run shows what would be affected."""
-        # Upload artifact with tag
-        upload_test_artifact(api_client, "test/flush-dry", b"dry run test")
-
-        # Create a tag
-        api_client.post(
-            "/api/v1/artifacts/test/flush-dry/latest/tags",
-            json={"tag_name": "to-flush"},
-        )
+        # Mock the subprocess call to return dry-run result
+        mock_flush_result = {
+            "tag_name": "to-flush",
+            "dry_run": True,
+            "count": 1,
+            "affected_artifacts": ["test/flush-dry"],
+        }
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
 
-            result = cli_runner.invoke(
-                cli,
-                ["--server", "http://test", "flush-tag", "to-flush", "--dry-run"],
-            )
+            with patch(PATCH_FLUSH_TAG_CTL, new=AsyncMock(return_value=mock_flush_result)):
+                result = cli_runner.invoke(
+                    cli,
+                    ["--server", "http://test", "flush-tag", "to-flush", "--dry-run"],
+                )
 
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "Would remove tag 'to-flush'" in result.output
 
     def test_flush_tag_no_matches(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Flush-tag with no matching artifacts reports 0."""
-        # Upload artifact (only has 'latest' tag)
-        upload_test_artifact(api_client, "test/flush-none", b"single version")
+        # Mock the subprocess call to return no matches
+        mock_flush_result = {
+            "tag_name": "nonexistent-tag",
+            "dry_run": False,
+            "count": 0,
+            "affected_artifacts": [],
+        }
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
 
-            result = cli_runner.invoke(
-                cli,
-                ["--server", "http://test", "flush-tag", "nonexistent-tag", "--yes"],
-            )
+            with patch(PATCH_FLUSH_TAG_CTL, new=AsyncMock(return_value=mock_flush_result)):
+                result = cli_runner.invoke(
+                    cli,
+                    ["--server", "http://test", "flush-tag", "nonexistent-tag", "--yes"],
+                )
 
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "0 artifact" in result.output
@@ -270,29 +274,30 @@ class TestFlushTagCommand:
         self, cli_runner: CliRunner, api_client: TestClient
     ) -> None:
         """Flush-tag shows list of affected artifacts."""
-        # Upload artifact with tag
-        upload_test_artifact(api_client, "test/show-affected", b"content")
-
-        api_client.post(
-            "/api/v1/artifacts/test/show-affected/latest/tags",
-            json={"tag_name": "show-me"},
-        )
+        # Mock the subprocess call to return affected artifacts
+        mock_flush_result = {
+            "tag_name": "show-me",
+            "dry_run": False,
+            "count": 1,
+            "affected_artifacts": ["test/show-affected"],
+        }
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
 
-            result = cli_runner.invoke(
-                cli,
-                ["--server", "http://test", "flush-tag", "show-me", "--yes"],
-            )
+            with patch(PATCH_FLUSH_TAG_CTL, new=AsyncMock(return_value=mock_flush_result)):
+                result = cli_runner.invoke(
+                    cli,
+                    ["--server", "http://test", "flush-tag", "show-me", "--yes"],
+                )
 
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "Affected artifacts:" in result.output
         assert "test/show-affected" in result.output
 
-    def test_flush_tag_requires_server(self, cli_runner: CliRunner) -> None:
+    def test_flush_tag_requires_server(self, cli_runner_no_config: CliRunner) -> None:
         """Flush-tag without server configured fails with error."""
-        result = cli_runner.invoke(cli, ["flush-tag", "some-tag", "--yes"])
+        result = cli_runner_no_config.invoke(cli, ["flush-tag", "some-tag", "--yes"])
 
         assert result.exit_code != 0
         assert "No server configured" in result.output
@@ -331,16 +336,22 @@ class TestFlushTagCommand:
         self, cli_runner: CliRunner, api_client: TestClient
     ) -> None:
         """Flush-tag on protected tags succeeds with --force flag."""
-        # Upload artifact (auto-tagged as 'latest')
-        upload_test_artifact(api_client, "test/force-flush", b"content")
+        # Mock the subprocess call to return flush result
+        mock_flush_result = {
+            "tag_name": "latest",
+            "dry_run": False,
+            "count": 1,
+            "affected_artifacts": ["test/force-flush"],
+        }
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
 
-            result = cli_runner.invoke(
-                cli,
-                ["--server", "http://test", "flush-tag", "latest", "--force", "--yes"],
-            )
+            with patch(PATCH_FLUSH_TAG_CTL, new=AsyncMock(return_value=mock_flush_result)):
+                result = cli_runner.invoke(
+                    cli,
+                    ["--server", "http://test", "flush-tag", "latest", "--force", "--yes"],
+                )
 
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "Removed tag 'latest'" in result.output
@@ -349,20 +360,22 @@ class TestFlushTagCommand:
         self, cli_runner: CliRunner, api_client: TestClient
     ) -> None:
         """Flush-tag on non-protected tags works without --force."""
-        upload_test_artifact(api_client, "test/normal-tag", b"content")
-
-        api_client.post(
-            "/api/v1/artifacts/test/normal-tag/latest/tags",
-            json={"tag_name": "custom-tag"},
-        )
+        # Mock the subprocess call to return flush result
+        mock_flush_result = {
+            "tag_name": "custom-tag",
+            "dry_run": False,
+            "count": 1,
+            "affected_artifacts": ["test/normal-tag"],
+        }
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
 
-            result = cli_runner.invoke(
-                cli,
-                ["--server", "http://test", "flush-tag", "custom-tag", "--yes"],
-            )
+            with patch(PATCH_FLUSH_TAG_CTL, new=AsyncMock(return_value=mock_flush_result)):
+                result = cli_runner.invoke(
+                    cli,
+                    ["--server", "http://test", "flush-tag", "custom-tag", "--yes"],
+                )
 
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "Removed tag 'custom-tag'" in result.output

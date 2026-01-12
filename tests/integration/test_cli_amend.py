@@ -233,9 +233,9 @@ class TestAmendCommand:
         assert "https://updated.example.com" in result.output
         assert "https://initial.example.com" not in result.output
 
-    def test_amend_requires_server(self, cli_runner: CliRunner) -> None:
+    def test_amend_requires_server(self, cli_runner_no_config: CliRunner) -> None:
         """Amend without server configured fails with error."""
-        result = cli_runner.invoke(
+        result = cli_runner_no_config.invoke(
             cli, ["amend", "test/artifact:latest", "--source-uri", "https://example.com"]
         )
 

@@ -2,29 +2,35 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel
 
-from magpie.server.deps import get_storage_service, require_admin_scope_header
-from magpie.storage.service import StorageService
+from magpie.server.deps import require_admin_scope_header
+from magpie.server.subprocess_utils import CtlCommandError, run_ctl_command
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+# Tag name validation pattern: alphanumeric start, then alphanumeric, dots, underscores, hyphens
+TAG_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
 
 
 class FlushTagResponse(BaseModel):
     """Response model for flush tag operation."""
 
     tag_name: str
-    affected_artifacts: list[str]
-    count: int
     dry_run: bool
+    count: int
+    affected_artifacts: list[str]
 
 
 @router.post("/api/v1/tags/{tag_name}/flush")
 async def flush_tag(
-    tag_name: str,
+    tag_name: Annotated[str, Path(pattern=TAG_NAME_PATTERN, max_length=128)],
     confirm_walk_filesystem: Annotated[
         bool | None,
         Query(description="Must be true to confirm this operation walks the entire filesystem"),
@@ -33,7 +39,6 @@ async def flush_tag(
         bool,
         Query(description="If true, return preview without actually removing tags"),
     ] = False,
-    storage_service: Annotated[StorageService, Depends(get_storage_service)] = None,
     _admin_scope_check: Annotated[None, Depends(require_admin_scope_header)] = None,
 ) -> FlushTagResponse:
     """Remove a tag from all artifacts globally.
@@ -44,6 +49,8 @@ async def flush_tag(
 
     The confirm_walk_filesystem parameter must be explicitly set to true to
     acknowledge that this operation will scan the entire storage filesystem.
+
+    This endpoint shells out to `magpie-ctl flush-tag` to avoid blocking the event loop.
 
     Args:
         tag_name: Name of the tag to remove globally.
@@ -67,11 +74,22 @@ async def flush_tag(
             ),
         )
 
-    result = storage_service.flush_tag(tag_name, dry_run=dry_run)
+    # Build command
+    cmd = ["magpie-ctl", "flush-tag", tag_name, "--json-output"]
+    if dry_run:
+        cmd.append("--dry-run")
+
+    try:
+        result = await run_ctl_command(cmd)
+    except CtlCommandError as e:
+        logger.error(f"Flush tag command failed: {e}")
+        raise HTTPException(status_code=500, detail="Flush tag operation failed") from e
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Operation timed out")
 
     return FlushTagResponse(
-        tag_name=result.tag_name,
-        affected_artifacts=result.affected_artifacts,
-        count=result.count,
-        dry_run=dry_run,
+        tag_name=result.get("tag_name", tag_name),
+        dry_run=result.get("dry_run", dry_run),
+        count=result.get("count", 0),
+        affected_artifacts=result.get("affected_artifacts", []),
     )

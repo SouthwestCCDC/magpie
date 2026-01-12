@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -24,6 +24,9 @@ from magpie.storage.service import StorageService
 
 # Patch path for get_client - must match where it's imported/used in the CLI module
 PATCH_GET_CLIENT = "magpie.cli.get_client"
+
+# Patch path for subprocess in server GC route
+PATCH_RUN_CTL = "magpie.server.routes.gc.run_ctl_command"
 
 
 @pytest.fixture
@@ -90,16 +93,16 @@ def cli_runner() -> CliRunner:
 class TestGCCommand:
     """Integration tests for gc command."""
 
-    def test_gc_requires_server(self, cli_runner: CliRunner) -> None:
+    def test_gc_requires_server(self, cli_runner_no_config: CliRunner) -> None:
         """GC without server configured fails with error."""
-        result = cli_runner.invoke(cli, ["gc"])
+        result = cli_runner_no_config.invoke(cli, ["gc"])
 
         assert result.exit_code != 0
         assert "No server configured" in result.output
 
-    def test_gc_requires_token(self, cli_runner: CliRunner) -> None:
+    def test_gc_requires_token(self, cli_runner_no_config: CliRunner) -> None:
         """GC without token configured fails with error."""
-        result = cli_runner.invoke(cli, ["--server", "http://test", "gc"])
+        result = cli_runner_no_config.invoke(cli, ["--server", "http://test", "gc"])
 
         assert result.exit_code != 0
         assert "No token configured" in result.output
@@ -129,13 +132,27 @@ class TestGCCommand:
 
         mock_client = MockClientWithAuth(api_client, admin_token)
 
+        # Mock the subprocess call in the server to return GC stats
+        mock_gc_result = {
+            "dry_run": False,
+            "artifacts_scanned": 10,
+            "blobs_found": 5,
+            "blobs_deleted": 0,
+            "space_reclaimed_bytes": 0,
+            "symlinks_checked": 3,
+            "symlinks_fixed": 1,
+            "items_removed": 0,
+            "errors": [],
+        }
+
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = mock_client
 
-            result = cli_runner.invoke(
-                cli,
-                ["--server", "http://test", "--token", admin_token, "gc"],
-            )
+            with patch(PATCH_RUN_CTL, new=AsyncMock(return_value=mock_gc_result)):
+                result = cli_runner.invoke(
+                    cli,
+                    ["--server", "http://test", "--token", admin_token, "gc"],
+                )
 
         assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
         assert "GC Complete:" in result.output
@@ -167,13 +184,27 @@ class TestGCCommand:
 
         mock_client = MockClientWithAuth(api_client, admin_token)
 
+        # Mock the subprocess call in the server to return dry-run results
+        mock_gc_result = {
+            "dry_run": True,
+            "artifacts_scanned": 5,
+            "blobs_found": 3,
+            "blobs_deleted": 2,
+            "space_reclaimed_bytes": 1024,
+            "symlinks_checked": 2,
+            "symlinks_fixed": 0,
+            "items_removed": 0,
+            "errors": [],
+        }
+
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = mock_client
 
-            result = cli_runner.invoke(
-                cli,
-                ["--server", "http://test", "--token", admin_token, "gc", "--dry-run"],
-            )
+            with patch(PATCH_RUN_CTL, new=AsyncMock(return_value=mock_gc_result)):
+                result = cli_runner.invoke(
+                    cli,
+                    ["--server", "http://test", "--token", admin_token, "gc", "--dry-run"],
+                )
 
         assert result.exit_code == 0
         assert "GC Preview (dry run):" in result.output
@@ -209,13 +240,27 @@ class TestGCCommand:
 
         mock_client = MockClientWithAuth(api_client, admin_token)
 
+        # Mock the subprocess call in the server to return stats
+        mock_gc_result = {
+            "dry_run": False,
+            "artifacts_scanned": 5,
+            "blobs_found": 3,
+            "blobs_deleted": 1,
+            "space_reclaimed_bytes": 512,
+            "symlinks_checked": 2,
+            "symlinks_fixed": 0,
+            "items_removed": 0,
+            "errors": [],
+        }
+
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = mock_client
 
-            result = cli_runner.invoke(
-                cli,
-                ["--server", "http://test", "--token", admin_token, "gc"],
-            )
+            with patch(PATCH_RUN_CTL, new=AsyncMock(return_value=mock_gc_result)):
+                result = cli_runner.invoke(
+                    cli,
+                    ["--server", "http://test", "--token", admin_token, "gc"],
+                )
 
         assert result.exit_code == 0
         assert "Artifacts scanned:" in result.output

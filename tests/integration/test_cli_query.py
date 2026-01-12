@@ -133,9 +133,9 @@ class TestLsCommand:
         assert result.exit_code == 0
         assert "latest" in result.output
 
-    def test_ls_requires_server(self, cli_runner: CliRunner) -> None:
+    def test_ls_requires_server(self, cli_runner_no_config: CliRunner) -> None:
         """Ls without server configured fails with error."""
-        result = cli_runner.invoke(cli, ["ls", "test/artifact"])
+        result = cli_runner_no_config.invoke(cli, ["ls", "test/artifact"])
 
         assert result.exit_code != 0
         assert "No server configured" in result.output
@@ -328,9 +328,9 @@ class TestInfoCommand:
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
-    def test_info_requires_server(self, cli_runner: CliRunner) -> None:
+    def test_info_requires_server(self, cli_runner_no_config: CliRunner) -> None:
         """Info without server configured fails with error."""
-        result = cli_runner.invoke(cli, ["info", "test/artifact"])
+        result = cli_runner_no_config.invoke(cli, ["info", "test/artifact"])
 
         assert result.exit_code != 0
         assert "No server configured" in result.output
@@ -430,9 +430,9 @@ class TestUrlCommand:
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
-    def test_url_requires_server(self, cli_runner: CliRunner) -> None:
+    def test_url_requires_server(self, cli_runner_no_config: CliRunner) -> None:
         """Url without server configured fails with error."""
-        result = cli_runner.invoke(cli, ["url", "test/artifact"])
+        result = cli_runner_no_config.invoke(cli, ["url", "test/artifact"])
 
         assert result.exit_code != 0
         assert "No server configured" in result.output
