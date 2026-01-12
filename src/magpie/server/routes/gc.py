@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from magpie.auth.service import TokenInfo
 from magpie.config import MagpieSettings, get_settings
 from magpie.server.deps import require_admin_scope
-from magpie.storage.gc import run_gc
+from magpie.server.subprocess_utils import CtlCommandError, run_ctl_command
 
 router = APIRouter()
 
@@ -19,13 +19,8 @@ class GCResponse(BaseModel):
     """Response model for GC operation."""
 
     dry_run: bool
-    artifacts_scanned: int
-    blobs_found: int
-    blobs_deleted: int
-    space_reclaimed_bytes: int
-    symlinks_checked: int
-    symlinks_fixed: int
-    items_removed: int = 0
+    blobs_removed: int
+    bytes_reclaimed: int
 
 
 @router.post("/api/v1/gc")
@@ -42,6 +37,8 @@ async def trigger_gc(
     - Deletes untagged blobs older than retention_days (default 90)
     - Reconciles symlinks to match manifests
 
+    This endpoint shells out to `magpie-ctl gc` to avoid blocking the event loop.
+
     Args:
         dry_run: If True, preview what would be deleted without making changes.
         retention_days: Override retention period (days). Defaults to config value.
@@ -52,40 +49,29 @@ async def trigger_gc(
         GCResponse with GC operation statistics.
     """
     storage_path = settings.storage_path
-    # Use query parameter if provided, otherwise fall back to config
-    retention_days = (
-        retention_days_override if retention_days_override is not None else settings.retention_days
-    )
 
-    # Run GC using shared implementation
+    # Return empty result if storage doesn't exist yet
     if not storage_path.exists():
-        # Return empty result if storage doesn't exist yet
         return GCResponse(
             dry_run=dry_run,
-            artifacts_scanned=0,
-            blobs_found=0,
-            blobs_deleted=0,
-            space_reclaimed_bytes=0,
-            symlinks_checked=0,
-            symlinks_fixed=0,
-            items_removed=0,
+            blobs_removed=0,
+            bytes_reclaimed=0,
         )
 
-    result, _ = run_gc(
-        storage_path=storage_path,
-        retention_days=retention_days,
-        dry_run=dry_run,
-        reconcile_only=False,
-        progress_callback=None,
-    )
+    # Build command
+    cmd = ["magpie-ctl", "gc", "--json-output"]
+    if dry_run:
+        cmd.append("--dry-run")
+    if retention_days_override is not None:
+        cmd.extend(["--retention-days", str(retention_days_override)])
+
+    try:
+        result = await run_ctl_command(cmd)
+    except CtlCommandError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
     return GCResponse(
-        dry_run=dry_run,
-        artifacts_scanned=result.artifacts_scanned,
-        blobs_found=result.blobs_found,
-        blobs_deleted=result.blobs_deleted,
-        space_reclaimed_bytes=result.space_reclaimed_bytes,
-        symlinks_checked=result.symlinks_checked,
-        symlinks_fixed=result.symlinks_fixed,
-        items_removed=result.items_removed,
+        dry_run=result.get("dry_run", dry_run),
+        blobs_removed=result.get("blobs_removed", 0),
+        bytes_reclaimed=result.get("bytes_reclaimed", 0),
     )
