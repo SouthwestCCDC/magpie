@@ -23,6 +23,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from magpie.storage.exceptions import InvalidArtifactPathError
+from magpie.storage.paths import normalize_artifact_path
+
 # Pattern for validating hash refs: @ followed by 8 hex characters
 HASH_REF_PATTERN = re.compile(r"^@[0-9a-f]{8}$")
 
@@ -67,11 +70,18 @@ def parse_artifact_ref(artifact_ref: str, default_ref: str = "latest") -> Artifa
     Uses colon (:) as the separator between path and ref. This is the
     canonical format that should be used consistently across all CLI commands.
 
+    Path normalization is applied to handle common input variations:
+    - Leading slashes are stripped
+    - Trailing slashes are stripped
+    - Multiple consecutive slashes are collapsed
+
     Examples:
         "images/ubuntu:latest" -> ArtifactRef(path="images/ubuntu", ref="latest")
         "images/ubuntu:@abc12345" -> ArtifactRef(path="images/ubuntu", ref="@abc12345")
         "images/ubuntu" -> ArtifactRef(path="images/ubuntu", ref="latest")
         "project/images/ubuntu:v1.0" -> ArtifactRef(path="project/images/ubuntu", ref="v1.0")
+        "/images/ubuntu:latest" -> ArtifactRef(path="images/ubuntu", ref="latest")
+        "//images//ubuntu//:latest" -> ArtifactRef(path="images/ubuntu", ref="latest")
 
     Args:
         artifact_ref: Artifact reference string in path:ref format.
@@ -103,7 +113,13 @@ def parse_artifact_ref(artifact_ref: str, default_ref: str = "latest") -> Artifa
         path = artifact_ref
         ref = default_ref
 
-    # Validate path
+    # Normalize path (strip leading/trailing slashes, collapse multiple slashes)
+    try:
+        path = normalize_artifact_path(path)
+    except InvalidArtifactPathError as e:
+        raise ParseError(str(e))
+
+    # Validate path components
     _validate_path(path)
 
     # Validate ref
@@ -117,12 +133,20 @@ def parse_artifact_path(artifact_input: str) -> str:
 
     This is for commands that only accept a path (like `ls`). If the user
     provides a ref (path:ref format), the ref is stripped and only the
-    path is returned. Leading slashes are also normalized away.
+    path is returned. Path normalization is applied to handle common
+    input variations.
+
+    Path normalization handles:
+    - Leading slashes are stripped
+    - Trailing slashes are stripped
+    - Multiple consecutive slashes are collapsed
 
     Examples:
         "images/ubuntu" -> "images/ubuntu"
         "images/ubuntu:latest" -> "images/ubuntu" (ref stripped)
         "/images/ubuntu" -> "images/ubuntu" (leading slash stripped)
+        "images/ubuntu/" -> "images/ubuntu" (trailing slash stripped)
+        "//images//ubuntu//" -> "images/ubuntu" (multiple slashes collapsed)
 
     Args:
         artifact_input: Artifact path or path:ref string.
@@ -139,19 +163,23 @@ def parse_artifact_path(artifact_input: str) -> str:
     # Check for common mistakes
     _validate_no_double_colon(artifact_input)
 
-    # Normalize: strip leading slashes
-    path = artifact_input.lstrip("/")
-
-    # If there's a colon, extract just the path
+    # If there's a colon, extract just the path portion first
+    path = artifact_input
     if ":" in path:
         idx = path.rfind(":")
         path = path[:idx]
         # Note: We silently accept and strip the ref for UX
 
-    if not path:
+    if not path or path.strip("/") == "":
         raise ParseError(f"Empty path in input: {artifact_input}")
 
-    # Validate path
+    # Normalize path (strip leading/trailing slashes, collapse multiple slashes)
+    try:
+        path = normalize_artifact_path(path)
+    except InvalidArtifactPathError as e:
+        raise ParseError(str(e))
+
+    # Validate path components
     _validate_path(path)
 
     return path

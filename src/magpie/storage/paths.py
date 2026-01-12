@@ -2,9 +2,108 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from magpie.storage.exceptions import InvalidArtifactPathError
+
+
+def normalize_artifact_path(path: str) -> str:
+    """Normalize artifact path, stripping leading/trailing slashes.
+
+    This function provides consistent path normalization for artifact paths
+    across CLI commands and server routes. It handles common input variations
+    like leading slashes, trailing slashes, and multiple consecutive slashes.
+
+    Args:
+        path: Raw artifact path string from user input.
+
+    Returns:
+        Normalized path with leading/trailing slashes removed and
+        multiple slashes collapsed to single slashes.
+
+    Raises:
+        InvalidArtifactPathError: If path contains traversal (..) or is empty.
+
+    Examples:
+        >>> normalize_artifact_path("/test/artifact")
+        'test/artifact'
+        >>> normalize_artifact_path("test/artifact/")
+        'test/artifact'
+        >>> normalize_artifact_path("//test//artifact//")
+        'test/artifact'
+        >>> normalize_artifact_path("test/../other")
+        Raises InvalidArtifactPathError
+        >>> normalize_artifact_path("")
+        Raises InvalidArtifactPathError
+    """
+    # Strip leading and trailing slashes
+    path = path.strip("/")
+
+    # Collapse multiple consecutive slashes to single slash
+    path = re.sub(r"/+", "/", path)
+
+    # Check for path traversal attempts using segment-based validation
+    # This avoids false positives for legitimate paths like "v1..2" or "test..file"
+    segments = path.split("/") if path else []
+    if any(segment == ".." for segment in segments):
+        raise InvalidArtifactPathError("Path traversal '..' is not allowed in artifact paths")
+
+    # Check for empty path after normalization
+    if not path:
+        raise InvalidArtifactPathError("Artifact path cannot be empty")
+
+    return path
+
+
+def verify_path_is_descendant(base: Path, artifact_path: str) -> Path:
+    """Verify that a constructed path is strictly a descendant of the base directory.
+
+    This provides defense-in-depth against path traversal attacks by checking
+    the resolved path rather than just token-based validation. After constructing
+    the full path, this function verifies it remains within the base directory.
+
+    Note:
+        This function expects artifact_path to be pre-normalized via
+        normalize_artifact_path(). Paths containing ".." segments should be
+        rejected by normalize_artifact_path before reaching this function.
+        This function provides an additional safety layer to catch any
+        traversal attempts that might bypass token-based validation.
+
+    Args:
+        base: Base storage directory path (must be absolute).
+        artifact_path: Normalized artifact path string (no ".." segments).
+
+    Returns:
+        The resolved full path if it is a valid descendant.
+
+    Raises:
+        InvalidArtifactPathError: If the resolved path escapes the base directory.
+
+    Example:
+        >>> base = Path("/storage/artifacts")
+        >>> verify_path_is_descendant(base, "project/artifact")
+        PosixPath('/storage/artifacts/project/artifact')
+    """
+    # Construct the full path
+    full_path = (base / artifact_path).resolve()
+    base_resolved = base.resolve()
+
+    # Check if the resolved path is under the base directory
+    # Using is_relative_to() which returns True if path is relative to base
+    try:
+        full_path.relative_to(base_resolved)
+    except ValueError:
+        raise InvalidArtifactPathError(
+            f"Path '{artifact_path}' resolves outside the storage directory"
+        )
+
+    # Additional check: ensure it's not the base directory itself
+    if full_path == base_resolved:
+        raise InvalidArtifactPathError("Artifact path cannot resolve to storage root")
+
+    return full_path
+
 
 # Reserved directory names that cannot appear in artifact paths
 RESERVED_SEGMENTS = {"blobs", "metadata", ".magpie"}

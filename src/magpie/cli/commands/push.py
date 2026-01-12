@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 from magpie.cli import CLIContext
 from magpie.cli.progress import transfer_progress
 from magpie.cli.utils import handle_http_error
+from magpie.storage.exceptions import InvalidArtifactPathError
+from magpie.storage.paths import normalize_artifact_path
 
 
 class ProgressFileWrapper:
@@ -116,6 +118,12 @@ def push(
     """
     if not ctx.server:
         raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
+
+    # Normalize artifact path
+    try:
+        artifact_path = normalize_artifact_path(artifact_path)
+    except InvalidArtifactPathError as e:
+        raise click.ClickException(str(e))
 
     # Build query params
     params: dict[str, str] = {}
