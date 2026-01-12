@@ -9,10 +9,12 @@ import pytest
 from magpie.cli.config import (
     DEFAULT_TIMEOUT,
     ClientConfig,
+    DurationParseError,
     get_server,
     get_timeout,
     get_token,
     load_config,
+    parse_duration,
 )
 
 
@@ -256,9 +258,118 @@ class TestGetTimeout:
         assert result == 0.0
 
     def test_env_var_float_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test that env var accepts float values."""
+        """Test that env var accepts float values (truncated to int by parse_duration)."""
         monkeypatch.setenv("MAGPIE_TIMEOUT", "45.5")
 
         result = get_timeout(cli_override=None)
 
-        assert result == 45.5
+        # parse_duration truncates to int, then get_timeout returns as float
+        assert result == 45.0
+
+    def test_env_var_duration_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that env var accepts duration strings like '5m'."""
+        monkeypatch.setenv("MAGPIE_TIMEOUT", "5m")
+
+        result = get_timeout(cli_override=None)
+
+        assert result == 300.0
+
+    def test_env_var_compound_duration(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that env var accepts compound duration strings like '1h30m'."""
+        monkeypatch.setenv("MAGPIE_TIMEOUT", "1h30m")
+
+        result = get_timeout(cli_override=None)
+
+        assert result == 5400.0
+
+
+class TestParseDuration:
+    """Tests for parse_duration function."""
+
+    def test_plain_seconds(self) -> None:
+        """Test parsing plain seconds."""
+        assert parse_duration("30") == 30
+        assert parse_duration("3600") == 3600
+        assert parse_duration("0") == 0
+
+    def test_seconds_with_unit(self) -> None:
+        """Test parsing seconds with 's' suffix."""
+        assert parse_duration("30s") == 30
+        assert parse_duration("60s") == 60
+        assert parse_duration("0s") == 0
+
+    def test_minutes(self) -> None:
+        """Test parsing minutes."""
+        assert parse_duration("5m") == 300
+        assert parse_duration("30m") == 1800
+        assert parse_duration("1m") == 60
+
+    def test_hours(self) -> None:
+        """Test parsing hours."""
+        assert parse_duration("1h") == 3600
+        assert parse_duration("2h") == 7200
+
+    def test_compound_durations(self) -> None:
+        """Test parsing compound durations like '1h30m'."""
+        assert parse_duration("1h30m") == 5400
+        assert parse_duration("1h30m45s") == 5445
+        assert parse_duration("2h15m") == 8100
+
+    def test_case_insensitive(self) -> None:
+        """Test that duration parsing is case insensitive."""
+        assert parse_duration("5M") == 300
+        assert parse_duration("1H") == 3600
+        assert parse_duration("30S") == 30
+        assert parse_duration("1H30M") == 5400
+
+    def test_float_seconds(self) -> None:
+        """Test parsing float values as plain seconds."""
+        assert parse_duration("45.5") == 45
+        assert parse_duration("100.9") == 100
+
+    def test_whitespace_handling(self) -> None:
+        """Test that leading/trailing whitespace is handled."""
+        assert parse_duration("  30s  ") == 30
+        assert parse_duration("\t5m\n") == 300
+
+    def test_empty_string_raises(self) -> None:
+        """Test that empty string raises DurationParseError."""
+        with pytest.raises(DurationParseError, match="Empty duration string"):
+            parse_duration("")
+
+    def test_whitespace_only_raises(self) -> None:
+        """Test that whitespace-only string raises DurationParseError."""
+        with pytest.raises(DurationParseError, match="Empty duration string"):
+            parse_duration("   ")
+
+    def test_invalid_format_raises(self) -> None:
+        """Test that invalid formats raise DurationParseError."""
+        with pytest.raises(DurationParseError, match="Invalid duration format"):
+            parse_duration("5x")
+
+        with pytest.raises(DurationParseError, match="Invalid duration format"):
+            parse_duration("abc")
+
+        with pytest.raises(DurationParseError, match="Invalid duration format"):
+            parse_duration("1d")  # days not supported
+
+    def test_mixed_invalid_raises(self) -> None:
+        """Test that mixed valid/invalid formats raise DurationParseError."""
+        with pytest.raises(DurationParseError, match="Invalid duration format"):
+            parse_duration("1h30x")
+
+        with pytest.raises(DurationParseError, match="Invalid duration format"):
+            parse_duration("5m abc")
+
+    def test_negative_plain_seconds_raises(self) -> None:
+        """Test that negative plain seconds raise DurationParseError."""
+        with pytest.raises(DurationParseError, match="Negative durations are not allowed"):
+            parse_duration("-30")
+
+        with pytest.raises(DurationParseError, match="Negative durations are not allowed"):
+            parse_duration("-100")
+
+    def test_negative_float_seconds_raises(self) -> None:
+        """Test that negative float seconds raise DurationParseError."""
+        with pytest.raises(DurationParseError, match="Negative durations are not allowed"):
+            parse_duration("-45.5")

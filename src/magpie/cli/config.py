@@ -7,6 +7,7 @@ variable overrides. Precedence: env vars > config file > defaults.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -121,6 +122,69 @@ def get_token(
 # Default timeout in seconds (10 minutes) for large file uploads
 DEFAULT_TIMEOUT = 600.0
 
+# Pattern for parsing duration strings like "30s", "5m", "1h", "1h30m"
+# Matches one or more groups of: number followed by unit (s/m/h)
+_DURATION_PATTERN = re.compile(r"^(\d+[smh])+$", re.IGNORECASE)
+_DURATION_COMPONENT = re.compile(r"(\d+)([smh])", re.IGNORECASE)
+
+
+class DurationParseError(ValueError):
+    """Raised when a duration string cannot be parsed."""
+
+
+def parse_duration(value: str) -> int:
+    """Parse a duration string to seconds.
+
+    Supports human-readable duration formats:
+    - "30s" -> 30 seconds
+    - "5m" -> 300 seconds
+    - "1h" -> 3600 seconds
+    - "1h30m" -> 5400 seconds (compound durations)
+    - "3600" -> 3600 seconds (plain number = seconds)
+
+    Args:
+        value: Duration string or plain number in seconds.
+
+    Returns:
+        Duration in seconds as an integer.
+
+    Raises:
+        DurationParseError: If the value cannot be parsed.
+    """
+    value = value.strip()
+    if not value:
+        raise DurationParseError("Empty duration string")
+
+    # Try plain number first (seconds)
+    try:
+        seconds = int(float(value))
+    except ValueError:
+        pass
+    else:
+        if seconds < 0:
+            raise DurationParseError("Negative durations are not allowed")
+        return seconds
+
+    # Try duration pattern (e.g., "30s", "5m", "1h", "1h30m")
+    if not _DURATION_PATTERN.match(value):
+        raise DurationParseError(
+            f"Invalid duration format: {value!r}. "
+            "Expected formats: 30s, 5m, 1h, 1h30m, or plain seconds."
+        )
+
+    total_seconds = 0
+    for match in _DURATION_COMPONENT.finditer(value):
+        amount = int(match.group(1))
+        unit = match.group(2).lower()
+        if unit == "s":
+            total_seconds += amount
+        elif unit == "m":
+            total_seconds += amount * 60
+        elif unit == "h":
+            total_seconds += amount * 3600
+
+    return total_seconds
+
 
 def get_timeout(cli_override: float | None = None) -> float:
     """Get HTTP client timeout with proper precedence.
@@ -131,6 +195,9 @@ def get_timeout(cli_override: float | None = None) -> float:
     from the config file. This ensures long-lived global configuration cannot
     silently affect network behavior; only explicit CLI flags or the
     MAGPIE_TIMEOUT environment variable can override the default.
+
+    The MAGPIE_TIMEOUT environment variable supports human-readable duration
+    formats: "30s", "5m", "1h", "1h30m", or plain seconds like "3600".
 
     Args:
         cli_override: Value from --timeout CLI option.
@@ -144,8 +211,8 @@ def get_timeout(cli_override: float | None = None) -> float:
     env_timeout = os.environ.get("MAGPIE_TIMEOUT")
     if env_timeout:
         try:
-            return float(env_timeout)
-        except ValueError:
+            return float(parse_duration(env_timeout))
+        except DurationParseError:
             # Invalid env var value, fall back to default
             pass
 
