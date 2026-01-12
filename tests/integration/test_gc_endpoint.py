@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import io
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -111,12 +111,28 @@ def _upload_artifact(
 class TestGCEndpointAuth:
     """Tests for GC endpoint authentication and authorization."""
 
-    def test_gc_requires_admin_scope(self, client: TestClient, admin_token: str) -> None:
+    def test_gc_requires_admin_scope(
+        self, client: TestClient, admin_token: str, test_config: MagpieSettings
+    ) -> None:
         """GC endpoint requires admin scope."""
-        response = client.post(
-            "/api/v1/gc",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
+        # Create storage so subprocess would be called
+        test_config.storage_path.mkdir(parents=True, exist_ok=True)
+
+        mock_result = {
+            "dry_run": False,
+            "blobs_removed": 0,
+            "bytes_reclaimed": 0,
+            "errors": [],
+        }
+
+        with patch(
+            "magpie.server.routes.gc.run_ctl_command",
+            new=AsyncMock(return_value=mock_result),
+        ):
+            response = client.post(
+                "/api/v1/gc",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
 
         assert response.status_code == 200
 
@@ -147,315 +163,188 @@ class TestGCEndpointAuth:
 
 
 class TestGCEndpointFunctionality:
-    """Tests for GC endpoint functionality."""
+    """Tests for GC endpoint functionality.
+
+    Note: The GC endpoint now shells out to magpie-ctl, so we mock the subprocess
+    call to test endpoint behavior without requiring the CLI to be installed.
+    """
 
     def test_gc_dry_run_returns_preview(self, client: TestClient, admin_token: str) -> None:
         """GC with dry_run returns preview without modification."""
-        # Upload an artifact first
-        _upload_artifact(client, "gc-test/artifact", b"test content")
+        mock_result = {
+            "dry_run": True,
+            "blobs_removed": 0,
+            "bytes_reclaimed": 0,
+            "errors": [],
+        }
 
-        response = client.post(
-            "/api/v1/gc",
-            headers={"Authorization": f"Bearer {admin_token}"},
-            params={"dry_run": "true"},
-        )
+        with patch(
+            "magpie.server.routes.gc.run_ctl_command",
+            new=AsyncMock(return_value=mock_result),
+        ):
+            response = client.post(
+                "/api/v1/gc",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                params={"dry_run": "true"},
+            )
 
         assert response.status_code == 200
         data = response.json()
         assert data["dry_run"] is True
-        assert "artifacts_scanned" in data
-        assert "blobs_found" in data
-        assert "blobs_deleted" in data
-        assert "space_reclaimed_bytes" in data
+        assert "blobs_removed" in data
+        assert "bytes_reclaimed" in data
 
     def test_gc_returns_zero_for_tagged_blobs(self, client: TestClient, admin_token: str) -> None:
-        """GC returns zero deleted blobs when all blobs are tagged."""
-        # Upload artifact (auto-tagged as "latest")
-        _upload_artifact(client, "gc-test/tagged", b"tagged content")
+        """GC returns zero removed blobs when all blobs are tagged."""
+        mock_result = {
+            "dry_run": False,
+            "blobs_removed": 0,
+            "bytes_reclaimed": 0,
+            "errors": [],
+        }
 
-        response = client.post(
-            "/api/v1/gc",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        # Should not delete any blobs since they're all tagged
-        assert data["blobs_deleted"] == 0
-
-    def test_gc_scans_artifacts(self, client: TestClient, admin_token: str) -> None:
-        """GC scans uploaded artifacts."""
-        # Upload multiple artifacts
-        _upload_artifact(client, "gc-test/a1", b"content a1")
-        _upload_artifact(client, "gc-test/a2", b"content a2")
-        _upload_artifact(client, "gc-test/a3", b"content a3")
-
-        response = client.post(
-            "/api/v1/gc",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
+        with patch(
+            "magpie.server.routes.gc.run_ctl_command",
+            new=AsyncMock(return_value=mock_result),
+        ):
+            response = client.post(
+                "/api/v1/gc",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["artifacts_scanned"] >= 3
-        assert data["blobs_found"] >= 3
+        assert data["blobs_removed"] == 0
 
     def test_gc_response_format(self, client: TestClient, admin_token: str) -> None:
         """GC response includes all expected fields."""
-        response = client.post(
-            "/api/v1/gc",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
+        mock_result = {
+            "dry_run": False,
+            "blobs_removed": 5,
+            "bytes_reclaimed": 1024,
+            "errors": [],
+        }
+
+        with patch(
+            "magpie.server.routes.gc.run_ctl_command",
+            new=AsyncMock(return_value=mock_result),
+        ):
+            response = client.post(
+                "/api/v1/gc",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
 
         assert response.status_code == 200
         data = response.json()
 
         required_fields = {
             "dry_run",
-            "artifacts_scanned",
-            "blobs_found",
-            "blobs_deleted",
-            "space_reclaimed_bytes",
-            "symlinks_checked",
-            "symlinks_fixed",
-            "items_removed",
+            "blobs_removed",
+            "bytes_reclaimed",
         }
         assert required_fields == set(data.keys())
 
-    def test_gc_empty_storage(self, client: TestClient, admin_token: str) -> None:
+    def test_gc_empty_storage(
+        self, client: TestClient, admin_token: str, test_config: MagpieSettings
+    ) -> None:
         """GC on empty storage returns zero counts."""
-        response = client.post(
-            "/api/v1/gc",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
+        # Ensure storage path exists but is empty
+        test_config.storage_path.mkdir(parents=True, exist_ok=True)
+
+        mock_result = {
+            "dry_run": False,
+            "blobs_removed": 0,
+            "bytes_reclaimed": 0,
+            "errors": [],
+        }
+
+        with patch(
+            "magpie.server.routes.gc.run_ctl_command",
+            new=AsyncMock(return_value=mock_result),
+        ):
+            response = client.post(
+                "/api/v1/gc",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["artifacts_scanned"] == 0
-        assert data["blobs_found"] == 0
-        assert data["blobs_deleted"] == 0
-        assert data["space_reclaimed_bytes"] == 0
-        assert data["symlinks_checked"] == 0
-        assert data["symlinks_fixed"] == 0
+        assert data["blobs_removed"] == 0
+        assert data["bytes_reclaimed"] == 0
+
+    def test_gc_reports_blobs_removed(self, client: TestClient, admin_token: str) -> None:
+        """GC reports number of blobs removed."""
+        mock_result = {
+            "dry_run": False,
+            "blobs_removed": 10,
+            "bytes_reclaimed": 5120,
+            "errors": [],
+        }
+
+        with patch(
+            "magpie.server.routes.gc.run_ctl_command",
+            new=AsyncMock(return_value=mock_result),
+        ):
+            response = client.post(
+                "/api/v1/gc",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["blobs_removed"] == 10
+        assert data["bytes_reclaimed"] == 5120
 
 
-class TestGCDeletesUntaggedBlobs:
-    """Tests for GC deleting untagged blobs."""
+class TestGCSubprocessIntegration:
+    """Tests for GC endpoint subprocess error handling."""
 
-    def test_gc_deletes_old_untagged_blob(
+    def test_gc_subprocess_error_returns_500(
         self, client: TestClient, admin_token: str, test_config: MagpieSettings
     ) -> None:
-        """GC deletes untagged blobs older than retention period."""
-        # Upload artifact
-        upload_data = _upload_artifact(client, "gc-delete-test/artifact", b"old content")
-        hash_value = upload_data["hash"]
+        """GC subprocess failure returns 500 error."""
+        # Create storage path so subprocess is called
+        test_config.storage_path.mkdir(parents=True, exist_ok=True)
 
-        # Remove the "latest" tag to make blob untagged
-        client.delete(
-            "/api/v1/artifacts/gc-delete-test/artifact/tags/latest",
-            headers={"X-Magpie-Scope": "write"},
-        )
+        from magpie.server.subprocess_utils import CtlCommandError
 
-        # Manually age the blob by modifying metadata
-        # Metadata files use short hash (first 8 chars) as filename
-        artifact_dir = test_config.storage_path / "gc-delete-test" / "artifact"
-        metadata_file = artifact_dir / "metadata" / f"{hash_value[:8]}.json"
+        with patch(
+            "magpie.server.routes.gc.run_ctl_command",
+            new=AsyncMock(side_effect=CtlCommandError("Command failed")),
+        ):
+            response = client.post(
+                "/api/v1/gc",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
 
-        if metadata_file.exists():
-            import json
+        assert response.status_code == 500
+        assert "Command failed" in response.json()["detail"]
 
-            with open(metadata_file) as f:
-                metadata = json.load(f)
-
-            # Set uploaded_at to 100 days ago
-            old_time = datetime.now(timezone.utc) - timedelta(days=100)
-            metadata["uploaded_at"] = old_time.isoformat()
-
-            with open(metadata_file, "w") as f:
-                json.dump(metadata, f)
-
-        # Run GC
-        response = client.post(
-            "/api/v1/gc",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["blobs_deleted"] >= 1
-        assert data["space_reclaimed_bytes"] > 0
-
-    def test_gc_dry_run_does_not_delete(
+    def test_gc_passes_retention_days_to_subprocess(
         self, client: TestClient, admin_token: str, test_config: MagpieSettings
     ) -> None:
-        """GC dry run does not actually delete blobs."""
-        # Upload artifact
-        upload_data = _upload_artifact(client, "gc-dryrun-test/artifact", b"keep this")
-        hash_value = upload_data["hash"]
+        """GC passes retention_days parameter to subprocess command."""
+        test_config.storage_path.mkdir(parents=True, exist_ok=True)
 
-        # Remove the tag
-        client.delete(
-            "/api/v1/artifacts/gc-dryrun-test/artifact/tags/latest",
-            headers={"X-Magpie-Scope": "write"},
-        )
+        mock_result = {
+            "dry_run": False,
+            "blobs_removed": 0,
+            "bytes_reclaimed": 0,
+            "errors": [],
+        }
 
-        # Age the blob
-        # Metadata files use short hash (first 8 chars) as filename
-        artifact_dir = test_config.storage_path / "gc-dryrun-test" / "artifact"
-        metadata_file = artifact_dir / "metadata" / f"{hash_value[:8]}.json"
+        mock_run = AsyncMock(return_value=mock_result)
 
-        if metadata_file.exists():
-            import json
-
-            with open(metadata_file) as f:
-                metadata = json.load(f)
-
-            old_time = datetime.now(timezone.utc) - timedelta(days=100)
-            metadata["uploaded_at"] = old_time.isoformat()
-
-            with open(metadata_file, "w") as f:
-                json.dump(metadata, f)
-
-        # Run GC in dry run mode
-        response = client.post(
-            "/api/v1/gc",
-            headers={"Authorization": f"Bearer {admin_token}"},
-            params={"dry_run": "true"},
-        )
+        with patch("magpie.server.routes.gc.run_ctl_command", new=mock_run):
+            response = client.post(
+                "/api/v1/gc",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                params={"retention_days": 7},
+            )
 
         assert response.status_code == 200
-        data = response.json()
-        assert data["dry_run"] is True
-        assert data["blobs_deleted"] >= 1
-
-        # Verify blob still exists (blob files use short hash as filename)
-        blob_file = artifact_dir / "blobs" / hash_value[:8]
-        assert blob_file.exists(), "Blob should not be deleted in dry run mode"
-
-
-class TestGCDirectoryCleanup:
-    """Tests for GC endpoint directory cleanup after blob deletion."""
-
-    def test_gc_response_includes_items_removed(self, client: TestClient, admin_token: str) -> None:
-        """GC response includes items_removed field."""
-        response = client.post(
-            "/api/v1/gc",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert "items_removed" in data
-
-    def test_gc_removes_empty_artifact_directories(
-        self, client: TestClient, admin_token: str, test_config: MagpieSettings
-    ) -> None:
-        """GC removes empty artifact directories after deleting all blobs."""
-        # Upload artifact
-        upload_data = _upload_artifact(client, "gc-cleanup-test/artifact", b"cleanup content")
-        hash_value = upload_data["hash"]
-
-        # Remove the "latest" tag to make blob untagged
-        client.delete(
-            "/api/v1/artifacts/gc-cleanup-test/artifact/tags/latest",
-            headers={"X-Magpie-Scope": "write"},
-        )
-
-        # Age the blob
-        artifact_dir = test_config.storage_path / "gc-cleanup-test" / "artifact"
-        metadata_file = artifact_dir / "metadata" / f"{hash_value[:8]}.json"
-
-        if metadata_file.exists():
-            import json
-
-            with open(metadata_file) as f:
-                metadata = json.load(f)
-
-            old_time = datetime.now(timezone.utc) - timedelta(days=100)
-            metadata["uploaded_at"] = old_time.isoformat()
-
-            with open(metadata_file, "w") as f:
-                json.dump(metadata, f)
-
-        # Run GC
-        response = client.post(
-            "/api/v1/gc",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["blobs_deleted"] >= 1
-        assert data["items_removed"] >= 1
-
-        # Artifact directory should be cleaned up
-        assert not artifact_dir.exists()
-
-    def test_gc_dry_run_reports_directories_to_remove(
-        self, client: TestClient, admin_token: str, test_config: MagpieSettings
-    ) -> None:
-        """GC dry run reports directories that would be removed."""
-        # Upload artifact
-        upload_data = _upload_artifact(client, "gc-dryrun-cleanup/artifact", b"dryrun cleanup")
-        hash_value = upload_data["hash"]
-
-        # Remove tag
-        client.delete(
-            "/api/v1/artifacts/gc-dryrun-cleanup/artifact/tags/latest",
-            headers={"X-Magpie-Scope": "write"},
-        )
-
-        # Age the blob
-        artifact_dir = test_config.storage_path / "gc-dryrun-cleanup" / "artifact"
-        metadata_file = artifact_dir / "metadata" / f"{hash_value[:8]}.json"
-
-        if metadata_file.exists():
-            import json
-
-            with open(metadata_file) as f:
-                metadata = json.load(f)
-
-            old_time = datetime.now(timezone.utc) - timedelta(days=100)
-            metadata["uploaded_at"] = old_time.isoformat()
-
-            with open(metadata_file, "w") as f:
-                json.dump(metadata, f)
-
-        # Run GC in dry run mode
-        response = client.post(
-            "/api/v1/gc",
-            headers={"Authorization": f"Bearer {admin_token}"},
-            params={"dry_run": "true"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["dry_run"] is True
-        assert data["items_removed"] >= 1
-
-        # Artifact directory should still exist (dry run)
-        assert artifact_dir.exists()
-
-    def test_gc_preserves_artifact_with_tags(
-        self, client: TestClient, admin_token: str, test_config: MagpieSettings
-    ) -> None:
-        """GC preserves artifact directories when tags still exist."""
-        # Upload artifact (has "latest" tag)
-        _upload_artifact(client, "gc-preserve-test/artifact", b"preserve content")
-
-        artifact_dir = test_config.storage_path / "gc-preserve-test" / "artifact"
-        assert artifact_dir.exists()
-
-        # Run GC
-        response = client.post(
-            "/api/v1/gc",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["blobs_deleted"] == 0
-
-        # Artifact directory should still exist
-        assert artifact_dir.exists()
-        assert (artifact_dir / ".magpie").exists()
+        # Verify command includes retention-days flag
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "--retention-days" in cmd
+        assert "7" in cmd

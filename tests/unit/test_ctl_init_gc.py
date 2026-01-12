@@ -778,3 +778,235 @@ class TestGCDirectoryCleanup:
         assert result.exit_code == 0
         # Should report removed items (directories + manifest files)
         assert "Removed empty items:" in result.output
+
+
+class TestGCJsonOutput:
+    """Tests for GC --json-output flag."""
+
+    def test_gc_json_output_returns_valid_json(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --json-output returns valid JSON."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=[],
+            blob_ages_days={"tagged_hash_abc": 0},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--json-output"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        output = json.loads(result.output.strip())
+        assert "dry_run" in output
+        assert "blobs_removed" in output
+        assert "bytes_reclaimed" in output
+        assert "errors" in output
+
+    def test_gc_json_output_dry_run_shows_correct_flag(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --json-output --dry-run shows dry_run=true."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=["old_untagged_xyz"],
+            blob_ages_days={"tagged_hash_abc": 0, "old_untagged_xyz": 100},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--json-output", "--dry-run"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        output = json.loads(result.output.strip())
+        assert output["dry_run"] is True
+        assert output["blobs_removed"] == 1
+
+    def test_gc_json_output_reports_deleted_blobs(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --json-output reports blobs_removed count."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=["old_untagged_xyz"],
+            blob_ages_days={"tagged_hash_abc": 0, "old_untagged_xyz": 100},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--json-output"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        output = json.loads(result.output.strip())
+        assert output["dry_run"] is False
+        assert output["blobs_removed"] == 1
+        assert output["bytes_reclaimed"] > 0
+
+    def test_gc_json_output_storage_not_found_exits_with_error(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --json-output with missing storage returns JSON error."""
+        # Don't create the storage path
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--json-output"])
+
+        assert result.exit_code == 1
+        output = json.loads(result.output.strip())
+        assert "error" in output
+
+    def test_gc_json_output_no_human_readable_text(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC --json-output doesn't include human-readable summary."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=[],
+            blob_ages_days={"tagged_hash_abc": 0},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc", "--json-output"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "GC Summary:" not in result.output
+        assert "Artifacts scanned:" not in result.output
+
+
+class TestFlushTagCommand:
+    """Tests for flush-tag command."""
+
+    def test_flush_tag_basic(self, cli_runner: CliRunner, test_settings: MagpieSettings) -> None:
+        """flush-tag removes tag from artifacts."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"release": "hash_abc12345"},
+            untagged_hashes=[],
+            blob_ages_days={"hash_abc12345": 0},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["flush-tag", "release"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "Removed tag 'release' from 1 artifact(s)" in result.output
+
+    def test_flush_tag_dry_run(self, cli_runner: CliRunner, test_settings: MagpieSettings) -> None:
+        """flush-tag --dry-run shows preview without modifying."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"release": "hash_abc12345"},
+            untagged_hashes=[],
+            blob_ages_days={"hash_abc12345": 0},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["flush-tag", "release", "--dry-run"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "Would remove tag 'release' from 1 artifact(s)" in result.output
+
+        # Verify tag still exists
+        manifest_file = test_settings.storage_path / "test/artifact/.magpie"
+        manifest_content = json.loads(manifest_file.read_text())
+        assert "release" in manifest_content["tags"]
+
+    def test_flush_tag_json_output(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """flush-tag --json-output returns valid JSON."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"release": "hash_abc12345"},
+            untagged_hashes=[],
+            blob_ages_days={"hash_abc12345": 0},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["flush-tag", "release", "--json-output"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        output = json.loads(result.output.strip())
+        assert output["tag"] == "release"
+        assert output["dry_run"] is False
+        assert output["artifacts_affected"] == 1
+        assert "test/artifact" in output["artifacts"]
+
+    def test_flush_tag_json_output_dry_run(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """flush-tag --json-output --dry-run shows correct flags."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"release": "hash_abc12345"},
+            untagged_hashes=[],
+            blob_ages_days={"hash_abc12345": 0},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["flush-tag", "release", "--json-output", "--dry-run"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        output = json.loads(result.output.strip())
+        assert output["tag"] == "release"
+        assert output["dry_run"] is True
+        assert output["artifacts_affected"] == 1
+
+    def test_flush_tag_nonexistent_tag(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """flush-tag with nonexistent tag returns zero count."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "hash_abc12345"},
+            untagged_hashes=[],
+            blob_ages_days={"hash_abc12345": 0},
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["flush-tag", "nonexistent"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "Removed tag 'nonexistent' from 0 artifact(s)" in result.output
+
+    def test_flush_tag_storage_not_found(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """flush-tag fails if storage path doesn't exist."""
+        # Don't create storage path
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["flush-tag", "release"])
+
+        assert result.exit_code != 0
+        assert "does not exist" in result.output
+
+    def test_flush_tag_json_output_storage_not_found(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """flush-tag --json-output with missing storage returns JSON error."""
+        # Don't create storage path
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["flush-tag", "release", "--json-output"])
+
+        assert result.exit_code == 1
+        output = json.loads(result.output.strip())
+        assert "error" in output
