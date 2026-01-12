@@ -90,8 +90,8 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
             handle_http_error(response, "Flush", ctx.token)
 
         data = response.json()
-        affected_count = data.get("count", 0)
-        affected_artifacts = data.get("affected_artifacts", [])
+        affected_count = data.get("artifacts_affected", 0)
+        affected_artifacts = data.get("artifacts", [])
 
     if dry_run:
         click.echo(f"Would remove tag '{tag_name}' from {affected_count} artifact(s)")

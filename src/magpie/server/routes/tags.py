@@ -7,8 +7,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from magpie.server.deps import get_storage_service, require_admin_scope_header
-from magpie.storage.service import StorageService
+from magpie.server.deps import require_admin_scope_header
+from magpie.server.subprocess_utils import CtlCommandError, run_ctl_command
 
 router = APIRouter()
 
@@ -16,10 +16,10 @@ router = APIRouter()
 class FlushTagResponse(BaseModel):
     """Response model for flush tag operation."""
 
-    tag_name: str
-    affected_artifacts: list[str]
-    count: int
+    tag: str
     dry_run: bool
+    artifacts_affected: int
+    artifacts: list[str]
 
 
 @router.post("/api/v1/tags/{tag_name}/flush")
@@ -33,7 +33,6 @@ async def flush_tag(
         bool,
         Query(description="If true, return preview without actually removing tags"),
     ] = False,
-    storage_service: Annotated[StorageService, Depends(get_storage_service)] = None,
     _admin_scope_check: Annotated[None, Depends(require_admin_scope_header)] = None,
 ) -> FlushTagResponse:
     """Remove a tag from all artifacts globally.
@@ -44,6 +43,8 @@ async def flush_tag(
 
     The confirm_walk_filesystem parameter must be explicitly set to true to
     acknowledge that this operation will scan the entire storage filesystem.
+
+    This endpoint shells out to `magpie-ctl flush-tag` to avoid blocking the event loop.
 
     Args:
         tag_name: Name of the tag to remove globally.
@@ -67,11 +68,19 @@ async def flush_tag(
             ),
         )
 
-    result = storage_service.flush_tag(tag_name, dry_run=dry_run)
+    # Build command
+    cmd = ["magpie-ctl", "flush-tag", tag_name, "--json-output"]
+    if dry_run:
+        cmd.append("--dry-run")
+
+    try:
+        result = await run_ctl_command(cmd)
+    except CtlCommandError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
     return FlushTagResponse(
-        tag_name=result.tag_name,
-        affected_artifacts=result.affected_artifacts,
-        count=result.count,
-        dry_run=dry_run,
+        tag=result.get("tag", tag_name),
+        dry_run=result.get("dry_run", dry_run),
+        artifacts_affected=result.get("artifacts_affected", 0),
+        artifacts=result.get("artifacts", []),
     )
