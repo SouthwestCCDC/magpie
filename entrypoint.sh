@@ -42,13 +42,39 @@ chmod 644 /run/magpie-user
 # below (database check and init) and is automatically released when FD 200 closes at
 # subshell exit. The lock file itself persists on disk as an empty, harmless marker;
 # concurrent entrypoints will block on the lock and serialize correctly rather than deadlocking.
-DB_LOCK_FILE="${MAGPIE_STORAGE_PATH:-/data/artifacts}/.magpie-init.lock"
 
+# Determine the storage path for the lock file. We need a directory that exists and is
+# writable. Check MAGPIE_STORAGE_PATH first, then fall back to /data/artifacts, then /data.
+if [ -n "$MAGPIE_STORAGE_PATH" ] && [ -d "$MAGPIE_STORAGE_PATH" ]; then
+    LOCK_DIR="$MAGPIE_STORAGE_PATH"
+elif [ -d /data/artifacts ]; then
+    LOCK_DIR=/data/artifacts
+elif [ -d /data ]; then
+    LOCK_DIR=/data
+else
+    echo "Error: No valid storage directory found for lock file (tried MAGPIE_STORAGE_PATH, /data/artifacts, /data)" >&2
+    exit 1
+fi
+DB_LOCK_FILE="${LOCK_DIR}/.magpie-init.lock"
+
+# Determine database path: MAGPIE_DATABASE_PATH takes precedence, otherwise derive from storage
+if [ -n "$MAGPIE_DATABASE_PATH" ]; then
+    DB_PATH="$MAGPIE_DATABASE_PATH"
+else
+    DB_PATH="${MAGPIE_STORAGE_PATH:-/data/artifacts}/.magpie.db"
+fi
+
+# Acquire the lock before checking/initializing the database
+# We separate the flock step from the init step to provide clear error messages
+if ! flock -x 200 2>/dev/null; then
+    echo "Error: Failed to acquire database init lock on $DB_LOCK_FILE (file system error or flock unavailable)" >&2
+    exit 1
+fi 200>"$DB_LOCK_FILE"
+
+# Now check and initialize the database (lock is held on FD 200)
 (
-    flock -x 200
-
-    if [ ! -f "${MAGPIE_STORAGE_PATH:-/data/artifacts}/.magpie.db" ]; then
-        echo "Database not found, running magpie-ctl init..."
+    if [ ! -f "$DB_PATH" ]; then
+        echo "Database not found at $DB_PATH, running magpie-ctl init..."
         INIT_STATUS=0
         if [ "$RUN_UID" = "0" ]; then
             /app/.venv/bin/python -m magpie.ctl init || INIT_STATUS=$?
@@ -61,13 +87,12 @@ DB_LOCK_FILE="${MAGPIE_STORAGE_PATH:-/data/artifacts}/.magpie-init.lock"
             exit "$INIT_STATUS"
         fi
     fi
-) 200>"$DB_LOCK_FILE"
-INIT_LOCK_STATUS=$?
+) 200>&-
+INIT_STATUS=$?
 
-# The subshell exits with the init status; re-check and propagate to main script
-# (set -e doesn't automatically propagate subshell exit codes)
-if [ "$INIT_LOCK_STATUS" -ne 0 ]; then
-    exit "$INIT_LOCK_STATUS"
+# Propagate init failure to main script (set -e doesn't automatically propagate subshell exit codes)
+if [ "$INIT_STATUS" -ne 0 ]; then
+    exit "$INIT_STATUS"
 fi
 
 # Run as root if UID is 0 (no privilege drop needed)
