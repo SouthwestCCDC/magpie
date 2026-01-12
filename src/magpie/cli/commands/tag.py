@@ -47,7 +47,7 @@ def tag(ctx: CLIContext, artifact_ref: str, tag_name: str) -> None:
         if response.status_code == 404:
             raise click.ClickException(f"Artifact not found: {parsed.path}:{parsed.ref}")
         if response.status_code != 200:
-            handle_http_error(response, "Tag creation", ctx.token)
+            handle_http_error(response, "Tag", ctx.token)
 
         data = response.json()
 

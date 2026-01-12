@@ -39,6 +39,6 @@ def untag(ctx: CLIContext, artifact_path: str, tag_name: str) -> None:
         if response.status_code == 404:
             raise click.ClickException(f"Tag not found: {artifact_path}:{tag_name}")
         if response.status_code != 204:
-            handle_http_error(response, "Tag removal", ctx.token)
+            handle_http_error(response, "Untag", ctx.token)
 
     click.echo(f"Removed tag '{tag_name}' from {artifact_path}")
