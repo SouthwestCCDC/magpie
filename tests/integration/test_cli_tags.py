@@ -144,9 +144,7 @@ class TestTagCommand:
 
     def test_tag_requires_server(self, cli_runner_no_config: CliRunner) -> None:
         """Tag without server configured fails with error."""
-        result = cli_runner_no_config.invoke(
-            cli, ["tag", "test/artifact:latest", "--as", "v1.0"]
-        )
+        result = cli_runner_no_config.invoke(cli, ["tag", "test/artifact:latest", "--as", "v1.0"])
 
         assert result.exit_code != 0
         assert "No server configured" in result.output

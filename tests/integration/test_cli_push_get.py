@@ -285,9 +285,7 @@ class TestPushCommand:
             assert "Duplicate:" in result2.output
             assert expected_hash in result2.output
 
-    def test_push_requires_server(
-        self, cli_runner_no_config: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_push_requires_server(self, cli_runner_no_config: CliRunner, tmp_path: Path) -> None:
         """Push without server configured fails with error."""
         test_file = tmp_path / "no_server.bin"
         test_file.write_bytes(b"content")
@@ -603,9 +601,7 @@ class TestGetCommand:
         expected_url = "/artifacts/tagref/gettest/latest"
         assert urls_requested[0] == expected_url
 
-    def test_get_requires_server(
-        self, cli_runner_no_config: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_get_requires_server(self, cli_runner_no_config: CliRunner, tmp_path: Path) -> None:
         """Get without server configured fails with error."""
         output_file = tmp_path / "noserver.bin"
 
