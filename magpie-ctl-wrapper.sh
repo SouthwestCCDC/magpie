@@ -13,17 +13,23 @@
 
 set -e
 
-REAL_CTL="/app/.venv/bin/python -m magpie.ctl"
+# Use array to avoid word splitting issues with multi-word command
+REAL_CTL=(/app/.venv/bin/python -m magpie.ctl)
 
 if [ -f /run/magpie-user ]; then
     EXPECTED_UID=$(cut -d: -f1 /run/magpie-user)
     CURRENT_UID=$(id -u)
 
     if [ "$CURRENT_UID" = "$EXPECTED_UID" ]; then
-        exec $REAL_CTL "$@"
+        exec "${REAL_CTL[@]}" "$@"
     elif [ "$CURRENT_UID" = "0" ]; then
-        exec gosu "$(cat /run/magpie-user)" $REAL_CTL "$@"
+        if command -v gosu >/dev/null 2>&1; then
+            exec gosu "$(cat /run/magpie-user)" "${REAL_CTL[@]}" "$@"
+        else
+            echo "magpie-ctl-wrapper: gosu is required to drop privileges from root but was not found in PATH" >&2
+            exit 1
+        fi
     fi
 fi
 
-exec $REAL_CTL "$@"
+exec "${REAL_CTL[@]}" "$@"
