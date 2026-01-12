@@ -42,21 +42,18 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
         magpie gc
     """
     if not ctx.server:
+        msg = "No server configured. Use --server or set MAGPIE_SERVER."
         if is_json_output():
-            output_error(
-                ErrorCode.CONFIG_ERROR, "No server configured. Use --server or set MAGPIE_SERVER."
-            )
-        raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+        else:
+            raise click.ClickException(msg)
 
     if not ctx.token:
+        msg = "No token configured. Use --token or set MAGPIE_TOKEN. Admin token required."
         if is_json_output():
-            output_error(
-                ErrorCode.CONFIG_ERROR,
-                "No token configured. Use --token or set MAGPIE_TOKEN. Admin token required.",
-            )
-        raise click.ClickException(
-            "No token configured. Use --token or set MAGPIE_TOKEN. Admin token required."
-        )
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+        else:
+            raise click.ClickException(msg)
 
     with ctx.get_client() as client:
         if ctx.debug:
@@ -73,12 +70,14 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
             msg = f"Authentication failed. Check your token (token: {mask_token(ctx.token)})"
             if is_json_output():
                 output_error(ErrorCode.UNAUTHORIZED, msg)
-            raise click.ClickException(msg)
+            else:
+                raise click.ClickException(msg)
         if response.status_code == 403:
             msg = f"Admin token required for garbage collection (token: {mask_token(ctx.token)})"
             if is_json_output():
                 output_error(ErrorCode.FORBIDDEN, msg)
-            raise click.ClickException(msg)
+            else:
+                raise click.ClickException(msg)
         if response.status_code not in (200,):
             if is_json_output():
                 try:
@@ -86,7 +85,8 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
                 except Exception:
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
-            handle_http_error(response, "GC", ctx.token)
+            else:
+                handle_http_error(response, "GC", ctx.token)
 
         data = response.json()
 

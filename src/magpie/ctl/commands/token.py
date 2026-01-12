@@ -61,7 +61,8 @@ def token_create(ctx: CTLContext, name: str, scope: str) -> None:
     except ValueError as e:
         if is_json_output():
             output_error(ErrorCode.CONFLICT, str(e))
-        raise click.ClickException(str(e))
+        else:
+            raise click.ClickException(str(e))
 
     # JSON output
     if is_json_output():
@@ -191,6 +192,8 @@ def token_revoke(ctx: CTLContext, name: str) -> None:
         # Human output
         click.echo(f"Token '{name}' has been revoked.")
     else:
+        msg = f"Token not found: {name}"
         if is_json_output():
-            output_error(ErrorCode.NOT_FOUND, f"Token not found: {name}")
-        raise click.ClickException(f"Token not found: {name}")
+            output_error(ErrorCode.NOT_FOUND, msg)
+        else:
+            raise click.ClickException(msg)

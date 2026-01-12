@@ -84,9 +84,11 @@ def gc(
     )
 
     if not storage_path.exists():
+        msg = f"Storage path does not exist: {storage_path}"
         if is_json_output():
-            output_error(ErrorCode.IO_ERROR, f"Storage path does not exist: {storage_path}")
-        raise click.ClickException(f"Storage path does not exist: {storage_path}")
+            output_error(ErrorCode.IO_ERROR, msg)
+        else:
+            raise click.ClickException(msg)
 
     if ctx.debug:
         click.echo(f"Storage path: {storage_path}", err=True)

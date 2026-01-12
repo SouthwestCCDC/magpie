@@ -60,11 +60,11 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
         magpie flush-tag latest --force --yes
     """
     if not ctx.server:
+        msg = "No server configured. Use --server or set MAGPIE_SERVER."
         if is_json_output():
-            output_error(
-                ErrorCode.CONFIG_ERROR, "No server configured. Use --server or set MAGPIE_SERVER."
-            )
-        raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+        else:
+            raise click.ClickException(msg)
 
     # Refuse to flush protected tags without --force
     if tag_name.lower() in PROTECTED_TAGS and not force:
@@ -74,7 +74,8 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
         )
         if is_json_output():
             output_error(ErrorCode.VALIDATION_ERROR, msg)
-        raise click.ClickException(msg)
+        else:
+            raise click.ClickException(msg)
 
     # In JSON mode, require --yes to skip confirmation (no interactive prompts)
     if is_json_output() and not dry_run and not yes:
@@ -112,7 +113,8 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
                 except Exception:
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
-            handle_http_error(response, "Flush", ctx.token)
+            else:
+                handle_http_error(response, "Flush", ctx.token)
         if response.status_code not in (200,):
             if is_json_output():
                 try:
@@ -120,7 +122,8 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
                 except Exception:
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
-            handle_http_error(response, "Flush", ctx.token)
+            else:
+                handle_http_error(response, "Flush", ctx.token)
 
         data = response.json()
         affected_count = data.get("count", 0)
