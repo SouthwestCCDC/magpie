@@ -72,28 +72,18 @@ if ! flock -x 200 2>/dev/null; then
 fi 200>"$DB_LOCK_FILE"
 
 # Now check and initialize the database (lock is held on FD 200)
+# The subshell closes FD 200 (releasing the lock) after the init completes.
+# If the subshell exits non-zero, set -e propagates the failure to the main script.
 (
     if [ ! -f "$DB_PATH" ]; then
         echo "Database not found at $DB_PATH, running magpie-ctl init..."
-        INIT_STATUS=0
         if [ "$RUN_UID" = "0" ]; then
-            /app/.venv/bin/python -m magpie.ctl init || INIT_STATUS=$?
+            /app/.venv/bin/python -m magpie.ctl init
         else
-            gosu "$RUN_UID:$RUN_GID" /app/.venv/bin/python -m magpie.ctl init || INIT_STATUS=$?
-        fi
-
-        if [ "$INIT_STATUS" -ne 0 ]; then
-            echo "Error: magpie-ctl init failed with exit code $INIT_STATUS" >&2
-            exit "$INIT_STATUS"
+            gosu "$RUN_UID:$RUN_GID" /app/.venv/bin/python -m magpie.ctl init
         fi
     fi
 ) 200>&-
-INIT_STATUS=$?
-
-# Propagate init failure to main script (set -e doesn't automatically propagate subshell exit codes)
-if [ "$INIT_STATUS" -ne 0 ]; then
-    exit "$INIT_STATUS"
-fi
 
 # Run as root if UID is 0 (no privilege drop needed)
 if [ "$RUN_UID" = "0" ]; then
