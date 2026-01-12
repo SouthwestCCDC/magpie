@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, BinaryIO
 import click
 
 if TYPE_CHECKING:
-    import httpx
     from rich.progress import Progress, TaskID
 
 from magpie.cli import CLIContext

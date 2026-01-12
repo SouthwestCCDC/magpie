@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import click
-
-if TYPE_CHECKING:
-    import httpx
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref

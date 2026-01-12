@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import click
-
-if TYPE_CHECKING:
-    import httpx
 
 from magpie.cli import CLIContext
 from magpie.cli.utils import handle_http_error
