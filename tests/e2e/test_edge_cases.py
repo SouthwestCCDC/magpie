@@ -352,3 +352,76 @@ class TestLargeArtifact:
 
         assert response.status_code == 200
         assert response.json()["hash"] == expected_hash
+
+
+@pytest.mark.e2e
+@pytest.mark.slow
+class TestDirectoryBrowsing:
+    """Tests for directory browsing on artifact paths.
+
+    Verifies that Caddy serves directory listings for /artifacts/ paths,
+    enabling discovery and debugging of stored artifacts.
+    """
+
+    def test_browse_artifacts_root(
+        self,
+        http_client: httpx.Client,
+        authenticated_client: httpx.Client,
+        test_artifact_content: bytes,
+    ) -> None:
+        """Verify browsing /artifacts/ returns directory listing."""
+        # Upload an artifact first to ensure there's something to list
+        authenticated_client.post(
+            "/api/v1/upload/e2e-tests/browse-test",
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+        )
+
+        # Browse the artifacts root directory
+        response = http_client.get("/artifacts/")
+
+        assert response.status_code == 200
+        # Caddy's browse directive returns HTML
+        assert "text/html" in response.headers.get("content-type", "")
+        # Should contain directory listing indicators
+        body = response.text
+        # Caddy's directory listing contains the path somewhere
+        assert "artifacts" in body.lower() or "Index of" in body
+
+    def test_browse_artifact_path_shows_contents(
+        self,
+        http_client: httpx.Client,
+        authenticated_client: httpx.Client,
+        test_artifact_content: bytes,
+    ) -> None:
+        """Verify browsing artifact directory shows blobs, metadata, etc."""
+        # Upload an artifact
+        upload_response = authenticated_client.post(
+            "/api/v1/upload/e2e-tests/browse-path-test",
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+        )
+        assert upload_response.status_code == 200
+
+        # Browse the specific artifact directory
+        response = http_client.get("/artifacts/e2e-tests/browse-path-test/")
+
+        assert response.status_code == 200
+        assert "text/html" in response.headers.get("content-type", "")
+        body = response.text
+        # Directory should contain blobs, metadata dirs and .magpie manifest
+        # At least one of these should appear in the listing
+        assert (
+            "blobs" in body.lower()
+            or "metadata" in body.lower()
+            or "magpie" in body.lower()
+            or "latest" in body.lower()  # symlink to latest version
+        )
+
+    def test_browse_nonexistent_path_returns_404(
+        self,
+        http_client: httpx.Client,
+    ) -> None:
+        """Verify browsing nonexistent path returns 404."""
+        response = http_client.get("/artifacts/nonexistent/path/that/does/not/exist/")
+
+        # Should get 404 for nonexistent directory
+        assert response.status_code == 404
