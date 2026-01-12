@@ -34,6 +34,11 @@ if [ -f /run/magpie-user ]; then
         exit 1
     fi
 
+    # Normalize UID/GID by stripping leading zeros to ensure consistent comparison
+    # (e.g., "007" becomes "7" to match `id -u` output)
+    EXPECTED_UID=$((10#$EXPECTED_UID))
+    EXPECTED_GID=$((10#$EXPECTED_GID))
+
     CURRENT_UID=$(id -u)
 
     if [ "$CURRENT_UID" = "$EXPECTED_UID" ]; then
@@ -43,6 +48,7 @@ if [ -f /run/magpie-user ]; then
             exec gosu "$EXPECTED_UID:$EXPECTED_GID" "${REAL_CTL[@]}" "$@"
         else
             echo "magpie-ctl-wrapper: gosu is required to drop privileges from root but was not found in PATH" >&2
+            echo "magpie-ctl-wrapper: ensure gosu is installed in the container image (e.g., 'apt-get install gosu')" >&2
             exit 1
         fi
     fi

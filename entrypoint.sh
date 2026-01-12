@@ -92,10 +92,20 @@ fi
 
     if [ ! -f "$DB_PATH" ]; then
         echo "Database not found at $DB_PATH, running magpie-ctl init..."
+        init_status=0
         if [ "$RUN_UID" = "0" ]; then
-            /app/.venv/bin/python -m magpie.ctl init
+            /app/.venv/bin/python -m magpie.ctl init || init_status=$?
         else
-            gosu "$RUN_UID:$RUN_GID" /app/.venv/bin/python -m magpie.ctl init
+            gosu "$RUN_UID:$RUN_GID" /app/.venv/bin/python -m magpie.ctl init || init_status=$?
+        fi
+        if [ "$init_status" -ne 0 ]; then
+            echo "Error: magpie-ctl init failed with exit code $init_status" >&2
+            # Remove potentially incomplete database file to allow retry on next start
+            if [ -f "$DB_PATH" ]; then
+                echo "Removing incomplete database file at $DB_PATH" >&2
+                rm -f "$DB_PATH"
+            fi
+            exit 1
         fi
     fi
 ) 200>"$DB_LOCK_FILE"
