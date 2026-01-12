@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from magpie.storage.exceptions import InvalidArtifactPathError
-from magpie.storage.paths import check_artifact_nesting, validate_artifact_path
+from magpie.storage.paths import (
+    check_artifact_nesting,
+    normalize_artifact_path,
+    validate_artifact_path,
+)
 
 
 class TestValidateArtifactPath:
@@ -181,3 +185,90 @@ class TestCheckArtifactNesting:
 
         # Should allow sibling
         check_artifact_nesting(tmp_path, "org/team1/project2")
+
+
+class TestNormalizeArtifactPath:
+    """Tests for normalize_artifact_path function."""
+
+    def test_simple_path_unchanged(self) -> None:
+        """Simple path without special characters is unchanged."""
+        assert normalize_artifact_path("test/artifact") == "test/artifact"
+
+    def test_single_component_path(self) -> None:
+        """Single component path is unchanged."""
+        assert normalize_artifact_path("artifact") == "artifact"
+
+    def test_strip_leading_slash(self) -> None:
+        """Leading slash is stripped."""
+        assert normalize_artifact_path("/test/artifact") == "test/artifact"
+
+    def test_strip_trailing_slash(self) -> None:
+        """Trailing slash is stripped."""
+        assert normalize_artifact_path("test/artifact/") == "test/artifact"
+
+    def test_strip_both_slashes(self) -> None:
+        """Both leading and trailing slashes are stripped."""
+        assert normalize_artifact_path("/test/artifact/") == "test/artifact"
+
+    def test_collapse_multiple_slashes(self) -> None:
+        """Multiple consecutive slashes are collapsed to single slash."""
+        assert normalize_artifact_path("test//artifact") == "test/artifact"
+
+    def test_collapse_many_slashes(self) -> None:
+        """Many consecutive slashes are collapsed."""
+        assert normalize_artifact_path("test////artifact") == "test/artifact"
+
+    def test_combined_normalization(self) -> None:
+        """All normalizations applied together."""
+        assert normalize_artifact_path("//test//artifact//") == "test/artifact"
+
+    def test_complex_path_normalization(self) -> None:
+        """Complex path with multiple issues is normalized."""
+        assert normalize_artifact_path("///foo///bar///baz///") == "foo/bar/baz"
+
+    def test_reject_path_traversal_double_dot(self) -> None:
+        """Path traversal with .. is rejected."""
+        with pytest.raises(InvalidArtifactPathError, match="Path traversal.*not allowed"):
+            normalize_artifact_path("test/../other")
+
+    def test_reject_path_traversal_at_start(self) -> None:
+        """Path traversal at start is rejected."""
+        with pytest.raises(InvalidArtifactPathError, match="Path traversal.*not allowed"):
+            normalize_artifact_path("../test")
+
+    def test_reject_path_traversal_at_end(self) -> None:
+        """Path traversal at end is rejected."""
+        with pytest.raises(InvalidArtifactPathError, match="Path traversal.*not allowed"):
+            normalize_artifact_path("test/..")
+
+    def test_reject_only_double_dot(self) -> None:
+        """Just .. is rejected."""
+        with pytest.raises(InvalidArtifactPathError, match="Path traversal.*not allowed"):
+            normalize_artifact_path("..")
+
+    def test_reject_empty_path(self) -> None:
+        """Empty path is rejected."""
+        with pytest.raises(InvalidArtifactPathError, match="cannot be empty"):
+            normalize_artifact_path("")
+
+    def test_reject_only_slashes(self) -> None:
+        """Path with only slashes is rejected (becomes empty after strip)."""
+        with pytest.raises(InvalidArtifactPathError, match="cannot be empty"):
+            normalize_artifact_path("///")
+
+    def test_reject_only_leading_slash(self) -> None:
+        """Path with only leading slash is rejected."""
+        with pytest.raises(InvalidArtifactPathError, match="cannot be empty"):
+            normalize_artifact_path("/")
+
+    def test_deeply_nested_path(self) -> None:
+        """Deeply nested path is normalized correctly."""
+        assert normalize_artifact_path("/a/b/c/d/e/") == "a/b/c/d/e"
+
+    def test_path_with_dots_allowed(self) -> None:
+        """Single dots in path components are allowed (not traversal)."""
+        # This tests that single dots within names are ok (e.g., version numbers)
+        # The ".." traversal is blocked, but "v1.0" or "file.tar" should work
+        # However, note that validate_artifact_path blocks segments starting with "."
+        # The normalize function only checks for ".." traversal
+        assert normalize_artifact_path("v1.0/artifact") == "v1.0/artifact"

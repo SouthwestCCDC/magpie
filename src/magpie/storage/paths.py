@@ -2,9 +2,56 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from magpie.storage.exceptions import InvalidArtifactPathError
+
+
+def normalize_artifact_path(path: str) -> str:
+    """Normalize artifact path, stripping leading/trailing slashes.
+
+    This function provides consistent path normalization for artifact paths
+    across CLI commands and server routes. It handles common input variations
+    like leading slashes, trailing slashes, and multiple consecutive slashes.
+
+    Args:
+        path: Raw artifact path string from user input.
+
+    Returns:
+        Normalized path with leading/trailing slashes removed and
+        multiple slashes collapsed to single slashes.
+
+    Raises:
+        InvalidArtifactPathError: If path contains traversal (..) or is empty.
+
+    Examples:
+        >>> normalize_artifact_path("/test/artifact")
+        'test/artifact'
+        >>> normalize_artifact_path("test/artifact/")
+        'test/artifact'
+        >>> normalize_artifact_path("//test//artifact//")
+        'test/artifact'
+        >>> normalize_artifact_path("test/../other")
+        Raises InvalidArtifactPathError
+        >>> normalize_artifact_path("")
+        Raises InvalidArtifactPathError
+    """
+    # Strip leading and trailing slashes
+    path = path.strip("/")
+
+    # Collapse multiple consecutive slashes to single slash
+    path = re.sub(r"/+", "/", path)
+
+    # Check for path traversal attempts
+    if ".." in path:
+        raise InvalidArtifactPathError("Path traversal '..' is not allowed in artifact paths")
+
+    # Check for empty path after normalization
+    if not path:
+        raise InvalidArtifactPathError("Artifact path cannot be empty")
+
+    return path
 
 # Reserved directory names that cannot appear in artifact paths
 RESERVED_SEGMENTS = {"blobs", "metadata", ".magpie"}

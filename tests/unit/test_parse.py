@@ -93,10 +93,12 @@ class TestParseArtifactRefErrors:
         with pytest.raises(ParseError, match="Empty ref after colon"):
             parse_artifact_ref("images/ubuntu:")
 
-    def test_double_slash_in_path_raises_error(self) -> None:
-        """Double slash in path raises ParseError."""
-        with pytest.raises(ParseError, match="Empty component"):
-            parse_artifact_ref("images//ubuntu:latest")
+    def test_double_slash_in_path_is_normalized(self) -> None:
+        """Double slash in path is normalized (collapsed to single slash)."""
+        # With path normalization, double slashes are collapsed rather than rejected
+        result = parse_artifact_ref("images//ubuntu:latest")
+        assert result.path == "images/ubuntu"
+        assert result.ref == "latest"
 
     def test_invalid_path_component_starting_char(self) -> None:
         """Path component starting with non-alphanumeric raises error."""
@@ -278,3 +280,78 @@ class TestParseEdgeCases:
         result = parse_artifact_ref("app/release:v1.2.3-rc1")
         assert result.path == "app/release"
         assert result.ref == "v1.2.3-rc1"
+
+
+class TestParsePathNormalization:
+    """Tests for path normalization in parse functions."""
+
+    def test_parse_ref_strips_leading_slash(self) -> None:
+        """parse_artifact_ref strips leading slash from path."""
+        result = parse_artifact_ref("/images/ubuntu:latest")
+        assert result.path == "images/ubuntu"
+        assert result.ref == "latest"
+
+    def test_parse_ref_strips_trailing_slash(self) -> None:
+        """parse_artifact_ref strips trailing slash from path."""
+        result = parse_artifact_ref("images/ubuntu/:latest")
+        assert result.path == "images/ubuntu"
+        assert result.ref == "latest"
+
+    def test_parse_ref_strips_both_slashes(self) -> None:
+        """parse_artifact_ref strips both leading and trailing slashes."""
+        result = parse_artifact_ref("/images/ubuntu/:latest")
+        assert result.path == "images/ubuntu"
+        assert result.ref == "latest"
+
+    def test_parse_ref_collapses_multiple_slashes(self) -> None:
+        """parse_artifact_ref collapses multiple consecutive slashes."""
+        result = parse_artifact_ref("images//ubuntu:latest")
+        assert result.path == "images/ubuntu"
+        assert result.ref == "latest"
+
+    def test_parse_ref_full_normalization(self) -> None:
+        """parse_artifact_ref applies all normalizations."""
+        result = parse_artifact_ref("//images//ubuntu//:latest")
+        assert result.path == "images/ubuntu"
+        assert result.ref == "latest"
+
+    def test_parse_ref_rejects_path_traversal(self) -> None:
+        """parse_artifact_ref rejects path traversal."""
+        with pytest.raises(ParseError, match="Path traversal"):
+            parse_artifact_ref("images/../etc:latest")
+
+    def test_parse_path_strips_leading_slash(self) -> None:
+        """parse_artifact_path strips leading slash."""
+        result = parse_artifact_path("/images/ubuntu")
+        assert result == "images/ubuntu"
+
+    def test_parse_path_strips_trailing_slash(self) -> None:
+        """parse_artifact_path strips trailing slash."""
+        result = parse_artifact_path("images/ubuntu/")
+        assert result == "images/ubuntu"
+
+    def test_parse_path_collapses_multiple_slashes(self) -> None:
+        """parse_artifact_path collapses multiple consecutive slashes."""
+        result = parse_artifact_path("images//ubuntu")
+        assert result == "images/ubuntu"
+
+    def test_parse_path_full_normalization(self) -> None:
+        """parse_artifact_path applies all normalizations."""
+        result = parse_artifact_path("//images//ubuntu//")
+        assert result == "images/ubuntu"
+
+    def test_parse_path_rejects_path_traversal(self) -> None:
+        """parse_artifact_path rejects path traversal."""
+        with pytest.raises(ParseError, match="Path traversal"):
+            parse_artifact_path("images/../etc")
+
+    def test_parse_path_strips_ref_with_normalization(self) -> None:
+        """parse_artifact_path strips ref and normalizes path."""
+        result = parse_artifact_path("/images//ubuntu/:latest")
+        assert result == "images/ubuntu"
+
+    def test_parse_ref_without_ref_normalizes(self) -> None:
+        """parse_artifact_ref without explicit ref still normalizes path."""
+        result = parse_artifact_ref("/images//ubuntu/")
+        assert result.path == "images/ubuntu"
+        assert result.ref == "latest"
