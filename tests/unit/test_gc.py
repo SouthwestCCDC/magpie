@@ -367,6 +367,49 @@ class TestRunGC:
         assert result.blobs_deleted == 0
         assert blob_file.exists()
 
+    def test_preserves_tagged_blobs_with_full_sha256_hash(self, storage_root: Path) -> None:
+        """Tagged blobs with full SHA-256 hashes are preserved.
+
+        Regression test for issue where GC used full 64-char hashes for tag
+        comparison, but blob files use short 8-char hashes. This caused tagged
+        blobs to be incorrectly garbage collected because "abcd1234..." (64 chars)
+        != "abcd1234" (8 chars).
+
+        The fix is to truncate manifest hashes to 8 chars before comparison:
+            tagged_hashes = {h[:8] for h in manifest.tags.values()}
+        """
+        # Use a realistic full SHA-256 hash (64 hex characters)
+        full_hash = "a1b2c3d4e5f67890abcdef1234567890fedcba0987654321a1b2c3d4e5f67890"
+        assert len(full_hash) == 64, "Test requires 64-char hash"
+
+        artifact_dir = create_artifact_with_blobs(
+            storage_root,
+            "test/artifact",
+            tagged_hashes={"latest": full_hash},
+            untagged_hashes=[],
+            blob_ages_days={full_hash: 365},  # Very old but tagged
+        )
+
+        # Blob file uses short hash (first 8 chars)
+        short_hash = full_hash[:8]
+        blob_file = artifact_dir / "blobs" / short_hash
+        assert blob_file.exists()
+        assert blob_file.name == "a1b2c3d4"
+
+        result, blobs = run_gc(
+            storage_path=storage_root,
+            retention_days=30,
+            dry_run=False,
+        )
+
+        # The blob should NOT be deleted because it's tagged
+        # If full hashes were used for comparison, this would fail
+        assert result.blobs_deleted == 0, (
+            "Tagged blob was deleted! "
+            "GC may be using full hashes instead of short hashes for tag lookup."
+        )
+        assert blob_file.exists(), "Tagged blob file was deleted"
+
     def test_reconcile_only_skips_deletion(self, storage_root: Path) -> None:
         """reconcile_only mode only fixes symlinks."""
         artifact_dir = create_artifact_with_blobs(
