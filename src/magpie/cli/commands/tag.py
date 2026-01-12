@@ -6,7 +6,7 @@ import click
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
-from magpie.cli.utils import handle_http_error
+from magpie.cli.errors import handle_http_error
 
 
 @click.command()

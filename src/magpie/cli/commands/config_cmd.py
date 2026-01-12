@@ -8,7 +8,7 @@ import click
 import tomli_w
 
 from magpie.cli import config as cli_config
-from magpie.cli.utils import mask_token
+from magpie.cli.errors import mask_token
 
 
 def _write_config(config_path: Path, server: str | None, token: str | None) -> None:
