@@ -20,6 +20,12 @@ if [ -f /run/magpie-user ]; then
     EXPECTED_UID=$(cut -d: -f1 /run/magpie-user)
     CURRENT_UID=$(id -u)
 
+    # Validate that EXPECTED_UID is non-empty and numeric
+    if [ -z "$EXPECTED_UID" ] || ! [[ "$EXPECTED_UID" =~ ^[0-9]+$ ]]; then
+        echo "magpie-ctl-wrapper: invalid UID in /run/magpie-user: '$EXPECTED_UID'" >&2
+        exit 1
+    fi
+
     if [ "$CURRENT_UID" = "$EXPECTED_UID" ]; then
         exec "${REAL_CTL[@]}" "$@"
     elif [ "$CURRENT_UID" = "0" ]; then
@@ -30,6 +36,13 @@ if [ -f /run/magpie-user ]; then
             exit 1
         fi
     fi
+    # If we reach here, the current UID is neither the expected UID nor root.
+    # This is an unexpected state - the wrapper should only be invoked inside
+    # the container where we control the user context. Fall through to the
+    # final exec below, which will run as the current (unexpected) user.
+    echo "magpie-ctl-wrapper: warning: running as UID $CURRENT_UID (expected $EXPECTED_UID or 0)" >&2
 fi
 
+# Fallback: run directly if /run/magpie-user doesn't exist (container started
+# without entrypoint) or if we're in an unexpected UID state (see warning above).
 exec "${REAL_CTL[@]}" "$@"

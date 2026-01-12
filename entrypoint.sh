@@ -37,15 +37,17 @@ chmod 644 /run/magpie-user
 
 # Auto-initialize database if it doesn't exist
 # This runs before starting the main service
-# Uses a lock file to prevent race conditions when multiple containers share /data
-# Note: The lock file persists on disk; this is intentional and harmless (flock releases
-# the lock automatically when the file descriptor closes, and the empty file has no effect)
-DB_LOCK_FILE=/data/.magpie-init.lock
+# Uses a lock file (held via flock on FD 200) to prevent race conditions when multiple
+# containers share /data/artifacts. The lock is only held for the duration of the subshell
+# below (database check and init) and is automatically released when FD 200 closes at
+# subshell exit. The lock file itself persists on disk as an empty, harmless marker;
+# concurrent entrypoints will block on the lock and serialize correctly rather than deadlocking.
+DB_LOCK_FILE="${MAGPIE_STORAGE_PATH:-/data/artifacts}/.magpie-init.lock"
 
 (
     flock -x 200
 
-    if [ ! -f /data/magpie.db ]; then
+    if [ ! -f "${MAGPIE_STORAGE_PATH:-/data/artifacts}/.magpie.db" ]; then
         echo "Database not found, running magpie-ctl init..."
         INIT_STATUS=0
         if [ "$RUN_UID" = "0" ]; then
