@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING, BinaryIO, Callable
 import click
 
 if TYPE_CHECKING:
-    import httpx
     from rich.progress import Progress, TaskID
 
 from magpie.cli import CLIContext
 from magpie.cli.progress import transfer_progress
+from magpie.cli.utils import handle_http_error
 
 
 class ProgressFileWrapper:
@@ -156,7 +156,7 @@ def push(
                     progress.update(processing_task[0], visible=False)
 
             if response.status_code != 200:
-                _handle_error(response)
+                handle_http_error(response, "Upload", ctx.token)
 
             data = response.json()
 
@@ -178,13 +178,3 @@ def push(
     if not source_uri:
         click.echo()
         click.echo("Info: No --source-uri provided. Consider adding provenance metadata.")
-
-
-def _handle_error(response: "httpx.Response") -> None:
-    """Handle HTTP error responses."""
-    try:
-        detail = response.json().get("detail", response.text)
-    except Exception:
-        detail = response.text
-
-    raise click.ClickException(f"Upload failed ({response.status_code}): {detail}")

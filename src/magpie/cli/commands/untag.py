@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import click
 
-if TYPE_CHECKING:
-    import httpx
-
 from magpie.cli import CLIContext
+from magpie.cli.utils import handle_http_error
 
 
 @click.command()
@@ -43,16 +39,6 @@ def untag(ctx: CLIContext, artifact_path: str, tag_name: str) -> None:
         if response.status_code == 404:
             raise click.ClickException(f"Tag not found: {artifact_path}:{tag_name}")
         if response.status_code != 204:
-            _handle_error(response)
+            handle_http_error(response, "Untag", ctx.token)
 
     click.echo(f"Removed tag '{tag_name}' from {artifact_path}")
-
-
-def _handle_error(response: "httpx.Response") -> None:
-    """Handle HTTP error responses."""
-    try:
-        detail = response.json().get("detail", response.text)
-    except Exception:
-        detail = response.text
-
-    raise click.ClickException(f"Tag removal failed ({response.status_code}): {detail}")

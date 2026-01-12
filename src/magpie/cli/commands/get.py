@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import click
-
-if TYPE_CHECKING:
-    import httpx
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
 from magpie.cli.progress import transfer_progress
+from magpie.cli.utils import handle_http_error
 from magpie.storage.hash import compute_hash
 
 
@@ -68,7 +65,7 @@ def get(
         if info_response.status_code == 404:
             raise click.ClickException(f"Artifact not found: {parsed.path}:{parsed.ref}")
         if info_response.status_code != 200:
-            _handle_error(info_response, "metadata fetch")
+            handle_http_error(info_response, "Metadata", ctx.token)
 
         info = info_response.json()
         expected_hash = info["hash"]
@@ -123,7 +120,7 @@ def get(
             if response.status_code != 200:
                 # Read response body for error message
                 response.read()
-                _handle_error(response, "download")
+                handle_http_error(response, "Download", ctx.token)
 
             # Get content length from header if available (may be more accurate)
             content_length = response.headers.get("content-length")
@@ -152,13 +149,3 @@ def get(
     # Write file
     output.write_bytes(content)
     click.echo(f"Downloaded: {output}")
-
-
-def _handle_error(response: "httpx.Response", operation: str) -> None:
-    """Handle HTTP error responses."""
-    try:
-        detail = response.json().get("detail", response.text)
-    except Exception:
-        detail = response.text
-
-    raise click.ClickException(f"{operation} failed ({response.status_code}): {detail}")

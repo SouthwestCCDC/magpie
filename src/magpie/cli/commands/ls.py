@@ -11,9 +11,7 @@ if TYPE_CHECKING:
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_path
-
-if TYPE_CHECKING:
-    import httpx
+from magpie.cli.utils import handle_http_error
 
 
 @click.command(name="ls")
@@ -88,7 +86,7 @@ def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str) -> None:
     response = client.get("/api/v1/artifacts", params={"prefix": prefix})
 
     if response.status_code != 200:
-        _handle_error(response)
+        handle_http_error(response, "List", ctx.token)
 
     data = response.json()
     paths = data.get("paths", [])
@@ -143,13 +141,3 @@ def _format_datetime(dt_str: str) -> str:
         return dt_str
     except Exception:
         return dt_str
-
-
-def _handle_error(response: "httpx.Response") -> None:
-    """Handle HTTP error responses."""
-    try:
-        detail = response.json().get("detail", response.text)
-    except Exception:
-        detail = response.text
-
-    raise click.ClickException(f"List failed ({response.status_code}): {detail}")

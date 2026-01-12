@@ -8,24 +8,7 @@ import click
 import tomli_w
 
 from magpie.cli import config as cli_config
-
-# Standard mask for hiding sensitive token values
-TOKEN_MASK = "********"  # nosec B105 - display placeholder, not a real password
-
-
-def _mask_token(token: str) -> str:
-    """Mask a token for display, showing only last 4 characters.
-
-    Args:
-        token: The token to mask.
-
-    Returns:
-        Masked token string with last 4 chars visible, or just the mask
-        if token is 4 chars or shorter.
-    """
-    if len(token) > 4:
-        return TOKEN_MASK + token[-4:]
-    return TOKEN_MASK
+from magpie.cli.utils import mask_token
 
 
 def _write_config(config_path: Path, server: str | None, token: str | None) -> None:
@@ -128,7 +111,7 @@ def config_cmd(
     if server:
         click.echo(f"Server set to: {server}")
     if token:
-        click.echo(f"Token set to: {_mask_token(token)}")
+        click.echo(f"Token set to: {mask_token(token)}")
 
     click.echo(f"Configuration saved to {config_path}")
 
@@ -150,7 +133,7 @@ def _show_config(config_path: Path) -> None:
         click.echo("  server = (not set)")
 
     if config.client.token:
-        click.echo(f"  token  = {_mask_token(config.client.token)}")
+        click.echo(f"  token  = {mask_token(config.client.token)}")
     else:
         click.echo("  token  = (not set)")
 

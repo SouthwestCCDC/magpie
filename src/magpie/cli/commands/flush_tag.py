@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import click
 
-if TYPE_CHECKING:
-    import httpx
-
 from magpie.cli import CLIContext
+from magpie.cli.utils import handle_http_error
 
 # Tags that require --force to flush due to their common importance
 PROTECTED_TAGS = frozenset({"latest", "stable", "production", "prod", "release"})
@@ -89,9 +85,9 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
         )
 
         if response.status_code == 400:
-            _handle_error(response)
+            handle_http_error(response, "Flush", ctx.token)
         if response.status_code not in (200,):
-            _handle_error(response)
+            handle_http_error(response, "Flush", ctx.token)
 
         data = response.json()
         affected_count = data.get("count", 0)
@@ -106,13 +102,3 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
         click.echo("Affected artifacts:")
         for artifact in affected_artifacts:
             click.echo(f"  - {artifact}")
-
-
-def _handle_error(response: "httpx.Response") -> None:
-    """Handle HTTP error responses."""
-    try:
-        detail = response.json().get("detail", response.text)
-    except Exception:
-        detail = response.text
-
-    raise click.ClickException(f"Flush failed ({response.status_code}): {detail}")

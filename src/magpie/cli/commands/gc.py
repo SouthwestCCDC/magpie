@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import click
 
-if TYPE_CHECKING:
-    import httpx
-
 from magpie.cli import CLIContext
+from magpie.cli.utils import handle_http_error, mask_token
 
 
 @click.command()
@@ -56,11 +52,13 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
         response = client.post("/api/v1/gc", params=params)
 
         if response.status_code == 401:
-            _handle_error(response, "Authentication failed. Check your token.")
+            msg = f"Authentication failed. Check your token (token: {mask_token(ctx.token)})"
+            raise click.ClickException(msg)
         if response.status_code == 403:
-            _handle_error(response, "Admin token required for garbage collection.")
+            msg = f"Admin token required for garbage collection (token: {mask_token(ctx.token)})"
+            raise click.ClickException(msg)
         if response.status_code not in (200,):
-            _handle_error(response)
+            handle_http_error(response, "GC", ctx.token)
 
         data = response.json()
 
@@ -86,19 +84,6 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
     if items_removed > 0:
         action = "Would remove" if dry_run else "Removed"
         click.echo(f"  {action} empty items: {items_removed}")
-
-
-def _handle_error(response: "httpx.Response", message: str | None = None) -> None:
-    """Handle HTTP error responses."""
-    if message:
-        raise click.ClickException(message)
-
-    try:
-        detail = response.json().get("detail", response.text)
-    except Exception:
-        detail = response.text
-
-    raise click.ClickException(f"GC failed ({response.status_code}): {detail}")
 
 
 def _format_size(size_bytes: int) -> str:
