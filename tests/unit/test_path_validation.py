@@ -11,6 +11,7 @@ from magpie.storage.paths import (
     check_artifact_nesting,
     normalize_artifact_path,
     validate_artifact_path,
+    verify_path_is_descendant,
 )
 
 
@@ -272,3 +273,65 @@ class TestNormalizeArtifactPath:
         # However, note that validate_artifact_path blocks segments starting with "."
         # The normalize function only checks for ".." traversal
         assert normalize_artifact_path("v1.0/artifact") == "v1.0/artifact"
+
+    def test_double_dot_in_filename_allowed(self) -> None:
+        """Double dots within filenames are allowed (not path traversal).
+
+        This tests that segment-based validation correctly allows paths like
+        "v1..2" or "test..file" which contain ".." as part of a filename
+        but are not path traversal attempts.
+        """
+        assert normalize_artifact_path("v1..2/artifact") == "v1..2/artifact"
+        assert normalize_artifact_path("test..file") == "test..file"
+        assert normalize_artifact_path("project/name..ext") == "project/name..ext"
+
+    def test_double_dot_as_segment_rejected(self) -> None:
+        """Double dots as a complete path segment are rejected."""
+        with pytest.raises(InvalidArtifactPathError, match="Path traversal.*not allowed"):
+            normalize_artifact_path("test/../other")
+        with pytest.raises(InvalidArtifactPathError, match="Path traversal.*not allowed"):
+            normalize_artifact_path("../test")
+        with pytest.raises(InvalidArtifactPathError, match="Path traversal.*not allowed"):
+            normalize_artifact_path("test/..")
+
+
+class TestVerifyPathIsDescendant:
+    """Tests for verify_path_is_descendant function."""
+
+    def test_valid_simple_descendant(self, tmp_path: Path) -> None:
+        """Valid simple path is a descendant of base."""
+        result = verify_path_is_descendant(tmp_path, "artifact")
+        assert result == tmp_path / "artifact"
+
+    def test_valid_nested_descendant(self, tmp_path: Path) -> None:
+        """Valid nested path is a descendant of base."""
+        result = verify_path_is_descendant(tmp_path, "project/component/artifact")
+        assert result == tmp_path / "project" / "component" / "artifact"
+
+    def test_reject_traversal_escape(self, tmp_path: Path) -> None:
+        """Path traversal that escapes base is rejected."""
+        with pytest.raises(InvalidArtifactPathError, match="resolves outside"):
+            verify_path_is_descendant(tmp_path, "../escape")
+
+    def test_reject_complex_traversal(self, tmp_path: Path) -> None:
+        """Complex path traversal that escapes base is rejected."""
+        with pytest.raises(InvalidArtifactPathError, match="resolves outside"):
+            verify_path_is_descendant(tmp_path, "project/../../escape")
+
+    def test_reject_root_path(self, tmp_path: Path) -> None:
+        """Path that resolves to base directory itself is rejected."""
+        with pytest.raises(InvalidArtifactPathError, match="resolve to storage root"):
+            verify_path_is_descendant(tmp_path, ".")
+
+    def test_double_dot_in_filename_allowed(self, tmp_path: Path) -> None:
+        """Double dots within filenames are allowed (not traversal)."""
+        result = verify_path_is_descendant(tmp_path, "v1..2/artifact")
+        assert result == tmp_path / "v1..2" / "artifact"
+
+    def test_path_stays_within_base(self, tmp_path: Path) -> None:
+        """Path that goes up then down but stays in base is valid."""
+        # Note: This tests that "project/../other" resolves to "other" which is valid
+        # The segment-based check in normalize_artifact_path would catch ".."
+        # but this test verifies the resolution behavior
+        result = verify_path_is_descendant(tmp_path, "project/../other")
+        assert result == tmp_path / "other"

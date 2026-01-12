@@ -43,8 +43,10 @@ def normalize_artifact_path(path: str) -> str:
     # Collapse multiple consecutive slashes to single slash
     path = re.sub(r"/+", "/", path)
 
-    # Check for path traversal attempts
-    if ".." in path:
+    # Check for path traversal attempts using segment-based validation
+    # This avoids false positives for legitimate paths like "v1..2" or "test..file"
+    segments = path.split("/") if path else []
+    if any(segment == ".." for segment in segments):
         raise InvalidArtifactPathError("Path traversal '..' is not allowed in artifact paths")
 
     # Check for empty path after normalization
@@ -52,6 +54,50 @@ def normalize_artifact_path(path: str) -> str:
         raise InvalidArtifactPathError("Artifact path cannot be empty")
 
     return path
+
+
+def verify_path_is_descendant(base: Path, artifact_path: str) -> Path:
+    """Verify that a constructed path is strictly a descendant of the base directory.
+
+    This provides defense-in-depth against path traversal attacks by checking
+    the resolved path rather than just token-based validation. After constructing
+    the full path, this function verifies it remains within the base directory.
+
+    Args:
+        base: Base storage directory path (must be absolute).
+        artifact_path: Normalized artifact path string.
+
+    Returns:
+        The resolved full path if it is a valid descendant.
+
+    Raises:
+        InvalidArtifactPathError: If the resolved path escapes the base directory.
+
+    Example:
+        >>> base = Path("/storage/artifacts")
+        >>> verify_path_is_descendant(base, "project/artifact")
+        PosixPath('/storage/artifacts/project/artifact')
+        >>> verify_path_is_descendant(base, "../escape")
+        Raises InvalidArtifactPathError
+    """
+    # Construct the full path
+    full_path = (base / artifact_path).resolve()
+    base_resolved = base.resolve()
+
+    # Check if the resolved path is under the base directory
+    # Using is_relative_to() which returns True if path is relative to base
+    try:
+        full_path.relative_to(base_resolved)
+    except ValueError:
+        raise InvalidArtifactPathError(
+            f"Path '{artifact_path}' resolves outside the storage directory"
+        )
+
+    # Additional check: ensure it's not the base directory itself
+    if full_path == base_resolved:
+        raise InvalidArtifactPathError("Artifact path cannot resolve to storage root")
+
+    return full_path
 
 
 # Reserved directory names that cannot appear in artifact paths
