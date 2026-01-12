@@ -58,10 +58,21 @@ fi
 DB_LOCK_FILE="${LOCK_DIR}/.magpie-init.lock"
 
 # Determine database path: MAGPIE_DATABASE_PATH takes precedence, otherwise derive from validated LOCK_DIR
+# NOTE: When MAGPIE_DATABASE_PATH points outside LOCK_DIR, the lock file and database
+# reside in different locations. This lock is designed for single-container use (preventing
+# race conditions between the entrypoint and concurrent docker exec invocations). If you
+# override MAGPIE_DATABASE_PATH in a multi-container deployment, you are responsible for
+# your own coordination to avoid concurrent database initialization.
 if [ -n "$MAGPIE_DATABASE_PATH" ]; then
     DB_PATH="$MAGPIE_DATABASE_PATH"
 else
     DB_PATH="${LOCK_DIR}/.magpie.db"
+fi
+
+# Verify gosu is available before we need it (only required when not running as root)
+if [ "$RUN_UID" != "0" ] && ! command -v gosu >/dev/null 2>&1; then
+    echo "Error: gosu is required to drop privileges but was not found in PATH" >&2
+    exit 1
 fi
 
 # Acquire the lock and check/initialize the database atomically

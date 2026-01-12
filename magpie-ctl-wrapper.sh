@@ -17,8 +17,10 @@ set -e
 REAL_CTL=(/app/.venv/bin/python -m magpie.ctl)
 
 if [ -f /run/magpie-user ]; then
-    EXPECTED_UID=$(cut -d: -f1 /run/magpie-user)
-    CURRENT_UID=$(id -u)
+    # Extract and validate both UID and GID from /run/magpie-user (format: UID:GID)
+    MAGPIE_USER_CONTENT=$(cat /run/magpie-user)
+    EXPECTED_UID=$(echo "$MAGPIE_USER_CONTENT" | cut -d: -f1)
+    EXPECTED_GID=$(echo "$MAGPIE_USER_CONTENT" | cut -d: -f2)
 
     # Validate that EXPECTED_UID is non-empty and numeric
     if [ -z "$EXPECTED_UID" ] || ! [[ "$EXPECTED_UID" =~ ^[0-9]+$ ]]; then
@@ -26,11 +28,19 @@ if [ -f /run/magpie-user ]; then
         exit 1
     fi
 
+    # Validate that EXPECTED_GID is non-empty and numeric
+    if [ -z "$EXPECTED_GID" ] || ! [[ "$EXPECTED_GID" =~ ^[0-9]+$ ]]; then
+        echo "magpie-ctl-wrapper: invalid GID in /run/magpie-user: '$EXPECTED_GID'" >&2
+        exit 1
+    fi
+
+    CURRENT_UID=$(id -u)
+
     if [ "$CURRENT_UID" = "$EXPECTED_UID" ]; then
         exec "${REAL_CTL[@]}" "$@"
     elif [ "$CURRENT_UID" = "0" ]; then
         if command -v gosu >/dev/null 2>&1; then
-            exec gosu "$(cat /run/magpie-user)" "${REAL_CTL[@]}" "$@"
+            exec gosu "$EXPECTED_UID:$EXPECTED_GID" "${REAL_CTL[@]}" "$@"
         else
             echo "magpie-ctl-wrapper: gosu is required to drop privileges from root but was not found in PATH" >&2
             exit 1
