@@ -110,3 +110,35 @@ def count_progress(
     with progress:
         task_id = progress.add_task(description, total=total)
         yield progress, task_id
+
+
+@contextmanager
+def processing_spinner(
+    message: str = "Processing...",
+    quiet: bool = False,
+) -> Generator[None, None, None]:
+    """Context manager for displaying a processing spinner.
+
+    Shows a spinner with a message while waiting for an operation to complete.
+    Only shows in TTY environments and when not quiet.
+
+    Args:
+        message: Message to display (e.g., "Processing...", "Finalizing...").
+        quiet: If True, suppress spinner output entirely.
+
+    Yields:
+        Nothing. The spinner displays until the context exits.
+    """
+    if quiet or not is_tty():
+        yield
+        return
+
+    from rich.console import Console
+    from rich.spinner import Spinner
+    from rich.live import Live
+
+    console = Console()
+    spinner = Spinner("dots", text=f"[bold blue]{message}")
+
+    with Live(spinner, console=console, refresh_per_second=10):
+        yield
