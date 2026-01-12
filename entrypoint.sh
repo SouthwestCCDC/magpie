@@ -35,6 +35,17 @@ mkdir -p /run
 echo "$RUN_UID:$RUN_GID" > /run/magpie-user
 chmod 644 /run/magpie-user
 
+# Auto-initialize database if it doesn't exist
+# This runs before starting the main service
+if [ ! -f /data/magpie.db ]; then
+    echo "Database not found, running magpie-ctl init..."
+    if [ "$RUN_UID" = "0" ]; then
+        /app/.venv/bin/python -m magpie.ctl init
+    else
+        gosu "$RUN_UID:$RUN_GID" /app/.venv/bin/python -m magpie.ctl init
+    fi
+fi
+
 # Run as root if UID is 0 (no privilege drop needed)
 if [ "$RUN_UID" = "0" ]; then
     exec "$@"
