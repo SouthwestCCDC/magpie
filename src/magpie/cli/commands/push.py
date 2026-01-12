@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from magpie.cli import CLIContext
 from magpie.cli.progress import transfer_progress
+from magpie.cli.utils import handle_http_error
 
 
 class ProgressFileWrapper:
@@ -84,7 +85,14 @@ def push(
     if ctx.debug:
         click.echo(f"Uploading {file} ({file_size} bytes) to {artifact_path}...", err=True)
 
-    # Upload file with progress
+    # Pre-flight auth check before showing progress bar.
+    # This prevents the misleading UX where progress completes before auth error appears.
+    with ctx.get_client() as client:
+        preflight = client.head(f"/api/v1/upload/{artifact_path}")
+        if preflight.status_code in (401, 403):
+            handle_http_error(preflight, "Upload", ctx.token)
+
+    # Upload file with progress (auth already verified)
     with transfer_progress("Uploading", file_size, quiet=quiet) as (progress, task_id):
         with ctx.get_client() as client:
             with file.open("rb") as f:
@@ -98,7 +106,7 @@ def push(
                 )
 
             if response.status_code != 200:
-                _handle_error(response)
+                handle_http_error(response, "Upload", ctx.token)
 
             data = response.json()
 
@@ -120,13 +128,3 @@ def push(
     if not source_uri:
         click.echo()
         click.echo("Info: No --source-uri provided. Consider adding provenance metadata.")
-
-
-def _handle_error(response: "httpx.Response") -> None:
-    """Handle HTTP error responses."""
-    try:
-        detail = response.json().get("detail", response.text)
-    except Exception:
-        detail = response.text
-
-    raise click.ClickException(f"Upload failed ({response.status_code}): {detail}")

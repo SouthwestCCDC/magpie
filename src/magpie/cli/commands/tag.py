@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
+from magpie.cli.utils import handle_http_error
 
 
 @click.command()
@@ -51,19 +52,9 @@ def tag(ctx: CLIContext, artifact_ref: str, tag_name: str) -> None:
         if response.status_code == 404:
             raise click.ClickException(f"Artifact not found: {parsed.path}:{parsed.ref}")
         if response.status_code != 200:
-            _handle_error(response)
+            handle_http_error(response, "Tag creation", ctx.token)
 
         data = response.json()
 
     click.echo(f"Tagged {data['hash_ref']} as '{tag_name}'")
     click.echo(f"All tags: {', '.join(data.get('tags', []))}")
-
-
-def _handle_error(response: "httpx.Response") -> None:
-    """Handle HTTP error responses."""
-    try:
-        detail = response.json().get("detail", response.text)
-    except Exception:
-        detail = response.text
-
-    raise click.ClickException(f"Tag creation failed ({response.status_code}): {detail}")
