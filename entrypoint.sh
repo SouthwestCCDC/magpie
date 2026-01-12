@@ -79,8 +79,14 @@ fi
 # The flock subshell holds the lock for the entire duration of the init check.
 # Using -w 30 to timeout after 30 seconds instead of blocking indefinitely.
 (
-    if ! flock -x -w 30 200; then
-        echo "Error: Failed to acquire database init lock on $DB_LOCK_FILE (timeout or flock unavailable)" >&2
+    flock_status=0
+    flock -x -w 30 200 || flock_status=$?
+    if [ "$flock_status" -ne 0 ]; then
+        if [ "$flock_status" -eq 1 ]; then
+            echo "Error: Failed to acquire database init lock on $DB_LOCK_FILE within 30 seconds (another process may be initializing the database)" >&2
+        else
+            echo "Error: flock failed with exit code $flock_status while trying to lock $DB_LOCK_FILE (is flock available and working?)" >&2
+        fi
         exit 1
     fi
 
