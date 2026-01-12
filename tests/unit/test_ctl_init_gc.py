@@ -943,10 +943,10 @@ class TestFlushTagCommand:
 
         assert result.exit_code == 0, f"Output: {result.output}"
         output = json.loads(result.output.strip())
-        assert output["tag"] == "release"
+        assert output["tag_name"] == "release"
         assert output["dry_run"] is False
-        assert output["artifacts_affected"] == 1
-        assert "test/artifact" in output["artifacts"]
+        assert output["count"] == 1
+        assert "test/artifact" in output["affected_artifacts"]
 
     def test_flush_tag_json_output_dry_run(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
@@ -966,9 +966,9 @@ class TestFlushTagCommand:
 
         assert result.exit_code == 0, f"Output: {result.output}"
         output = json.loads(result.output.strip())
-        assert output["tag"] == "release"
+        assert output["tag_name"] == "release"
         assert output["dry_run"] is True
-        assert output["artifacts_affected"] == 1
+        assert output["count"] == 1
 
     def test_flush_tag_nonexistent_tag(
         self, cli_runner: CliRunner, test_settings: MagpieSettings

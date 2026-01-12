@@ -261,6 +261,7 @@ class TestGCEndpointFunctionality:
             "symlinks_checked",
             "symlinks_fixed",
             "items_removed",
+            "errors",
         }
         assert required_fields == set(data.keys())
 
@@ -348,7 +349,8 @@ class TestGCSubprocessIntegration:
             )
 
         assert response.status_code == 500
-        assert "Command failed" in response.json()["detail"]
+        # Error message should be sanitized (not expose internal details)
+        assert response.json()["detail"] == "Garbage collection failed"
 
     def test_gc_passes_retention_days_to_subprocess(
         self, client: TestClient, admin_token: str, test_config: MagpieSettings

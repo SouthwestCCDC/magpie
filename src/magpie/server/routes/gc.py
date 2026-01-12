@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,6 +15,7 @@ from magpie.server.deps import require_admin_scope
 from magpie.server.subprocess_utils import CtlCommandError, run_ctl_command
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class GCResponse(BaseModel):
@@ -26,6 +29,7 @@ class GCResponse(BaseModel):
     symlinks_checked: int
     symlinks_fixed: int
     items_removed: int = 0
+    errors: list[str] = []
 
 
 @router.post("/api/v1/gc")
@@ -78,7 +82,10 @@ async def trigger_gc(
     try:
         result = await run_ctl_command(cmd)
     except CtlCommandError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error(f"GC command failed: {e}")
+        raise HTTPException(status_code=500, detail="Garbage collection failed") from e
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Operation timed out")
 
     return GCResponse(
         dry_run=result.get("dry_run", dry_run),
@@ -89,4 +96,5 @@ async def trigger_gc(
         symlinks_checked=result.get("symlinks_checked", 0),
         symlinks_fixed=result.get("symlinks_fixed", 0),
         items_removed=result.get("items_removed", 0),
+        errors=result.get("errors", []),
     )

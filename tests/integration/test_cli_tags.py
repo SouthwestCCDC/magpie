@@ -207,10 +207,10 @@ class TestFlushTagCommand:
         """Flush-tag removes a tag from all artifacts."""
         # Mock the subprocess call to return flush-tag result
         mock_flush_result = {
-            "tag": "common-tag",
+            "tag_name": "common-tag",
             "dry_run": False,
-            "artifacts_affected": 2,
-            "artifacts": ["test/flush1", "test/flush2"],
+            "count": 2,
+            "affected_artifacts": ["test/flush1", "test/flush2"],
         }
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
@@ -230,10 +230,10 @@ class TestFlushTagCommand:
         """Flush-tag dry-run shows what would be affected."""
         # Mock the subprocess call to return dry-run result
         mock_flush_result = {
-            "tag": "to-flush",
+            "tag_name": "to-flush",
             "dry_run": True,
-            "artifacts_affected": 1,
-            "artifacts": ["test/flush-dry"],
+            "count": 1,
+            "affected_artifacts": ["test/flush-dry"],
         }
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
@@ -252,10 +252,10 @@ class TestFlushTagCommand:
         """Flush-tag with no matching artifacts reports 0."""
         # Mock the subprocess call to return no matches
         mock_flush_result = {
-            "tag": "nonexistent-tag",
+            "tag_name": "nonexistent-tag",
             "dry_run": False,
-            "artifacts_affected": 0,
-            "artifacts": [],
+            "count": 0,
+            "affected_artifacts": [],
         }
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
@@ -276,10 +276,10 @@ class TestFlushTagCommand:
         """Flush-tag shows list of affected artifacts."""
         # Mock the subprocess call to return affected artifacts
         mock_flush_result = {
-            "tag": "show-me",
+            "tag_name": "show-me",
             "dry_run": False,
-            "artifacts_affected": 1,
-            "artifacts": ["test/show-affected"],
+            "count": 1,
+            "affected_artifacts": ["test/show-affected"],
         }
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
@@ -338,10 +338,10 @@ class TestFlushTagCommand:
         """Flush-tag on protected tags succeeds with --force flag."""
         # Mock the subprocess call to return flush result
         mock_flush_result = {
-            "tag": "latest",
+            "tag_name": "latest",
             "dry_run": False,
-            "artifacts_affected": 1,
-            "artifacts": ["test/force-flush"],
+            "count": 1,
+            "affected_artifacts": ["test/force-flush"],
         }
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
@@ -362,10 +362,10 @@ class TestFlushTagCommand:
         """Flush-tag on non-protected tags works without --force."""
         # Mock the subprocess call to return flush result
         mock_flush_result = {
-            "tag": "custom-tag",
+            "tag_name": "custom-tag",
             "dry_run": False,
-            "artifacts_affected": 1,
-            "artifacts": ["test/normal-tag"],
+            "count": 1,
+            "affected_artifacts": ["test/normal-tag"],
         }
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:

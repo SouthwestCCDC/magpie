@@ -2,29 +2,35 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel
 
 from magpie.server.deps import require_admin_scope_header
 from magpie.server.subprocess_utils import CtlCommandError, run_ctl_command
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+# Tag name validation pattern: alphanumeric start, then alphanumeric, dots, underscores, hyphens
+TAG_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
 
 
 class FlushTagResponse(BaseModel):
     """Response model for flush tag operation."""
 
-    tag: str
+    tag_name: str
     dry_run: bool
-    artifacts_affected: int
-    artifacts: list[str]
+    count: int
+    affected_artifacts: list[str]
 
 
 @router.post("/api/v1/tags/{tag_name}/flush")
 async def flush_tag(
-    tag_name: str,
+    tag_name: Annotated[str, Path(pattern=TAG_NAME_PATTERN, max_length=128)],
     confirm_walk_filesystem: Annotated[
         bool | None,
         Query(description="Must be true to confirm this operation walks the entire filesystem"),
@@ -76,11 +82,14 @@ async def flush_tag(
     try:
         result = await run_ctl_command(cmd)
     except CtlCommandError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error(f"Flush tag command failed: {e}")
+        raise HTTPException(status_code=500, detail="Flush tag operation failed") from e
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Operation timed out")
 
     return FlushTagResponse(
-        tag=result.get("tag", tag_name),
+        tag_name=result.get("tag_name", tag_name),
         dry_run=result.get("dry_run", dry_run),
-        artifacts_affected=result.get("artifacts_affected", 0),
-        artifacts=result.get("artifacts", []),
+        count=result.get("count", 0),
+        affected_artifacts=result.get("affected_artifacts", []),
     )

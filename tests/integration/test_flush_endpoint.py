@@ -33,10 +33,10 @@ class TestDryRunPreview:
     def test_dry_run_returns_preview(self, client: TestClient) -> None:
         """Dry run returns affected artifacts."""
         mock_result = {
-            "tag": "release",
+            "tag_name": "release",
             "dry_run": True,
-            "artifacts_affected": 2,
-            "artifacts": ["flush-test/artifact1", "flush-test/artifact2"],
+            "count": 2,
+            "affected_artifacts": ["flush-test/artifact1", "flush-test/artifact2"],
         }
 
         with patch(
@@ -51,11 +51,11 @@ class TestDryRunPreview:
         assert response.status_code == 200
         data = response.json()
 
-        assert data["tag"] == "release"
-        assert data["artifacts_affected"] == 2
+        assert data["tag_name"] == "release"
+        assert data["count"] == 2
         assert data["dry_run"] is True
-        assert "flush-test/artifact1" in data["artifacts"]
-        assert "flush-test/artifact2" in data["artifacts"]
+        assert "flush-test/artifact1" in data["affected_artifacts"]
+        assert "flush-test/artifact2" in data["affected_artifacts"]
 
 
 class TestConfirmedFlush:
@@ -64,10 +64,10 @@ class TestConfirmedFlush:
     def test_confirmed_flush_calls_subprocess(self, client: TestClient) -> None:
         """Confirmed flush calls subprocess and returns result."""
         mock_result = {
-            "tag": "to-flush",
+            "tag_name": "to-flush",
             "dry_run": False,
-            "artifacts_affected": 2,
-            "artifacts": ["flush-confirm/art1", "flush-confirm/art2"],
+            "count": 2,
+            "affected_artifacts": ["flush-confirm/art1", "flush-confirm/art2"],
         }
 
         with patch(
@@ -82,8 +82,8 @@ class TestConfirmedFlush:
         assert response.status_code == 200
         data = response.json()
 
-        assert data["tag"] == "to-flush"
-        assert data["artifacts_affected"] == 2
+        assert data["tag_name"] == "to-flush"
+        assert data["count"] == 2
         assert data["dry_run"] is False
 
 
@@ -116,10 +116,10 @@ class TestFlushUnknownTag:
     def test_flush_unknown_tag_returns_empty_result(self, client: TestClient) -> None:
         """Flushing a tag that doesn't exist returns empty result."""
         mock_result = {
-            "tag": "nonexistent-tag",
+            "tag_name": "nonexistent-tag",
             "dry_run": False,
-            "artifacts_affected": 0,
-            "artifacts": [],
+            "count": 0,
+            "affected_artifacts": [],
         }
 
         with patch(
@@ -134,9 +134,9 @@ class TestFlushUnknownTag:
         assert response.status_code == 200
         data = response.json()
 
-        assert data["tag"] == "nonexistent-tag"
-        assert data["artifacts_affected"] == 0
-        assert data["artifacts"] == []
+        assert data["tag_name"] == "nonexistent-tag"
+        assert data["count"] == 0
+        assert data["affected_artifacts"] == []
 
 
 class TestResponseFormat:
@@ -145,10 +145,10 @@ class TestResponseFormat:
     def test_response_has_all_fields(self, client: TestClient) -> None:
         """Response has all expected fields."""
         mock_result = {
-            "tag": "any-tag",
+            "tag_name": "any-tag",
             "dry_run": False,
-            "artifacts_affected": 0,
-            "artifacts": [],
+            "count": 0,
+            "affected_artifacts": [],
         }
 
         with patch(
@@ -163,16 +163,16 @@ class TestResponseFormat:
         assert response.status_code == 200
         data = response.json()
 
-        expected_fields = {"tag", "artifacts", "artifacts_affected", "dry_run"}
+        expected_fields = {"tag_name", "affected_artifacts", "count", "dry_run"}
         assert expected_fields == set(data.keys())
 
     def test_dry_run_defaults_to_false(self, client: TestClient) -> None:
         """dry_run parameter defaults to false when not specified."""
         mock_result = {
-            "tag": "default-test",
+            "tag_name": "default-test",
             "dry_run": False,
-            "artifacts_affected": 0,
-            "artifacts": [],
+            "count": 0,
+            "affected_artifacts": [],
         }
 
         mock_run = AsyncMock(return_value=mock_result)
@@ -209,15 +209,16 @@ class TestFlushSubprocessIntegration:
             )
 
         assert response.status_code == 500
-        assert "Command failed" in response.json()["detail"]
+        # Error message should be sanitized (not expose internal details)
+        assert response.json()["detail"] == "Flush tag operation failed"
 
     def test_flush_passes_tag_name_to_subprocess(self, client: TestClient) -> None:
         """Flush passes tag name to subprocess command."""
         mock_result = {
-            "tag": "my-tag",
+            "tag_name": "my-tag",
             "dry_run": False,
-            "artifacts_affected": 0,
-            "artifacts": [],
+            "count": 0,
+            "affected_artifacts": [],
         }
 
         mock_run = AsyncMock(return_value=mock_result)

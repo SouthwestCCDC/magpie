@@ -66,10 +66,10 @@ def flush_tag(
 
     if json_output:
         output = {
-            "tag": result.tag_name,
+            "tag_name": result.tag_name,
             "dry_run": dry_run,
-            "artifacts_affected": result.count,
-            "artifacts": result.affected_artifacts,
+            "count": result.count,
+            "affected_artifacts": result.affected_artifacts,
         }
         click.echo(json.dumps(output))
         return
