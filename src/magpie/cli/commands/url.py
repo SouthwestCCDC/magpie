@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import click
 
 from magpie.cli import CLIContext
@@ -68,11 +70,10 @@ def url(ctx: CLIContext, artifact_ref: str) -> None:
             if is_json_output():
                 try:
                     detail = response.json().get("detail", response.text)
-                except Exception:
+                except json.JSONDecodeError:
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
-            else:
-                handle_http_error(response, "URL resolution")
+            handle_http_error(response, "URL resolution")
 
         data = response.json()
         hash_ref = data["hash_ref"]

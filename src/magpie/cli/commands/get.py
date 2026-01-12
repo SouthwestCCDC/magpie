@@ -207,11 +207,10 @@ def get(
                     ErrorCode.VALIDATION_ERROR,
                     f"Hash mismatch! Expected {expected_hash}, got {actual_hash}.",
                 )
-            else:
-                raise click.ClickException(
-                    f"Hash mismatch! Expected {expected_hash}, got {actual_hash}. "
-                    "File may be corrupted. Use --no-verify to skip verification."
-                )
+            raise click.ClickException(
+                f"Hash mismatch! Expected {expected_hash}, got {actual_hash}. "
+                "File may be corrupted. Use --no-verify to skip verification."
+            )
         verified = True
         if ctx.debug:
             click.echo("Hash verified.", err=True)
