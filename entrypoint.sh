@@ -57,11 +57,11 @@ else
 fi
 DB_LOCK_FILE="${LOCK_DIR}/.magpie-init.lock"
 
-# Determine database path: MAGPIE_DATABASE_PATH takes precedence, otherwise derive from storage
+# Determine database path: MAGPIE_DATABASE_PATH takes precedence, otherwise derive from validated LOCK_DIR
 if [ -n "$MAGPIE_DATABASE_PATH" ]; then
     DB_PATH="$MAGPIE_DATABASE_PATH"
 else
-    DB_PATH="${MAGPIE_STORAGE_PATH:-/data/artifacts}/.magpie.db"
+    DB_PATH="${LOCK_DIR}/.magpie.db"
 fi
 
 # Acquire the lock and check/initialize the database atomically
