@@ -38,6 +38,8 @@ chmod 644 /run/magpie-user
 # Auto-initialize database if it doesn't exist
 # This runs before starting the main service
 # Uses a lock file to prevent race conditions when multiple containers share /data
+# Note: The lock file persists on disk; this is intentional and harmless (flock releases
+# the lock automatically when the file descriptor closes, and the empty file has no effect)
 DB_LOCK_FILE=/data/.magpie-init.lock
 
 (
@@ -45,15 +47,12 @@ DB_LOCK_FILE=/data/.magpie-init.lock
 
     if [ ! -f /data/magpie.db ]; then
         echo "Database not found, running magpie-ctl init..."
-        set +e
+        INIT_STATUS=0
         if [ "$RUN_UID" = "0" ]; then
-            /app/.venv/bin/python -m magpie.ctl init
-            INIT_STATUS=$?
+            /app/.venv/bin/python -m magpie.ctl init || INIT_STATUS=$?
         else
-            gosu "$RUN_UID:$RUN_GID" /app/.venv/bin/python -m magpie.ctl init
-            INIT_STATUS=$?
+            gosu "$RUN_UID:$RUN_GID" /app/.venv/bin/python -m magpie.ctl init || INIT_STATUS=$?
         fi
-        set -e
 
         if [ "$INIT_STATUS" -ne 0 ]; then
             echo "Error: magpie-ctl init failed with exit code $INIT_STATUS" >&2
@@ -61,6 +60,13 @@ DB_LOCK_FILE=/data/.magpie-init.lock
         fi
     fi
 ) 200>"$DB_LOCK_FILE"
+INIT_LOCK_STATUS=$?
+
+# The subshell exits with the init status; re-check and propagate to main script
+# (set -e doesn't automatically propagate subshell exit codes)
+if [ "$INIT_LOCK_STATUS" -ne 0 ]; then
+    exit "$INIT_LOCK_STATUS"
+fi
 
 # Run as root if UID is 0 (no privilege drop needed)
 if [ "$RUN_UID" = "0" ]; then

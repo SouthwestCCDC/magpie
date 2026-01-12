@@ -4,7 +4,7 @@
 # This wrapper detects whether it needs to drop privileges:
 # - If already running as the correct user (UID matches), exec directly
 # - If running as root, use gosu to drop privileges
-# - Fallback to direct exec if /run/magpie-user doesn't exist
+# - Fallback to direct exec if /run/magpie-user doesn't exist or UID is neither expected nor root
 #
 # This enables magpie-ctl to work correctly whether invoked:
 # - From within the running container (same user)
@@ -13,7 +13,7 @@
 
 set -e
 
-# Use array to avoid word splitting issues with multi-word command
+# Use an array so the command and its arguments are kept as separate elements
 REAL_CTL=(/app/.venv/bin/python -m magpie.ctl)
 
 if [ -f /run/magpie-user ]; then
