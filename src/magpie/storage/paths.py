@@ -53,6 +53,7 @@ def normalize_artifact_path(path: str) -> str:
 
     return path
 
+
 # Reserved directory names that cannot appear in artifact paths
 RESERVED_SEGMENTS = {"blobs", "metadata", ".magpie"}
 
