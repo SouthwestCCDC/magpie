@@ -54,8 +54,15 @@ class ProgressFileWrapper:
         return data
 
     def seek(self, offset: int, whence: int = 0) -> int:
-        """Seek in file (needed for multipart encoding)."""
-        return self._file.seek(offset, whence)
+        """Seek in file (needed for multipart encoding).
+
+        Resets the bytes read counter to match the new file position,
+        ensuring accurate tracking even if httpx seeks back to re-read.
+        """
+        result = self._file.seek(offset, whence)
+        # Update _bytes_read to match the new file position
+        self._bytes_read = self._file.tell()
+        return result
 
     def tell(self) -> int:
         """Return current position."""

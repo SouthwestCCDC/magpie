@@ -134,8 +134,8 @@ def processing_spinner(
         return
 
     from rich.console import Console
-    from rich.spinner import Spinner
     from rich.live import Live
+    from rich.spinner import Spinner
 
     console = Console()
     spinner = Spinner("dots", text=f"[bold blue]{message}")
