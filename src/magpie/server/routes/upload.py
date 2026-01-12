@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, UploadFile
+from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
 from magpie.server.deps import get_storage_service, require_write_scope
+from magpie.storage.exceptions import InvalidArtifactPathError
+from magpie.storage.paths import normalize_artifact_path
 from magpie.storage.service import StorageService
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,12 @@ async def upload_artifact(
         HTTPException 403: If token has read scope (insufficient permissions).
         StorageError: If storage operation fails.
     """
+    # Normalize path for defense in depth (CLI should also normalize)
+    try:
+        path = normalize_artifact_path(path)
+    except InvalidArtifactPathError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
     # Use X-Magpie-User header if present (authenticated via Caddy)
     # Fall back to query parameter for direct API access
     if x_magpie_user is not None:
@@ -83,7 +91,9 @@ async def upload_artifact(
         source_uri=source_uri,
     )
 
-    download_url = f"/artifacts/{path}/{info.hash_ref}"
+    # Use blobs/ path for hash-based downloads (info.hash_ref has @ prefix)
+    blob_name = info.hash_ref.lstrip("@")
+    download_url = f"/artifacts/{path}/blobs/{blob_name}"
 
     return UploadResponse(
         hash=info.hash,

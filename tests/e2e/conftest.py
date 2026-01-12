@@ -72,19 +72,27 @@ def docker_services(
     """Start docker-compose services for E2E tests.
 
     Starts services, waits for health checks, yields service info, then cleans up.
+
+    Test isolation is achieved by:
+    - Using a unique COMPOSE_PROJECT_NAME per test session
+    - Mounting a temporary directory as MAGPIE_DATA_DIR
+    - Cleaning up all containers, volumes, and temp data after tests
     """
     # Create temporary data directory for test isolation
+    # This ensures tests don't affect real data and start fresh each session
     temp_data_dir = Path(tempfile.mkdtemp(prefix="magpie_e2e_"))
     artifacts_dir = temp_data_dir / "artifacts"
     artifacts_dir.mkdir(parents=True)
 
     env = os.environ.copy()
     env["COMPOSE_PROJECT_NAME"] = docker_compose_project_name
+    # Use the temp directory for data isolation - this overrides the default ./data/artifacts
+    env["MAGPIE_DATA_DIR"] = str(artifacts_dir)
 
     compose_cmd = ["docker", "compose", "-f", str(PROJECT_ROOT / "docker-compose.yml")]
 
     try:
-        # Build and start services with temp data directory
+        # Build services
         subprocess.run(
             [*compose_cmd, "build"],
             cwd=PROJECT_ROOT,
@@ -93,7 +101,7 @@ def docker_services(
             capture_output=True,
         )
 
-        # Start with volume override for test isolation
+        # Start services with isolated temp data directory via MAGPIE_DATA_DIR env var
         subprocess.run(
             [
                 *compose_cmd,
@@ -142,6 +150,7 @@ def admin_token(docker_services: dict[str, str]) -> str:
     """Get admin token from initialized system.
 
     Runs magpie-ctl init inside the container to get the admin token.
+    Since tests run with an isolated data directory, this is always a fresh init.
     """
     compose_cmd = [
         "docker",
@@ -153,9 +162,9 @@ def admin_token(docker_services: dict[str, str]) -> str:
     env["COMPOSE_PROJECT_NAME"] = docker_services["project_name"]
 
     # Run magpie-ctl init inside the container
-    # Use --reset-admin-token to ensure we get a fresh token even if data persists
+    # No --reset-admin-token needed since we use isolated temp data directory
     result = subprocess.run(
-        [*compose_cmd, "exec", "-T", "magpie", "magpie-ctl", "init", "--reset-admin-token"],
+        [*compose_cmd, "exec", "-T", "magpie", "magpie-ctl", "init"],
         cwd=PROJECT_ROOT,
         env=env,
         capture_output=True,

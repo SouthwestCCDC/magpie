@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import click
 
-if TYPE_CHECKING:
-    import httpx
-
 from magpie.cli import CLIContext
+from magpie.cli.errors import handle_http_error
+from magpie.storage.exceptions import InvalidArtifactPathError
+from magpie.storage.paths import normalize_artifact_path
 
 
 @click.command()
@@ -32,6 +30,12 @@ def untag(ctx: CLIContext, artifact_path: str, tag_name: str) -> None:
     if not ctx.server:
         raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
 
+    # Normalize artifact path
+    try:
+        artifact_path = normalize_artifact_path(artifact_path)
+    except InvalidArtifactPathError as e:
+        raise click.ClickException(str(e))
+
     with ctx.get_client() as client:
         if ctx.debug:
             click.echo(f"Removing tag '{tag_name}' from {artifact_path}...", err=True)
@@ -43,16 +47,6 @@ def untag(ctx: CLIContext, artifact_path: str, tag_name: str) -> None:
         if response.status_code == 404:
             raise click.ClickException(f"Tag not found: {artifact_path}:{tag_name}")
         if response.status_code != 204:
-            _handle_error(response)
+            handle_http_error(response, "Untag", ctx.token)
 
     click.echo(f"Removed tag '{tag_name}' from {artifact_path}")
-
-
-def _handle_error(response: "httpx.Response") -> None:
-    """Handle HTTP error responses."""
-    try:
-        detail = response.json().get("detail", response.text)
-    except Exception:
-        detail = response.text
-
-    raise click.ClickException(f"Tag removal failed ({response.status_code}): {detail}")

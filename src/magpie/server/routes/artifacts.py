@@ -5,14 +5,35 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from magpie.server.deps import get_storage_service, require_write_scope
-from magpie.storage.exceptions import ArtifactNotFoundError
+from magpie.storage.exceptions import ArtifactNotFoundError, InvalidArtifactPathError
+from magpie.storage.paths import normalize_artifact_path
 from magpie.storage.service import StorageService
 
 router = APIRouter()
+
+
+def _normalize_path(path: str) -> str:
+    """Normalize artifact path for defense in depth.
+
+    CLI should also normalize, but server validates as well.
+
+    Args:
+        path: Raw artifact path from request.
+
+    Returns:
+        Normalized path.
+
+    Raises:
+        HTTPException 400: If path is invalid.
+    """
+    try:
+        return normalize_artifact_path(path)
+    except InvalidArtifactPathError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 class VersionInfo(BaseModel):
@@ -95,6 +116,7 @@ async def get_artifact_info(
         ArtifactNotFoundError: If path doesn't exist or ref doesn't resolve.
             Automatically converted to HTTP 404 by error handlers.
     """
+    path = _normalize_path(path)
     info = storage_service.get_artifact_info(path, ref)
 
     return ArtifactInfoResponse(
@@ -138,6 +160,8 @@ async def create_tag(
         ArtifactNotFoundError: If path doesn't exist or ref doesn't resolve.
             Automatically converted to HTTP 404 by error handlers.
     """
+    path = _normalize_path(path)
+
     # Resolve ref (tag name or hash ref) to get the hash_ref
     # This handles both "latest" (tag) and "@abc123" (hash ref) formats
     existing_info = storage_service.get_artifact_info(path, ref)
@@ -182,6 +206,7 @@ async def remove_tag(
         ArtifactNotFoundError: If path doesn't exist or tag doesn't exist.
             Automatically converted to HTTP 404 by error handlers.
     """
+    path = _normalize_path(path)
     removed = storage_service.remove_tag(path, tag_name)
 
     if not removed:
@@ -221,6 +246,8 @@ async def amend_metadata(
         ArtifactNotFoundError: If path doesn't exist or ref doesn't resolve.
             Automatically converted to HTTP 404 by error handlers.
     """
+    path = _normalize_path(path)
+
     # Resolve ref (tag name or hash ref) to get the hash_ref
     existing_info = storage_service.get_artifact_info(path, ref)
 
@@ -258,6 +285,13 @@ async def list_artifact_paths(
     Returns:
         ArtifactPathsResponse with list of matching artifact paths.
     """
+    # Normalize prefix if provided (empty string is valid for listing all)
+    if prefix:
+        try:
+            prefix = normalize_artifact_path(prefix)
+        except InvalidArtifactPathError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
     paths = storage_service.list_artifact_paths(prefix)
     return ArtifactPathsResponse(paths=paths)
 
@@ -279,6 +313,7 @@ async def list_artifacts(
         ArtifactListResponse with artifact path and list of versions.
         Empty versions list if path doesn't exist.
     """
+    path = _normalize_path(path)
     artifact_infos = storage_service.list_artifacts(path)
 
     versions = [

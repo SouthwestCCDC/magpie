@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import click
 
-if TYPE_CHECKING:
-    import httpx
-
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
+from magpie.cli.errors import handle_http_error
 from magpie.cli.progress import transfer_progress
 from magpie.storage.hash import compute_hash
 
@@ -23,7 +20,10 @@ from magpie.storage.hash import compute_hash
 @click.option("--no-verify", is_flag=True, help="Skip SHA-256 verification.")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress output.")
 @click.option(
-    "--force", "-f", is_flag=True, help="Overwrite existing output file without prompting."
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Overwrite existing output file without prompting, and re-download even if local hash matches.",
 )
 @click.pass_obj
 def get(
@@ -65,7 +65,7 @@ def get(
         if info_response.status_code == 404:
             raise click.ClickException(f"Artifact not found: {parsed.path}:{parsed.ref}")
         if info_response.status_code != 200:
-            _handle_error(info_response, "metadata fetch")
+            handle_http_error(info_response, "Metadata", ctx.token)
 
         info = info_response.json()
         expected_hash = info["hash"]
@@ -85,9 +85,10 @@ def get(
         # Check if output file exists before downloading to avoid wasting bandwidth
         if output.exists():
             # If local file has same hash as remote, skip download entirely
+            # (unless --force is set, in which case we re-download anyway)
             # Use compute_hash for streaming hash computation (handles large files)
             local_hash = compute_hash(output)
-            if local_hash == expected_hash:
+            if local_hash == expected_hash and not force:
                 click.echo(f"File already exists with matching hash: {output}")
                 return
 
@@ -100,10 +101,13 @@ def get(
 
         # Download the artifact
         # Hash refs use blobs/ subdirectory, tags are symlinks at root
-        if hash_ref.startswith("@"):
-            download_url = f"/artifacts/{parsed.path}/blobs/{hash_ref.lstrip('@')}"
+        if parsed.ref.startswith("@"):
+            # User requested hash directly - use blobs path
+            blob_name = hash_ref.lstrip("@")
+            download_url = f"/artifacts/{parsed.path}/blobs/{blob_name}"
         else:
-            download_url = f"/artifacts/{parsed.path}/{hash_ref}"
+            # User requested tag - use tag symlink path
+            download_url = f"/artifacts/{parsed.path}/{parsed.ref}"
 
         if ctx.debug:
             click.echo(f"Downloading from {download_url}...", err=True)
@@ -116,7 +120,7 @@ def get(
             if response.status_code != 200:
                 # Read response body for error message
                 response.read()
-                _handle_error(response, "download")
+                handle_http_error(response, "Download", ctx.token)
 
             # Get content length from header if available (may be more accurate)
             content_length = response.headers.get("content-length")
@@ -145,13 +149,3 @@ def get(
     # Write file
     output.write_bytes(content)
     click.echo(f"Downloaded: {output}")
-
-
-def _handle_error(response: "httpx.Response", operation: str) -> None:
-    """Handle HTTP error responses."""
-    try:
-        detail = response.json().get("detail", response.text)
-    except Exception:
-        detail = response.text
-
-    raise click.ClickException(f"{operation} failed ({response.status_code}): {detail}")
