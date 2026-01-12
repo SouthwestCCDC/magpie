@@ -41,8 +41,10 @@ if [ -f /run/magpie-user ]; then
     # the container where we control the user context. Fall through to the
     # final exec below, which will run as the current (unexpected) user.
     echo "magpie-ctl-wrapper: warning: running as UID $CURRENT_UID (expected $EXPECTED_UID or 0)" >&2
+    echo "magpie-ctl-wrapper: warning: this may cause permission errors accessing the database or storage paths" >&2
 fi
 
 # Fallback: run directly if /run/magpie-user doesn't exist (container started
 # without entrypoint) or if we're in an unexpected UID state (see warning above).
+# Note: In the unexpected UID case, the command may fail with permission errors.
 exec "${REAL_CTL[@]}" "$@"
