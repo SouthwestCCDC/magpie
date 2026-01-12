@@ -37,14 +37,30 @@ chmod 644 /run/magpie-user
 
 # Auto-initialize database if it doesn't exist
 # This runs before starting the main service
-if [ ! -f /data/magpie.db ]; then
-    echo "Database not found, running magpie-ctl init..."
-    if [ "$RUN_UID" = "0" ]; then
-        /app/.venv/bin/python -m magpie.ctl init
-    else
-        gosu "$RUN_UID:$RUN_GID" /app/.venv/bin/python -m magpie.ctl init
+# Uses a lock file to prevent race conditions when multiple containers share /data
+DB_LOCK_FILE=/data/.magpie-init.lock
+
+(
+    flock -x 200
+
+    if [ ! -f /data/magpie.db ]; then
+        echo "Database not found, running magpie-ctl init..."
+        set +e
+        if [ "$RUN_UID" = "0" ]; then
+            /app/.venv/bin/python -m magpie.ctl init
+            INIT_STATUS=$?
+        else
+            gosu "$RUN_UID:$RUN_GID" /app/.venv/bin/python -m magpie.ctl init
+            INIT_STATUS=$?
+        fi
+        set -e
+
+        if [ "$INIT_STATUS" -ne 0 ]; then
+            echo "Error: magpie-ctl init failed with exit code $INIT_STATUS" >&2
+            exit "$INIT_STATUS"
+        fi
     fi
-fi
+) 200>"$DB_LOCK_FILE"
 
 # Run as root if UID is 0 (no privilege drop needed)
 if [ "$RUN_UID" = "0" ]; then
