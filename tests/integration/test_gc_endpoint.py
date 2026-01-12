@@ -336,9 +336,7 @@ class TestGCDeletesUntaggedBlobs:
 class TestGCDirectoryCleanup:
     """Tests for GC endpoint directory cleanup after blob deletion."""
 
-    def test_gc_response_includes_items_removed(
-        self, client: TestClient, admin_token: str
-    ) -> None:
+    def test_gc_response_includes_items_removed(self, client: TestClient, admin_token: str) -> None:
         """GC response includes items_removed field."""
         response = client.post(
             "/api/v1/gc",
