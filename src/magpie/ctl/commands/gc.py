@@ -16,7 +16,8 @@ from magpie.cli.formatting import (
 )
 from magpie.cli.progress import count_progress
 from magpie.ctl import CTLContext
-from magpie.storage.gc import BlobToDelete, GCResult, format_size, run_gc
+from magpie.storage.gc import BlobToDelete, GCResult, run_gc
+from magpie.utils.formatting import format_size
 
 
 @click.command()

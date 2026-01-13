@@ -13,6 +13,7 @@ from magpie.server.observability import setup_observability
 from magpie.server.routes.artifacts import router as artifacts_router
 from magpie.server.routes.auth import router as auth_router
 from magpie.server.routes.gc import router as gc_router
+from magpie.server.routes.status import router as status_router
 from magpie.server.routes.tags import router as tags_router
 from magpie.server.routes.upload import router as upload_router
 
@@ -40,6 +41,7 @@ app.include_router(artifacts_router)
 app.include_router(tags_router)
 app.include_router(auth_router)
 app.include_router(gc_router)
+app.include_router(status_router)
 
 
 @app.get("/health")

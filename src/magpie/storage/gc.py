@@ -376,22 +376,3 @@ def run_gc(
         result.items_removed = cleanup_stats.total_removed
 
     return result, blobs_to_delete
-
-
-def format_size(size_bytes: int) -> str:
-    """Format byte size as human-readable string.
-
-    Args:
-        size_bytes: Size in bytes.
-
-    Returns:
-        Human-readable size string (e.g., "1.5 MB").
-    """
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
