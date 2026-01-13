@@ -109,17 +109,41 @@ def verify_path_is_descendant(base: Path, artifact_path: str) -> Path:
 RESERVED_SEGMENTS = {"blobs", "metadata", ".magpie"}
 
 
-def artifact_dir_path(base: Path, artifact_path: str) -> Path:
+def artifact_dir_path(base: Path, artifact_path: str, verify_security: bool = True) -> Path:
     """Construct artifact directory path from base and artifact path.
+
+    Security: By default, this function verifies that the resolved path remains
+    within the storage base directory. This protects against symlink attacks
+    where a symlink inside storage could point to files outside storage.
 
     Args:
         base: Base storage directory path.
         artifact_path: Logical artifact path (e.g., "project/component/artifact").
+        verify_security: If True (default), verify resolved path stays within base.
+            Set to False only for trusted internal operations that don't need
+            symlink protection.
 
     Returns:
         Full path to artifact directory.
+
+    Raises:
+        InvalidArtifactPathError: If verify_security is True and the resolved
+            path would escape the base directory (e.g., via symlink).
     """
-    return base / artifact_path
+    result = base / artifact_path
+    if verify_security:
+        # Use resolve() to follow any symlinks and verify final path is within base.
+        # This protects against symlink attacks where storage/escape_link -> /etc
+        # would allow reading/writing files outside the storage directory.
+        resolved = result.resolve()
+        base_resolved = base.resolve()
+        try:
+            resolved.relative_to(base_resolved)
+        except ValueError:
+            raise InvalidArtifactPathError(
+                f"Path '{artifact_path}' resolves outside the storage directory"
+            )
+    return result
 
 
 def blob_path(artifact_dir: Path, hash_ref: str) -> Path:

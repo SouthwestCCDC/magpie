@@ -220,55 +220,161 @@ class TestUnicodeNormalizationAttacks:
 class TestSymlinkAttacks:
     """Test symlink-based attacks.
 
-    These tests verify that the system properly handles or rejects
-    symlinks that could be used to escape the storage directory or
-    access unauthorized files.
+    These tests verify that the system properly rejects symlinks that
+    could be used to escape the storage directory or access unauthorized
+    files.
 
-    Note: Currently symlinks in the storage directory are followed, which
-    could be a security concern. This test documents the current behavior.
+    Security mechanism: The artifact_dir_path() function uses Path.resolve()
+    to follow symlinks and verifies that the resolved path remains within
+    the storage root directory. This protects both uploads and reads.
     """
 
-    @pytest.mark.xfail(
-        reason="Symlink following is currently allowed - see issue #135 for security review"
-    )
     def test_symlink_in_artifact_path_rejected(
-        self, client: TestClient, test_storage_service: StorageService, tmp_path: Path
+        self, client: TestClient, test_storage_service: StorageService
     ) -> None:
         """Symlinks in artifact paths should not allow escaping storage root.
 
-        This test is marked as xfail because the current implementation
-        follows symlinks. This behavior should be reviewed for security
-        implications.
+        The verify_path_is_descendant function uses resolve() to detect when
+        symlinks would escape the storage directory, and rejects such paths.
         """
+        import tempfile
+        import shutil
+
         storage_base = test_storage_service.config.storage_path
+
+        # Create target directory OUTSIDE the storage root
+        # We need a separate temp directory, not a subdirectory of storage_base
+        outside_temp = Path(tempfile.mkdtemp(prefix="magpie_symlink_test_outside_"))
+        target_path = outside_temp / "escape_target"
+        target_path.mkdir(parents=True, exist_ok=True)
 
         # Create a symlink inside storage pointing outside
         symlink_path = storage_base / "escape_link"
-        target_path = tmp_path / "outside_storage"
-        target_path.mkdir(parents=True, exist_ok=True)
 
         try:
             symlink_path.symlink_to(target_path)
         except OSError:
+            shutil.rmtree(outside_temp, ignore_errors=True)
             pytest.skip("Cannot create symlinks on this system")
 
-        # Try to upload through the symlink
-        content = b"test content"
-        files = {"file": ("test.bin", io.BytesIO(content), "application/octet-stream")}
+        try:
+            # Try to upload through the symlink
+            content = b"test content"
+            files = {"file": ("test.bin", io.BytesIO(content), "application/octet-stream")}
 
-        response = client.post(
-            "/api/v1/upload/escape_link/artifact",
-            files=files,
-        )
+            response = client.post(
+                "/api/v1/upload/escape_link/artifact",
+                files=files,
+            )
 
-        # The storage service should handle this safely
-        # Either reject or store in the actual symlink location (not follow it)
-        if response.status_code == 200:
-            # If upload succeeded, verify it didn't write to the target
+            # The upload should be rejected because the symlink escapes storage root
+            assert response.status_code == 400, (
+                f"Expected 400 for symlink escape attempt, got {response.status_code}: "
+                f"{response.text}"
+            )
+            assert "resolves outside" in response.text.lower()
+
+            # Double-check that nothing was written to the target
             target_artifact_dir = target_path / "artifact"
             assert not (target_artifact_dir / "blobs").exists(), (
                 "Upload followed symlink and wrote outside storage!"
             )
+        finally:
+            # Clean up the outside temp directory
+            shutil.rmtree(outside_temp, ignore_errors=True)
+
+    def test_symlink_read_artifact_rejected(
+        self, client: TestClient, test_storage_service: StorageService
+    ) -> None:
+        """Symlinks should not allow reading files outside storage root.
+
+        Tests that attempting to read artifact info through a symlink that
+        escapes the storage directory is rejected.
+        """
+        import tempfile
+        import shutil
+
+        storage_base = test_storage_service.config.storage_path
+
+        # Create target directory OUTSIDE the storage root with some content
+        outside_temp = Path(tempfile.mkdtemp(prefix="magpie_symlink_read_test_"))
+        target_path = outside_temp / "sensitive_data"
+        target_path.mkdir(parents=True, exist_ok=True)
+
+        # Create some "sensitive" content that should NOT be readable
+        (target_path / "secret.txt").write_text("sensitive data")
+
+        # Create a symlink inside storage pointing outside
+        symlink_path = storage_base / "escape_link"
+
+        try:
+            symlink_path.symlink_to(target_path)
+        except OSError:
+            shutil.rmtree(outside_temp, ignore_errors=True)
+            pytest.skip("Cannot create symlinks on this system")
+
+        try:
+            # Try to list artifacts through the symlink
+            response = client.get("/api/v1/artifacts/escape_link")
+
+            # The request should be rejected because the symlink escapes storage root
+            assert response.status_code == 400, (
+                f"Expected 400 for symlink escape attempt, got {response.status_code}: "
+                f"{response.text}"
+            )
+            assert "resolves outside" in response.text.lower()
+        finally:
+            shutil.rmtree(outside_temp, ignore_errors=True)
+
+    def test_symlink_in_nested_path_rejected(
+        self, client: TestClient, test_storage_service: StorageService
+    ) -> None:
+        """Symlinks in nested paths should also be rejected.
+
+        Tests that symlinks anywhere in the artifact path (not just at the root)
+        are detected and rejected.
+        """
+        import tempfile
+        import shutil
+
+        storage_base = test_storage_service.config.storage_path
+
+        # Create a legitimate top-level directory
+        legit_dir = storage_base / "project"
+        legit_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create target directory OUTSIDE the storage root
+        outside_temp = Path(tempfile.mkdtemp(prefix="magpie_nested_symlink_test_"))
+        target_path = outside_temp / "escape_target"
+        target_path.mkdir(parents=True, exist_ok=True)
+
+        # Create a symlink inside the legitimate directory pointing outside
+        symlink_path = legit_dir / "evil_link"
+
+        try:
+            symlink_path.symlink_to(target_path)
+        except OSError:
+            shutil.rmtree(outside_temp, ignore_errors=True)
+            pytest.skip("Cannot create symlinks on this system")
+
+        try:
+            # Try to upload through the nested symlink
+            content = b"test content"
+            files = {"file": ("test.bin", io.BytesIO(content), "application/octet-stream")}
+
+            response = client.post(
+                "/api/v1/upload/project/evil_link/artifact",
+                files=files,
+            )
+
+            # The upload should be rejected
+            assert response.status_code == 400, (
+                f"Expected 400 for nested symlink escape, got {response.status_code}: "
+                f"{response.text}"
+            )
+            assert "resolves outside" in response.text.lower()
+        finally:
+            shutil.rmtree(outside_temp, ignore_errors=True)
 
     def test_double_dot_path_normalized_by_http(self, client: TestClient) -> None:
         """Double dot (..) in URL path is normalized by HTTP framework.
