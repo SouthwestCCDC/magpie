@@ -16,7 +16,7 @@ from magpie.cli.formatting import (
     output_error,
     output_result,
 )
-from magpie.storage.gc import format_size
+from magpie.utils.formatting import format_size
 
 
 @click.command()

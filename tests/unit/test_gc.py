@@ -12,10 +12,10 @@ from magpie.storage.gc import (
     BlobToDelete,
     GCResult,
     SymlinkFixDetail,
-    format_size,
     get_blob_age_days,
     run_gc,
 )
+from magpie.utils.formatting import format_size
 
 
 @pytest.fixture

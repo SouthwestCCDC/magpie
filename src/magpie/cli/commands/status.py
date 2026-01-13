@@ -16,25 +16,7 @@ from magpie.cli.formatting import (
     output_error,
     output_result,
 )
-
-
-def _format_size(size_bytes: int) -> str:
-    """Format byte size to human-readable string.
-
-    Args:
-        size_bytes: Size in bytes.
-
-    Returns:
-        Human-readable size string (e.g., "42.5 GB").
-    """
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+from magpie.utils.formatting import format_size
 
 
 @click.command()
@@ -118,7 +100,7 @@ def status(ctx: CLIContext) -> None:
 
     # Storage stats
     storage = data["storage"]
-    size_str = _format_size(storage["total_size_bytes"])
+    size_str = format_size(storage["total_size_bytes"])
     click.echo(f"Storage:   {size_str} used")
     click.echo(f"Artifacts: {storage['artifact_count']} total")
     click.echo(f"Blobs:     {storage['blob_count']} total")

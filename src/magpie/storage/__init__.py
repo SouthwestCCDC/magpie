@@ -22,7 +22,6 @@ from magpie.storage.gc import (
     GCResult,
     ProgressCallback,
     SymlinkFixDetail,
-    format_size,
     get_blob_age_days,
     run_gc,
 )
@@ -52,6 +51,7 @@ from magpie.storage.symlinks import (
     reconcile_symlinks,
     remove_symlink,
 )
+from magpie.utils.formatting import format_size
 
 __all__ = [
     # Storage service (main API)
