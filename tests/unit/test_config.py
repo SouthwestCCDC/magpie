@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from magpie.config import MagpieSettings, get_settings
 
@@ -157,6 +158,12 @@ class TestMagpieSettingsEnvironmentOverride:
         monkeypatch.setenv("MAGPIE_LOG_FORMAT", "console")
         settings = MagpieSettings()
         assert settings.log_format == "console"
+
+    def test_log_format_invalid_value_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Invalid MAGPIE_LOG_FORMAT values should raise ValidationError."""
+        monkeypatch.setenv("MAGPIE_LOG_FORMAT", "invalid")
+        with pytest.raises(ValidationError):
+            MagpieSettings()
 
 
 class TestGetSettingsCaching:
