@@ -88,7 +88,7 @@ def amend(ctx: CLIContext, artifact_ref: str, source_uri: str | None) -> None:
             if is_json_output():
                 try:
                     detail = response.json().get("detail", response.text)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, ValueError, KeyError):
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
             else:
