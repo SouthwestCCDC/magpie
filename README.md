@@ -40,16 +40,21 @@ The production configuration (`docker-compose.prod.yml` and `Caddyfile.prod`) in
 - Automatic TLS via Let's Encrypt (or manual certificate configuration)
 - Security headers (HSTS, X-Frame-Options, CSP, etc.)
 - JSON access logging
-- Rate limiting must be configured at infrastructure layer - see [issue #129](https://github.com/SouthwestCCDC/magpie/issues/129) for implementation options (custom Caddy build, FastAPI middleware, or load balancer)
+- Rate limiting must be configured at the infrastructure layer. See [issue #129](https://github.com/SouthwestCCDC/magpie/issues/129) for implementation options (custom Caddy build, FastAPI middleware, or load balancer).
 
 For manual TLS certificates, edit `Caddyfile.prod` and uncomment the `tls` directive
 with your certificate paths.
 
 **Let's Encrypt rate limits**: Let's Encrypt enforces a limit of 50 certificates per
-registered domain per week. For testing, use `tls internal` or staging endpoints to
-avoid exhausting your quota. The `caddy_data` volume stores issued certificates --
-persist this volume across container recreations to avoid requesting duplicate
-certificates.
+registered domain per week. For testing, use `tls internal` to generate self-signed
+certificates, or configure the Let's Encrypt staging environment in `Caddyfile.prod`:
+```
+tls {
+    ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+```
+The `caddy_data` volume stores issued certificates. Persist this volume across
+container recreations to avoid requesting duplicate certificates.
 
 ## Project Structure
 

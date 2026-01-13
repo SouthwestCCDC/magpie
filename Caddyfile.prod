@@ -72,7 +72,13 @@
 		level INFO
 	}
 
-	# Admin API disabled for security (enable only if needed for debugging)
+	# Admin API disabled for production security.
+	# For debugging, prefer:
+	#   - Reviewing Caddy's access/error logs (output to stdout, captured by Docker)
+	#   - Validating config before deployment: `caddy validate --config /etc/caddy/Caddyfile`
+	#   - Testing in a non-production environment
+	# If you must enable the admin API temporarily, restrict access to localhost
+	# and disable it again before returning to production.
 	admin off
 }
 
@@ -95,11 +101,13 @@
 	# =========================================================================
 
 	header {
-		# HSTS - Enforce HTTPS for all future requests (2 year max-age)
-		# NOTE: The "preload" directive is omitted because it requires active
-		# submission to hstspreload.org. Add "preload" only after submitting
+		# HSTS - Enforce HTTPS for all future requests (30-day max-age for initial deployment)
+		# NOTE: Starting with 30 days allows recovery if TLS is misconfigured. After
+		# confirming TLS works correctly, increase to 2 years (63072000) for production.
+		# The "preload" directive is omitted because it requires active submission to
+		# hstspreload.org. Add "preload" only after increasing max-age and submitting
 		# your domain to the HSTS preload list.
-		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		Strict-Transport-Security "max-age=2592000; includeSubDomains"
 
 		# Prevent MIME type sniffing
 		X-Content-Type-Options "nosniff"
@@ -174,8 +182,14 @@
 	# refs, filenames) to anyone who can access this endpoint. This is intentional
 	# for Magpie's use case (artifact discovery). If you need to restrict
 	# browsing, remove the "browse" argument from file_server below.
+	#
+	# PATH TRAVERSAL PROTECTION: The root directive points to /data/artifacts
+	# (not /data) to prevent traversal attacks from accessing Caddy's internal
+	# state directories (ACME keys, TLS certificates) that are stored elsewhere
+	# under /data. Caddy normalizes ".." segments, so the explicit subdirectory
+	# root ensures only artifact files are accessible.
 	handle /artifacts/* {
-		root * /data
+		root * /data/artifacts
 		file_server browse
 	}
 
