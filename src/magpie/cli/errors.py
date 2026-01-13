@@ -90,3 +90,44 @@ def handle_http_error(
         click.ClickException: Always raised with formatted error message.
     """
     raise click.ClickException(format_auth_error(response, operation, token))
+
+
+def handle_response_error(
+    response: "httpx.Response",
+    operation: str,
+    token: str | None = None,
+) -> None:
+    """Handle HTTP error responses for both JSON and human-readable output modes.
+
+    This is the unified error handler that replaces duplicated error handling
+    code across CLI commands. It:
+    - Checks if JSON output mode is active
+    - Extracts error detail from response (trying JSON first, falling back to text)
+    - In JSON mode: calls output_error() with appropriate error code
+    - In human mode: raises click.ClickException via handle_http_error()
+
+    Args:
+        response: The HTTP response object.
+        operation: Description of the operation that failed (e.g., "Upload", "Download").
+        token: Optional token to include (masked) for auth errors in human mode.
+
+    Note:
+        This function never returns - it always raises an exception or calls sys.exit().
+    """
+    # Import here to avoid circular imports
+    from magpie.cli.formatting import (
+        http_status_to_error_code,
+        is_json_output,
+        output_error,
+    )
+
+    if is_json_output():
+        try:
+            detail = response.json().get("detail", response.text)
+        except (json.JSONDecodeError, ValueError, KeyError):
+            detail = response.text
+        output_error(http_status_to_error_code(response.status_code), detail)
+        # output_error never returns (calls sys.exit), but this makes it explicit
+        return  # pragma: no cover
+
+    handle_http_error(response, operation, token)

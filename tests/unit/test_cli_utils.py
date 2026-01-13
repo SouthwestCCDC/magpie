@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import Mock
 
 import click
 import pytest
+from click.testing import CliRunner
 
-from magpie.cli.errors import TOKEN_MASK, format_auth_error, handle_http_error, mask_token
+from magpie.cli.errors import (
+    TOKEN_MASK,
+    format_auth_error,
+    handle_http_error,
+    handle_response_error,
+    mask_token,
+)
+from magpie.cli.formatting import format_option
 
 
 class TestBackwardCompatibility:
@@ -179,3 +188,171 @@ class TestHandleHttpError:
             handle_http_error(response, "Download", "mgp_testtoken5678")
 
         assert "token: ********5678" in str(exc_info.value)
+
+
+class TestHandleResponseError:
+    """Tests for handle_response_error function.
+
+    This function handles HTTP error responses for both JSON and human-readable
+    output modes. It extracts error details from the response and either outputs
+    JSON error envelope or raises ClickException for human mode.
+    """
+
+    def test_human_mode_raises_click_exception(self) -> None:
+        """In human mode, raises ClickException with formatted error."""
+        response = Mock()
+        response.status_code = 500
+        response.json.return_value = {"detail": "Internal server error"}
+
+        @click.command()
+        @format_option
+        def test_cmd() -> None:
+            handle_response_error(response, "Upload")
+
+        runner = CliRunner()
+        result = runner.invoke(test_cmd, ["--format", "human"])
+        assert result.exit_code == 1
+        assert "Upload failed (500): Internal server error" in result.output
+
+    def test_human_mode_includes_token_for_401(self) -> None:
+        """In human mode, 401 errors include masked token."""
+        response = Mock()
+        response.status_code = 401
+        response.json.return_value = {"detail": "Unauthorized"}
+
+        @click.command()
+        @format_option
+        def test_cmd() -> None:
+            handle_response_error(response, "Download", "mgp_secret123456")
+
+        runner = CliRunner()
+        result = runner.invoke(test_cmd, ["--format", "human"])
+        assert result.exit_code == 1
+        assert "token: ********3456" in result.output
+
+    def test_json_mode_outputs_error_envelope(self) -> None:
+        """In JSON mode, outputs JSON error envelope to stderr."""
+        response = Mock()
+        response.status_code = 404
+        response.json.return_value = {"detail": "Resource not found"}
+
+        @click.command()
+        @format_option
+        def test_cmd() -> None:
+            handle_response_error(response, "Info")
+
+        runner = CliRunner()
+        result = runner.invoke(test_cmd, ["--format", "json"])
+        assert result.exit_code == 1
+
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["code"] == "NOT_FOUND"
+        assert output["error"]["message"] == "Resource not found"
+
+    def test_json_mode_401_maps_to_unauthorized(self) -> None:
+        """In JSON mode, 401 maps to UNAUTHORIZED error code."""
+        response = Mock()
+        response.status_code = 401
+        response.json.return_value = {"detail": "Token expired"}
+
+        @click.command()
+        @format_option
+        def test_cmd() -> None:
+            handle_response_error(response, "Upload")
+
+        runner = CliRunner()
+        result = runner.invoke(test_cmd, ["--format", "json"])
+        output = json.loads(result.output)
+        assert output["error"]["code"] == "UNAUTHORIZED"
+        assert output["error"]["message"] == "Token expired"
+
+    def test_json_mode_403_maps_to_forbidden(self) -> None:
+        """In JSON mode, 403 maps to FORBIDDEN error code."""
+        response = Mock()
+        response.status_code = 403
+        response.json.return_value = {"detail": "Insufficient permissions"}
+
+        @click.command()
+        @format_option
+        def test_cmd() -> None:
+            handle_response_error(response, "Delete")
+
+        runner = CliRunner()
+        result = runner.invoke(test_cmd, ["--format", "json"])
+        output = json.loads(result.output)
+        assert output["error"]["code"] == "FORBIDDEN"
+        assert output["error"]["message"] == "Insufficient permissions"
+
+    def test_json_mode_500_maps_to_server_error(self) -> None:
+        """In JSON mode, 500 maps to SERVER_ERROR error code."""
+        response = Mock()
+        response.status_code = 500
+        response.json.return_value = {"detail": "Database connection failed"}
+
+        @click.command()
+        @format_option
+        def test_cmd() -> None:
+            handle_response_error(response, "Query")
+
+        runner = CliRunner()
+        result = runner.invoke(test_cmd, ["--format", "json"])
+        output = json.loads(result.output)
+        assert output["error"]["code"] == "SERVER_ERROR"
+        assert output["error"]["message"] == "Database connection failed"
+
+    def test_json_mode_malformed_json_falls_back_to_text(self) -> None:
+        """In JSON mode, malformed JSON response falls back to text."""
+        response = Mock()
+        response.status_code = 502
+        response.json.side_effect = json.JSONDecodeError("Invalid JSON", "", 0)
+        response.text = "Bad Gateway: upstream server unavailable"
+
+        @click.command()
+        @format_option
+        def test_cmd() -> None:
+            handle_response_error(response, "Proxy")
+
+        runner = CliRunner()
+        result = runner.invoke(test_cmd, ["--format", "json"])
+        assert result.exit_code == 1
+
+        output = json.loads(result.output)
+        assert output["status"] == "error"
+        assert output["error"]["code"] == "SERVER_ERROR"
+        assert output["error"]["message"] == "Bad Gateway: upstream server unavailable"
+
+    def test_json_mode_no_detail_key_falls_back_to_text(self) -> None:
+        """In JSON mode, missing detail key falls back to response text."""
+        response = Mock()
+        response.status_code = 409
+        response.json.return_value = {"error": "ConflictError"}
+        response.text = "Resource already exists"
+
+        @click.command()
+        @format_option
+        def test_cmd() -> None:
+            handle_response_error(response, "Create")
+
+        runner = CliRunner()
+        result = runner.invoke(test_cmd, ["--format", "json"])
+        output = json.loads(result.output)
+        assert output["error"]["code"] == "CONFLICT"
+        assert output["error"]["message"] == "Resource already exists"
+
+    def test_human_mode_malformed_json_falls_back_to_text(self) -> None:
+        """In human mode, malformed JSON response falls back to text."""
+        response = Mock()
+        response.status_code = 503
+        response.json.side_effect = ValueError("No JSON")
+        response.text = "Service Unavailable"
+
+        @click.command()
+        @format_option
+        def test_cmd() -> None:
+            handle_response_error(response, "Health")
+
+        runner = CliRunner()
+        result = runner.invoke(test_cmd, ["--format", "human"])
+        assert result.exit_code == 1
+        assert "Health failed (503): Service Unavailable" in result.output

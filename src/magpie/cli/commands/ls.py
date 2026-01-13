@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING
 
 import click
@@ -12,11 +11,10 @@ if TYPE_CHECKING:
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_path
-from magpie.cli.errors import handle_http_error
+from magpie.cli.errors import handle_response_error
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
-    http_status_to_error_code,
     is_json_output,
     output_error,
     output_result,
@@ -121,14 +119,7 @@ def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str) -> None:
     response = client.get("/api/v1/artifacts", params={"prefix": prefix})
 
     if response.status_code != 200:
-        if is_json_output():
-            try:
-                detail = response.json().get("detail", response.text)
-            except (json.JSONDecodeError, ValueError, KeyError):
-                detail = response.text
-            output_error(http_status_to_error_code(response.status_code), detail)
-            return  # output_error never returns, but explicit for clarity
-        handle_http_error(response, "List", ctx.token)
+        handle_response_error(response, "List", ctx.token)
 
     data = response.json()
     paths = data.get("paths", [])

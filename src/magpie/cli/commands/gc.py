@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
-
 import click
 
 from magpie.cli import CLIContext
-from magpie.cli.errors import handle_http_error, mask_token
+from magpie.cli.errors import handle_response_error, mask_token
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
-    http_status_to_error_code,
     is_json_output,
     output_error,
     output_result,
@@ -80,15 +77,8 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
                 output_error(ErrorCode.FORBIDDEN, msg)
                 return  # output_error never returns, but explicit for clarity
             raise click.ClickException(msg)
-        if response.status_code not in (200,):
-            if is_json_output():
-                try:
-                    detail = response.json().get("detail", response.text)
-                except (json.JSONDecodeError, ValueError, KeyError):
-                    detail = response.text
-                output_error(http_status_to_error_code(response.status_code), detail)
-                return  # output_error never returns, but explicit for clarity
-            handle_http_error(response, "GC", ctx.token)
+        if response.status_code != 200:
+            handle_response_error(response, "GC", ctx.token)
 
         data = response.json()
 
