@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import json
+
 import click
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
 from magpie.cli.errors import handle_http_error
+from magpie.cli.formatting import (
+    CommandResult,
+    ErrorCode,
+    http_status_to_error_code,
+    is_json_output,
+    output_error,
+    output_result,
+)
 
 
 @click.command()
@@ -30,14 +40,25 @@ def amend(ctx: CLIContext, artifact_ref: str, source_uri: str | None) -> None:
         magpie amend builds/app --source-uri https://ci.example.com/builds/123
     """
     if not ctx.server:
-        raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
+        msg = "No server configured. Use --server or set MAGPIE_SERVER."
+        if is_json_output():
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     if source_uri is None:
-        raise click.ClickException("No metadata updates specified. Use --source-uri to update.")
+        msg = "No metadata updates specified. Use --source-uri to update."
+        if is_json_output():
+            output_error(ErrorCode.VALIDATION_ERROR, msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     try:
         parsed = parse_artifact_ref(artifact_ref)
     except ParseError as e:
+        if is_json_output():
+            output_error(ErrorCode.VALIDATION_ERROR, str(e))
+            return  # output_error never returns, but explicit for clarity
         raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
@@ -46,9 +67,11 @@ def amend(ctx: CLIContext, artifact_ref: str, source_uri: str | None) -> None:
 
         # Build request body
         body: dict[str, str | None] = {}
+        updated_fields: list[str] = []
         if source_uri is not None:
             # Empty string means clear the field (set to null)
             body["source_uri"] = source_uri if source_uri else None
+            updated_fields.append("source_uri")
 
         response = client.patch(
             f"/api/v1/artifacts/{parsed.path}/{parsed.ref}",
@@ -56,13 +79,38 @@ def amend(ctx: CLIContext, artifact_ref: str, source_uri: str | None) -> None:
         )
 
         if response.status_code == 404:
-            raise click.ClickException(f"Artifact not found: {parsed.path}:{parsed.ref}")
+            msg = f"Artifact not found: {parsed.path}:{parsed.ref}"
+            if is_json_output():
+                output_error(ErrorCode.NOT_FOUND, msg)
+                return  # output_error never returns, but explicit for clarity
+            raise click.ClickException(msg)
         if response.status_code != 200:
+            if is_json_output():
+                try:
+                    detail = response.json().get("detail", response.text)
+                except (json.JSONDecodeError, ValueError, KeyError):
+                    detail = response.text
+                output_error(http_status_to_error_code(response.status_code), detail)
+                return  # output_error never returns, but explicit for clarity
             handle_http_error(response, "Amend", ctx.token)
 
         data = response.json()
 
-    # Display updated metadata
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "artifact": parsed.path,
+                    "version": data["hash_ref"],
+                    "updated_fields": updated_fields,
+                },
+                human_output="",
+            )
+        )
+        return
+
+    # Human output
     click.echo(f"Updated: {parsed.path}:{data['hash_ref']}")
     click.echo(f"  Source URI: {data.get('source_uri') or '(none)'}")
     click.echo(f"  Tags: {', '.join(data.get('tags', []))}")

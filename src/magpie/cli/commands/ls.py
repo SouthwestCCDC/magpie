@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import click
@@ -12,6 +13,14 @@ if TYPE_CHECKING:
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_path
 from magpie.cli.errors import handle_http_error
+from magpie.cli.formatting import (
+    CommandResult,
+    ErrorCode,
+    http_status_to_error_code,
+    is_json_output,
+    output_error,
+    output_result,
+)
 
 
 @click.command(name="ls")
@@ -35,7 +44,11 @@ def ls(ctx: CLIContext, artifact_path: str | None) -> None:
         magpie ls /test/myartifact   # Leading slash is normalized
     """
     if not ctx.server:
-        raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
+        msg = "No server configured. Use --server or set MAGPIE_SERVER."
+        if is_json_output():
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     with ctx.get_client() as client:
         # Case 1: No path provided - list all artifact paths
@@ -47,6 +60,9 @@ def ls(ctx: CLIContext, artifact_path: str | None) -> None:
         try:
             normalized_path = parse_artifact_path(artifact_path)
         except ParseError as e:
+            if is_json_output():
+                output_error(ErrorCode.VALIDATION_ERROR, str(e))
+                return  # output_error never returns, but explicit for clarity
             raise click.ClickException(str(e))
 
         if ctx.debug:
@@ -60,7 +76,26 @@ def ls(ctx: CLIContext, artifact_path: str | None) -> None:
             versions = data.get("versions", [])
 
             if versions:
-                # Found versions - display them in table format
+                # Found versions - display them
+                if is_json_output():
+                    output_result(
+                        CommandResult(
+                            data={
+                                "artifact": normalized_path,
+                                "versions": [
+                                    {
+                                        "version": v["hash_ref"],
+                                        "hash": v.get("hash", ""),
+                                        "tags": v.get("tags", []),
+                                        "created": v.get("uploaded_at", ""),
+                                    }
+                                    for v in versions
+                                ],
+                            },
+                            human_output="",
+                        )
+                    )
+                    return
                 _display_versions_table(versions)
                 return
             # No versions but path exists - fall through to prefix listing
@@ -86,11 +121,32 @@ def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str) -> None:
     response = client.get("/api/v1/artifacts", params={"prefix": prefix})
 
     if response.status_code != 200:
+        if is_json_output():
+            try:
+                detail = response.json().get("detail", response.text)
+            except (json.JSONDecodeError, ValueError, KeyError):
+                detail = response.text
+            output_error(http_status_to_error_code(response.status_code), detail)
+            return  # output_error never returns, but explicit for clarity
         handle_http_error(response, "List", ctx.token)
 
     data = response.json()
     paths = data.get("paths", [])
 
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "prefix": prefix,
+                    "paths": paths,
+                },
+                human_output="",
+            )
+        )
+        return
+
+    # Human output
     if not paths:
         if prefix:
             click.echo(f"No artifacts found matching: {prefix}")
@@ -139,5 +195,5 @@ def _format_datetime(dt_str: str) -> str:
             time_part = dt_str.split("T")[1][:8]  # HH:MM:SS
             return f"{date_part} {time_part}"
         return dt_str
-    except Exception:
+    except (ValueError, IndexError):
         return dt_str

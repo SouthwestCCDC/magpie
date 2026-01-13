@@ -9,6 +9,13 @@ import tomli_w
 
 from magpie.cli import config as cli_config
 from magpie.cli.errors import mask_token
+from magpie.cli.formatting import (
+    CommandResult,
+    ErrorCode,
+    is_json_output,
+    output_error,
+    output_result,
+)
 
 
 def _write_config(config_path: Path, server: str | None, token: str | None) -> None:
@@ -87,9 +94,17 @@ def config_cmd(
 
     # Validate mutually exclusive options
     if clear and (server or token):
-        raise click.ClickException("Cannot use --clear with --server or --token.")
+        msg = "Cannot use --clear with --server or --token."
+        if is_json_output():
+            output_error(ErrorCode.VALIDATION_ERROR, msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
     if show and (server or token or clear):
-        raise click.ClickException("Cannot use --show with other options.")
+        msg = "Cannot use --show with other options."
+        if is_json_output():
+            output_error(ErrorCode.VALIDATION_ERROR, msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     if show:
         _show_config(config_path)
@@ -107,7 +122,21 @@ def config_cmd(
     # Set values
     _write_config(config_path, server, token)
 
-    # Show what was set
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "server": server,
+                    "token": mask_token(token) if token else None,
+                    "path": str(config_path),
+                },
+                human_output="",
+            )
+        )
+        return
+
+    # Human output - show what was set
     if server:
         click.echo(f"Server set to: {server}")
     if token:
@@ -119,11 +148,44 @@ def config_cmd(
 def _show_config(config_path: Path) -> None:
     """Display current configuration."""
     if not config_path.exists():
+        # JSON output for missing config
+        if is_json_output():
+            output_result(
+                CommandResult(
+                    data={
+                        "server": None,
+                        "token": None,
+                        "timeout": None,
+                        "path": str(config_path),
+                        "exists": False,
+                    },
+                    human_output="",
+                )
+            )
+            return
         click.echo(f"No configuration file found at {config_path}")
         click.echo("Run 'magpie config --server URL --token TOKEN' to create one.")
         return
 
     config = cli_config.load_config(config_path)
+
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "server": config.client.server,
+                    "token": mask_token(config.client.token) if config.client.token else None,
+                    "timeout": config.client.timeout,
+                    "path": str(config_path),
+                    "exists": True,
+                },
+                human_output="",
+            )
+        )
+        return
+
+    # Human output
     click.echo(f"Configuration file: {config_path}")
     click.echo()
 
@@ -141,11 +203,23 @@ def _show_config(config_path: Path) -> None:
 def _clear_config(config_path: Path) -> None:
     """Remove configuration file."""
     if not config_path.exists():
+        # JSON output for missing config
+        if is_json_output():
+            output_result(
+                CommandResult(
+                    data={
+                        "path": str(config_path),
+                        "cleared": False,
+                        "existed": False,
+                    },
+                    human_output="",
+                )
+            )
+            return
         click.echo(f"No configuration file found at {config_path}")
         return
 
     config_path.unlink()
-    click.echo(f"Configuration cleared: {config_path}")
 
     # Remove parent directory if empty
     try:
@@ -153,3 +227,20 @@ def _clear_config(config_path: Path) -> None:
     except OSError:
         # Directory not empty or other error, ignore
         pass
+
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "path": str(config_path),
+                    "cleared": True,
+                    "existed": True,
+                },
+                human_output="",
+            )
+        )
+        return
+
+    # Human output
+    click.echo(f"Configuration cleared: {config_path}")

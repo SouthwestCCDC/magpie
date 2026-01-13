@@ -6,6 +6,7 @@ consistent error messages and exit codes across the application.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import click
@@ -55,7 +56,7 @@ def format_auth_error(
     """
     try:
         detail = response.json().get("detail", response.text)
-    except Exception:
+    except (json.JSONDecodeError, ValueError, KeyError):
         detail = response.text
 
     base_msg = f"{operation} failed ({response.status_code}): {detail}"

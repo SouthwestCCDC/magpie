@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import click
@@ -10,6 +11,14 @@ import click
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
 from magpie.cli.errors import handle_http_error
+from magpie.cli.formatting import (
+    CommandResult,
+    ErrorCode,
+    http_status_to_error_code,
+    is_json_output,
+    output_error,
+    output_result,
+)
 from magpie.cli.progress import transfer_progress
 from magpie.storage.hash import compute_hash
 
@@ -48,11 +57,18 @@ def get(
         magpie get builds/app --no-verify
     """
     if not ctx.server:
-        raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
+        msg = "No server configured. Use --server or set MAGPIE_SERVER."
+        if is_json_output():
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     try:
         parsed = parse_artifact_ref(artifact_ref)
     except ParseError as e:
+        if is_json_output():
+            output_error(ErrorCode.VALIDATION_ERROR, str(e))
+            return  # output_error never returns, but explicit for clarity
         raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
@@ -63,8 +79,19 @@ def get(
         info_response = client.get(f"/api/v1/artifacts/{parsed.path}/{parsed.ref}/info")
 
         if info_response.status_code == 404:
-            raise click.ClickException(f"Artifact not found: {parsed.path}:{parsed.ref}")
+            msg = f"Artifact not found: {parsed.path}:{parsed.ref}"
+            if is_json_output():
+                output_error(ErrorCode.NOT_FOUND, msg)
+                return  # output_error never returns, but explicit for clarity
+            raise click.ClickException(msg)
         if info_response.status_code != 200:
+            if is_json_output():
+                try:
+                    detail = info_response.json().get("detail", info_response.text)
+                except (json.JSONDecodeError, ValueError, KeyError):
+                    detail = info_response.text
+                output_error(http_status_to_error_code(info_response.status_code), detail)
+                return  # output_error never returns, but explicit for clarity
             handle_http_error(info_response, "Metadata", ctx.token)
 
         info = info_response.json()
@@ -89,11 +116,31 @@ def get(
             # Use compute_hash for streaming hash computation (handles large files)
             local_hash = compute_hash(output)
             if local_hash == expected_hash and not force:
+                if is_json_output():
+                    output_result(
+                        CommandResult(
+                            data={
+                                "path": str(output.absolute()),
+                                "hash": expected_hash,
+                                "size": output.stat().st_size,
+                                "verified": True,
+                                "skipped": True,
+                            },
+                            human_output="",
+                        )
+                    )
+                    return
                 click.echo(f"File already exists with matching hash: {output}")
                 return
 
             # File exists but has different hash - require --force
             if not force:
+                if is_json_output():
+                    output_error(
+                        ErrorCode.CONFLICT,
+                        f"Output file already exists: {output}. Use --force to overwrite.",
+                    )
+                    return  # output_error never returns, but explicit for clarity
                 raise click.ClickException(
                     f"Output file already exists: {output}\n"
                     "Use --force to overwrite existing files."
@@ -112,14 +159,28 @@ def get(
         if ctx.debug:
             click.echo(f"Downloading from {download_url}...", err=True)
 
+        # Suppress progress output in JSON mode
+        quiet_mode = quiet or is_json_output()
+
         # Use streaming download with progress
         chunks: list[bytes] = []
         with client.stream("GET", download_url) as response:
             if response.status_code == 404:
-                raise click.ClickException(f"Artifact blob not found: {hash_ref}")
+                msg = f"Artifact blob not found: {hash_ref}"
+                if is_json_output():
+                    output_error(ErrorCode.NOT_FOUND, msg)
+                    return  # output_error never returns, but explicit for clarity
+                raise click.ClickException(msg)
             if response.status_code != 200:
                 # Read response body for error message
                 response.read()
+                if is_json_output():
+                    try:
+                        detail = response.json().get("detail", response.text)
+                    except (json.JSONDecodeError, ValueError, KeyError):
+                        detail = response.text
+                    output_error(http_status_to_error_code(response.status_code), detail)
+                    return  # output_error never returns, but explicit for clarity
                 handle_http_error(response, "Download", ctx.token)
 
             # Get content length from header if available (may be more accurate)
@@ -127,7 +188,10 @@ def get(
             if content_length:
                 file_size = int(content_length)
 
-            with transfer_progress("Downloading", file_size, quiet=quiet) as (progress, task_id):
+            with transfer_progress("Downloading", file_size, quiet=quiet_mode) as (
+                progress,
+                task_id,
+            ):
                 for chunk in response.iter_bytes():
                     chunks.append(chunk)
                     if progress is not None and task_id is not None:
@@ -136,16 +200,40 @@ def get(
         content = b"".join(chunks)
 
     # Verify hash unless --no-verify
+    verified = False
     if not no_verify:
         actual_hash = hashlib.sha256(content).hexdigest()
         if actual_hash != expected_hash:
+            if is_json_output():
+                output_error(
+                    ErrorCode.VALIDATION_ERROR,
+                    f"Hash mismatch! Expected {expected_hash}, got {actual_hash}.",
+                )
+                return  # output_error never returns, but explicit for clarity
             raise click.ClickException(
                 f"Hash mismatch! Expected {expected_hash}, got {actual_hash}. "
                 "File may be corrupted. Use --no-verify to skip verification."
             )
+        verified = True
         if ctx.debug:
             click.echo("Hash verified.", err=True)
 
     # Write file
     output.write_bytes(content)
+
+    # Output result
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "path": str(output.absolute()),
+                    "hash": expected_hash,
+                    "size": len(content),
+                    "verified": verified,
+                },
+                human_output="",
+            )
+        )
+        return
+
     click.echo(f"Downloaded: {output}")

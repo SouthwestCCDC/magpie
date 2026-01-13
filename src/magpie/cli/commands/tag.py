@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import json
+
 import click
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
 from magpie.cli.errors import handle_http_error
+from magpie.cli.formatting import (
+    CommandResult,
+    ErrorCode,
+    http_status_to_error_code,
+    is_json_output,
+    output_error,
+    output_result,
+)
 
 
 @click.command()
@@ -28,11 +38,18 @@ def tag(ctx: CLIContext, artifact_ref: str, tag_name: str) -> None:
         magpie tag builds/app --as release-1.0
     """
     if not ctx.server:
-        raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
+        msg = "No server configured. Use --server or set MAGPIE_SERVER."
+        if is_json_output():
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     try:
         parsed = parse_artifact_ref(artifact_ref)
     except ParseError as e:
+        if is_json_output():
+            output_error(ErrorCode.VALIDATION_ERROR, str(e))
+            return  # output_error never returns, but explicit for clarity
         raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
@@ -45,11 +62,37 @@ def tag(ctx: CLIContext, artifact_ref: str, tag_name: str) -> None:
         )
 
         if response.status_code == 404:
-            raise click.ClickException(f"Artifact not found: {parsed.path}:{parsed.ref}")
+            msg = f"Artifact not found: {parsed.path}:{parsed.ref}"
+            if is_json_output():
+                output_error(ErrorCode.NOT_FOUND, msg)
+                return  # output_error never returns, but explicit for clarity
+            raise click.ClickException(msg)
         if response.status_code != 200:
+            if is_json_output():
+                try:
+                    detail = response.json().get("detail", response.text)
+                except (json.JSONDecodeError, ValueError, KeyError):
+                    detail = response.text
+                output_error(http_status_to_error_code(response.status_code), detail)
+                return  # output_error never returns, but explicit for clarity
             handle_http_error(response, "Tag", ctx.token)
 
         data = response.json()
 
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "artifact": parsed.path,
+                    "version": data["hash_ref"],
+                    "tag": tag_name,
+                },
+                human_output="",
+            )
+        )
+        return
+
+    # Human output
     click.echo(f"Tagged {data['hash_ref']} as '{tag_name}'")
     click.echo(f"All tags: {', '.join(data.get('tags', []))}")

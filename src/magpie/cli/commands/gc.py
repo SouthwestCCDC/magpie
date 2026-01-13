@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import json
+
 import click
 
 from magpie.cli import CLIContext
 from magpie.cli.errors import handle_http_error, mask_token
+from magpie.cli.formatting import (
+    CommandResult,
+    ErrorCode,
+    http_status_to_error_code,
+    is_json_output,
+    output_error,
+    output_result,
+)
 from magpie.storage.gc import format_size
 
 
@@ -34,12 +44,18 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
         magpie gc
     """
     if not ctx.server:
-        raise click.ClickException("No server configured. Use --server or set MAGPIE_SERVER.")
+        msg = "No server configured. Use --server or set MAGPIE_SERVER."
+        if is_json_output():
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     if not ctx.token:
-        raise click.ClickException(
-            "No token configured. Use --token or set MAGPIE_TOKEN. Admin token required."
-        )
+        msg = "No token configured. Use --token or set MAGPIE_TOKEN. Admin token required."
+        if is_json_output():
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     with ctx.get_client() as client:
         if ctx.debug:
@@ -54,16 +70,49 @@ def gc(ctx: CLIContext, dry_run: bool) -> None:
 
         if response.status_code == 401:
             msg = f"Authentication failed. Check your token (token: {mask_token(ctx.token)})"
+            if is_json_output():
+                output_error(ErrorCode.UNAUTHORIZED, msg)
+                return  # output_error never returns, but explicit for clarity
             raise click.ClickException(msg)
         if response.status_code == 403:
             msg = f"Admin token required for garbage collection (token: {mask_token(ctx.token)})"
+            if is_json_output():
+                output_error(ErrorCode.FORBIDDEN, msg)
+                return  # output_error never returns, but explicit for clarity
             raise click.ClickException(msg)
         if response.status_code not in (200,):
+            if is_json_output():
+                try:
+                    detail = response.json().get("detail", response.text)
+                except (json.JSONDecodeError, ValueError, KeyError):
+                    detail = response.text
+                output_error(http_status_to_error_code(response.status_code), detail)
+                return  # output_error never returns, but explicit for clarity
             handle_http_error(response, "GC", ctx.token)
 
         data = response.json()
 
-    # Display results
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "dry_run": dry_run,
+                    "blobs_removed": data["blobs_deleted"],
+                    "bytes_reclaimed": data["space_reclaimed_bytes"],
+                    "errors": [],  # Server-side GC currently doesn't report individual errors
+                    "artifacts_scanned": data.get("artifacts_scanned", 0),
+                    "blobs_found": data.get("blobs_found", 0),
+                    "symlinks_checked": data.get("symlinks_checked", 0),
+                    "symlinks_fixed": data.get("symlinks_fixed", 0),
+                    "items_removed": data.get("items_removed", 0),
+                },
+                human_output="",
+            )
+        )
+        return
+
+    # Human output
     if dry_run:
         click.echo("GC Preview (dry run):")
     else:
