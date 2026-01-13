@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import click
@@ -87,7 +88,7 @@ def get(
             if is_json_output():
                 try:
                     detail = info_response.json().get("detail", info_response.text)
-                except Exception:
+                except json.JSONDecodeError:
                     detail = info_response.text
                 output_error(http_status_to_error_code(info_response.status_code), detail)
             else:
@@ -139,10 +140,11 @@ def get(
                         ErrorCode.CONFLICT,
                         f"Output file already exists: {output}. Use --force to overwrite.",
                     )
-                raise click.ClickException(
-                    f"Output file already exists: {output}\n"
-                    "Use --force to overwrite existing files."
-                )
+                else:
+                    raise click.ClickException(
+                        f"Output file already exists: {output}\n"
+                        "Use --force to overwrite existing files."
+                    )
 
         # Download the artifact
         # Hash refs use blobs/ subdirectory, tags are symlinks at root
@@ -175,7 +177,7 @@ def get(
                 if is_json_output():
                     try:
                         detail = response.json().get("detail", response.text)
-                    except Exception:
+                    except json.JSONDecodeError:
                         detail = response.text
                     output_error(http_status_to_error_code(response.status_code), detail)
                 else:
@@ -207,10 +209,11 @@ def get(
                     ErrorCode.VALIDATION_ERROR,
                     f"Hash mismatch! Expected {expected_hash}, got {actual_hash}.",
                 )
-            raise click.ClickException(
-                f"Hash mismatch! Expected {expected_hash}, got {actual_hash}. "
-                "File may be corrupted. Use --no-verify to skip verification."
-            )
+            else:
+                raise click.ClickException(
+                    f"Hash mismatch! Expected {expected_hash}, got {actual_hash}. "
+                    "File may be corrupted. Use --no-verify to skip verification."
+                )
         verified = True
         if ctx.debug:
             click.echo("Hash verified.", err=True)

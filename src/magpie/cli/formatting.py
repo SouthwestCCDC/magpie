@@ -19,6 +19,7 @@ Usage:
             output_error("ERROR_CODE", str(e))
 
 Note: This module was generated with AI assistance (Claude Code w/ Opus 4.5).
+This content was AI-generated.
 """
 
 from __future__ import annotations
