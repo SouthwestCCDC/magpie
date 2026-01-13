@@ -60,16 +60,16 @@ def get(
         msg = "No server configured. Use --server or set MAGPIE_SERVER."
         if is_json_output():
             output_error(ErrorCode.CONFIG_ERROR, msg)
-        else:
-            raise click.ClickException(msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     try:
         parsed = parse_artifact_ref(artifact_ref)
     except ParseError as e:
         if is_json_output():
             output_error(ErrorCode.VALIDATION_ERROR, str(e))
-        else:
-            raise click.ClickException(str(e))
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
         # Fetch metadata to get hash and size for verification/progress
@@ -82,8 +82,8 @@ def get(
             msg = f"Artifact not found: {parsed.path}:{parsed.ref}"
             if is_json_output():
                 output_error(ErrorCode.NOT_FOUND, msg)
-            else:
-                raise click.ClickException(msg)
+                return  # output_error never returns, but explicit for clarity
+            raise click.ClickException(msg)
         if info_response.status_code != 200:
             if is_json_output():
                 try:
@@ -91,8 +91,8 @@ def get(
                 except (json.JSONDecodeError, ValueError, KeyError):
                     detail = info_response.text
                 output_error(http_status_to_error_code(info_response.status_code), detail)
-            else:
-                handle_http_error(info_response, "Metadata", ctx.token)
+                return  # output_error never returns, but explicit for clarity
+            handle_http_error(info_response, "Metadata", ctx.token)
 
         info = info_response.json()
         expected_hash = info["hash"]
@@ -140,11 +140,11 @@ def get(
                         ErrorCode.CONFLICT,
                         f"Output file already exists: {output}. Use --force to overwrite.",
                     )
-                else:
-                    raise click.ClickException(
-                        f"Output file already exists: {output}\n"
-                        "Use --force to overwrite existing files."
-                    )
+                    return  # output_error never returns, but explicit for clarity
+                raise click.ClickException(
+                    f"Output file already exists: {output}\n"
+                    "Use --force to overwrite existing files."
+                )
 
         # Download the artifact
         # Hash refs use blobs/ subdirectory, tags are symlinks at root
@@ -169,8 +169,8 @@ def get(
                 msg = f"Artifact blob not found: {hash_ref}"
                 if is_json_output():
                     output_error(ErrorCode.NOT_FOUND, msg)
-                else:
-                    raise click.ClickException(msg)
+                    return  # output_error never returns, but explicit for clarity
+                raise click.ClickException(msg)
             if response.status_code != 200:
                 # Read response body for error message
                 response.read()
@@ -180,8 +180,8 @@ def get(
                     except (json.JSONDecodeError, ValueError, KeyError):
                         detail = response.text
                     output_error(http_status_to_error_code(response.status_code), detail)
-                else:
-                    handle_http_error(response, "Download", ctx.token)
+                    return  # output_error never returns, but explicit for clarity
+                handle_http_error(response, "Download", ctx.token)
 
             # Get content length from header if available (may be more accurate)
             content_length = response.headers.get("content-length")
@@ -209,11 +209,11 @@ def get(
                     ErrorCode.VALIDATION_ERROR,
                     f"Hash mismatch! Expected {expected_hash}, got {actual_hash}.",
                 )
-            else:
-                raise click.ClickException(
-                    f"Hash mismatch! Expected {expected_hash}, got {actual_hash}. "
-                    "File may be corrupted. Use --no-verify to skip verification."
-                )
+                return  # output_error never returns, but explicit for clarity
+            raise click.ClickException(
+                f"Hash mismatch! Expected {expected_hash}, got {actual_hash}. "
+                "File may be corrupted. Use --no-verify to skip verification."
+            )
         verified = True
         if ctx.debug:
             click.echo("Hash verified.", err=True)

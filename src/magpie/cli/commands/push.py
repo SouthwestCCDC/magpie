@@ -129,8 +129,8 @@ def push(
         msg = "No server configured. Use --server or set MAGPIE_SERVER."
         if is_json_output():
             output_error(ErrorCode.CONFIG_ERROR, msg)
-        else:
-            raise click.ClickException(msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     # Normalize artifact path
     try:
@@ -138,8 +138,8 @@ def push(
     except InvalidArtifactPathError as e:
         if is_json_output():
             output_error(ErrorCode.VALIDATION_ERROR, str(e))
-        else:
-            raise click.ClickException(str(e))
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(str(e))
 
     # Build query params
     params: dict[str, str] = {}
@@ -189,8 +189,8 @@ def push(
                     except (json.JSONDecodeError, ValueError, KeyError):
                         detail = response.text
                     output_error(http_status_to_error_code(response.status_code), detail)
-                else:
-                    handle_http_error(response, "Upload", ctx.token)
+                    return  # output_error never returns, but explicit for clarity
+                handle_http_error(response, "Upload", ctx.token)
 
             data = response.json()
 

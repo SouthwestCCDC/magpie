@@ -40,16 +40,16 @@ def info(ctx: CLIContext, artifact_ref: str) -> None:
         msg = "No server configured. Use --server or set MAGPIE_SERVER."
         if is_json_output():
             output_error(ErrorCode.CONFIG_ERROR, msg)
-        else:
-            raise click.ClickException(msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     try:
         parsed = parse_artifact_ref(artifact_ref)
     except ParseError as e:
         if is_json_output():
             output_error(ErrorCode.VALIDATION_ERROR, str(e))
-        else:
-            raise click.ClickException(str(e))
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
         if ctx.debug:
@@ -61,8 +61,8 @@ def info(ctx: CLIContext, artifact_ref: str) -> None:
             msg = f"Artifact not found: {parsed.path}:{parsed.ref}"
             if is_json_output():
                 output_error(ErrorCode.NOT_FOUND, msg)
-            else:
-                raise click.ClickException(msg)
+                return  # output_error never returns, but explicit for clarity
+            raise click.ClickException(msg)
         if response.status_code != 200:
             if is_json_output():
                 try:
@@ -70,8 +70,8 @@ def info(ctx: CLIContext, artifact_ref: str) -> None:
                 except (json.JSONDecodeError, ValueError, KeyError):
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
-            else:
-                handle_http_error(response, "Info", ctx.token)
+                return  # output_error never returns, but explicit for clarity
+            handle_http_error(response, "Info", ctx.token)
 
         data = response.json()
 

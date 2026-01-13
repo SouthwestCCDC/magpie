@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, NoReturn, TypeVar
 
 import click
 
@@ -161,7 +161,7 @@ def output_result(result: CommandResult) -> None:
         click.echo(result.human_output)
 
 
-def output_error(code: str, message: str, exit_code: int = 1) -> None:
+def output_error(code: str, message: str, exit_code: int = 1) -> NoReturn:
     """Output error in the appropriate format and exit.
 
     For JSON format, outputs to stderr:

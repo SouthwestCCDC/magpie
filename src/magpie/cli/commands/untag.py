@@ -41,8 +41,8 @@ def untag(ctx: CLIContext, artifact_path: str, tag_name: str) -> None:
         msg = "No server configured. Use --server or set MAGPIE_SERVER."
         if is_json_output():
             output_error(ErrorCode.CONFIG_ERROR, msg)
-        else:
-            raise click.ClickException(msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     # Normalize artifact path
     try:
@@ -50,8 +50,8 @@ def untag(ctx: CLIContext, artifact_path: str, tag_name: str) -> None:
     except InvalidArtifactPathError as e:
         if is_json_output():
             output_error(ErrorCode.VALIDATION_ERROR, str(e))
-        else:
-            raise click.ClickException(str(e))
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
         if ctx.debug:
@@ -65,8 +65,8 @@ def untag(ctx: CLIContext, artifact_path: str, tag_name: str) -> None:
             msg = f"Tag not found: {artifact_path}:{tag_name}"
             if is_json_output():
                 output_error(ErrorCode.NOT_FOUND, msg)
-            else:
-                raise click.ClickException(msg)
+                return  # output_error never returns, but explicit for clarity
+            raise click.ClickException(msg)
         if response.status_code != 204:
             if is_json_output():
                 try:
@@ -74,8 +74,8 @@ def untag(ctx: CLIContext, artifact_path: str, tag_name: str) -> None:
                 except (json.JSONDecodeError, ValueError, KeyError):
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
-            else:
-                handle_http_error(response, "Untag", ctx.token)
+                return  # output_error never returns, but explicit for clarity
+            handle_http_error(response, "Untag", ctx.token)
 
     # JSON output
     if is_json_output():

@@ -97,14 +97,14 @@ def config_cmd(
         msg = "Cannot use --clear with --server or --token."
         if is_json_output():
             output_error(ErrorCode.VALIDATION_ERROR, msg)
-        else:
-            raise click.ClickException(msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
     if show and (server or token or clear):
         msg = "Cannot use --show with other options."
         if is_json_output():
             output_error(ErrorCode.VALIDATION_ERROR, msg)
-        else:
-            raise click.ClickException(msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     if show:
         _show_config(config_path)

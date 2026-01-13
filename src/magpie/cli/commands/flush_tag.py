@@ -65,8 +65,8 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
         msg = "No server configured. Use --server or set MAGPIE_SERVER."
         if is_json_output():
             output_error(ErrorCode.CONFIG_ERROR, msg)
-        else:
-            raise click.ClickException(msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     # Refuse to flush protected tags without --force
     if tag_name.lower() in PROTECTED_TAGS and not force:
@@ -76,14 +76,15 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
         )
         if is_json_output():
             output_error(ErrorCode.VALIDATION_ERROR, msg)
-        else:
-            raise click.ClickException(msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
 
     # In JSON mode, require --yes to skip confirmation (no interactive prompts)
     if is_json_output() and not dry_run and not yes:
         output_error(
             ErrorCode.VALIDATION_ERROR, "In JSON mode, use --yes to confirm destructive operations."
         )
+        return  # output_error never returns, but explicit for clarity
 
     # Confirm before proceeding (unless --yes or --dry-run)
     if not dry_run and not yes:
@@ -115,8 +116,8 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
                 except (json.JSONDecodeError, ValueError, KeyError):
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
-            else:
-                handle_http_error(response, "Flush", ctx.token)
+                return  # output_error never returns, but explicit for clarity
+            handle_http_error(response, "Flush", ctx.token)
         if response.status_code not in (200,):
             if is_json_output():
                 try:
@@ -124,8 +125,8 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
                 except (json.JSONDecodeError, ValueError, KeyError):
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
-            else:
-                handle_http_error(response, "Flush", ctx.token)
+                return  # output_error never returns, but explicit for clarity
+            handle_http_error(response, "Flush", ctx.token)
 
         data = response.json()
         affected_count = data.get("count", 0)
