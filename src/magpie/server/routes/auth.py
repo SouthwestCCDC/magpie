@@ -25,6 +25,8 @@ TOKEN_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$"  # nosec B105 - not a 
 class CreateTokenRequest(BaseModel):
     """Request model for creating a new token."""
 
+    # NOTE: max_length duplicates the limit in TOKEN_NAME_PATTERN intentionally.
+    # This keeps length validation explicit in the schema and can yield clearer error messages.
     name: str = Field(pattern=TOKEN_NAME_PATTERN, max_length=64)
     scope: str  # "read", "write", or "admin"
 
