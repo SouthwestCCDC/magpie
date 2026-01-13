@@ -1,4 +1,4 @@
-"""Unit tests for source_uri length validation."""
+"""Integration tests for source_uri length validation."""
 
 from __future__ import annotations
 
