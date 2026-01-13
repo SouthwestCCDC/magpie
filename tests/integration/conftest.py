@@ -19,11 +19,10 @@ from fastapi.testclient import TestClient
 
 from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenInfo, TokenService
-from magpie.config import MagpieSettings, get_settings
+from magpie.config import MagpieSettings
 from magpie.server.app import app
 from magpie.server.deps import (
     get_storage_service,
-    get_token_service,
     require_admin_scope,
     require_admin_scope_header,
     require_write_scope,
@@ -44,17 +43,6 @@ def test_config(tmp_path: Path) -> MagpieSettings:
     directory, and ensures the temp_path subdirectory exists.
     """
     config = MagpieSettings(storage_path=tmp_path)
-    config.temp_path.mkdir(parents=True, exist_ok=True)
-    return config
-
-
-@pytest.fixture
-def test_config_with_retention(tmp_path: Path) -> MagpieSettings:
-    """Create test configuration with retention_days set.
-
-    Used by tests that need to verify retention-related behavior (e.g., GC tests).
-    """
-    config = MagpieSettings(storage_path=tmp_path, retention_days=90)
     config.temp_path.mkdir(parents=True, exist_ok=True)
     return config
 
@@ -158,37 +146,6 @@ def api_client(test_storage_service: StorageService) -> TestClient:
 
     app.dependency_overrides[get_storage_service] = override_storage_service
     yield TestClient(app)
-    app.dependency_overrides.clear()
-
-
-@pytest.fixture
-def client_with_auth(
-    token_service: TokenService,
-    test_storage_service: StorageService,
-    test_config: MagpieSettings,
-) -> TestClient:
-    """Create test client for testing real authentication.
-
-    This fixture clears the autouse auth overrides so that actual token
-    validation is tested. Use this for tests that verify auth behavior
-    (e.g., token endpoints, GC endpoint auth).
-    """
-    # Clear any auth overrides from the autouse fixture
-    app.dependency_overrides.clear()
-
-    def override_token_service() -> TokenService:
-        return token_service
-
-    def override_storage_service() -> StorageService:
-        return test_storage_service
-
-    def override_settings() -> MagpieSettings:
-        return test_config
-
-    app.dependency_overrides[get_token_service] = override_token_service
-    app.dependency_overrides[get_storage_service] = override_storage_service
-    app.dependency_overrides[get_settings] = override_settings
-    yield TestClient(app, raise_server_exceptions=False)
     app.dependency_overrides.clear()
 
 
@@ -325,7 +282,7 @@ def upload_test_artifact(
     response = client.post(
         f"/api/v1/upload/{path}",
         files=files,
-        params=params if params else None,
+        params=params,
     )
     assert response.status_code == 200
     return response.json()
