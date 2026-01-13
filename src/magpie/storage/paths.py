@@ -78,16 +78,23 @@ def verify_path_is_descendant(base: Path, artifact_path: str) -> Path:
         The resolved full path if it is a valid descendant.
 
     Raises:
-        InvalidArtifactPathError: If the resolved path escapes the base directory.
+        InvalidArtifactPathError: If the resolved path escapes the base directory,
+            or if the path contains cyclic symlinks.
 
     Example:
         >>> base = Path("/storage/artifacts")
         >>> verify_path_is_descendant(base, "project/artifact")
         PosixPath('/storage/artifacts/project/artifact')
     """
-    # Construct the full path
-    full_path = (base / artifact_path).resolve()
-    base_resolved = base.resolve()
+    # Construct the full path and resolve symlinks.
+    # Handle OSError for cyclic symlinks (ELOOP: "Too many levels of symbolic links").
+    try:
+        full_path = (base / artifact_path).resolve()
+        base_resolved = base.resolve()
+    except OSError as e:
+        raise InvalidArtifactPathError(
+            f"Path '{artifact_path}' cannot be resolved: {e}"
+        )
 
     # Check if the resolved path is under the base directory
     # Using is_relative_to() which returns True if path is relative to base
@@ -119,30 +126,44 @@ def artifact_dir_path(base: Path, artifact_path: str, verify_security: bool = Tr
     Args:
         base: Base storage directory path.
         artifact_path: Logical artifact path (e.g., "project/component/artifact").
-        verify_security: If True (default), verify resolved path stays within base.
-            Set to False only for trusted internal operations that don't need
-            symlink protection.
+        verify_security: If True (default), verify the resolved path (following
+            symlinks) stays within ``base``. This must remain enabled for any
+            path derived from user input or external callers.
+
+            Set to False only for trusted internal operations that:
+
+            * never accept untrusted/user-supplied paths, and
+            * operate on paths that have already been validated and persisted
+              (for example, paths recovered from an internal index or metadata
+              store that was created using :func:`verify_path_is_descendant`).
+
+            Example (internal maintenance job)::
+
+                base = Path("/var/lib/magpie/storage")
+                # 'stored_path' is read from Magpie's own metadata and was
+                # originally created via normalize_artifact_path() and
+                # verify_path_is_descendant(), not from user input.
+                stored_path = "project/component/artifact"
+                artifact_dir_path(base, stored_path, verify_security=False)
+                # Returns: PosixPath('/var/lib/magpie/storage/project/component/artifact')
+
+            Do not disable security checks for raw request parameters or CLI
+            arguments.
 
     Returns:
         Full path to artifact directory.
 
     Raises:
         InvalidArtifactPathError: If verify_security is True and the resolved
-            path would escape the base directory (e.g., via symlink).
+            path would escape the base directory (e.g., via symlink), or if
+            the path contains cyclic symlinks.
     """
     result = base / artifact_path
     if verify_security:
-        # Use resolve() to follow any symlinks and verify final path is within base.
-        # This protects against symlink attacks where storage/escape_link -> /etc
-        # would allow reading/writing files outside the storage directory.
-        resolved = result.resolve()
-        base_resolved = base.resolve()
-        try:
-            resolved.relative_to(base_resolved)
-        except ValueError:
-            raise InvalidArtifactPathError(
-                f"Path '{artifact_path}' resolves outside the storage directory"
-            )
+        # Delegate security verification to shared helper to avoid duplication.
+        # This will raise InvalidArtifactPathError if the resolved path escapes base
+        # or if there are cyclic symlinks.
+        verify_path_is_descendant(base, artifact_path)
     return result
 
 

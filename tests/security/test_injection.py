@@ -234,8 +234,9 @@ class TestSymlinkAttacks:
     ) -> None:
         """Symlinks in artifact paths should not allow escaping storage root.
 
-        The verify_path_is_descendant function uses resolve() to detect when
-        symlinks would escape the storage directory, and rejects such paths.
+        The artifact_dir_path() helper uses resolve() to detect when a path,
+        including any symlinks, would escape the storage directory, and rejects
+        such paths.
         """
         import shutil
         import tempfile
