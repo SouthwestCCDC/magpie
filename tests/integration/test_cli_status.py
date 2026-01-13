@@ -60,12 +60,6 @@ def api_client(
     app.dependency_overrides.clear()
 
 
-@pytest.fixture
-def cli_runner() -> CliRunner:
-    """Create Click CLI test runner."""
-    return CliRunner()
-
-
 def upload_test_artifact(
     api_client: TestClient,
     path: str,

@@ -17,6 +17,12 @@ from magpie.server.deps import (
 
 
 @pytest.fixture
+def cli_runner() -> CliRunner:
+    """Create Click CLI test runner."""
+    return CliRunner()
+
+
+@pytest.fixture
 def cli_runner_no_config() -> CliRunner:
     """Create CLI runner that simulates no server/token configuration.
 
