@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 
 from magpie.server.deps import get_storage_service, require_write_scope
@@ -34,7 +34,7 @@ async def upload_artifact(
     file: UploadFile,
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
     _write_scope_check: Annotated[None, Depends(require_write_scope)] = None,
-    source_uri: str | None = None,
+    source_uri: Annotated[str | None, Query(max_length=2048)] = None,
     uploaded_by: str = "anonymous",
     x_magpie_user: Annotated[str | None, Header(alias="X-Magpie-User")] = None,
 ) -> UploadResponse:
