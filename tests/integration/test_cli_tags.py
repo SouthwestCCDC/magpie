@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 from unittest.mock import AsyncMock, patch
 
 from click.testing import CliRunner
@@ -10,32 +9,13 @@ from fastapi.testclient import TestClient
 
 from magpie.cli import cli
 
+from tests.integration.conftest import upload_test_artifact
+
 # Patch path for get_client - must match where it's imported/used in the CLI module
 PATCH_GET_CLIENT = "magpie.cli.get_client"
 
 # Patch path for subprocess in server flush-tag route
 PATCH_FLUSH_TAG_CTL = "magpie.server.routes.tags.run_ctl_command"
-
-
-def upload_test_artifact(
-    api_client: TestClient,
-    path: str,
-    content: bytes,
-    source_uri: str | None = None,
-) -> dict:
-    """Helper to upload a test artifact and return response data."""
-    files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
-    params = {}
-    if source_uri:
-        params["source_uri"] = source_uri
-
-    response = api_client.post(
-        f"/api/v1/upload/{path}",
-        files=files,
-        params=params if params else None,
-    )
-    assert response.status_code == 200
-    return response.json()
 
 
 class TestTagCommand:

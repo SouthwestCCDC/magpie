@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
@@ -29,7 +30,7 @@ PATCH_RUN_CTL = "magpie.server.routes.gc.run_ctl_command"
 
 
 @pytest.fixture
-def test_config(tmp_path) -> MagpieSettings:
+def test_config(tmp_path: Path) -> MagpieSettings:
     """Create test configuration with retention_days for GC tests."""
     config = MagpieSettings(storage_path=tmp_path, retention_days=90)
     config.temp_path.mkdir(parents=True, exist_ok=True)

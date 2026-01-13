@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -16,7 +17,7 @@ from magpie.storage.service import StorageService
 
 
 @pytest.fixture
-def test_config(tmp_path) -> MagpieSettings:
+def test_config(tmp_path: Path) -> MagpieSettings:
     """Create test configuration with retention_days for GC tests."""
     config = MagpieSettings(storage_path=tmp_path, retention_days=90)
     config.temp_path.mkdir(parents=True, exist_ok=True)
