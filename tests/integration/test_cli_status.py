@@ -81,9 +81,7 @@ def upload_test_artifact(
 class TestStatusCommand:
     """Integration tests for status command."""
 
-    def test_status_shows_server_url(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_status_shows_server_url(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Status command displays configured server URL."""
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
@@ -97,9 +95,7 @@ class TestStatusCommand:
         assert "Server:" in result.output
         assert "http://test.example.com" in result.output
 
-    def test_status_shows_ok_status(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_status_shows_ok_status(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Status command displays OK status when server is healthy."""
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
@@ -113,9 +109,7 @@ class TestStatusCommand:
         assert "Status:" in result.output
         assert "OK" in result.output
 
-    def test_status_shows_version(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_status_shows_version(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Status command displays server version."""
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
@@ -188,9 +182,7 @@ class TestStatusCommand:
         assert result.exit_code != 0
         assert "No server configured" in result.output
 
-    def test_status_json_output(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_status_json_output(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Status command outputs valid JSON when --format json is used."""
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
@@ -235,9 +227,7 @@ class TestStatusCommand:
 class TestStatusFormatSize:
     """Tests for size formatting in status command."""
 
-    def test_status_formats_bytes(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_status_formats_bytes(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Status command formats small sizes in bytes."""
         upload_test_artifact(api_client, "test/small", b"tiny")
 

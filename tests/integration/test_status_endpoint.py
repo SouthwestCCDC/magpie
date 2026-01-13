@@ -123,9 +123,7 @@ class TestStatusEndpoint:
         assert data["storage"]["blob_count"] == 2
         assert data["storage"]["total_size_bytes"] == len(content1) + len(content2)
 
-    def test_status_storage_stats_with_duplicate_content(
-        self, api_client: TestClient
-    ) -> None:
+    def test_status_storage_stats_with_duplicate_content(self, api_client: TestClient) -> None:
         """Status with duplicate content counts each blob once."""
         # Upload same content to different paths
         content = b"same content"
