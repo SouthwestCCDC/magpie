@@ -2,8 +2,6 @@
 
 This module provides unified error handling for all CLI commands, ensuring
 consistent error messages and exit codes across the application.
-
-Note: This module was AI-generated using Claude Code with Opus 4.5.
 """
 
 from __future__ import annotations
