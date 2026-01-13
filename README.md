@@ -36,7 +36,7 @@ The production configuration (`docker-compose.prod.yml` and `Caddyfile.prod`) in
 - Automatic TLS via Let's Encrypt (or manual certificate configuration)
 - Security headers (HSTS, X-Frame-Options, CSP, etc.)
 - JSON access logging
-- Rate limiting must be configured at infrastructure layer (see issue #129)
+- Rate limiting must be configured at infrastructure layer - see [issue #129](https://github.com/SouthwestCCDC/magpie/issues/129) for implementation options (custom Caddy build, FastAPI middleware, or load balancer)
 
 For manual TLS certificates, edit `Caddyfile.prod` and uncomment the `tls` directive
 with your certificate paths.

@@ -125,7 +125,8 @@
 	# or use a custom Caddy build with the rate-limit plugin.
 	# See issue #129 for implementation options.
 	#
-	# Auth endpoints that should be rate-limited:
+	# Auth endpoints matcher - kept for documentation and future rate limiting.
+	# See issue #129 for rate limiting implementation options.
 	@auth_endpoints {
 		path /api/v1/auth/*
 		path /api/v1/tokens*
