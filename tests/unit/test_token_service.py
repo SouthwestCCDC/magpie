@@ -10,6 +10,7 @@ from magpie.auth.database import get_connection
 from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenInfo, TokenService
 from magpie.config import MagpieSettings
+from magpie.validation import ValidationError
 
 
 @pytest.fixture
@@ -238,3 +239,62 @@ class TestTokenServiceInitialization:
 
         assert result is not None
         assert result.name == "shared"
+
+
+class TestTokenNameValidation:
+    """Tests for token name validation in TokenService.create_token.
+
+    Defense-in-depth validation at service layer ensures CLI and other
+    non-API callers also get proper validation.
+    """
+
+    def test_create_token_with_invalid_name_raises_validation_error(
+        self, token_service: TokenService
+    ) -> None:
+        """create_token should raise ValidationError for invalid name."""
+        with pytest.raises(ValidationError, match="must start with alphanumeric"):
+            token_service.create_token("-invalid-name", TokenScope.READ)
+
+    def test_create_token_with_empty_name_raises_validation_error(
+        self, token_service: TokenService
+    ) -> None:
+        """create_token should raise ValidationError for empty name."""
+        with pytest.raises(ValidationError, match="cannot be empty"):
+            token_service.create_token("", TokenScope.READ)
+
+    def test_create_token_with_too_long_name_raises_validation_error(
+        self, token_service: TokenService
+    ) -> None:
+        """create_token should raise ValidationError for name exceeding max length."""
+        long_name = "a" * 65  # Max is 64
+        with pytest.raises(ValidationError, match="exceeds maximum length"):
+            token_service.create_token(long_name, TokenScope.READ)
+
+    def test_create_token_with_name_starting_with_dot_raises(
+        self, token_service: TokenService
+    ) -> None:
+        """create_token should raise ValidationError for name starting with dot."""
+        with pytest.raises(ValidationError):
+            token_service.create_token(".hidden", TokenScope.READ)
+
+    def test_create_token_with_name_containing_spaces_raises(
+        self, token_service: TokenService
+    ) -> None:
+        """create_token should raise ValidationError for name with spaces."""
+        with pytest.raises(ValidationError):
+            token_service.create_token("my token", TokenScope.READ)
+
+    def test_create_token_with_special_chars_raises(self, token_service: TokenService) -> None:
+        """create_token should raise ValidationError for name with special chars."""
+        with pytest.raises(ValidationError):
+            token_service.create_token("token@123!", TokenScope.READ)
+
+    def test_validation_error_is_catchable_as_value_error(
+        self, token_service: TokenService
+    ) -> None:
+        """ValidationError should be catchable as ValueError for backward compatibility."""
+        try:
+            token_service.create_token("-invalid", TokenScope.READ)
+            assert False, "Should have raised an exception"
+        except ValueError:
+            pass  # ValidationError is a subclass of ValueError

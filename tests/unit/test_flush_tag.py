@@ -11,6 +11,7 @@ from magpie.config import MagpieSettings
 from magpie.storage.manifest import read_manifest
 from magpie.storage.paths import artifact_dir_path
 from magpie.storage.service import FlushResult, StorageService
+from magpie.validation import ValidationError
 
 
 @pytest.fixture
@@ -263,3 +264,38 @@ class TestFlushTagEdgeCases:
         assert result.tag_name == "check-result"
         assert isinstance(result.affected_artifacts, list)
         assert isinstance(result.count, int)
+
+
+class TestFlushTagValidation:
+    """Tests for tag name validation in flush_tag.
+
+    Defense-in-depth validation at service layer ensures CLI and other
+    non-API callers also get proper validation.
+    """
+
+    def test_flush_tag_with_invalid_name_raises_validation_error(
+        self, storage_service: StorageService
+    ) -> None:
+        """flush_tag should raise ValidationError for invalid tag name."""
+        with pytest.raises(ValidationError, match="must start with alphanumeric"):
+            storage_service.flush_tag("-invalid-tag")
+
+    def test_flush_tag_with_empty_name_raises_validation_error(
+        self, storage_service: StorageService
+    ) -> None:
+        """flush_tag should raise ValidationError for empty tag name."""
+        with pytest.raises(ValidationError, match="cannot be empty"):
+            storage_service.flush_tag("")
+
+    def test_flush_tag_with_too_long_name_raises_validation_error(
+        self, storage_service: StorageService
+    ) -> None:
+        """flush_tag should raise ValidationError for tag name exceeding max length."""
+        long_name = "a" * 129  # Max is 128
+        with pytest.raises(ValidationError, match="exceeds maximum length"):
+            storage_service.flush_tag(long_name)
+
+    def test_flush_tag_with_special_chars_raises(self, storage_service: StorageService) -> None:
+        """flush_tag should raise ValidationError for tag with special chars."""
+        with pytest.raises(ValidationError):
+            storage_service.flush_tag("v1@beta!")

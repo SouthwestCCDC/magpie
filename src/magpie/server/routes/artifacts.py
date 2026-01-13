@@ -13,12 +13,10 @@ from magpie.server.deps import get_storage_service, require_write_scope
 from magpie.storage.exceptions import ArtifactNotFoundError, InvalidArtifactPathError
 from magpie.storage.paths import normalize_artifact_path
 from magpie.storage.service import StorageService
+from magpie.validation import TAG_NAME_MAX_LENGTH, TAG_NAME_PATTERN
 
 router = APIRouter()
 
-# Tag name validation pattern: alphanumeric start, then alphanumeric, dots, underscores, hyphens
-# Must match the pattern in tags.py for consistency
-TAG_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
 _TAG_NAME_RE = re.compile(TAG_NAME_PATTERN)
 
 
@@ -209,7 +207,7 @@ async def create_tag(
 )
 async def remove_tag(
     path: str,
-    tag_name: Annotated[str, Path(pattern=TAG_NAME_PATTERN, max_length=128)],
+    tag_name: Annotated[str, Path(pattern=TAG_NAME_PATTERN, max_length=TAG_NAME_MAX_LENGTH)],
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
     _write_scope_check: Annotated[None, Depends(require_write_scope)] = None,
 ) -> Response:

@@ -11,12 +11,10 @@ from pydantic import BaseModel
 
 from magpie.server.deps import require_admin_scope_header
 from magpie.server.subprocess_utils import CtlCommandError, run_ctl_command
+from magpie.validation import TAG_NAME_MAX_LENGTH, TAG_NAME_PATTERN
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-# Tag name validation pattern: alphanumeric start, then alphanumeric, dots, underscores, hyphens
-TAG_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
 
 
 class FlushTagResponse(BaseModel):
@@ -30,7 +28,7 @@ class FlushTagResponse(BaseModel):
 
 @router.post("/api/v1/tags/{tag_name}/flush")
 async def flush_tag(
-    tag_name: Annotated[str, Path(pattern=TAG_NAME_PATTERN, max_length=128)],
+    tag_name: Annotated[str, Path(pattern=TAG_NAME_PATTERN, max_length=TAG_NAME_MAX_LENGTH)],
     confirm_walk_filesystem: Annotated[
         bool | None,
         Query(description="Must be true to confirm this operation walks the entire filesystem"),
