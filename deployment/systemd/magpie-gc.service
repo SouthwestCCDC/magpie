@@ -1,0 +1,64 @@
+# Magpie Garbage Collection Service
+# This oneshot service runs magpie-ctl gc to clean up untagged blobs.
+# Triggered by magpie-gc.timer (recommended) or can be run manually.
+#
+# Installation:
+#   cp magpie-gc.service /etc/systemd/system/
+#   cp magpie-gc.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now magpie-gc.timer
+#
+# Manual run:
+#   systemctl start magpie-gc.service
+#
+# View logs:
+#   journalctl -u magpie-gc.service
+
+[Unit]
+Description=Magpie Garbage Collection
+Documentation=https://github.com/SouthwestCCDC/magpie
+After=network.target
+
+# Prevent concurrent GC runs
+# If GC is already running, this instance will fail immediately
+ConditionPathExists=!/var/run/magpie-gc.lock
+
+[Service]
+Type=oneshot
+
+# Create lock file before starting, remove on exit
+ExecStartPre=/bin/sh -c 'echo $$ > /var/run/magpie-gc.lock'
+ExecStopPost=/bin/rm -f /var/run/magpie-gc.lock
+
+# Run GC via Docker Compose
+# Adjust the path to match your installation
+WorkingDirectory=/opt/magpie
+ExecStart=/usr/bin/docker compose exec -T magpie magpie-ctl gc --quiet
+
+# Alternative: Direct execution (if not using Docker)
+# ExecStart=/usr/local/bin/magpie-ctl gc --quiet
+
+# Environment overrides (optional)
+# Uncomment and adjust as needed:
+# Environment=MAGPIE_RETENTION_DAYS=30
+# Environment=MAGPIE_STORAGE_PATH=/data/artifacts
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=magpie-gc
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+# Allow write access to storage and lock file
+ReadWritePaths=/var/run/magpie-gc.lock
+# If using direct execution, also add:
+# ReadWritePaths=/data/artifacts
+
+# Timeouts
+# GC can take a while for large storage; adjust as needed
+TimeoutStartSec=3600
