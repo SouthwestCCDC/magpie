@@ -18,6 +18,7 @@ from magpie.auth.database import (
     save_token,
 )
 from magpie.auth.models import Token, TokenScope
+from magpie.validation import validate_token_name
 
 if TYPE_CHECKING:
     from magpie.config import MagpieSettings
@@ -83,8 +84,12 @@ class TokenService:
             Plaintext token string (mgp_... format) - only returned once.
 
         Raises:
-            ValueError: If token name already exists.
+            ValueError: If token name already exists or is invalid.
+            ValidationError: If token name fails validation (invalid format/length).
         """
+        # Validate token name (defense in depth - also validated at API layer)
+        validate_token_name(name)
+
         # Generate secure random token
         random_part = secrets.token_urlsafe(32)
 
