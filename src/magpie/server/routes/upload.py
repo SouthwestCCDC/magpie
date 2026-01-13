@@ -52,6 +52,14 @@ class SizeLimitedReader:
 
         Raises:
             UploadSizeExceededError: If cumulative read exceeds max_size.
+
+        NOTE: The check happens AFTER reading to simplify the code. This means we may
+        temporarily hold up to one chunk more than max_size in memory before raising.
+        This is acceptable because:
+        1. The exceeded bytes are never persisted - the exception aborts processing
+        2. The overage is bounded by the read chunk size (typically 8KB-64KB)
+        3. Pre-checking when size=-1 is impossible (we don't know how much will be read)
+        4. Memory is already allocated by the underlying stream.read() call regardless
         """
         data = self._stream.read(size)
         self._bytes_read += len(data)
@@ -66,13 +74,15 @@ class SizeLimitedReader:
         """Seek in stream and reset bytes_read counter appropriately.
 
         SECURITY: Must reset _bytes_read to prevent bypass via seek-then-read.
-        For SEEK_SET (whence=0), we know the exact position.
+        For SEEK_SET (whence=0) and SEEK_CUR (whence=1), we use the resulting
+        absolute position returned by the underlying stream's seek().
         For SEEK_END (whence=2), we cannot accurately track position, so reset
         to 0 to be conservative (may over-count on subsequent reads).
         """
         result = self._stream.seek(pos, whence)
-        if whence == 0:  # SEEK_SET
-            self._bytes_read = pos
+        if whence in (0, 1):  # SEEK_SET or SEEK_CUR
+            # Use the resulting absolute position to keep _bytes_read in sync.
+            self._bytes_read = result
         elif whence == 2:  # SEEK_END - can't track accurately
             self._bytes_read = 0  # Reset to be safe
         return result
@@ -138,9 +148,12 @@ async def upload_artifact(
     # Defense-in-depth size limiting strategy:
     # 1. Content-Length check (below): Fast early rejection before reading body.
     #    Catches well-behaved clients with oversized uploads immediately.
-    # 2. SizeLimitedReader (later): Enforces limit during streaming.
+    #    NOTE: Content-Length includes multipart overhead (~200 bytes), so this check
+    #    is stricter than the file content limit. Some valid uploads near the limit
+    #    may be rejected early. This is intentional - we prefer DoS protection over
+    #    allowing the last ~200 bytes of capacity.
+    # 2. SizeLimitedReader (later): Enforces limit during streaming on file content only.
     #    Catches malicious clients that lie about Content-Length or omit it.
-    # Both checks use the same max_upload_size limit for file content.
     max_size = settings.max_upload_size
     if max_size is not None and content_length is not None:
         if content_length > max_size:

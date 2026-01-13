@@ -77,6 +77,62 @@ class TestSizeLimitedReader:
         result = reader.read()
         assert result == b"data"
 
+    def test_seek_cur_forward(self) -> None:
+        """SEEK_CUR with positive offset should move forward and track position."""
+        data = b"0123456789"
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=100)
+
+        # Read 3 bytes
+        reader.read(3)
+        assert reader.tell() == 3
+
+        # Seek forward 2 bytes relative to current position (SEEK_CUR)
+        result = reader.seek(2, 1)  # whence=1 is SEEK_CUR
+        assert result == 5
+        assert reader.tell() == 5
+
+        # Read remaining bytes
+        remaining = reader.read()
+        assert remaining == b"56789"
+
+    def test_seek_cur_backward(self) -> None:
+        """SEEK_CUR with negative offset should move backward and reset bytes_read."""
+        data = b"0123456789"
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=100)
+
+        # Read 8 bytes
+        reader.read(8)
+        assert reader.tell() == 8
+
+        # Seek backward 5 bytes relative to current position (SEEK_CUR)
+        result = reader.seek(-5, 1)  # whence=1 is SEEK_CUR
+        assert result == 3
+        assert reader.tell() == 3
+
+        # Read remaining bytes - should succeed since position-based tracking
+        remaining = reader.read()
+        assert remaining == b"3456789"
+
+    def test_seek_cur_prevents_size_bypass(self) -> None:
+        """SEEK_CUR backward shouldn't allow reading more than max_size unique bytes."""
+        # This test verifies the security fix: an attacker cannot bypass
+        # the size limit by seeking backward and re-reading data
+        data = b"x" * 100
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=50)
+
+        # Read 40 bytes (under limit)
+        reader.read(40)
+
+        # Seek backward 20 bytes - now at position 20
+        reader.seek(-20, 1)
+
+        # Try to read 40 more bytes - would be position 60, over the 50 byte limit
+        with pytest.raises(UploadSizeExceededError):
+            reader.read(40)
+
     def test_tell_passthrough(self) -> None:
         """Tell should return current position from underlying stream."""
         data = b"test data"
@@ -252,6 +308,17 @@ class TestUploadSizeLimitEndpoint:
         """Upload with file content over size limit should fail.
 
         Uses 2001 bytes which exceeds the 2000 byte limit.
+
+        NOTE: This test validates the defense-in-depth strategy. With 2001 bytes of
+        content plus ~200 bytes of multipart overhead, the Content-Length (~2201 bytes)
+        exceeds the 2000 byte limit. This means the early Content-Length check rejects
+        the request before SizeLimitedReader runs. This is the intended behavior -
+        the Content-Length check provides fast early rejection for well-behaved clients.
+
+        The SizeLimitedReader unit tests (test_read_exceeds_limit, test_incremental_read_exceeds_limit)
+        verify the streaming enforcement without HTTP overhead. The endpoint test
+        test_upload_without_content_length_still_enforced verifies SizeLimitedReader
+        catches oversized uploads even when Content-Length passes.
         """
         content = b"x" * 2001  # One byte over the 2000 byte limit
         files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
