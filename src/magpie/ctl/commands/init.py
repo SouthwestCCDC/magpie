@@ -110,6 +110,7 @@ def init(ctx: CTLContext, reset_admin_token: bool) -> None:
                 data={
                     "admin_token": plaintext_token,
                     "storage_path": str(settings.storage_path),
+                    "database_path": str(settings.database_path),
                     "token_already_existed": token_already_exists,
                 },
                 human_output="",

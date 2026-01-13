@@ -195,5 +195,5 @@ def _format_datetime(dt_str: str) -> str:
             time_part = dt_str.split("T")[1][:8]  # HH:MM:SS
             return f"{date_part} {time_part}"
         return dt_str
-    except (json.JSONDecodeError, ValueError, KeyError):
+    except (ValueError, IndexError):
         return dt_str
