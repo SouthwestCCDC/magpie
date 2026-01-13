@@ -37,7 +37,7 @@ services:
       - ${MAGPIE_DATA_DIR:-./data/artifacts}:/data/artifacts  # Read-write for uploads
     environment:
       - MAGPIE_STORAGE_PATH=/data/artifacts
-      - MAGPIE_DEBUG=true
+      - MAGPIE_DEBUG=${MAGPIE_DEBUG:-false}
     expose:
       - "8000"  # Internal only - accessed via Caddy
     restart: unless-stopped
