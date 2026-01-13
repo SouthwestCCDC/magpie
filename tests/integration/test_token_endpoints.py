@@ -177,6 +177,158 @@ class TestCreateTokenEndpoint:
         assert "already exists" in response.json()["detail"]
 
 
+class TestCreateTokenNameValidation:
+    """Tests for token name validation in POST /api/v1/tokens endpoint."""
+
+    def test_valid_alphanumeric_name(self, client: TestClient, admin_token: str) -> None:
+        """Valid alphanumeric token name is accepted."""
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "myservice123", "scope": "read"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["name"] == "myservice123"
+
+    def test_valid_name_with_dots(self, client: TestClient, admin_token: str) -> None:
+        """Token name with dots is accepted."""
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "my.service.name", "scope": "read"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["name"] == "my.service.name"
+
+    def test_valid_name_with_underscores(self, client: TestClient, admin_token: str) -> None:
+        """Token name with underscores is accepted."""
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "my_service_name", "scope": "read"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["name"] == "my_service_name"
+
+    def test_valid_name_with_hyphens(self, client: TestClient, admin_token: str) -> None:
+        """Token name with hyphens is accepted."""
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "my-service-name", "scope": "read"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["name"] == "my-service-name"
+
+    def test_valid_single_character_name(self, client: TestClient, admin_token: str) -> None:
+        """Single alphanumeric character token name is accepted."""
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "a", "scope": "read"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["name"] == "a"
+
+    def test_invalid_name_starting_with_hyphen_returns_422(
+        self, client: TestClient, admin_token: str
+    ) -> None:
+        """Token name starting with hyphen returns 422."""
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "-invalid", "scope": "read"},
+        )
+
+        assert response.status_code == 422
+
+    def test_invalid_name_starting_with_dot_returns_422(
+        self, client: TestClient, admin_token: str
+    ) -> None:
+        """Token name starting with dot returns 422."""
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": ".invalid", "scope": "read"},
+        )
+
+        assert response.status_code == 422
+
+    def test_invalid_name_starting_with_underscore_returns_422(
+        self, client: TestClient, admin_token: str
+    ) -> None:
+        """Token name starting with underscore returns 422."""
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "_invalid", "scope": "read"},
+        )
+
+        assert response.status_code == 422
+
+    def test_invalid_name_with_spaces_returns_422(
+        self, client: TestClient, admin_token: str
+    ) -> None:
+        """Token name with spaces returns 422."""
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "invalid name", "scope": "read"},
+        )
+
+        assert response.status_code == 422
+
+    def test_invalid_name_with_special_chars_returns_422(
+        self, client: TestClient, admin_token: str
+    ) -> None:
+        """Token name with special characters returns 422."""
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "invalid@name!", "scope": "read"},
+        )
+
+        assert response.status_code == 422
+
+    def test_invalid_empty_name_returns_422(self, client: TestClient, admin_token: str) -> None:
+        """Empty token name returns 422."""
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": "", "scope": "read"},
+        )
+
+        assert response.status_code == 422
+
+    def test_invalid_name_too_long_returns_422(self, client: TestClient, admin_token: str) -> None:
+        """Token name exceeding 64 characters returns 422."""
+        long_name = "a" * 65  # 65 characters, exceeds max of 64
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": long_name, "scope": "read"},
+        )
+
+        assert response.status_code == 422
+
+    def test_valid_max_length_name(self, client: TestClient, admin_token: str) -> None:
+        """Token name at max length (64 chars) is accepted."""
+        max_name = "a" * 64  # Exactly 64 characters
+        response = client.post(
+            "/api/v1/tokens",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"name": max_name, "scope": "read"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["name"] == max_name
+
+
 class TestListTokensEndpoint:
     """Tests for GET /api/v1/tokens endpoint."""
 
