@@ -453,6 +453,10 @@ token = "mgp_xxx..."
 
 Environment variables override file settings: `MAGPIE_SERVER`, `MAGPIE_TOKEN`.
 
+**Note:** `MAGPIE_TIMEOUT` is intentionally not read from the config file. It can only be
+set via CLI flag (`--timeout`) or environment variable. This prevents long-lived global
+configuration from silently affecting network behavior.
+
 ### Observability
 
 Observability covers three pillars: **structured logging**, **tracing**, and **metrics**. All server-side
