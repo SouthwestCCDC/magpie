@@ -58,7 +58,14 @@ def _compute_hash(content: bytes) -> str:
 
 
 class TestConcurrentUploads:
-    """Tests for concurrent uploads of the same artifact."""
+    """Tests for concurrent uploads of the same artifact.
+
+    Note: StorageService performs filesystem operations without explicit file
+    locking. These tests characterize the observed behavior under concurrent
+    access rather than asserting specific locking guarantees. The content-
+    addressable storage design provides natural idempotency for same-content
+    uploads, which mitigates many race conditions in practice.
+    """
 
     async def test_concurrent_uploads_same_content(
         self, test_config: MagpieSettings, test_storage_service: StorageService
@@ -66,7 +73,9 @@ class TestConcurrentUploads:
         """Multiple concurrent uploads of same content produce consistent result.
 
         When the same artifact content is uploaded simultaneously, all uploads
-        should succeed and produce the same hash reference.
+        should succeed and produce the same hash reference. The content-addressable
+        design means identical content produces identical paths, providing natural
+        idempotency without requiring explicit locking.
         """
         content = b"concurrent upload test content"
         expected_hash = _compute_hash(content)
@@ -244,13 +253,23 @@ class TestConcurrentTagOperations:
                 # Create new tag
                 test_storage_service.create_tag(artifact_path, hash_ref, f"new-tag-{op_idx}")
             else:
-                # Remove existing tag (may fail if already removed)
+                # Remove existing tag (may return False if already removed by another worker)
                 tag_to_remove = initial_tags[op_idx % len(initial_tags)]
                 test_storage_service.remove_tag(artifact_path, tag_to_remove)
 
         # Run mixed operations concurrently
         tasks = [tag_operation(i) for i in range(20)]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Check that any exceptions are expected types (file not found during race)
+        # rather than unexpected errors (corruption, bugs, etc.)
+        for result in results:
+            if isinstance(result, Exception):
+                # FileNotFoundError can occur if manifest file is being updated concurrently
+                # These are expected race conditions in the absence of file locking
+                assert isinstance(result, (FileNotFoundError, OSError)), (
+                    f"Unexpected exception type: {type(result).__name__}: {result}"
+                )
 
         # Artifact should still be accessible
         versions = test_storage_service.list_artifacts(artifact_path)
@@ -279,9 +298,6 @@ class TestUploadDuringGC:
                 uploaded_by="setup",
             )
 
-        gc_complete = asyncio.Event()
-        upload_complete = asyncio.Event()
-
         def run_gc_sync() -> None:
             """Run GC synchronously."""
             run_gc(
@@ -289,7 +305,6 @@ class TestUploadDuringGC:
                 retention_days=0,  # Delete old untagged immediately
                 dry_run=False,
             )
-            gc_complete.set()
 
         def upload_sync() -> str:
             """Upload artifact synchronously."""
@@ -300,7 +315,6 @@ class TestUploadDuringGC:
                 file_stream=file_stream,
                 uploaded_by="concurrent-uploader",
             )
-            upload_complete.set()
             return info.hash
 
         # Run GC and upload concurrently using to_thread
@@ -507,7 +521,15 @@ class TestConcurrentMixedOperations:
                 tasks.append(amend_task(path, hash_ref, i))
 
         # Run all tasks concurrently
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Check that any exceptions are expected types rather than unexpected errors
+        for result in results:
+            if isinstance(result, Exception):
+                # FileNotFoundError/OSError can occur during concurrent filesystem access
+                assert isinstance(result, (FileNotFoundError, OSError)), (
+                    f"Unexpected exception type: {type(result).__name__}: {result}"
+                )
 
         # Verify all pre-created artifacts still exist and are accessible
         for path, hash_ref in created_hashes:
@@ -524,7 +546,13 @@ class TestGCLockContention:
     """Tests for GC lock contention scenarios.
 
     Note: The current implementation does not use file locking for GC.
-    These tests verify behavior when multiple GC processes run simultaneously.
+    These tests characterize behavior when multiple GC processes run
+    simultaneously. Because GC only deletes blobs that are untagged AND
+    older than the retention period, the worst case is that a blob gets
+    deleted by one GC process while another is scanning it, which may
+    result in a FileNotFoundError during the scan. The tests verify that
+    tagged artifacts are preserved and storage remains consistent, but
+    do not attempt to trigger specific race conditions.
     """
 
     async def test_concurrent_gc_processes(
@@ -532,8 +560,9 @@ class TestGCLockContention:
     ) -> None:
         """Multiple GC processes running simultaneously.
 
-        Both processes should complete without errors. The storage should
-        remain consistent after both complete.
+        Characterizes behavior under concurrent GC execution. All processes
+        should complete (possibly with FileNotFoundError for already-deleted
+        blobs) and tagged artifacts should be preserved.
         """
         # Create artifacts with tagged and untagged blobs
         for i in range(5):
@@ -648,7 +677,7 @@ class TestAsyncClientConcurrency:
     """Tests using httpx.AsyncClient for HTTP-level concurrency testing."""
 
     @pytest.fixture
-    def async_client(self, test_storage_service: StorageService) -> httpx.AsyncClient:
+    async def async_client(self, test_storage_service: StorageService) -> httpx.AsyncClient:
         """Create async HTTP client for testing."""
 
         def override_storage_service() -> StorageService:
@@ -664,6 +693,7 @@ class TestAsyncClientConcurrency:
 
         yield client
 
+        await client.aclose()
         app.dependency_overrides.clear()
 
     async def test_concurrent_http_uploads(
