@@ -1,0 +1,277 @@
+# Magpie Artifact Storage - Production Caddy Configuration
+#
+# =============================================================================
+# PRODUCTION DEPLOYMENT NOTES
+# =============================================================================
+#
+# This configuration provides:
+# - TLS encryption (automatic via Let's Encrypt or manual certs)
+# - Security headers (HSTS, X-Content-Type-Options, X-Frame-Options, etc.)
+# - Access logging
+#
+# Environment variable configuration:
+#   MAGPIE_DOMAIN - The domain name for the service (REQUIRED - no default)
+#
+# TLS options:
+#   1. Automatic TLS via Let's Encrypt (default)
+#   2. Manual certificates: Edit the TLS block to specify cert/key paths
+#   3. Internal CA: Edit the TLS block to use 'tls internal'
+#
+# =============================================================================
+# AUTHENTICATION FLOW (forward_auth)
+# =============================================================================
+#
+# Protected routes use Caddy's forward_auth to validate Bearer tokens:
+#
+# 1. Client sends request with "Authorization: Bearer <token>" header
+# 2. Caddy makes subrequest to /api/v1/auth/validate with the same headers
+# 3. Auth endpoint validates token and returns:
+#    - 200 OK with X-Magpie-User and X-Magpie-Scope headers (valid token)
+#    - 401 Unauthorized (invalid/missing token)
+# 4. If auth returns 200, Caddy copies identity headers to upstream request
+# 5. If auth returns 401, Caddy returns 401 to client (request blocked)
+#
+# =============================================================================
+# ROUTE PROTECTION SUMMARY
+# =============================================================================
+#
+# PROTECTED ROUTES (require valid Bearer token):
+#   - POST   /api/v1/upload/*              - Artifact uploads
+#   - POST   /api/v1/artifacts/*/tags      - Create/update tags
+#   - DELETE /api/v1/artifacts/*/tags/*    - Remove tags
+#   - POST   /api/v1/tags/*/flush          - Flush tags globally
+#   - GET    /api/v1/tokens                - List tokens (admin)
+#   - POST   /api/v1/tokens                - Create tokens (admin)
+#   - DELETE /api/v1/tokens/*              - Revoke tokens (admin)
+#   - POST   /api/v1/gc                    - Garbage collection (admin)
+#
+# PUBLIC ROUTES (no authentication required):
+#   - GET    /api/v1/artifacts/*           - List artifacts, get info
+#   - GET    /api/v1/auth/validate         - Auth validation endpoint
+#   - GET    /health                       - Health check
+#   - GET    /artifacts/*                  - Static file downloads + directory browsing
+#
+# =============================================================================
+# HEADER PROPAGATION
+# =============================================================================
+#
+# On successful authentication, these headers are copied to upstream:
+#   - X-Magpie-User:  Token name (identifies the authenticated client)
+#   - X-Magpie-Scope: Permission level (read, write, or admin)
+#
+# The FastAPI backend can use these headers for authorization decisions.
+#
+# =============================================================================
+
+# Global options block
+{
+	# Enable access logging to stdout (captured by container runtime)
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+
+	# Admin API disabled for production security.
+	# For debugging, prefer:
+	#   - Reviewing Caddy's access/error logs (output to stdout, captured by Docker)
+	#   - Validating config before deployment: `caddy validate --config /etc/caddy/Caddyfile`
+	#   - Testing in a non-production environment
+	# If you must enable the admin API temporarily, restrict access to localhost
+	# and disable it again before returning to production.
+	admin off
+}
+
+# Site block - uses environment variable for domain (required)
+# WARNING: MAGPIE_DOMAIN must be set - Let's Encrypt will fail without a valid domain
+{$MAGPIE_DOMAIN} {
+	# =========================================================================
+	# TLS CONFIGURATION
+	# =========================================================================
+	#
+	# TLS is automatic via Let's Encrypt by default.
+	# For manual certificates, uncomment and configure:
+	# tls /path/to/cert.pem /path/to/key.pem
+	#
+	# For internal CA (self-signed):
+	# tls internal
+
+	# =========================================================================
+	# SECURITY HEADERS
+	# =========================================================================
+
+	header {
+		# HSTS - Enforce HTTPS for all future requests (30-day max-age for initial deployment)
+		# NOTE: Starting with 30 days allows recovery if TLS is misconfigured. After
+		# confirming TLS works correctly, increase to 2 years (63072000) for production.
+		# The "preload" directive is omitted because it requires active submission to
+		# hstspreload.org. Add "preload" only after increasing max-age and submitting
+		# your domain to the HSTS preload list.
+		Strict-Transport-Security "max-age=2592000; includeSubDomains"
+
+		# Prevent MIME type sniffing
+		X-Content-Type-Options "nosniff"
+
+		# Clickjacking protection - deny framing entirely
+		X-Frame-Options "DENY"
+
+		# XSS protection (legacy, but still useful for older browsers)
+		X-XSS-Protection "1; mode=block"
+
+		# Referrer policy - only send origin for cross-origin requests
+		Referrer-Policy "strict-origin-when-cross-origin"
+
+		# Content Security Policy - restrict resource loading
+		# API-only service: strict policy with no data URIs
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
+		# Remove server identification headers
+		-Server
+	}
+
+	# =========================================================================
+	# RATE LIMITING NOTE
+	# =========================================================================
+	# Caddy's standard build does not include rate limiting. For production,
+	# implement rate limiting at the infrastructure layer (load balancer, WAF)
+	# or use a custom Caddy build with the rate-limit plugin.
+	# See issue #129 for implementation options.
+	#
+	# Auth endpoints matcher - kept for documentation and future rate limiting.
+	# See issue #129 for rate limiting implementation options.
+	@auth_endpoints {
+		path /api/v1/auth/*
+		path /api/v1/tokens*
+	}
+
+	# =========================================================================
+	# ACCESS LOGGING
+	# =========================================================================
+	# Site-specific logging is handled by the global log block above.
+
+	# =========================================================================
+	# PUBLIC ROUTES - No authentication required
+	# =========================================================================
+
+	# Health check endpoint - used by container orchestration
+	handle /health {
+		reverse_proxy magpie:8000
+	}
+
+	# Auth validation endpoint - must be public (used by forward_auth itself)
+	handle /api/v1/auth/validate {
+		reverse_proxy magpie:8000
+	}
+
+	# Artifact read operations (GET only) - public access
+	# Matches: GET /api/v1/artifacts/{path}, GET /api/v1/artifacts/{path}/{ref}/info
+	# Note: POST/DELETE to /artifacts/*/tags* are handled by protected routes below
+	@artifacts_read {
+		method GET
+		path_regexp read ^/api/v1/artifacts/.+
+	}
+	handle @artifacts_read {
+		reverse_proxy magpie:8000
+	}
+
+	# Static artifact downloads - served directly by Caddy for performance
+	# Files accessed via /artifacts/{artifact_path}/{ref} symlinks
+	# Directory browsing enabled for discovery and debugging
+	#
+	# SECURITY NOTE: Directory browsing exposes the artifact structure (paths,
+	# refs, filenames) to anyone who can access this endpoint. This is intentional
+	# for Magpie's use case (artifact discovery). If you need to restrict
+	# browsing, remove the "browse" argument from file_server below.
+	handle /artifacts/* {
+		root * /data
+		file_server browse
+	}
+
+	# =========================================================================
+	# PROTECTED ROUTES - Require valid Bearer token via forward_auth
+	# =========================================================================
+
+	# Upload endpoint - requires write or admin scope
+	handle /api/v1/upload/* {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
+		reverse_proxy magpie:8000
+	}
+
+	# Artifact metadata amendment - requires write or admin scope
+	# Matches: PATCH /api/v1/artifacts/{path}/{ref}
+	@artifacts_amend {
+		method PATCH
+		path_regexp amend ^/api/v1/artifacts/.+
+	}
+	handle @artifacts_amend {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
+		reverse_proxy magpie:8000
+	}
+
+	# Tag mutation endpoints - requires write or admin scope
+	# Matches: POST /api/v1/artifacts/{path}/{ref}/tags
+	#          DELETE /api/v1/artifacts/{path}/tags/{tag_name}
+	@artifacts_tags {
+		path_regexp tags ^/api/v1/artifacts/.+/tags
+	}
+	handle @artifacts_tags {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
+		reverse_proxy magpie:8000
+	}
+
+	# Flush tag endpoint - requires admin scope
+	# Matches: POST /api/v1/tags/{tag_name}/flush
+	#
+	# NOTE: This route is more specific than the dev Caddyfile which uses
+	# /api/v1/tags/* to catch all tag operations. In production, we explicitly
+	# match only POST /api/v1/tags/*/flush since that is the only tag endpoint
+	# that exists outside of artifact-scoped routes. The dev config is broader
+	# to simplify local testing.
+	@tags_flush {
+		method POST
+		path /api/v1/tags/*/flush
+	}
+	handle @tags_flush {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
+		reverse_proxy magpie:8000
+	}
+
+	# Token management endpoints - requires admin scope
+	handle /api/v1/tokens* {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
+		reverse_proxy magpie:8000
+	}
+
+	# GC endpoint - requires admin scope
+	handle /api/v1/gc {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
+		reverse_proxy magpie:8000
+	}
+
+	# =========================================================================
+	# FALLBACK
+	# =========================================================================
+
+	# Return 404 for unmatched routes
+	handle {
+		respond "Not Found" 404
+	}
+}

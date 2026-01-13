@@ -66,6 +66,7 @@ Environment variables override config file values:
 |----------|-------------|---------|
 | `MAGPIE_SERVER` | Server URL | `https://magpie.example.com` |
 | `MAGPIE_TOKEN` | Authentication token | `mgp_abc123...` |
+| `MAGPIE_TIMEOUT` | Request timeout (see note below) | `600`, `5m`, `1h30m` |
 
 ### Configuration Precedence
 
@@ -73,6 +74,11 @@ Environment variables override config file values:
 2. Environment variables (`MAGPIE_SERVER`, `MAGPIE_TOKEN`)
 3. Config file (`~/.magpie/config.toml`)
 4. Defaults - lowest priority
+
+**Note:** The `--timeout` setting has a different precedence. It can only be set via
+CLI flag or the `MAGPIE_TIMEOUT` environment variable -- it is intentionally not read
+from the config file. This prevents long-lived global configuration from silently
+affecting network behavior. The default is 600 seconds (10 minutes).
 
 ### Getting a Token
 
@@ -424,6 +430,7 @@ The artifact was already stored; the existing hash was returned.
 |----------|-------|-------------|
 | `MAGPIE_SERVER` | Client | Server URL |
 | `MAGPIE_TOKEN` | Client | Auth token |
+| `MAGPIE_TIMEOUT` | Client | Request timeout (CLI/env only, not config file) |
 | `MAGPIE_HTTP_PORT` | Deploy | External HTTP port (default: 8080) |
 | `MAGPIE_HTTPS_PORT` | Deploy | External HTTPS port (default: 8443) |
 | `MAGPIE_STORAGE_PATH` | Server | Storage directory |
@@ -439,7 +446,8 @@ The artifact was already stored; the existing hash was returned.
 | GET | `/health` | Health check |
 | GET | `/api/v1/artifacts/{path}` | List versions |
 | GET | `/api/v1/artifacts/{path}/{ref}/info` | Get metadata |
-| GET | `/artifacts/{path}/{ref}` | Download file |
+| GET | `/artifacts/{path}/{tag}` | Download by tag |
+| GET | `/artifacts/{path}/blobs/{hash}` | Download by hash |
 
 **Protected (auth required):**
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
@@ -28,12 +28,9 @@ class TestSentrySetup:
         """Sentry should not be initialized when sentry_dsn is None."""
         settings = MagpieSettings(sentry_dsn=None)
 
-        # When DSN is None, function should return early without importing sentry_sdk
-        # We verify this by checking no exception is raised and no side effects occur
-        with patch.dict("sys.modules", {"sentry_sdk": MagicMock()}):
+        with patch("sentry_sdk.init") as mock_init:
             setup_sentry(test_app, settings)
-            # sentry_sdk should not have been imported since we return early
-            # The function returns before importing, so this should succeed
+            mock_init.assert_not_called()
 
     def test_sentry_initialized_when_dsn_set(self, test_app: FastAPI) -> None:
         """Sentry should be initialized when sentry_dsn is provided."""
@@ -69,10 +66,15 @@ class TestOpenTelemetrySetup:
         """OpenTelemetry should not be initialized when otel_enabled is False."""
         settings = MagpieSettings(otel_enabled=False)
 
-        # When disabled, function returns early without importing anything
-        # Just verify function completes without error
-        setup_opentelemetry(test_app, settings)
-        # If we get here without error, the early return worked
+        with (
+            patch("opentelemetry.trace.set_tracer_provider") as mock_set_provider,
+            patch(
+                "opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"
+            ) as mock_instrument,
+        ):
+            setup_opentelemetry(test_app, settings)
+            mock_set_provider.assert_not_called()
+            mock_instrument.assert_not_called()
 
     def test_otel_initialized_when_enabled(self, test_app: FastAPI) -> None:
         """OpenTelemetry should be initialized when otel_enabled is True."""
@@ -136,9 +138,17 @@ class TestConfigToggles:
         """setup_observability should not initialize anything when all disabled."""
         settings = MagpieSettings(sentry_dsn=None, otel_enabled=False)
 
-        # Both are disabled, so function should complete without importing SDKs
-        setup_observability(test_app, settings)
-        # If we get here without error, early returns worked
+        with (
+            patch("sentry_sdk.init") as mock_sentry_init,
+            patch("opentelemetry.trace.set_tracer_provider") as mock_set_provider,
+            patch(
+                "opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"
+            ) as mock_instrument,
+        ):
+            setup_observability(test_app, settings)
+            mock_sentry_init.assert_not_called()
+            mock_set_provider.assert_not_called()
+            mock_instrument.assert_not_called()
 
     def test_setup_observability_initializes_both_when_configured(self, test_app: FastAPI) -> None:
         """setup_observability should initialize both when both are configured."""

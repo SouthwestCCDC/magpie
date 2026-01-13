@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from magpie.config import MagpieSettings, get_settings
 
@@ -26,6 +27,26 @@ class TestMagpieSettingsDefaults:
         """Default debug should be False."""
         settings = MagpieSettings()
         assert settings.debug is False
+
+    def test_default_gc_lock_path(self) -> None:
+        """Default gc_lock_path should be /var/run/magpie-gc.lock."""
+        settings = MagpieSettings()
+        assert settings.gc_lock_path == Path("/var/run/magpie-gc.lock")
+
+    def test_default_max_upload_size_none(self) -> None:
+        """Default max_upload_size should be None (no limit)."""
+        settings = MagpieSettings()
+        assert settings.max_upload_size is None
+
+    def test_default_s3_bucket_none(self) -> None:
+        """Default s3_bucket should be None (disabled)."""
+        settings = MagpieSettings()
+        assert settings.s3_bucket is None
+
+    def test_default_log_format_console(self) -> None:
+        """Default log_format should be 'console'."""
+        settings = MagpieSettings()
+        assert settings.log_format == "console"
 
 
 class TestMagpieSettingsPathDerivation:
@@ -107,6 +128,42 @@ class TestMagpieSettingsEnvironmentOverride:
         settings = MagpieSettings()
         assert settings.temp_path == Path("/env/storage/.tmp")
         assert settings.database_path == Path("/env/storage/.magpie.db")
+
+    def test_gc_lock_path_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """MAGPIE_GC_LOCK_PATH env var should override default."""
+        monkeypatch.setenv("MAGPIE_GC_LOCK_PATH", "/custom/gc.lock")
+        settings = MagpieSettings()
+        assert settings.gc_lock_path == Path("/custom/gc.lock")
+
+    def test_max_upload_size_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """MAGPIE_MAX_UPLOAD_SIZE env var should override default."""
+        monkeypatch.setenv("MAGPIE_MAX_UPLOAD_SIZE", "1073741824")
+        settings = MagpieSettings()
+        assert settings.max_upload_size == 1073741824
+
+    def test_s3_bucket_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """MAGPIE_S3_BUCKET env var should override default."""
+        monkeypatch.setenv("MAGPIE_S3_BUCKET", "my-backup-bucket")
+        settings = MagpieSettings()
+        assert settings.s3_bucket == "my-backup-bucket"
+
+    def test_log_format_env_override_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """MAGPIE_LOG_FORMAT env var should accept 'json'."""
+        monkeypatch.setenv("MAGPIE_LOG_FORMAT", "json")
+        settings = MagpieSettings()
+        assert settings.log_format == "json"
+
+    def test_log_format_env_override_console(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """MAGPIE_LOG_FORMAT env var should accept 'console'."""
+        monkeypatch.setenv("MAGPIE_LOG_FORMAT", "console")
+        settings = MagpieSettings()
+        assert settings.log_format == "console"
+
+    def test_log_format_invalid_value_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Invalid MAGPIE_LOG_FORMAT values should raise ValidationError."""
+        monkeypatch.setenv("MAGPIE_LOG_FORMAT", "invalid")
+        with pytest.raises(ValidationError):
+            MagpieSettings()
 
 
 class TestGetSettingsCaching:

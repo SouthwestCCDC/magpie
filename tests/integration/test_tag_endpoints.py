@@ -243,3 +243,123 @@ class TestTagResponseIncludesTags:
 
         expected_fields = {"artifact_path", "tag_name", "hash_ref", "tags"}
         assert expected_fields == set(data.keys())
+
+
+class TestCreateTagValidation:
+    """Tests for tag name validation on create_tag endpoint."""
+
+    def test_create_tag_rejects_path_traversal(self, client: TestClient) -> None:
+        """Create tag rejects tag names with path traversal."""
+        artifact_path = "tag-validation/traversal"
+        upload_artifact(client, artifact_path, b"validation test content")
+
+        response = client.post(
+            f"/api/v1/artifacts/{artifact_path}/latest/tags",
+            json={"tag_name": "../../../evil"},
+        )
+
+        assert response.status_code == 422
+
+    def test_create_tag_rejects_leading_dot(self, client: TestClient) -> None:
+        """Create tag rejects tag names starting with a dot."""
+        artifact_path = "tag-validation/leading-dot"
+        upload_artifact(client, artifact_path, b"validation test content")
+
+        response = client.post(
+            f"/api/v1/artifacts/{artifact_path}/latest/tags",
+            json={"tag_name": ".hidden"},
+        )
+
+        assert response.status_code == 422
+
+    def test_create_tag_rejects_leading_hyphen(self, client: TestClient) -> None:
+        """Create tag rejects tag names starting with a hyphen."""
+        artifact_path = "tag-validation/leading-hyphen"
+        upload_artifact(client, artifact_path, b"validation test content")
+
+        response = client.post(
+            f"/api/v1/artifacts/{artifact_path}/latest/tags",
+            json={"tag_name": "-invalid"},
+        )
+
+        assert response.status_code == 422
+
+    def test_create_tag_rejects_slashes(self, client: TestClient) -> None:
+        """Create tag rejects tag names with slashes."""
+        artifact_path = "tag-validation/slashes"
+        upload_artifact(client, artifact_path, b"validation test content")
+
+        response = client.post(
+            f"/api/v1/artifacts/{artifact_path}/latest/tags",
+            json={"tag_name": "path/to/tag"},
+        )
+
+        assert response.status_code == 422
+
+    def test_create_tag_accepts_valid_names(self, client: TestClient) -> None:
+        """Create tag accepts various valid tag name formats."""
+        artifact_path = "tag-validation/valid-names"
+        upload_artifact(client, artifact_path, b"validation test content")
+
+        valid_names = [
+            "v1.0.0",
+            "release-2024",
+            "my_tag",
+            "Tag123",
+            "a",
+            "1tag",
+        ]
+
+        for tag_name in valid_names:
+            response = client.post(
+                f"/api/v1/artifacts/{artifact_path}/latest/tags",
+                json={"tag_name": tag_name},
+            )
+            assert response.status_code == 200, f"Tag name '{tag_name}' should be valid"
+
+
+class TestRemoveTagValidation:
+    """Tests for tag name validation on remove_tag endpoint."""
+
+    def test_remove_tag_rejects_leading_dot(self, client: TestClient) -> None:
+        """Remove tag rejects tag names starting with a dot."""
+        artifact_path = "tag-validation/remove-leading-dot"
+        upload_artifact(client, artifact_path, b"validation test content")
+
+        response = client.delete(f"/api/v1/artifacts/{artifact_path}/tags/.hidden")
+
+        assert response.status_code == 422
+
+    def test_remove_tag_rejects_leading_hyphen(self, client: TestClient) -> None:
+        """Remove tag rejects tag names starting with a hyphen."""
+        artifact_path = "tag-validation/remove-leading-hyphen"
+        upload_artifact(client, artifact_path, b"validation test content")
+
+        response = client.delete(f"/api/v1/artifacts/{artifact_path}/tags/-invalid")
+
+        assert response.status_code == 422
+
+    def test_remove_tag_rejects_leading_underscore(self, client: TestClient) -> None:
+        """Remove tag rejects tag names starting with an underscore."""
+        artifact_path = "tag-validation/remove-leading-underscore"
+        upload_artifact(client, artifact_path, b"validation test content")
+
+        response = client.delete(f"/api/v1/artifacts/{artifact_path}/tags/_invalid")
+
+        assert response.status_code == 422
+
+    def test_remove_tag_accepts_valid_name(self, client: TestClient) -> None:
+        """Remove tag allows valid tag names."""
+        artifact_path = "tag-validation/remove-valid"
+        upload_data = upload_artifact(client, artifact_path, b"validation test content")
+
+        # Create a tag to remove
+        client.post(
+            f"/api/v1/artifacts/{artifact_path}/{upload_data['hash_ref']}/tags",
+            json={"tag_name": "valid-tag"},
+        )
+
+        # Removing should succeed (204 if found, but we care about validation passing)
+        response = client.delete(f"/api/v1/artifacts/{artifact_path}/tags/valid-tag")
+
+        assert response.status_code == 204
