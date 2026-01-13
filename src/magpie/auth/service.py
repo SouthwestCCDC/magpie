@@ -18,7 +18,7 @@ from magpie.auth.database import (
     save_token,
 )
 from magpie.auth.models import Token, TokenScope
-from magpie.validation import ValidationError, validate_token_name
+from magpie.validation import validate_token_name
 
 if TYPE_CHECKING:
     from magpie.config import MagpieSettings
