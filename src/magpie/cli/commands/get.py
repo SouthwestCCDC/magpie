@@ -88,7 +88,7 @@ def get(
             if is_json_output():
                 try:
                     detail = info_response.json().get("detail", info_response.text)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, ValueError, KeyError):
                     detail = info_response.text
                 output_error(http_status_to_error_code(info_response.status_code), detail)
             else:
@@ -177,7 +177,7 @@ def get(
                 if is_json_output():
                     try:
                         detail = response.json().get("detail", response.text)
-                    except json.JSONDecodeError:
+                    except (json.JSONDecodeError, ValueError, KeyError):
                         detail = response.text
                     output_error(http_status_to_error_code(response.status_code), detail)
                 else:
