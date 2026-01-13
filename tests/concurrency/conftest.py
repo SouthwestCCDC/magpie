@@ -33,7 +33,7 @@ def _noop_require_admin_scope_header() -> None:
 
 
 @pytest.fixture(autouse=True)
-def override_auth_dependencies(request):
+def override_auth_dependencies():
     """Override auth dependencies for concurrency tests.
 
     Concurrency tests run against the FastAPI app directly without Caddy,
