@@ -182,14 +182,8 @@
 	# refs, filenames) to anyone who can access this endpoint. This is intentional
 	# for Magpie's use case (artifact discovery). If you need to restrict
 	# browsing, remove the "browse" argument from file_server below.
-	#
-	# PATH TRAVERSAL PROTECTION: The root directive points to /data/artifacts
-	# (not /data) to prevent traversal attacks from accessing Caddy's internal
-	# state directories (ACME keys, TLS certificates) that are stored elsewhere
-	# under /data. Caddy normalizes ".." segments, so the explicit subdirectory
-	# root ensures only artifact files are accessible.
 	handle /artifacts/* {
-		root * /data/artifacts
+		root * /data
 		file_server browse
 	}
 
