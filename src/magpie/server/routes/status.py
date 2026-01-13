@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel
 
 from magpie import __version__
-from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenService
 from magpie.server.deps import get_storage_service, get_token_service
 from magpie.storage.service import StorageService
