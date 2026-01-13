@@ -22,8 +22,6 @@ router = APIRouter()
 class UploadSizeExceededError(Exception):
     """Raised when upload exceeds configured max_upload_size."""
 
-    pass
-
 
 class SizeLimitedReader:
     """Wrapper around a file stream that enforces a maximum size limit.
@@ -58,12 +56,26 @@ class SizeLimitedReader:
         data = self._stream.read(size)
         self._bytes_read += len(data)
         if self._bytes_read > self._max_size:
+            # NOTE: Revealing the exact limit is intentional - it helps legitimate users
+            # understand the constraint. The limit is not security-sensitive information;
+            # it's a configuration value that would be documented anyway.
             raise UploadSizeExceededError(f"Upload exceeds maximum size of {self._max_size} bytes")
         return data
 
     def seek(self, pos: int, whence: int = 0) -> int:
-        """Seek in stream (pass-through)."""
-        return self._stream.seek(pos, whence)
+        """Seek in stream and reset bytes_read counter appropriately.
+
+        SECURITY: Must reset _bytes_read to prevent bypass via seek-then-read.
+        For SEEK_SET (whence=0), we know the exact position.
+        For SEEK_END (whence=2), we cannot accurately track position, so reset
+        to 0 to be conservative (may over-count on subsequent reads).
+        """
+        result = self._stream.seek(pos, whence)
+        if whence == 0:  # SEEK_SET
+            self._bytes_read = pos
+        elif whence == 2:  # SEEK_END - can't track accurately
+            self._bytes_read = 0  # Reset to be safe
+        return result
 
     def tell(self) -> int:
         """Get current position in stream (pass-through)."""
@@ -123,7 +135,12 @@ async def upload_artifact(
         HTTPException 413: If upload exceeds max_upload_size configuration.
         StorageError: If storage operation fails.
     """
-    # Early rejection based on Content-Length header if size limit is configured
+    # Defense-in-depth size limiting strategy:
+    # 1. Content-Length check (below): Fast early rejection before reading body.
+    #    Catches well-behaved clients with oversized uploads immediately.
+    # 2. SizeLimitedReader (later): Enforces limit during streaming.
+    #    Catches malicious clients that lie about Content-Length or omit it.
+    # Both checks use the same max_upload_size limit for file content.
     max_size = settings.max_upload_size
     if max_size is not None and content_length is not None:
         if content_length > max_size:

@@ -33,7 +33,7 @@ class MagpieSettings(BaseSettings):
     # GC settings
     gc_lock_path: Path = Path("/var/run/magpie-gc.lock")  # MAGPIE_GC_LOCK_PATH
 
-    # Upload limits
+    # Upload limits - applies to file content size, not including HTTP/multipart overhead
     max_upload_size: int | None = None  # MAGPIE_MAX_UPLOAD_SIZE (bytes, None = unlimited)
 
     # S3 backup settings (optional)
