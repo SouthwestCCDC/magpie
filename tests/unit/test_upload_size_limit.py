@@ -143,6 +143,135 @@ class TestSizeLimitedReader:
         reader.read(4)
         assert reader.tell() == 4
 
+    def test_seek_end_basic(self) -> None:
+        """SEEK_END should position at end of stream."""
+        data = b"0123456789"
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=100)
+
+        # Seek to end
+        result = reader.seek(0, 2)  # whence=2 is SEEK_END
+        assert result == 10
+        assert reader.tell() == 10
+
+    def test_seek_end_with_offset(self) -> None:
+        """SEEK_END with negative offset should position before end."""
+        data = b"0123456789"
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=100)
+
+        # Seek to 3 bytes before end
+        result = reader.seek(-3, 2)  # whence=2 is SEEK_END
+        assert result == 7
+        assert reader.tell() == 7
+
+        # Read remaining bytes
+        remaining = reader.read()
+        assert remaining == b"789"
+
+    def test_seek_end_then_seek_set_prevents_bypass(self) -> None:
+        """SEEK_END followed by SEEK_SET should not allow reading past the limit.
+
+        This tests the specific bypass scenario identified in the review:
+        1. Read data up to near the limit
+        2. seek(0, 2) - SEEK_END
+        3. seek(0, 0) - SEEK_SET back to start
+        4. Attempt to read past the limit - should still be blocked
+
+        The high water mark tracks the maximum position ever reached in the stream,
+        preventing an attacker from reading beyond max_size bytes from the start.
+        Re-reading already-seen data is allowed (it doesn't increase exposure).
+        """
+        data = b"x" * 100
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=50)
+
+        # Read 45 bytes (under limit)
+        first_read = reader.read(45)
+        assert len(first_read) == 45
+
+        # Seek to end (attacker trying to reset tracking)
+        reader.seek(0, 2)  # SEEK_END
+
+        # Seek back to start (attacker trying to re-read)
+        reader.seek(0, 0)  # SEEK_SET
+
+        # Re-reading data we've already seen is OK (high water mark is 45)
+        second_read = reader.read(10)
+        assert len(second_read) == 10
+
+        # But trying to read PAST the high water mark and exceed the limit fails
+        # Currently at position 10, high water mark is 45
+        # Reading 50 bytes would reach position 60, which exceeds max_size=50
+        with pytest.raises(UploadSizeExceededError):
+            reader.read(50)  # Would reach position 60 > max_size 50
+
+    def test_seek_end_multiple_bypass_attempts(self) -> None:
+        """Multiple SEEK_END cycles should not reset the limit tracking."""
+        data = b"x" * 200
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=100)
+
+        # Read 80 bytes
+        reader.read(80)
+
+        # First bypass attempt
+        reader.seek(0, 2)
+        reader.seek(0, 0)
+
+        # Read 15 more - should succeed (80 + 15 = 95 < 100)
+        reader.read(15)
+
+        # Second bypass attempt
+        reader.seek(0, 2)
+        reader.seek(0, 0)
+
+        # Try to read 20 more - should fail (95 + 20 = 115 > 100)
+        # Actually, high water mark is now 95, so reading from position 0
+        # the check is against max(95, 0+20) = 95, which is under limit
+        # But if we read 10, high water mark stays 95, still under
+        reader.read(5)  # This should succeed (hwm=95, pos=5, max(95,5)=95 < 100)
+
+        # Try to reach position beyond high water mark
+        reader.seek(90, 0)
+        # Reading 15 bytes from position 90 would reach position 105
+        with pytest.raises(UploadSizeExceededError):
+            reader.read(15)  # pos 90 + 15 = 105 > 100
+
+    def test_seek_end_read_from_end(self) -> None:
+        """Reading after SEEK_END should track position correctly."""
+        data = b"0123456789"
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=15)
+
+        # Seek to end
+        reader.seek(0, 2)
+        assert reader.tell() == 10
+
+        # Read should return empty (already at end)
+        result = reader.read()
+        assert result == b""
+
+        # Seek back to start and re-read
+        reader.seek(0, 0)
+        reader.read(10)  # Should succeed, high water mark stays at 10
+
+        # High water mark is 10. We can read up to position 15 (max_size).
+        reader.seek(0, 0)
+        # Reading 15 bytes would reach position 15 which equals max_size
+        result = reader.read(15)
+        assert len(result) == 10  # Only 10 bytes in the stream
+
+        # Trying to read beyond max_size should fail
+        # We need a larger data set to test this properly
+        data2 = b"x" * 20
+        stream2 = io.BytesIO(data2)
+        reader2 = SizeLimitedReader(stream2, max_size=15)
+
+        # Read past the limit
+        with pytest.raises(UploadSizeExceededError):
+            reader2.read(16)  # Would reach position 16 > max_size 15
+
 
 class TestMaxUploadSizeConfig:
     """Tests for max_upload_size configuration setting."""

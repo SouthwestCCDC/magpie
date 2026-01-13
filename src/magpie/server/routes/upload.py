@@ -28,6 +28,11 @@ class SizeLimitedReader:
 
     This wrapper tracks bytes read from the underlying stream and raises
     UploadSizeExceededError if the limit is exceeded during streaming.
+
+    SECURITY: The _high_water_mark tracks the maximum position ever reached,
+    preventing bypass via seek operations. Even if a caller seeks backward
+    and re-reads data, _high_water_mark ensures we never allow reading
+    beyond max_size bytes from the start of the stream.
     """
 
     def __init__(self, stream: IO[bytes], max_size: int) -> None:
@@ -40,6 +45,7 @@ class SizeLimitedReader:
         self._stream = stream
         self._max_size = max_size
         self._bytes_read = 0
+        self._high_water_mark = 0  # Maximum position ever reached
 
     def read(self, size: int = -1) -> bytes:
         """Read from stream, enforcing size limit.
@@ -60,10 +66,16 @@ class SizeLimitedReader:
         2. The overage is bounded by the read chunk size (typically 8KB-64KB)
         3. Pre-checking when size=-1 is impossible (we don't know how much will be read)
         4. Memory is already allocated by the underlying stream.read() call regardless
+
+        SECURITY: We track both current position (_bytes_read) and the maximum position
+        ever reached (_high_water_mark). The limit is enforced against _high_water_mark,
+        preventing bypass via seek operations that try to re-read data.
         """
         data = self._stream.read(size)
         self._bytes_read += len(data)
-        if self._bytes_read > self._max_size:
+        # Update high water mark - this never decreases, preventing seek bypass attacks
+        self._high_water_mark = max(self._high_water_mark, self._bytes_read)
+        if self._high_water_mark > self._max_size:
             # NOTE: Revealing the exact limit is intentional - it helps legitimate users
             # understand the constraint. The limit is not security-sensitive information;
             # it's a configuration value that would be documented anyway.
@@ -71,20 +83,21 @@ class SizeLimitedReader:
         return data
 
     def seek(self, pos: int, whence: int = 0) -> int:
-        """Seek in stream and reset bytes_read counter appropriately.
+        """Seek in stream and update bytes_read counter appropriately.
 
-        SECURITY: Must reset _bytes_read to prevent bypass via seek-then-read.
-        For SEEK_SET (whence=0) and SEEK_CUR (whence=1), we use the resulting
-        absolute position returned by the underlying stream's seek().
-        For SEEK_END (whence=2), we cannot accurately track position, so reset
-        to 0 to be conservative (may over-count on subsequent reads).
+        SECURITY: The _high_water_mark is never decreased by seek operations,
+        preventing bypass attacks. Even if a caller seeks backward (or uses
+        SEEK_END then SEEK_SET to return to the start), they cannot read more
+        than max_size bytes from the beginning of the stream.
+
+        For all seek modes, we use the resulting absolute position from the
+        underlying stream's seek() to track _bytes_read. The _high_water_mark
+        preserves the maximum position ever reached.
         """
         result = self._stream.seek(pos, whence)
-        if whence in (0, 1):  # SEEK_SET or SEEK_CUR
-            # Use the resulting absolute position to keep _bytes_read in sync.
-            self._bytes_read = result
-        elif whence == 2:  # SEEK_END - can't track accurately
-            self._bytes_read = 0  # Reset to be safe
+        # Update _bytes_read to current position; _high_water_mark is preserved
+        # and only updated in read() when we actually advance past it
+        self._bytes_read = result
         return result
 
     def tell(self) -> int:
