@@ -446,7 +446,8 @@ The artifact was already stored; the existing hash was returned.
 | GET | `/health` | Health check |
 | GET | `/api/v1/artifacts/{path}` | List versions |
 | GET | `/api/v1/artifacts/{path}/{ref}/info` | Get metadata |
-| GET | `/artifacts/{path}/{ref}` | Download file |
+| GET | `/artifacts/{path}/{tag}` | Download by tag |
+| GET | `/artifacts/{path}/blobs/{hash}` | Download by hash |
 
 **Protected (auth required):**
 
