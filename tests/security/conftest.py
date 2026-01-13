@@ -67,7 +67,22 @@ def client(test_storage_service: StorageService) -> TestClient:
     This provides explicit isolation - security tests run in their own test
     directory and should not depend on fixtures from other test modules. The
     duplication is intentional for clarity and to avoid cross-module coupling.
+
+    Unlike integration tests which use an autouse fixture to override auth
+    dependencies globally, this fixture explicitly manages the dependency
+    lifecycle per-test. This prevents any potential conflict since:
+    1. Security tests are in a separate directory (tests/security/)
+    2. pytest conftest.py fixtures are scoped to their directory
+    3. Each fixture saves and restores state independently
     """
+    # Save existing overrides to restore them after test (defensive against
+    # any global state from other test modules if tests are run together)
+    saved_overrides = {
+        get_storage_service: app.dependency_overrides.get(get_storage_service),
+        require_admin_scope: app.dependency_overrides.get(require_admin_scope),
+        require_admin_scope_header: app.dependency_overrides.get(require_admin_scope_header),
+        require_write_scope: app.dependency_overrides.get(require_write_scope),
+    }
 
     def override_storage_service() -> StorageService:
         return test_storage_service
@@ -77,7 +92,10 @@ def client(test_storage_service: StorageService) -> TestClient:
     app.dependency_overrides[require_admin_scope_header] = _noop_require_admin_scope_header
     app.dependency_overrides[require_write_scope] = _noop_require_write_scope
     yield TestClient(app)
-    app.dependency_overrides.pop(get_storage_service, None)
-    app.dependency_overrides.pop(require_admin_scope, None)
-    app.dependency_overrides.pop(require_admin_scope_header, None)
-    app.dependency_overrides.pop(require_write_scope, None)
+
+    # Restore previous state (or remove if there was none)
+    for dep, saved_value in saved_overrides.items():
+        if saved_value is None:
+            app.dependency_overrides.pop(dep, None)
+        else:
+            app.dependency_overrides[dep] = saved_value

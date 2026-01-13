@@ -79,10 +79,16 @@ class TestSQLInjectionArtifactPaths:
             # If accepted, should return safe empty result
             data = response.json()
             assert "paths" in data
-            # SQL injection shouldn't return data from other tables
+            # SQL injection should only return paths that match the prefix filter.
+            # Since we're using file-based storage (not SQL), the prefix is used
+            # as a literal string match. Any returned paths must start with that
+            # prefix - this proves no SQL execution occurred (which would return
+            # data from "other tables" that don't match the prefix).
             for path in data["paths"]:
-                assert "DROP" not in path
-                assert "SELECT" not in path
+                assert path.startswith(payload), (
+                    f"Returned path '{path}' does not start with prefix '{payload}' - "
+                    "this could indicate SQL injection succeeded"
+                )
 
 
 class TestSQLInjectionTagNames:
@@ -144,23 +150,36 @@ class TestUnicodeNormalizationAttacks:
     path validation or cause confusion.
     """
 
-    def test_unicode_path_traversal_blocked(self, client: TestClient) -> None:
+    def test_unicode_path_traversal_blocked(
+        self, client: TestClient, test_storage_service: StorageService
+    ) -> None:
         """Unicode lookalike dots should not allow path traversal."""
         content = b"test content"
+        storage_root = test_storage_service.config.storage_path
 
-        # Try various Unicode dot-like characters
+        # Try various Unicode dot-like characters that look like ".." but aren't
+        # U+2024 = ONE DOT LEADER, U+2025 = TWO DOT LEADER
         unicode_traversal_payloads = [
-            "../\u2024/etc/passwd",  # Dot leader
-            "\u2025/etc/passwd",  # Two dot leader
+            ("../\u2024/etc/passwd", "dot leader"),
+            ("\u2025/etc/passwd", "two dot leader"),
         ]
 
-        for payload in unicode_traversal_payloads:
+        for payload, description in unicode_traversal_payloads:
             files = {"file": ("test.bin", io.BytesIO(content), "application/octet-stream")}
             response = client.post(f"/api/v1/upload/{payload}", files=files)
-            # The path traversal component should be blocked
-            assert response.status_code != 200 or ".." not in response.json().get(
-                "artifact_path", ""
-            )
+
+            # The security property we're testing: Unicode lookalikes should not
+            # allow escaping the storage directory. Either:
+            # 1. The request is rejected (status != 200), OR
+            # 2. If accepted, the stored artifact is within storage_root
+            if response.status_code == 200:
+                artifact_path = response.json().get("artifact_path", "")
+                # Verify the artifact was stored within the storage root
+                stored_path = storage_root / artifact_path
+                assert stored_path.resolve().is_relative_to(storage_root.resolve()), (
+                    f"Unicode traversal with {description} escaped storage root: "
+                    f"artifact_path={artifact_path}, resolved to {stored_path.resolve()}"
+                )
 
     def test_unicode_directory_confusion(self, client: TestClient) -> None:
         """Test that Unicode lookalikes don't cause directory confusion."""
@@ -246,8 +265,8 @@ class TestSymlinkAttacks:
         # Either reject or store in the actual symlink location (not follow it)
         if response.status_code == 200:
             # If upload succeeded, verify it didn't write to the target
-            target_file = target_path / "artifact"
-            assert not (target_file / "blobs").exists(), (
+            target_artifact_dir = target_path / "artifact"
+            assert not (target_artifact_dir / "blobs").exists(), (
                 "Upload followed symlink and wrote outside storage!"
             )
 
