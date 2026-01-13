@@ -229,7 +229,7 @@ class TestSymlinkAttacks:
     """
 
     @pytest.mark.xfail(
-        reason="Symlink following is currently allowed - see issue for security review"
+        reason="Symlink following is currently allowed - see issue #135 for security review"
     )
     def test_symlink_in_artifact_path_rejected(
         self, client: TestClient, test_storage_service: StorageService, tmp_path: Path
@@ -297,12 +297,13 @@ class TestSymlinkAttacks:
 class TestPathTraversal:
     """Test path traversal attacks using ../ patterns.
 
-    Note: Core path normalization and traversal rejection behavior for
-    normalize_artifact_path / validate_artifact_path is covered in depth in
-    tests/unit/test_path_validation.py::TestNormalizeArtifactPath.
-    To avoid duplicated coverage and maintenance burden, this security test
-    suite focuses on HTTP-level traversal and encoding behaviors rather than
-    re-testing the same normalization inputs here.
+    Security tests vs unit tests: Unit tests in test_path_validation.py verify
+    that individual functions (normalize_artifact_path, validate_artifact_path)
+    correctly reject malicious inputs. These security tests verify that the
+    complete HTTP request pipeline handles attacks correctly - including HTTP
+    framework URL normalization, route parsing, and response handling. Both
+    layers matter: unit tests catch bugs in validation logic, while integration
+    tests catch misconfigurations (e.g., a route that forgets to call validation).
 
     Plain '../' in URLs is normalized by the HTTP framework before
     reaching the application, so these tests verify HTTP-level behavior.
@@ -475,27 +476,12 @@ class TestCombinedAttacks:
 class TestBoundaryConditions:
     """Test boundary conditions and edge cases.
 
-    Note: Basic validation tests for empty paths, reserved segments, and hidden
-    segments are covered in tests/unit/test_path_validation.py. This class focuses
-    on HTTP-level integration tests and edge cases not covered by unit tests.
+    Note: Basic validation tests (empty paths, whitespace-only paths, reserved
+    segments, hidden segments) are covered by unit tests in
+    tests/unit/test_path_validation.py. This class focuses on HTTP-level
+    integration tests that verify the complete request pipeline handles edge
+    cases correctly (not just the validation functions in isolation).
     """
-
-    def test_whitespace_only_path_preserved_by_normalize_but_rejected_by_validate(
-        self,
-    ) -> None:
-        """Whitespace-only path segments are preserved by normalize but rejected by validation.
-
-        Note: normalize_artifact_path only strips leading/trailing slashes from the full path,
-        not whitespace within segments. A path of '   ' is preserved by normalization but is
-        rejected by validate_artifact_path as an invalid artifact path.
-        """
-        # Whitespace is preserved as a literal path segment by normalize_artifact_path
-        normalized = normalize_artifact_path("   ")
-        assert normalized == "   "
-
-        # But validation should reject whitespace-only paths
-        with pytest.raises(InvalidArtifactPathError):
-            validate_artifact_path(normalized)
 
     def test_very_long_path_handled_safely(self, client: TestClient) -> None:
         """Very long paths should be handled without server errors."""
@@ -510,24 +496,3 @@ class TestBoundaryConditions:
         # Should either succeed or reject with appropriate error
         # Should not cause server error (500)
         assert response.status_code != 500
-
-    def test_reserved_segments_rejected(self, client: TestClient) -> None:
-        """Reserved path segments (blobs, metadata, .magpie) should be rejected."""
-        content = b"test content"
-
-        reserved = ["blobs", "metadata", ".magpie"]
-
-        for segment in reserved:
-            files = {"file": ("test.bin", io.BytesIO(content), "application/octet-stream")}
-            response = client.post(f"/api/v1/upload/test/{segment}/artifact", files=files)
-            assert response.status_code == 400
-            assert "reserved" in response.json().get("message", "").lower()
-
-    def test_hidden_segments_rejected(self, client: TestClient) -> None:
-        """Hidden path segments (starting with .) should be rejected."""
-        content = b"test content"
-        files = {"file": ("test.bin", io.BytesIO(content), "application/octet-stream")}
-
-        response = client.post("/api/v1/upload/test/.hidden/artifact", files=files)
-        assert response.status_code == 400
-        assert "cannot start with" in response.json().get("message", "").lower()

@@ -62,18 +62,11 @@ def client(test_storage_service: StorageService) -> TestClient:
     - Auth dependencies to allow unauthenticated access (security tests
       focus on input validation, not authentication)
 
-    Note: Security tests deliberately define their own auth dependency overrides
-    rather than relying on the autouse fixture in tests/integration/conftest.py.
-    This provides explicit isolation - security tests run in their own test
-    directory and should not depend on fixtures from other test modules. The
-    duplication is intentional for clarity and to avoid cross-module coupling.
-
-    Unlike integration tests which use an autouse fixture to override auth
-    dependencies globally, this fixture explicitly manages the dependency
-    lifecycle per-test. This prevents any potential conflict since:
-    1. Security tests are in a separate directory (tests/security/)
-    2. pytest conftest.py fixtures are scoped to their directory
-    3. Each fixture saves and restores state independently
+    Note on fixture sharing: The auth overrides here are similar to those in
+    tests/integration/conftest.py. While pytest conftest.py is designed for
+    fixture sharing, these test directories have different goals (integration
+    vs security) and may evolve independently. Issue #113 tracks consolidating
+    shared fixtures across the test suite.
     """
     # Save existing overrides to restore them after test (defensive against
     # any global state from other test modules if tests are run together)
