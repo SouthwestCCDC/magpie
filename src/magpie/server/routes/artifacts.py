@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
+from pydantic import BaseModel, field_validator
 
 from magpie.server.deps import get_storage_service, require_write_scope
 from magpie.storage.exceptions import ArtifactNotFoundError, InvalidArtifactPathError
@@ -14,6 +15,11 @@ from magpie.storage.paths import normalize_artifact_path
 from magpie.storage.service import StorageService
 
 router = APIRouter()
+
+# Tag name validation pattern: alphanumeric start, then alphanumeric, dots, underscores, hyphens
+# Must match the pattern in tags.py for consistency
+TAG_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+_TAG_NAME_RE = re.compile(TAG_NAME_PATTERN)
 
 
 def _normalize_path(path: str) -> str:
@@ -69,6 +75,24 @@ class CreateTagRequest(BaseModel):
     """Request model for creating a tag."""
 
     tag_name: str  # Name for the new tag
+
+    @field_validator("tag_name")
+    @classmethod
+    def validate_tag_name(cls, v: str) -> str:
+        """Validate tag name matches allowed pattern.
+
+        Tag names must start with an alphanumeric character and contain only
+        alphanumeric characters, dots, underscores, and hyphens.
+
+        Raises:
+            ValueError: If tag name is invalid.
+        """
+        if not _TAG_NAME_RE.match(v):
+            raise ValueError(
+                "Tag name must start with alphanumeric and contain only "
+                "alphanumeric, dots, underscores, or hyphens"
+            )
+        return v
 
 
 class TagResponse(BaseModel):
@@ -183,7 +207,7 @@ async def create_tag(
 )
 async def remove_tag(
     path: str,
-    tag_name: str,
+    tag_name: Annotated[str, Path(pattern=TAG_NAME_PATTERN, max_length=128)],
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
     _write_scope_check: Annotated[None, Depends(require_write_scope)] = None,
 ) -> Response:
