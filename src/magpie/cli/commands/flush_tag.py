@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import click
 
 from magpie.cli import CLIContext
@@ -110,7 +112,7 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
             if is_json_output():
                 try:
                     detail = response.json().get("detail", response.text)
-                except Exception:
+                except (json.JSONDecodeError, ValueError, KeyError):
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
             else:
@@ -119,7 +121,7 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
             if is_json_output():
                 try:
                     detail = response.json().get("detail", response.text)
-                except Exception:
+                except (json.JSONDecodeError, ValueError, KeyError):
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
             else:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, Callable
 
@@ -185,7 +186,7 @@ def push(
                 if is_json_output():
                     try:
                         detail = response.json().get("detail", response.text)
-                    except Exception:
+                    except (json.JSONDecodeError, ValueError, KeyError):
                         detail = response.text
                     output_error(http_status_to_error_code(response.status_code), detail)
                 else:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import click
@@ -123,7 +124,7 @@ def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str) -> None:
         if is_json_output():
             try:
                 detail = response.json().get("detail", response.text)
-            except Exception:
+            except (json.JSONDecodeError, ValueError, KeyError):
                 detail = response.text
             output_error(http_status_to_error_code(response.status_code), detail)
         else:
@@ -194,5 +195,5 @@ def _format_datetime(dt_str: str) -> str:
             time_part = dt_str.split("T")[1][:8]  # HH:MM:SS
             return f"{date_part} {time_part}"
         return dt_str
-    except Exception:
+    except (json.JSONDecodeError, ValueError, KeyError):
         return dt_str

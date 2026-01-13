@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import click
 
 from magpie.cli import CLIContext
@@ -65,7 +67,7 @@ def info(ctx: CLIContext, artifact_ref: str) -> None:
             if is_json_output():
                 try:
                     detail = response.json().get("detail", response.text)
-                except Exception:
+                except (json.JSONDecodeError, ValueError, KeyError):
                     detail = response.text
                 output_error(http_status_to_error_code(response.status_code), detail)
             else:
