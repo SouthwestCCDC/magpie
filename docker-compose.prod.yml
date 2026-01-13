@@ -1,0 +1,83 @@
+# Magpie Artifact Storage - Production Docker Compose Configuration
+#
+# This configuration is intended for production deployments with:
+# - TLS/HTTPS enabled via Caddyfile.prod
+# - Security hardening settings
+# - Production-ready health checks
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Required Environment Variables:
+#   MAGPIE_DOMAIN     - The domain name for TLS (e.g., magpie.swccdc.com)
+#   MAGPIE_DATA_DIR   - Host path for artifact storage (default: ./data/artifacts)
+#
+# Optional Environment Variables:
+#   MAGPIE_TLS_CERT   - Path to TLS certificate (for manual certs, leave empty for Let's Encrypt)
+#   MAGPIE_TLS_KEY    - Path to TLS private key (for manual certs)
+#   MAGPIE_HTTP_PORT  - External HTTP port (default: 80)
+#   MAGPIE_HTTPS_PORT - External HTTPS port (default: 443)
+#
+# Note: For Let's Encrypt auto-TLS, ensure:
+# - Port 443 is publicly accessible
+# - MAGPIE_DOMAIN resolves to this server's IP
+# - No other service is using port 443
+
+services:
+  # Caddy reverse proxy - handles TLS, routing, and static file serving
+  # Uses Caddyfile.prod for production configuration
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "${MAGPIE_HTTP_PORT:-80}:80"    # HTTP (redirects to HTTPS)
+      - "${MAGPIE_HTTPS_PORT:-443}:443"  # HTTPS
+    volumes:
+      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - ${MAGPIE_DATA_DIR:-./data/artifacts}:/data/artifacts:ro
+      - caddy_data:/data      # TLS certificates and state
+      - caddy_config:/config  # Caddy configuration
+    environment:
+      - MAGPIE_DOMAIN=${MAGPIE_DOMAIN:-magpie.example.com}
+      - MAGPIE_TLS_CERT=${MAGPIE_TLS_CERT:-}
+      - MAGPIE_TLS_KEY=${MAGPIE_TLS_KEY:-}
+    depends_on:
+      magpie:
+        condition: service_healthy
+    restart: unless-stopped
+    # Security: Run as non-root where possible (Caddy handles this internally)
+    # Limit capabilities for security
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE  # Required for binding to ports 80/443
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # Magpie FastAPI service - handles API requests
+  magpie:
+    build: .
+    volumes:
+      - ${MAGPIE_DATA_DIR:-./data/artifacts}:/data/artifacts
+    environment:
+      - MAGPIE_STORAGE_PATH=/data/artifacts
+      - MAGPIE_DEBUG=false  # Disable debug mode in production
+    expose:
+      - "8000"  # Internal only - accessed via Caddy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # Security hardening
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+
+volumes:
+  caddy_data:
+  caddy_config:
