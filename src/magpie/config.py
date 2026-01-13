@@ -33,8 +33,11 @@ class MagpieSettings(BaseSettings):
     # GC settings
     gc_lock_path: Path = Path("/var/run/magpie-gc.lock")  # MAGPIE_GC_LOCK_PATH
 
-    # Upload limits
-    max_upload_size: int | None = None  # MAGPIE_MAX_UPLOAD_SIZE (bytes)
+    # Upload limits - enforced in two places for defense-in-depth:
+    # 1. Content-Length header check: Includes multipart overhead (~200 bytes), provides early rejection
+    # 2. SizeLimitedReader: Counts actual file content bytes during streaming, catches malicious clients
+    # Some valid uploads near the limit may be rejected early due to multipart overhead.
+    max_upload_size: int | None = None  # MAGPIE_MAX_UPLOAD_SIZE (bytes, None = unlimited)
 
     # S3 backup settings (optional)
     s3_bucket: str | None = None  # MAGPIE_S3_BUCKET
