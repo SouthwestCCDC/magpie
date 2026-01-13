@@ -30,6 +30,9 @@ class MagpieSettings(BaseSettings):
     retention_days: int = 90
     debug: bool = False
 
+    # Upload limits
+    max_upload_size: int | None = None  # MAGPIE_MAX_UPLOAD_SIZE (bytes, None = unlimited)
+
     # Observability settings
     sentry_dsn: str | None = None  # MAGPIE_SENTRY_DSN
     otel_enabled: bool = False  # MAGPIE_OTEL_ENABLED

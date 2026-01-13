@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from typing import IO, Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 
-from magpie.server.deps import get_storage_service, require_write_scope
+from magpie.config import MagpieSettings
+from magpie.server.deps import get_magpie_settings, get_storage_service, require_write_scope
 from magpie.storage.exceptions import InvalidArtifactPathError
 from magpie.storage.paths import normalize_artifact_path
 from magpie.storage.service import StorageService
@@ -16,6 +17,57 @@ from magpie.storage.service import StorageService
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class UploadSizeExceededError(Exception):
+    """Raised when upload exceeds configured max_upload_size."""
+
+    pass
+
+
+class SizeLimitedReader:
+    """Wrapper around a file stream that enforces a maximum size limit.
+
+    This wrapper tracks bytes read from the underlying stream and raises
+    UploadSizeExceededError if the limit is exceeded during streaming.
+    """
+
+    def __init__(self, stream: IO[bytes], max_size: int) -> None:
+        """Initialize size-limited reader.
+
+        Args:
+            stream: Underlying file stream to wrap.
+            max_size: Maximum allowed bytes to read.
+        """
+        self._stream = stream
+        self._max_size = max_size
+        self._bytes_read = 0
+
+    def read(self, size: int = -1) -> bytes:
+        """Read from stream, enforcing size limit.
+
+        Args:
+            size: Number of bytes to read (-1 for all).
+
+        Returns:
+            Bytes read from stream.
+
+        Raises:
+            UploadSizeExceededError: If cumulative read exceeds max_size.
+        """
+        data = self._stream.read(size)
+        self._bytes_read += len(data)
+        if self._bytes_read > self._max_size:
+            raise UploadSizeExceededError(f"Upload exceeds maximum size of {self._max_size} bytes")
+        return data
+
+    def seek(self, pos: int, whence: int = 0) -> int:
+        """Seek in stream (pass-through)."""
+        return self._stream.seek(pos, whence)
+
+    def tell(self) -> int:
+        """Get current position in stream (pass-through)."""
+        return self._stream.tell()
 
 
 class UploadResponse(BaseModel):
@@ -33,10 +85,12 @@ async def upload_artifact(
     path: str,
     file: UploadFile,
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
+    settings: Annotated[MagpieSettings, Depends(get_magpie_settings)],
     _write_scope_check: Annotated[None, Depends(require_write_scope)] = None,
     source_uri: Annotated[str | None, Query(max_length=2048)] = None,
     uploaded_by: str = "anonymous",
     x_magpie_user: Annotated[str | None, Header(alias="X-Magpie-User")] = None,
+    content_length: Annotated[int | None, Header(alias="Content-Length")] = None,
 ) -> UploadResponse:
     """Upload an artifact to the storage system.
 
@@ -53,9 +107,11 @@ async def upload_artifact(
     Args:
         path: Logical path for the artifact (e.g., "project/component").
         file: File content to upload (streamed).
+        settings: Application settings for size limit configuration.
         source_uri: Optional source URI for provenance tracking.
         uploaded_by: Identity of the uploader (fallback, default: "anonymous").
         x_magpie_user: Authenticated user from Caddy forward_auth header.
+        content_length: Content-Length header for early size validation.
 
     Returns:
         UploadResponse with artifact details including hash, download URL,
@@ -64,8 +120,18 @@ async def upload_artifact(
     Raises:
         HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
         HTTPException 403: If token has read scope (insufficient permissions).
+        HTTPException 413: If upload exceeds max_upload_size configuration.
         StorageError: If storage operation fails.
     """
+    # Early rejection based on Content-Length header if size limit is configured
+    max_size = settings.max_upload_size
+    if max_size is not None and content_length is not None:
+        if content_length > max_size:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail=f"Upload size {content_length} exceeds maximum allowed size of {max_size} bytes",
+            )
+
     # Normalize path for defense in depth (CLI should also normalize)
     try:
         path = normalize_artifact_path(path)
@@ -84,12 +150,25 @@ async def upload_artifact(
                 "using 'anonymous' - this may indicate unauthenticated access"
             )
 
-    info, is_duplicate = storage_service.store_artifact(
-        artifact_path=path,
-        file_stream=file.file,
-        uploaded_by=effective_user,
-        source_uri=source_uri,
-    )
+    # Wrap file stream with size limiter if max_upload_size is configured
+    # This provides defense-in-depth for clients that send more than Content-Length
+    if max_size is not None:
+        file_stream = SizeLimitedReader(file.file, max_size)
+    else:
+        file_stream = file.file
+
+    try:
+        info, is_duplicate = storage_service.store_artifact(
+            artifact_path=path,
+            file_stream=file_stream,
+            uploaded_by=effective_user,
+            source_uri=source_uri,
+        )
+    except UploadSizeExceededError as e:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=str(e),
+        )
 
     # Use blobs/ path for hash-based downloads (info.hash_ref has @ prefix)
     blob_name = info.hash_ref.lstrip("@")

@@ -8,8 +8,17 @@ from fastapi import Depends, Header, HTTPException, status
 
 from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenInfo, TokenService
-from magpie.config import get_settings
+from magpie.config import MagpieSettings, get_settings
 from magpie.storage.service import StorageService
+
+
+def get_magpie_settings() -> MagpieSettings:
+    """Get MagpieSettings instance (cached singleton).
+
+    Returns:
+        MagpieSettings instance using current application settings.
+    """
+    return get_settings()
 
 
 def get_storage_service() -> StorageService:
