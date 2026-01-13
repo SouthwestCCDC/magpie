@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from magpie.auth.database import get_connection, list_tokens
 from magpie.auth.models import TokenScope
@@ -15,6 +15,9 @@ from magpie.server.deps import get_token_service, require_admin_scope
 
 router = APIRouter()
 
+# Token name validation pattern: alphanumeric start, then alphanumeric, dots, underscores, hyphens
+# Maximum 64 characters total (1 required start + up to 63 more)
+TOKEN_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$"  # nosec B105 - not a password, just a token name regex
 
 # Request/Response models for token management
 
@@ -22,7 +25,7 @@ router = APIRouter()
 class CreateTokenRequest(BaseModel):
     """Request model for creating a new token."""
 
-    name: str
+    name: str = Field(pattern=TOKEN_NAME_PATTERN, max_length=64)
     scope: str  # "read", "write", or "admin"
 
 
