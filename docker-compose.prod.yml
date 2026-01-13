@@ -11,7 +11,7 @@
 #   docker compose -f docker-compose.prod.yml up -d
 #
 # Required Environment Variables:
-#   MAGPIE_DOMAIN     - The domain name for TLS (e.g., magpie.swccdc.com)
+#   MAGPIE_DOMAIN     - The domain name for TLS (REQUIRED - e.g., magpie.swccdc.com)
 #   MAGPIE_DATA_DIR   - Host path for artifact storage (default: ./data/artifacts)
 #
 # Optional Environment Variables:
@@ -37,7 +37,8 @@ services:
       - caddy_data:/data      # TLS certificates and state
       - caddy_config:/config  # Caddy configuration
     environment:
-      - MAGPIE_DOMAIN=${MAGPIE_DOMAIN:-magpie.example.com}
+      # MAGPIE_DOMAIN is required - Let's Encrypt will fail without a valid domain
+      - MAGPIE_DOMAIN=${MAGPIE_DOMAIN:?MAGPIE_DOMAIN must be set}
     depends_on:
       magpie:
         condition: service_healthy

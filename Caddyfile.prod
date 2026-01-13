@@ -10,7 +10,7 @@
 # - Access logging
 #
 # Environment variable configuration:
-#   MAGPIE_DOMAIN - The domain name for the service (default: magpie.example.com)
+#   MAGPIE_DOMAIN - The domain name for the service (REQUIRED - no default)
 #
 # TLS options:
 #   1. Automatic TLS via Let's Encrypt (default)
@@ -76,8 +76,9 @@
 	admin off
 }
 
-# Site block - uses environment variable for domain, with fallback
-{$MAGPIE_DOMAIN:magpie.example.com} {
+# Site block - uses environment variable for domain (required)
+# WARNING: MAGPIE_DOMAIN must be set - Let's Encrypt will fail without a valid domain
+{$MAGPIE_DOMAIN} {
 	# =========================================================================
 	# TLS CONFIGURATION
 	# =========================================================================
@@ -110,8 +111,8 @@
 		Referrer-Policy "strict-origin-when-cross-origin"
 
 		# Content Security Policy - restrict resource loading
-		# Adjust as needed for your frontend requirements
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		# API-only service: strict policy with no data URIs
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
 		# Remove server identification headers
 		-Server
@@ -212,7 +213,12 @@
 	}
 
 	# Flush tag endpoint - requires admin scope
-	handle /api/v1/tags/* {
+	# Matches: POST /api/v1/tags/{tag_name}/flush
+	@tags_flush {
+		method POST
+		path /api/v1/tags/*/flush
+	}
+	handle @tags_flush {
 		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
