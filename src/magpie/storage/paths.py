@@ -92,9 +92,7 @@ def verify_path_is_descendant(base: Path, artifact_path: str) -> Path:
         full_path = (base / artifact_path).resolve()
         base_resolved = base.resolve()
     except OSError as e:
-        raise InvalidArtifactPathError(
-            f"Path '{artifact_path}' cannot be resolved: {e}"
-        )
+        raise InvalidArtifactPathError(f"Path '{artifact_path}' cannot be resolved: {e}")
 
     # Check if the resolved path is under the base directory
     # Using is_relative_to() which returns True if path is relative to base
