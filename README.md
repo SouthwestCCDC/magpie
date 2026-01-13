@@ -32,6 +32,10 @@ export MAGPIE_DATA_DIR=/path/to/persistent/storage
 docker compose -f docker-compose.prod.yml up -d
 ```
 
+**Port conflicts**: The production configuration binds to ports 80 and 443. If other
+services (e.g., nginx, Apache, another Caddy instance) are using these ports, either
+stop them first or customize the port bindings in `docker-compose.prod.yml`.
+
 The production configuration (`docker-compose.prod.yml` and `Caddyfile.prod`) includes:
 - Automatic TLS via Let's Encrypt (or manual certificate configuration)
 - Security headers (HSTS, X-Frame-Options, CSP, etc.)
@@ -40,6 +44,12 @@ The production configuration (`docker-compose.prod.yml` and `Caddyfile.prod`) in
 
 For manual TLS certificates, edit `Caddyfile.prod` and uncomment the `tls` directive
 with your certificate paths.
+
+**Let's Encrypt rate limits**: Let's Encrypt enforces a limit of 50 certificates per
+registered domain per week. For testing, use `tls internal` or staging endpoints to
+avoid exhausting your quota. The `caddy_data` volume stores issued certificates --
+persist this volume across container recreations to avoid requesting duplicate
+certificates.
 
 ## Project Structure
 

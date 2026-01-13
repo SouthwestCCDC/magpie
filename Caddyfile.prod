@@ -96,7 +96,10 @@
 
 	header {
 		# HSTS - Enforce HTTPS for all future requests (2 year max-age)
-		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		# NOTE: The "preload" directive is omitted because it requires active
+		# submission to hstspreload.org. Add "preload" only after submitting
+		# your domain to the HSTS preload list.
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
 
 		# Prevent MIME type sniffing
 		X-Content-Type-Options "nosniff"
@@ -166,6 +169,11 @@
 	# Static artifact downloads - served directly by Caddy for performance
 	# Files accessed via /artifacts/{artifact_path}/{ref} symlinks
 	# Directory browsing enabled for discovery and debugging
+	#
+	# SECURITY NOTE: Directory browsing exposes the artifact structure (paths,
+	# refs, filenames) to anyone who can access this endpoint. This is intentional
+	# for Magpie's use case (artifact discovery). If you need to restrict
+	# browsing, remove the "browse" argument from file_server below.
 	handle /artifacts/* {
 		root * /data
 		file_server browse
@@ -214,6 +222,12 @@
 
 	# Flush tag endpoint - requires admin scope
 	# Matches: POST /api/v1/tags/{tag_name}/flush
+	#
+	# NOTE: This route is more specific than the dev Caddyfile which uses
+	# /api/v1/tags/* to catch all tag operations. In production, we explicitly
+	# match only POST /api/v1/tags/*/flush since that is the only tag endpoint
+	# that exists outside of artifact-scoped routes. The dev config is broader
+	# to simplify local testing.
 	@tags_flush {
 		method POST
 		path /api/v1/tags/*/flush
