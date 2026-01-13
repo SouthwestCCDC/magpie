@@ -265,13 +265,9 @@ class TestMultiSegmentPathGet:
 class TestMultiSegmentPathTag:
     """Tests for tag command with multi-segment paths."""
 
-    def test_tag_three_segment_path(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_tag_three_segment_path(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Tag on org/project/artifact path works correctly."""
-        upload_data = upload_test_artifact(
-            api_client, "acme/webapp/config", b"config content"
-        )
+        upload_data = upload_test_artifact(api_client, "acme/webapp/config", b"config content")
         hash_ref = upload_data["hash_ref"]
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
@@ -292,13 +288,9 @@ class TestMultiSegmentPathTag:
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "v1.0.0" in result.output
 
-    def test_tag_four_segment_path(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_tag_four_segment_path(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Tag on org/project/component/artifact path works correctly."""
-        upload_test_artifact(
-            api_client, "acme/platform/db/migrations", b"migration content"
-        )
+        upload_test_artifact(api_client, "acme/platform/db/migrations", b"migration content")
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
@@ -322,9 +314,7 @@ class TestMultiSegmentPathTag:
 class TestMultiSegmentPathAmend:
     """Tests for amend command with multi-segment paths."""
 
-    def test_amend_three_segment_path(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_amend_three_segment_path(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Amend on org/project/artifact path works correctly."""
         upload_test_artifact(api_client, "acme/webapp/assets", b"assets content")
 
@@ -347,13 +337,9 @@ class TestMultiSegmentPathAmend:
         assert "Updated:" in result.output
         assert "https://github.com/acme/webapp/assets" in result.output
 
-    def test_amend_four_segment_path(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_amend_four_segment_path(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Amend on org/project/component/artifact path works correctly."""
-        upload_test_artifact(
-            api_client, "acme/platform/auth/keys", b"keys content"
-        )
+        upload_test_artifact(api_client, "acme/platform/auth/keys", b"keys content")
 
         with patch(PATCH_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = api_client
@@ -377,9 +363,7 @@ class TestMultiSegmentPathAmend:
 class TestMultiSegmentPathUntag:
     """Tests for untag command with multi-segment paths."""
 
-    def test_untag_three_segment_path(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_untag_three_segment_path(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Untag on org/project/artifact path works correctly."""
         upload_test_artifact(api_client, "acme/webapp/cache", b"cache content")
 
@@ -400,13 +384,9 @@ class TestMultiSegmentPathUntag:
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "Removed tag 'temp-tag'" in result.output
 
-    def test_untag_four_segment_path(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_untag_four_segment_path(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Untag on org/project/component/artifact path works correctly."""
-        upload_test_artifact(
-            api_client, "acme/platform/cdn/static", b"static content"
-        )
+        upload_test_artifact(api_client, "acme/platform/cdn/static", b"static content")
 
         api_client.post(
             "/api/v1/artifacts/acme/platform/cdn/static/latest/tags",
@@ -434,9 +414,7 @@ class TestMultiSegmentPathUntag:
 class TestMultiSegmentPathInfo:
     """Tests for info command with multi-segment paths."""
 
-    def test_info_three_segment_path(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_info_three_segment_path(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Info on org/project/artifact path displays metadata correctly."""
         upload_data = upload_test_artifact(
             api_client,
@@ -459,9 +437,7 @@ class TestMultiSegmentPathInfo:
         assert "Source URI:" in result.output
         assert "https://github.com/acme/webapp" in result.output
 
-    def test_info_four_segment_path(
-        self, cli_runner: CliRunner, api_client: TestClient
-    ) -> None:
+    def test_info_four_segment_path(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Info on org/project/component/artifact path displays metadata correctly."""
         upload_data = upload_test_artifact(
             api_client,
@@ -593,7 +569,9 @@ class TestCompleteArtifactLifecycle:
                 ],
             )
 
-            assert get_stable_result.exit_code == 0, f"Get stable failed: {get_stable_result.output}"
+            assert get_stable_result.exit_code == 0, (
+                f"Get stable failed: {get_stable_result.output}"
+            )
             assert output_file_stable.read_bytes() == test_content
 
             # Step 6: Amend source-uri
