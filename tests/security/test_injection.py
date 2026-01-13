@@ -63,7 +63,8 @@ class TestSQLInjectionArtifactPaths:
         assert response.status_code != 200
         # Should never expose database errors or SQL syntax
         response_text = response.text.lower()
-        assert "sql" not in response_text and "sqlalchemy" not in response_text
+        assert "sql" not in response_text
+        assert "sqlalchemy" not in response_text
         assert "database error" not in response_text
         assert "syntax error" not in response_text
 

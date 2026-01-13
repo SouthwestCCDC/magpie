@@ -33,12 +33,10 @@ def _noop_require_admin_scope() -> TokenInfo:
 
 def _noop_require_write_scope() -> None:
     """No-op override for require_write_scope in tests."""
-    return None
 
 
 def _noop_require_admin_scope_header() -> None:
     """No-op override for require_admin_scope_header in tests."""
-    return None
 
 
 @pytest.fixture
@@ -63,6 +61,12 @@ def client(test_storage_service: StorageService) -> TestClient:
     - Storage service to use temporary paths
     - Auth dependencies to allow unauthenticated access (security tests
       focus on input validation, not authentication)
+
+    Note: Security tests deliberately define their own auth dependency overrides
+    rather than relying on the autouse fixture in tests/integration/conftest.py.
+    This provides explicit isolation - security tests run in their own test
+    directory and should not depend on fixtures from other test modules. The
+    duplication is intentional for clarity and to avoid cross-module coupling.
     """
 
     def override_storage_service() -> StorageService:
