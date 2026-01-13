@@ -206,7 +206,9 @@ class TestSymlinkAttacks:
     could be a security concern. This test documents the current behavior.
     """
 
-    @pytest.mark.xfail(reason="Symlink following is currently allowed - see issue for security review")
+    @pytest.mark.xfail(
+        reason="Symlink following is currently allowed - see issue for security review"
+    )
     def test_symlink_in_artifact_path_rejected(
         self, client: TestClient, test_storage_service, tmp_path: Path
     ) -> None:
@@ -367,9 +369,7 @@ class TestNullByteInjection:
     to bypass security controls or access unintended files.
     """
 
-    def test_null_byte_in_tag_name(
-        self, client: TestClient, test_storage_service
-    ) -> None:
+    def test_null_byte_in_tag_name(self, client: TestClient, test_storage_service) -> None:
         """Null byte in tag name should be rejected."""
         # Create a valid artifact first
         content = b"test content"
