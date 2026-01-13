@@ -35,14 +35,11 @@ docker compose -f docker-compose.prod.yml up -d
 The production configuration (`docker-compose.prod.yml` and `Caddyfile.prod`) includes:
 - Automatic TLS via Let's Encrypt (or manual certificate configuration)
 - Security headers (HSTS, X-Frame-Options, CSP, etc.)
-- Rate limiting on authentication endpoints
 - JSON access logging
+- Rate limiting must be configured at infrastructure layer (see issue #129)
 
-For manual TLS certificates, also set:
-```bash
-export MAGPIE_TLS_CERT=/path/to/cert.pem
-export MAGPIE_TLS_KEY=/path/to/key.pem
-```
+For manual TLS certificates, edit `Caddyfile.prod` and uncomment the `tls` directive
+with your certificate paths.
 
 ## Project Structure
 

@@ -7,7 +7,6 @@
 # This configuration provides:
 # - TLS encryption (automatic via Let's Encrypt or manual certs)
 # - Security headers (HSTS, X-Content-Type-Options, X-Frame-Options, etc.)
-# - Rate limiting on authentication endpoints
 # - Access logging
 #
 # Environment variable configuration:
@@ -15,7 +14,8 @@
 #
 # TLS options:
 #   1. Automatic TLS via Let's Encrypt (default)
-#   2. Manual certificates: Set MAGPIE_TLS_CERT and MAGPIE_TLS_KEY paths
+#   2. Manual certificates: Edit the TLS block to specify cert/key paths
+#   3. Internal CA: Edit the TLS block to use 'tls internal'
 #
 # =============================================================================
 # AUTHENTICATION FLOW (forward_auth)
@@ -82,17 +82,12 @@
 	# TLS CONFIGURATION
 	# =========================================================================
 	#
-	# Option 1: Automatic TLS via Let's Encrypt (default)
-	# Just ensure the domain resolves to this server and port 443 is accessible.
-	#
-	# Option 2: Manual certificates - uncomment and set paths:
+	# TLS is automatic via Let's Encrypt by default.
+	# For manual certificates, uncomment and configure:
 	# tls /path/to/cert.pem /path/to/key.pem
 	#
-	# Option 3: Internal CA - for internal deployments:
+	# For internal CA (self-signed):
 	# tls internal
-	#
-	# For flexibility, check for environment variables:
-	tls {$MAGPIE_TLS_CERT:} {$MAGPIE_TLS_KEY:}
 
 	# =========================================================================
 	# SECURITY HEADERS
@@ -116,41 +111,30 @@
 
 		# Content Security Policy - restrict resource loading
 		# Adjust as needed for your frontend requirements
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
 		# Remove server identification headers
 		-Server
 	}
 
 	# =========================================================================
-	# RATE LIMITING
+	# RATE LIMITING NOTE
 	# =========================================================================
+	# Caddy's standard build does not include rate limiting. For production,
+	# implement rate limiting at the infrastructure layer (load balancer, WAF)
+	# or use a custom Caddy build with the rate-limit plugin.
+	# See issue #129 for implementation options.
 	#
-	# Rate limit authentication-related endpoints to prevent brute force attacks.
-	# Limits: 10 requests per second per client IP
-
+	# Auth endpoints that should be rate-limited:
 	@auth_endpoints {
 		path /api/v1/auth/*
 		path /api/v1/tokens*
-	}
-	rate_limit @auth_endpoints {
-		zone auth_zone {
-			key {remote_host}
-			events 10
-			window 1s
-		}
 	}
 
 	# =========================================================================
 	# ACCESS LOGGING
 	# =========================================================================
-
-	log {
-		output stdout
-		format json {
-			time_format iso8601
-		}
-	}
+	# Site-specific logging is handled by the global log block above.
 
 	# =========================================================================
 	# PUBLIC ROUTES - No authentication required

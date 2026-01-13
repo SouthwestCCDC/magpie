@@ -1,5 +1,7 @@
 # Magpie Artifact Storage - Production Docker Compose Configuration
 #
+# Requires Docker Compose v2.1+ (for healthcheck 'condition' support)
+#
 # This configuration is intended for production deployments with:
 # - TLS/HTTPS enabled via Caddyfile.prod
 # - Security hardening settings
@@ -13,8 +15,6 @@
 #   MAGPIE_DATA_DIR   - Host path for artifact storage (default: ./data/artifacts)
 #
 # Optional Environment Variables:
-#   MAGPIE_TLS_CERT   - Path to TLS certificate (for manual certs, leave empty for Let's Encrypt)
-#   MAGPIE_TLS_KEY    - Path to TLS private key (for manual certs)
 #   MAGPIE_HTTP_PORT  - External HTTP port (default: 80)
 #   MAGPIE_HTTPS_PORT - External HTTPS port (default: 443)
 #
@@ -38,8 +38,6 @@ services:
       - caddy_config:/config  # Caddy configuration
     environment:
       - MAGPIE_DOMAIN=${MAGPIE_DOMAIN:-magpie.example.com}
-      - MAGPIE_TLS_CERT=${MAGPIE_TLS_CERT:-}
-      - MAGPIE_TLS_KEY=${MAGPIE_TLS_KEY:-}
     depends_on:
       magpie:
         condition: service_healthy
@@ -61,7 +59,9 @@ services:
       - ${MAGPIE_DATA_DIR:-./data/artifacts}:/data/artifacts
     environment:
       - MAGPIE_STORAGE_PATH=/data/artifacts
-      - MAGPIE_DEBUG=false  # Disable debug mode in production
+      # IMPORTANT: Keep debug mode disabled in production. Enabling it exposes
+      # detailed error messages and stack traces that could leak sensitive info.
+      - MAGPIE_DEBUG=false
     expose:
       - "8000"  # Internal only - accessed via Caddy
     restart: unless-stopped
