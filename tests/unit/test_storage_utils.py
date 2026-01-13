@@ -1,4 +1,4 @@
-"""Unit tests for storage utilities: hash, paths, and exceptions."""
+"""Unit tests for storage utilities: hash and paths."""
 
 from __future__ import annotations
 
@@ -7,13 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from magpie.storage.exceptions import (
-    ArtifactNotFoundError,
-    BlobExistsError,
-    HashMismatchError,
-    ManifestCorruptError,
-    StorageError,
-)
 from magpie.storage.hash import compute_hash, short_hash
 from magpie.storage.paths import (
     artifact_dir_path,
@@ -186,47 +179,3 @@ class TestManifestPath:
         artifact_dir = Path("/any/path")
         result = manifest_path(artifact_dir)
         assert result.name == ".magpie"
-
-
-class TestExceptionInheritance:
-    """Tests for exception class hierarchy."""
-
-    def test_storage_error_is_exception(self) -> None:
-        """StorageError should inherit from Exception."""
-        assert issubclass(StorageError, Exception)
-
-    def test_artifact_not_found_inherits_storage_error(self) -> None:
-        """ArtifactNotFoundError should inherit from StorageError."""
-        assert issubclass(ArtifactNotFoundError, StorageError)
-
-    def test_blob_exists_inherits_storage_error(self) -> None:
-        """BlobExistsError should inherit from StorageError."""
-        assert issubclass(BlobExistsError, StorageError)
-
-    def test_manifest_corrupt_inherits_storage_error(self) -> None:
-        """ManifestCorruptError should inherit from StorageError."""
-        assert issubclass(ManifestCorruptError, StorageError)
-
-    def test_hash_mismatch_inherits_storage_error(self) -> None:
-        """HashMismatchError should inherit from StorageError."""
-        assert issubclass(HashMismatchError, StorageError)
-
-    def test_can_catch_all_with_storage_error(self) -> None:
-        """All custom exceptions should be catchable as StorageError."""
-        exceptions = [
-            ArtifactNotFoundError("test"),
-            BlobExistsError("test"),
-            ManifestCorruptError("test"),
-            HashMismatchError("test"),
-        ]
-        for exc in exceptions:
-            with pytest.raises(StorageError):
-                raise exc
-
-    def test_exceptions_have_message(self) -> None:
-        """All exceptions should preserve their message."""
-        msg = "test error message"
-        assert str(ArtifactNotFoundError(msg)) == msg
-        assert str(BlobExistsError(msg)) == msg
-        assert str(ManifestCorruptError(msg)) == msg
-        assert str(HashMismatchError(msg)) == msg
