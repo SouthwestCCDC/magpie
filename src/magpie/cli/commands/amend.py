@@ -43,20 +43,23 @@ def amend(ctx: CLIContext, artifact_ref: str, source_uri: str | None) -> None:
         msg = "No server configured. Use --server or set MAGPIE_SERVER."
         if is_json_output():
             output_error(ErrorCode.CONFIG_ERROR, msg)
-        raise click.ClickException(msg)
+        else:
+            raise click.ClickException(msg)
 
     if source_uri is None:
         msg = "No metadata updates specified. Use --source-uri to update."
         if is_json_output():
             output_error(ErrorCode.VALIDATION_ERROR, msg)
-        raise click.ClickException(msg)
+        else:
+            raise click.ClickException(msg)
 
     try:
         parsed = parse_artifact_ref(artifact_ref)
     except ParseError as e:
         if is_json_output():
             output_error(ErrorCode.VALIDATION_ERROR, str(e))
-        raise click.ClickException(str(e))
+        else:
+            raise click.ClickException(str(e))
 
     with ctx.get_client() as client:
         if ctx.debug:
@@ -79,7 +82,8 @@ def amend(ctx: CLIContext, artifact_ref: str, source_uri: str | None) -> None:
             msg = f"Artifact not found: {parsed.path}:{parsed.ref}"
             if is_json_output():
                 output_error(ErrorCode.NOT_FOUND, msg)
-            raise click.ClickException(msg)
+            else:
+                raise click.ClickException(msg)
         if response.status_code != 200:
             if is_json_output():
                 try:
