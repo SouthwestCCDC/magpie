@@ -39,11 +39,27 @@ def override_auth_dependencies():
     Concurrency tests run against the FastAPI app directly without Caddy,
     so there are no Authorization headers. This fixture disables auth
     checking for all concurrency tests.
+
+    Note: This fixture modifies global FastAPI app state (dependency_overrides).
+    The cleanup uses pop() with a default value to handle cases where the key
+    may have been removed by other test cleanup code, ensuring cleanup succeeds
+    even if tests fail partway through.
     """
-    app.dependency_overrides[require_admin_scope] = _noop_require_admin_scope
-    app.dependency_overrides[require_admin_scope_header] = _noop_require_admin_scope_header
-    app.dependency_overrides[require_write_scope] = _noop_require_write_scope
-    yield
-    app.dependency_overrides.pop(require_admin_scope, None)
-    app.dependency_overrides.pop(require_admin_scope_header, None)
-    app.dependency_overrides.pop(require_write_scope, None)
+    # Store original state to restore on cleanup
+    original_overrides = {
+        require_admin_scope: app.dependency_overrides.get(require_admin_scope),
+        require_admin_scope_header: app.dependency_overrides.get(require_admin_scope_header),
+        require_write_scope: app.dependency_overrides.get(require_write_scope),
+    }
+    try:
+        app.dependency_overrides[require_admin_scope] = _noop_require_admin_scope
+        app.dependency_overrides[require_admin_scope_header] = _noop_require_admin_scope_header
+        app.dependency_overrides[require_write_scope] = _noop_require_write_scope
+        yield
+    finally:
+        # Restore original state (remove overrides we added)
+        for dep, original_value in original_overrides.items():
+            if original_value is None:
+                app.dependency_overrides.pop(dep, None)
+            else:
+                app.dependency_overrides[dep] = original_value

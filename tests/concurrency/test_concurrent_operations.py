@@ -11,6 +11,7 @@ Tests for race conditions and data corruption during concurrent operations:
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import io
 import json
@@ -28,7 +29,11 @@ from magpie.storage.service import StorageService
 
 @pytest.fixture
 def test_config(tmp_path: Path) -> MagpieSettings:
-    """Create test configuration with temporary paths."""
+    """Create test configuration with temporary paths.
+
+    The tmp_path fixture is session-scoped and automatically cleaned up by pytest,
+    so no explicit cleanup is needed here.
+    """
     config = MagpieSettings(storage_path=tmp_path)
     config.temp_path.mkdir(parents=True, exist_ok=True)
     return config
@@ -58,12 +63,14 @@ class TestConcurrentUploads:
     async def test_concurrent_uploads_same_content(
         self, test_storage_service: StorageService
     ) -> None:
-        """Multiple concurrent uploads of same content produce consistent result.
+        """Concurrent uploads of same content complete without data corruption.
 
-        When the same artifact content is uploaded simultaneously, all uploads
-        should succeed and produce the same hash reference. The content-addressable
-        design means identical content produces identical paths, providing natural
-        idempotency without requiring explicit locking.
+        When the same artifact content is uploaded simultaneously, at least one
+        upload should succeed and all successful uploads should produce the same
+        hash reference. Race conditions during symlink creation may cause some
+        uploads to fail with FileExistsError or OSError, which is expected behavior
+        in the absence of file locking. The content-addressable design means
+        identical content produces identical paths, providing natural idempotency.
         """
         content = b"concurrent upload test content"
         expected_hash = _compute_hash(content)
@@ -85,11 +92,13 @@ class TestConcurrentUploads:
         tasks = [upload_artifact(i) for i in range(num_concurrent)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Filter out exceptions (race conditions can cause FileExistsError/OSError)
+        # Filter out exceptions from race conditions during concurrent symlink creation.
+        # FileExistsError occurs when multiple threads try to create the same symlink.
+        # OSError may occur from other filesystem-level conflicts during concurrent access.
+        # These are expected in the absence of application-level file locking.
         successful_results = []
         for result in results:
             if isinstance(result, Exception):
-                # FileExistsError/OSError can occur when multiple uploads try to create symlinks
                 assert isinstance(result, (FileExistsError, OSError)), (
                     f"Unexpected exception type: {type(result).__name__}: {result}"
                 )
@@ -135,11 +144,13 @@ class TestConcurrentUploads:
         tasks = [upload_artifact(i) for i in range(num_concurrent)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Filter out exceptions (race conditions can cause FileExistsError/OSError)
+        # Filter out exceptions from race conditions during concurrent symlink creation.
+        # FileExistsError occurs when multiple threads try to create the same symlink.
+        # OSError may occur from other filesystem-level conflicts during concurrent access.
+        # These are expected in the absence of application-level file locking.
         hashes = []
         for result in results:
             if isinstance(result, Exception):
-                # FileExistsError/OSError can occur when multiple uploads try to create symlinks
                 assert isinstance(result, (FileExistsError, OSError)), (
                     f"Unexpected exception type: {type(result).__name__}: {result}"
                 )
@@ -196,11 +207,14 @@ class TestConcurrentTagOperations:
         tasks = [create_tag(i) for i in range(num_tags)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Filter successful tag creations (though they may be lost due to race)
+        # Filter successful tag creations (though they may be lost due to race).
+        # FileExistsError/OSError can occur when multiple threads attempt to
+        # write/rename the manifest file concurrently. While atomic rename is used,
+        # the read-modify-write cycle is not atomic, so concurrent updates can
+        # conflict at the filesystem level.
         attempted_tags = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                # FileExistsError/OSError can occur during concurrent manifest updates
                 assert isinstance(result, (FileExistsError, OSError)), (
                     f"Unexpected exception type: {type(result).__name__}: {result}"
                 )
@@ -308,12 +322,13 @@ class TestConcurrentTagOperations:
         tasks = [tag_operation(i) for i in range(20)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Check that any exceptions are expected types (file not found during race)
-        # rather than unexpected errors (corruption, bugs, etc.)
+        # Check that any exceptions are expected types rather than unexpected errors.
+        # FileNotFoundError can occur when one thread reads the manifest while another
+        # is in the middle of an atomic rename (write-to-temp then rename pattern).
+        # The temp file exists but the final path is briefly absent during rename.
+        # OSError may occur from other filesystem-level conflicts during concurrent access.
         for result in results:
             if isinstance(result, Exception):
-                # FileNotFoundError can occur if manifest file is being updated concurrently
-                # These are expected race conditions in the absence of file locking
                 assert isinstance(result, (FileNotFoundError, OSError)), (
                     f"Unexpected exception type: {type(result).__name__}: {result}"
                 )
@@ -447,7 +462,8 @@ class TestConcurrentAmend:
             uri = uris[uri_idx]
             try:
                 await asyncio.to_thread(
-                    lambda: test_storage_service.amend_metadata(
+                    functools.partial(
+                        test_storage_service.amend_metadata,
                         artifact_path=artifact_path,
                         hash_ref=hash_ref,
                         source_uri=uri,
@@ -466,8 +482,8 @@ class TestConcurrentAmend:
         successful_uris = [r for r in results if r is not None]
         assert len(successful_uris) >= 1, "At least one amend should succeed"
 
-        # Final value should be one of the attempted URIs (may be None if all failed
-        # but one should succeed based on assertion above)
+        # Final value should be one of the attempted URIs. The assertion above ensures
+        # at least one amend succeeded, so source_uri should be set.
         info = test_storage_service.get_artifact_info(artifact_path, hash_ref)
         if info.source_uri is not None:
             assert info.source_uri in uris, "source_uri should be one of the attempted values"
@@ -478,7 +494,12 @@ class TestConcurrentAmend:
     async def test_concurrent_amend_preserves_immutable_fields(
         self, test_storage_service: StorageService
     ) -> None:
-        """Concurrent amends preserve immutable fields (hash, uploaded_by, uploaded_at)."""
+        """Concurrent amends preserve immutable fields (hash, uploaded_by, uploaded_at).
+
+        This tests the storage service layer directly. The HTTP-layer equivalent
+        is test_concurrent_http_amend which also verifies hash and uploaded_by
+        are preserved after concurrent amends.
+        """
         artifact_path = "concurrent/amend-preserve"
         content = b"immutable fields test"
 
@@ -499,10 +520,11 @@ class TestConcurrentAmend:
             for i in range(5):
                 try:
                     await asyncio.to_thread(
-                        lambda w=worker_id, j=i: test_storage_service.amend_metadata(
+                        functools.partial(
+                            test_storage_service.amend_metadata,
                             artifact_path=artifact_path,
                             hash_ref=hash_ref,
-                            source_uri=f"https://worker-{w}-iteration-{j}.example.com",
+                            source_uri=f"https://worker-{worker_id}-iteration-{i}.example.com",
                         )
                     )
                 except (FileNotFoundError, OSError, json.JSONDecodeError):
@@ -562,7 +584,8 @@ class TestConcurrentMixedOperations:
         async def amend_task(artifact_path: str, hash_ref: str, amend_num: int) -> None:
             """Amend metadata on existing artifact."""
             await asyncio.to_thread(
-                lambda: test_storage_service.amend_metadata(
+                functools.partial(
+                    test_storage_service.amend_metadata,
                     artifact_path=artifact_path,
                     hash_ref=hash_ref,
                     source_uri=f"https://amend-{amend_num}.example.com",
@@ -589,10 +612,13 @@ class TestConcurrentMixedOperations:
         # Run all tasks concurrently
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Check that any exceptions are expected types rather than unexpected errors
+        # Check that any exceptions are expected types rather than unexpected errors.
+        # FileNotFoundError/OSError can occur during concurrent file access.
+        # JSONDecodeError could theoretically occur if a read happens during a
+        # partial write, though atomic rename should prevent this in practice.
+        # We include it for defensive completeness.
         for result in results:
             if isinstance(result, Exception):
-                # FileNotFoundError/OSError/JSONDecodeError can occur during concurrent access
                 assert isinstance(result, (FileNotFoundError, OSError, json.JSONDecodeError)), (
                     f"Unexpected exception type: {type(result).__name__}: {result}"
                 )
@@ -703,10 +729,12 @@ class TestGCLockContention:
                 uploaded_by="setup",
             )
 
+        # Track hashes of uploaded artifacts. This list is populated sequentially
+        # by upload_continuously(), with index i corresponding to artifact during-{i}.
         uploaded_hashes: list[str] = []
 
         async def upload_continuously() -> None:
-            """Upload artifacts continuously during GC."""
+            """Upload artifacts sequentially during GC, recording each hash."""
             for i in range(10):
                 content = f"uploaded during GC {i}".encode()
                 file_stream = io.BytesIO(content)
@@ -745,7 +773,13 @@ class TestAsyncClientConcurrency:
 
     @pytest.fixture
     async def http_client(self, test_storage_service: StorageService) -> httpx.AsyncClient:
-        """Create async HTTP client for testing."""
+        """Create async HTTP client for testing.
+
+        Note: This fixture modifies global FastAPI app state by adding a
+        dependency override for get_storage_service. The override is cleaned
+        up after the test by removing only the key we added, preserving any
+        other overrides that may exist (e.g., from conftest.py auth overrides).
+        """
 
         def override_storage_service() -> StorageService:
             return test_storage_service
@@ -758,17 +792,22 @@ class TestAsyncClientConcurrency:
         transport = ASGITransport(app=app)  # type: ignore[arg-type]
         client = httpx.AsyncClient(transport=transport, base_url="http://test")
 
-        yield client
-
-        await client.aclose()
-        app.dependency_overrides.clear()
+        try:
+            yield client
+        finally:
+            await client.aclose()
+            # Only remove the override we added, not all overrides
+            app.dependency_overrides.pop(get_storage_service, None)
 
     async def test_concurrent_http_uploads(
         self, http_client: httpx.AsyncClient, test_storage_service: StorageService
     ) -> None:
-        """Concurrent HTTP upload requests.
+        """Concurrent HTTP upload requests to different artifact paths.
 
-        Multiple simultaneous upload requests should all succeed.
+        Each upload targets a unique artifact path (worker-0, worker-1, etc.),
+        so there are no path conflicts. All uploads should succeed. This differs
+        from the storage service tests which test concurrent uploads to the SAME
+        path, where race conditions can cause failures.
         """
         num_uploads = 10
 
@@ -797,7 +836,13 @@ class TestAsyncClientConcurrency:
     async def test_concurrent_http_tag_operations(
         self, http_client: httpx.AsyncClient, test_storage_service: StorageService
     ) -> None:
-        """Concurrent HTTP tag creation requests."""
+        """Concurrent HTTP tag creation requests with unique tag names.
+
+        Each tag operation creates a uniquely-named tag (http-tag-0, http-tag-1, etc.),
+        so there are no tag name conflicts. All operations should succeed. The HTTP
+        layer provides request serialization that prevents the filesystem-level race
+        conditions seen in direct storage service tests.
+        """
         # First upload an artifact
         content = b"tag operations test"
         files = {"file": ("artifact.bin", content, "application/octet-stream")}
@@ -838,7 +883,13 @@ class TestAsyncClientConcurrency:
     async def test_concurrent_http_amend(
         self, http_client: httpx.AsyncClient, test_storage_service: StorageService
     ) -> None:
-        """Concurrent HTTP amend requests."""
+        """Concurrent HTTP amend requests to the same artifact.
+
+        Multiple amend requests update the same artifact's source_uri field.
+        The HTTP layer provides request serialization that prevents the filesystem-
+        level race conditions seen in direct storage service tests. All requests
+        should succeed, with the final source_uri being one of the attempted values.
+        """
         # First upload an artifact
         content = b"amend test content"
         files = {"file": ("artifact.bin", content, "application/octet-stream")}
