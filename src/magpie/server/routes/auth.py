@@ -12,12 +12,9 @@ from magpie.auth.database import get_connection, list_tokens
 from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenInfo, TokenService
 from magpie.server.deps import get_token_service, require_admin_scope
+from magpie.validation import TOKEN_NAME_MAX_LENGTH, TOKEN_NAME_PATTERN
 
 router = APIRouter()
-
-# Token name validation pattern: alphanumeric start, then alphanumeric, dots, underscores, hyphens
-# Length limit enforced via Field(max_length=64) for consistency with TAG_NAME_PATTERN style
-TOKEN_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"  # nosec B105 - not a password, just a token name regex
 
 # Request/Response models for token management
 
@@ -27,11 +24,11 @@ class CreateTokenRequest(BaseModel):
 
     name: str = Field(
         pattern=TOKEN_NAME_PATTERN,
-        max_length=64,
+        max_length=TOKEN_NAME_MAX_LENGTH,
         description=(
             "Token name: must start with an alphanumeric character, may contain "
             "alphanumeric characters, dots (.), underscores (_), or hyphens (-). "
-            "Maximum 64 characters."
+            f"Maximum {TOKEN_NAME_MAX_LENGTH} characters."
         ),
     )
     scope: str  # "read", "write", or "admin"

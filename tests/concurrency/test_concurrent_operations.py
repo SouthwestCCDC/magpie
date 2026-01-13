@@ -128,6 +128,12 @@ class TestConcurrentUploads:
 
         Each upload should succeed and "latest" tag should point to one of them.
         All uploaded blobs should be preserved.
+
+        Note: Due to race conditions, a worker may successfully write the blob and
+        update the "latest" tag but then fail during symlink reconciliation. In this
+        case the "latest" tag points to a valid blob but the worker threw an exception.
+        Therefore we verify "latest" points to a stored blob rather than requiring it
+        to be from a successful (non-throwing) upload.
         """
         base_path = "concurrent/diff-content"
         num_concurrent = 5
@@ -170,11 +176,8 @@ class TestConcurrentUploads:
         unique_hashes = set(hashes)
         assert len(unique_hashes) == len(hashes), "Each successful upload should have unique hash"
 
-        # "latest" should point to some uploaded version.
-        # Note: Due to race conditions, "latest" may point to an upload that threw an
-        # exception during task completion (e.g., JSONDecodeError during manifest read)
-        # but still wrote to storage. So we verify "latest" points to a valid blob,
-        # not necessarily one from our successful task list.
+        # Verify "latest" points to a stored blob (may be from a worker that threw
+        # an exception after writing the blob and updating the tag)
         info = test_storage_service.get_artifact_info(base_path, "latest")
         assert info is not None, "latest should exist"
         assert "latest" in info.tags, "latest tag should be present"
@@ -182,6 +185,9 @@ class TestConcurrentUploads:
         # All successful uploads should be retrievable
         versions = test_storage_service.list_artifacts(base_path)
         stored_hashes = {v.hash for v in versions}
+        assert info.hash in stored_hashes, "latest should point to a stored blob"
+
+        # All successful uploads should be retrievable
         assert unique_hashes.issubset(stored_hashes), "All successful uploads should be stored"
 
 
