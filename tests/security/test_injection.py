@@ -11,6 +11,8 @@ Note: These tests focus on ensuring that malicious payloads cannot achieve
 their intended attack goals. The specific HTTP status code may vary (400, 401,
 404, 422, 500) depending on where the payload is rejected - the key is that
 the attack does not succeed.
+
+AI-assisted: Generated with Claude Code (Opus 4.5).
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from fastapi.testclient import TestClient
 
 from magpie.storage.exceptions import InvalidArtifactPathError
 from magpie.storage.paths import normalize_artifact_path, validate_artifact_path
+from magpie.storage.service import StorageService
 
 # =============================================================================
 # SQL Injection Tests
@@ -60,7 +63,7 @@ class TestSQLInjectionArtifactPaths:
         assert response.status_code != 200
         # Should never expose database errors or SQL syntax
         response_text = response.text.lower()
-        assert "sql" not in response_text or "sqlalchemy" not in response_text
+        assert "sql" not in response_text and "sqlalchemy" not in response_text
         assert "database error" not in response_text
         assert "syntax error" not in response_text
 
@@ -97,7 +100,7 @@ class TestSQLInjectionTagNames:
 
     @pytest.mark.parametrize("payload", SQL_INJECTION_TAG_PAYLOADS)
     def test_sql_injection_in_tag_name_create(
-        self, client: TestClient, test_storage_service, payload: str
+        self, client: TestClient, test_storage_service: StorageService, payload: str
     ) -> None:
         """SQL injection in tag name creation should be rejected."""
         # First create a valid artifact
@@ -143,7 +146,6 @@ class TestUnicodeNormalizationAttacks:
     def test_unicode_path_traversal_blocked(self, client: TestClient) -> None:
         """Unicode lookalike dots should not allow path traversal."""
         content = b"test content"
-        files = {"file": ("test.bin", io.BytesIO(content), "application/octet-stream")}
 
         # Try various Unicode dot-like characters
         unicode_traversal_payloads = [
@@ -210,7 +212,7 @@ class TestSymlinkAttacks:
         reason="Symlink following is currently allowed - see issue for security review"
     )
     def test_symlink_in_artifact_path_rejected(
-        self, client: TestClient, test_storage_service, tmp_path: Path
+        self, client: TestClient, test_storage_service: StorageService, tmp_path: Path
     ) -> None:
         """Symlinks in artifact paths should not allow escaping storage root.
 
@@ -275,13 +277,15 @@ class TestSymlinkAttacks:
 class TestPathTraversal:
     """Test path traversal attacks using ../ patterns.
 
-    These tests verify that the normalize_artifact_path and
-    verify_path_is_descendant functions properly block all forms
-    of path traversal attempts.
+    Note: Core path normalization and traversal rejection behavior for
+    normalize_artifact_path / validate_artifact_path is covered in depth in
+    tests/unit/test_path_validation.py::TestNormalizeArtifactPath.
+    To avoid duplicated coverage and maintenance burden, this security test
+    suite focuses on HTTP-level traversal and encoding behaviors rather than
+    re-testing the same normalization inputs here.
 
-    Note: Plain '../' in URLs is normalized by the HTTP framework before
-    reaching the application, so we test URL-encoded variants that bypass
-    HTTP normalization and reach the application-level validation.
+    Plain '../' in URLs is normalized by the HTTP framework before
+    reaching the application, so these tests verify HTTP-level behavior.
     """
 
     def test_url_path_traversal_normalized_by_http(self, client: TestClient) -> None:
@@ -320,37 +324,6 @@ class TestPathTraversal:
         # The path was normalized to just 'otherpath'
         assert response.json()["artifact_path"] == "otherpath"
 
-    def test_normalize_artifact_path_rejects_traversal(self) -> None:
-        """Direct test of normalize_artifact_path rejecting traversal."""
-        with pytest.raises(InvalidArtifactPathError) as exc_info:
-            normalize_artifact_path("test/../../../etc/passwd")
-        assert "traversal" in str(exc_info.value).lower()
-
-    def test_normalize_artifact_path_allows_double_dot_in_name(self) -> None:
-        """Paths like 'v1..2' should be allowed (not directory traversal)."""
-        # This should NOT raise - double dots in filenames are OK
-        result = normalize_artifact_path("version/v1..2")
-        assert result == "version/v1..2"
-
-    def test_validate_artifact_path_rejects_traversal(self) -> None:
-        """Direct test of validate_artifact_path rejecting traversal."""
-        with pytest.raises(InvalidArtifactPathError):
-            validate_artifact_path("test/../other")
-
-    @pytest.mark.parametrize(
-        "path,expected",
-        [
-            ("test/artifact", "test/artifact"),  # Normal path
-            ("/test/artifact/", "test/artifact"),  # Leading/trailing slashes
-            ("//test//artifact//", "test/artifact"),  # Multiple slashes
-            ("test", "test"),  # Single segment
-        ],
-    )
-    def test_normalize_path_valid_inputs(self, path: str, expected: str) -> None:
-        """Valid paths should normalize correctly."""
-        result = normalize_artifact_path(path)
-        assert result == expected
-
 
 # =============================================================================
 # Null Byte Injection Tests
@@ -369,7 +342,9 @@ class TestNullByteInjection:
     to bypass security controls or access unintended files.
     """
 
-    def test_null_byte_in_tag_name(self, client: TestClient, test_storage_service) -> None:
+    def test_null_byte_in_tag_name(
+        self, client: TestClient, test_storage_service: StorageService
+    ) -> None:
         """Null byte in tag name should be rejected."""
         # Create a valid artifact first
         content = b"test content"
@@ -441,7 +416,9 @@ class TestCombinedAttacks:
         assert response.status_code in (200, 400, 404)
         if response.status_code == 200:
             # SQL characters in path are just literal characters
-            assert "DROP" not in response.json().get("artifact_path", "DROP")
+            data = response.json()
+            artifact_path = data.get("artifact_path", "")
+            assert "DROP" not in artifact_path
 
 
 # =============================================================================
@@ -450,23 +427,29 @@ class TestCombinedAttacks:
 
 
 class TestBoundaryConditions:
-    """Test boundary conditions and edge cases."""
+    """Test boundary conditions and edge cases.
 
-    def test_empty_path_rejected(self, client: TestClient) -> None:
-        """Empty path should be rejected by validation."""
-        with pytest.raises(InvalidArtifactPathError):
-            normalize_artifact_path("")
+    Note: Basic validation tests for empty paths, reserved segments, and hidden
+    segments are covered in tests/unit/test_path_validation.py. This class focuses
+    on HTTP-level integration tests and edge cases not covered by unit tests.
+    """
 
-    def test_whitespace_only_path_allowed_as_literal(self) -> None:
-        """Whitespace-only path is treated as literal path segment.
+    def test_whitespace_only_path_preserved_by_normalize_but_rejected_by_validate(
+        self,
+    ) -> None:
+        """Whitespace-only path segments are preserved by normalize but rejected by validation.
 
-        Note: The normalize_artifact_path function only strips leading/trailing
-        slashes, not whitespace. A path of '   ' is technically valid (though
-        unusual). This is acceptable as whitespace in URLs gets encoded.
+        Note: normalize_artifact_path only strips leading/trailing slashes from the full path,
+        not whitespace within segments. A path of '   ' is preserved by normalization but is
+        rejected by validate_artifact_path as an invalid artifact path.
         """
-        # Whitespace is preserved as a literal path segment
-        result = normalize_artifact_path("   ")
-        assert result == "   "  # Preserved as-is
+        # Whitespace is preserved as a literal path segment by normalize_artifact_path
+        normalized = normalize_artifact_path("   ")
+        assert normalized == "   "
+
+        # But validation should reject whitespace-only paths
+        with pytest.raises(InvalidArtifactPathError):
+            validate_artifact_path(normalized)
 
     def test_very_long_path_handled_safely(self, client: TestClient) -> None:
         """Very long paths should be handled without server errors."""

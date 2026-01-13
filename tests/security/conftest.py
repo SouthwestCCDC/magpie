@@ -1,4 +1,7 @@
-"""Shared fixtures for security tests."""
+"""Shared fixtures for security tests.
+
+AI-assisted: Generated with Claude Code (Opus 4.5).
+"""
 
 from __future__ import annotations
 
@@ -70,4 +73,7 @@ def client(test_storage_service: StorageService) -> TestClient:
     app.dependency_overrides[require_admin_scope_header] = _noop_require_admin_scope_header
     app.dependency_overrides[require_write_scope] = _noop_require_write_scope
     yield TestClient(app)
-    app.dependency_overrides.clear()
+    app.dependency_overrides.pop(get_storage_service, None)
+    app.dependency_overrides.pop(require_admin_scope, None)
+    app.dependency_overrides.pop(require_admin_scope_header, None)
+    app.dependency_overrides.pop(require_write_scope, None)
