@@ -24,7 +24,6 @@ from fastapi.testclient import TestClient
 from magpie.storage.exceptions import InvalidArtifactPathError
 from magpie.storage.paths import normalize_artifact_path, validate_artifact_path
 
-
 # =============================================================================
 # SQL Injection Tests
 # =============================================================================
