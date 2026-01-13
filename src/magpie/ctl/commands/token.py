@@ -15,6 +15,7 @@ from magpie.cli.formatting import (
     output_result,
 )
 from magpie.ctl import CTLContext
+from magpie.validation import ValidationError
 
 
 @click.group()
@@ -58,7 +59,14 @@ def token_create(ctx: CTLContext, name: str, scope: str) -> None:
 
     try:
         plaintext_token = token_service.create_token(name, token_scope)
+    except ValidationError as e:
+        # Token name validation failed
+        if is_json_output():
+            output_error(ErrorCode.VALIDATION_ERROR, str(e))
+        else:
+            raise click.ClickException(str(e))
     except ValueError as e:
+        # Token name already exists
         if is_json_output():
             output_error(ErrorCode.CONFLICT, str(e))
         else:

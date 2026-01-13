@@ -8,6 +8,7 @@ import click
 
 from magpie.ctl import CTLContext
 from magpie.storage.service import StorageService
+from magpie.validation import ValidationError
 
 
 @click.command(name="flush-tag")
@@ -62,7 +63,14 @@ def flush_tag(
 
     # Use StorageService for the actual flush operation
     storage_service = StorageService(settings)
-    result = storage_service.flush_tag(tag_name, dry_run=dry_run)
+    try:
+        result = storage_service.flush_tag(tag_name, dry_run=dry_run)
+    except ValidationError as e:
+        if json_output:
+            error_data = {"error": str(e)}
+            click.echo(json.dumps(error_data))
+            raise SystemExit(1)
+        raise click.ClickException(str(e))
 
     if json_output:
         output = {
