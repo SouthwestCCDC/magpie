@@ -18,7 +18,7 @@ Usage:
         except SomeError as e:
             output_error("ERROR_CODE", str(e))
 
-Note: This module was AI-generated using Claude Code with Opus 4.5.
+Note: This module was generated with AI assistance (Claude Code w/ Opus 4.5).
 """
 
 from __future__ import annotations
