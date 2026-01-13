@@ -236,3 +236,4 @@ class TestStatusFormatSize:
         assert result.exit_code == 0
         # 4 bytes should show as "4 B"
         assert "Storage:   4 B used" in result.output
+
