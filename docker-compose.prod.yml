@@ -48,6 +48,9 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE  # Required for binding to ports 80/443
+    # Filesystem is read-only for security; writable paths use named volumes:
+    # - /data (caddy_data): TLS certificates and Let's Encrypt state
+    # - /config (caddy_config): Caddy runtime configuration
     read_only: true
     tmpfs:
       - /tmp
@@ -74,8 +77,13 @@ services:
     # Security hardening
     cap_drop:
       - ALL
+    # Filesystem is read-only for security; writable paths:
+    # - /data/artifacts: bind mount for artifact storage (includes database and lock file)
+    # - /run: tmpfs for entrypoint runtime files (magpie-user UID/GID marker)
+    # - /tmp: tmpfs for temporary files
     read_only: true
     tmpfs:
+      - /run
       - /tmp
 
 volumes:
