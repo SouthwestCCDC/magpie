@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
-
 import click
 
 from magpie.cli import CLIContext
-from magpie.cli.errors import handle_http_error
+from magpie.cli.errors import handle_response_error
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
-    http_status_to_error_code,
     is_json_output,
     output_error,
     output_result,
@@ -109,24 +106,8 @@ def flush_tag(ctx: CLIContext, tag_name: str, dry_run: bool, yes: bool, force: b
             params=params,
         )
 
-        if response.status_code == 400:
-            if is_json_output():
-                try:
-                    detail = response.json().get("detail", response.text)
-                except (json.JSONDecodeError, ValueError, KeyError):
-                    detail = response.text
-                output_error(http_status_to_error_code(response.status_code), detail)
-                return  # output_error never returns, but explicit for clarity
-            handle_http_error(response, "Flush", ctx.token)
-        if response.status_code not in (200,):
-            if is_json_output():
-                try:
-                    detail = response.json().get("detail", response.text)
-                except (json.JSONDecodeError, ValueError, KeyError):
-                    detail = response.text
-                output_error(http_status_to_error_code(response.status_code), detail)
-                return  # output_error never returns, but explicit for clarity
-            handle_http_error(response, "Flush", ctx.token)
+        if response.status_code != 200:
+            handle_response_error(response, "Flush", ctx.token)
 
         data = response.json()
         affected_count = data.get("count", 0)

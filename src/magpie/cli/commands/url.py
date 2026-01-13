@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import json
-
 import click
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
-from magpie.cli.errors import handle_http_error
+from magpie.cli.errors import handle_response_error
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
-    http_status_to_error_code,
     is_json_output,
     output_error,
     output_result,
@@ -67,14 +64,7 @@ def url(ctx: CLIContext, artifact_ref: str) -> None:
                 return  # output_error never returns, but explicit for clarity
             raise click.ClickException(msg)
         if response.status_code != 200:
-            if is_json_output():
-                try:
-                    detail = response.json().get("detail", response.text)
-                except (json.JSONDecodeError, ValueError, KeyError):
-                    detail = response.text
-                output_error(http_status_to_error_code(response.status_code), detail)
-                return  # output_error never returns, but explicit for clarity
-            handle_http_error(response, "URL resolution")
+            handle_response_error(response, "URL resolution")
 
         data = response.json()
         hash_ref = data["hash_ref"]

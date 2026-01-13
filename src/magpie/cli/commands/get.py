@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 import click
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
-from magpie.cli.errors import handle_http_error
+from magpie.cli.errors import handle_response_error
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
-    http_status_to_error_code,
     is_json_output,
     output_error,
     output_result,
@@ -85,14 +83,7 @@ def get(
                 return  # output_error never returns, but explicit for clarity
             raise click.ClickException(msg)
         if info_response.status_code != 200:
-            if is_json_output():
-                try:
-                    detail = info_response.json().get("detail", info_response.text)
-                except (json.JSONDecodeError, ValueError, KeyError):
-                    detail = info_response.text
-                output_error(http_status_to_error_code(info_response.status_code), detail)
-                return  # output_error never returns, but explicit for clarity
-            handle_http_error(info_response, "Metadata", ctx.token)
+            handle_response_error(info_response, "Metadata", ctx.token)
 
         info = info_response.json()
         expected_hash = info["hash"]
@@ -174,14 +165,7 @@ def get(
             if response.status_code != 200:
                 # Read response body for error message
                 response.read()
-                if is_json_output():
-                    try:
-                        detail = response.json().get("detail", response.text)
-                    except (json.JSONDecodeError, ValueError, KeyError):
-                        detail = response.text
-                    output_error(http_status_to_error_code(response.status_code), detail)
-                    return  # output_error never returns, but explicit for clarity
-                handle_http_error(response, "Download", ctx.token)
+                handle_response_error(response, "Download", ctx.token)
 
             # Get content length from header if available (may be more accurate)
             content_length = response.headers.get("content-length")
