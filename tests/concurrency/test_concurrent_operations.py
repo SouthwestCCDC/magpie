@@ -85,11 +85,11 @@ class TestConcurrentUploads:
         tasks = [upload_artifact(i) for i in range(num_concurrent)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Filter out exceptions (race conditions can cause FileExistsError)
+        # Filter out exceptions (race conditions can cause FileExistsError/OSError)
         successful_results = []
         for result in results:
             if isinstance(result, Exception):
-                # FileExistsError can occur when multiple uploads try to create symlinks
+                # FileExistsError/OSError can occur when multiple uploads try to create symlinks
                 assert isinstance(result, (FileExistsError, OSError)), (
                     f"Unexpected exception type: {type(result).__name__}: {result}"
                 )
@@ -135,11 +135,11 @@ class TestConcurrentUploads:
         tasks = [upload_artifact(i) for i in range(num_concurrent)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Filter out exceptions (race conditions can cause FileExistsError)
+        # Filter out exceptions (race conditions can cause FileExistsError/OSError)
         hashes = []
         for result in results:
             if isinstance(result, Exception):
-                # FileExistsError can occur when multiple uploads try to create symlinks
+                # FileExistsError/OSError can occur when multiple uploads try to create symlinks
                 assert isinstance(result, (FileExistsError, OSError)), (
                     f"Unexpected exception type: {type(result).__name__}: {result}"
                 )
