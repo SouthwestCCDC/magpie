@@ -318,9 +318,7 @@ class TestTagNameValidation:
         with pytest.raises(ValidationError, match="exceeds maximum length"):
             storage_service.create_tag(artifact_path, hash_ref, long_name)
 
-    def test_create_tag_with_special_chars_raises(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_create_tag_with_special_chars_raises(self, storage_service: StorageService) -> None:
         """create_tag should raise ValidationError for tag with special chars."""
         artifact_path = "test/special-chars"
         _, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")

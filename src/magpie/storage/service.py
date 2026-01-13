@@ -12,7 +12,6 @@ from magpie.storage.blob import store_blob
 from magpie.storage.exceptions import ArtifactNotFoundError
 from magpie.storage.hash import short_hash
 from magpie.storage.manifest import read_manifest, remove_tag, update_tag
-from magpie.validation import validate_tag_name
 from magpie.storage.metadata import (
     BlobMetadata,
     read_metadata,
@@ -26,6 +25,7 @@ from magpie.storage.paths import (
     verify_path_is_descendant,
 )
 from magpie.storage.symlinks import reconcile_symlinks
+from magpie.validation import validate_tag_name
 
 logger = logging.getLogger(__name__)
 

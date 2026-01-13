@@ -10,7 +10,7 @@ import re
 
 # Token name validation: alphanumeric start, then alphanumeric, dots, underscores, hyphens
 # Maximum 64 characters
-TOKEN_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+TOKEN_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"  # nosec B105 - not a password
 TOKEN_NAME_MAX_LENGTH = 64
 _TOKEN_NAME_RE = re.compile(TOKEN_NAME_PATTERN)
 

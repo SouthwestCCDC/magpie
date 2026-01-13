@@ -284,9 +284,7 @@ class TestTokenNameValidation:
         with pytest.raises(ValidationError):
             token_service.create_token("my token", TokenScope.READ)
 
-    def test_create_token_with_special_chars_raises(
-        self, token_service: TokenService
-    ) -> None:
+    def test_create_token_with_special_chars_raises(self, token_service: TokenService) -> None:
         """create_token should raise ValidationError for name with special chars."""
         with pytest.raises(ValidationError):
             token_service.create_token("token@123!", TokenScope.READ)

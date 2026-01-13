@@ -295,9 +295,7 @@ class TestFlushTagValidation:
         with pytest.raises(ValidationError, match="exceeds maximum length"):
             storage_service.flush_tag(long_name)
 
-    def test_flush_tag_with_special_chars_raises(
-        self, storage_service: StorageService
-    ) -> None:
+    def test_flush_tag_with_special_chars_raises(self, storage_service: StorageService) -> None:
         """flush_tag should raise ValidationError for tag with special chars."""
         with pytest.raises(ValidationError):
             storage_service.flush_tag("v1@beta!")
