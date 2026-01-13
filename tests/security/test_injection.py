@@ -237,8 +237,8 @@ class TestSymlinkAttacks:
         The verify_path_is_descendant function uses resolve() to detect when
         symlinks would escape the storage directory, and rejects such paths.
         """
-        import tempfile
         import shutil
+        import tempfile
 
         storage_base = test_storage_service.config.storage_path
 
@@ -291,8 +291,8 @@ class TestSymlinkAttacks:
         Tests that attempting to read artifact info through a symlink that
         escapes the storage directory is rejected.
         """
-        import tempfile
         import shutil
+        import tempfile
 
         storage_base = test_storage_service.config.storage_path
 
@@ -334,8 +334,8 @@ class TestSymlinkAttacks:
         Tests that symlinks anywhere in the artifact path (not just at the root)
         are detected and rejected.
         """
-        import tempfile
         import shutil
+        import tempfile
 
         storage_base = test_storage_service.config.storage_path
 
