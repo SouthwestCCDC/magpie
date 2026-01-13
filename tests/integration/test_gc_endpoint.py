@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenService
 from magpie.config import MagpieSettings, get_settings
 from magpie.server.app import app
@@ -18,41 +16,11 @@ from magpie.storage.service import StorageService
 
 
 @pytest.fixture
-def test_config(tmp_path: Path) -> MagpieSettings:
-    """Create test configuration with temporary paths."""
+def test_config(tmp_path) -> MagpieSettings:
+    """Create test configuration with retention_days for GC tests."""
     config = MagpieSettings(storage_path=tmp_path, retention_days=90)
     config.temp_path.mkdir(parents=True, exist_ok=True)
     return config
-
-
-@pytest.fixture
-def token_service(test_config: MagpieSettings) -> TokenService:
-    """Create a TokenService instance for testing."""
-    return TokenService(test_config)
-
-
-@pytest.fixture
-def storage_service(test_config: MagpieSettings) -> StorageService:
-    """Create a StorageService instance for testing."""
-    return StorageService(test_config)
-
-
-@pytest.fixture
-def admin_token(token_service: TokenService) -> str:
-    """Create an admin token for authentication."""
-    return token_service.create_token("test-admin", TokenScope.ADMIN)
-
-
-@pytest.fixture
-def read_token(token_service: TokenService) -> str:
-    """Create a read-only token for testing non-admin access."""
-    return token_service.create_token("test-reader", TokenScope.READ)
-
-
-@pytest.fixture
-def write_token(token_service: TokenService) -> str:
-    """Create a write token for testing non-admin access."""
-    return token_service.create_token("test-writer", TokenScope.WRITE)
 
 
 @pytest.fixture

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
@@ -30,29 +29,11 @@ PATCH_RUN_CTL = "magpie.server.routes.gc.run_ctl_command"
 
 
 @pytest.fixture
-def test_config(tmp_path: Path) -> MagpieSettings:
-    """Create test configuration with temporary paths."""
+def test_config(tmp_path) -> MagpieSettings:
+    """Create test configuration with retention_days for GC tests."""
     config = MagpieSettings(storage_path=tmp_path, retention_days=90)
     config.temp_path.mkdir(parents=True, exist_ok=True)
     return config
-
-
-@pytest.fixture
-def token_service(test_config: MagpieSettings) -> TokenService:
-    """Create a TokenService instance for testing."""
-    return TokenService(test_config)
-
-
-@pytest.fixture
-def storage_service(test_config: MagpieSettings) -> StorageService:
-    """Create a StorageService instance for testing."""
-    return StorageService(test_config)
-
-
-@pytest.fixture
-def admin_token(token_service: TokenService) -> str:
-    """Create an admin token for authentication."""
-    return token_service.create_token("test-admin", TokenScope.ADMIN)
 
 
 @pytest.fixture
@@ -82,12 +63,6 @@ def api_client(
     app.dependency_overrides[get_settings] = override_settings
     yield TestClient(app, raise_server_exceptions=False)
     app.dependency_overrides.clear()
-
-
-@pytest.fixture
-def cli_runner() -> CliRunner:
-    """Create Click CLI test runner."""
-    return CliRunner()
 
 
 class TestGCCommand:

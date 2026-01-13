@@ -3,41 +3,10 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
-from magpie.config import MagpieSettings
-from magpie.server.app import app
-from magpie.server.deps import get_storage_service
 from magpie.storage.service import StorageService
-
-
-@pytest.fixture
-def test_config(tmp_path: Path) -> MagpieSettings:
-    """Create test configuration with temporary paths."""
-    config = MagpieSettings(storage_path=tmp_path)
-    config.temp_path.mkdir(parents=True, exist_ok=True)
-    return config
-
-
-@pytest.fixture
-def test_storage_service(test_config: MagpieSettings) -> StorageService:
-    """Create a StorageService instance for testing."""
-    return StorageService(test_config)
-
-
-@pytest.fixture
-def client(test_storage_service: StorageService) -> TestClient:
-    """Create test client with overridden storage service dependency."""
-
-    def override_storage_service() -> StorageService:
-        return test_storage_service
-
-    app.dependency_overrides[get_storage_service] = override_storage_service
-    yield TestClient(app)
-    app.dependency_overrides.clear()
 
 
 class TestListArtifactsEndpoint:

@@ -3,25 +3,11 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
 
 import pytest
 
-from magpie.config import MagpieSettings
 from magpie.storage.exceptions import ArtifactNotFoundError
 from magpie.storage.service import ArtifactInfo, StorageService
-
-
-@pytest.fixture
-def test_config(tmp_path: Path) -> MagpieSettings:
-    """Create test configuration with temporary paths."""
-    return MagpieSettings(storage_path=tmp_path)
-
-
-@pytest.fixture
-def storage_service(test_config: MagpieSettings) -> StorageService:
-    """Create a StorageService instance for testing."""
-    return StorageService(test_config)
 
 
 class TestStoreListGetFlow:

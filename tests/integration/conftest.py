@@ -1,19 +1,207 @@
-"""Shared fixtures for integration tests."""
+"""Shared fixtures for integration tests.
+
+This module consolidates common test fixtures used across integration tests,
+reducing duplication and ensuring consistent test setup.
+
+Note: This module was significantly updated to consolidate fixtures from
+individual test files. Generated with assistance from Claude Code (Opus 4.5).
+"""
 
 from __future__ import annotations
 
+import io
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
+from fastapi.testclient import TestClient
 
-from magpie.auth.service import TokenInfo
+from magpie.auth.models import TokenScope
+from magpie.auth.service import TokenInfo, TokenService
+from magpie.config import MagpieSettings, get_settings
 from magpie.server.app import app
 from magpie.server.deps import (
+    get_storage_service,
+    get_token_service,
     require_admin_scope,
     require_admin_scope_header,
     require_write_scope,
 )
+from magpie.storage.service import StorageService
+
+
+# =============================================================================
+# Core Configuration Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def test_config(tmp_path: Path) -> MagpieSettings:
+    """Create test configuration with temporary paths.
+
+    This is the base configuration fixture used by most integration tests.
+    Creates a MagpieSettings instance with storage_path set to a temporary
+    directory, and ensures the temp_path subdirectory exists.
+    """
+    config = MagpieSettings(storage_path=tmp_path)
+    config.temp_path.mkdir(parents=True, exist_ok=True)
+    return config
+
+
+@pytest.fixture
+def test_config_with_retention(tmp_path: Path) -> MagpieSettings:
+    """Create test configuration with retention_days set.
+
+    Used by tests that need to verify retention-related behavior (e.g., GC tests).
+    """
+    config = MagpieSettings(storage_path=tmp_path, retention_days=90)
+    config.temp_path.mkdir(parents=True, exist_ok=True)
+    return config
+
+
+# =============================================================================
+# Service Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def test_storage_service(test_config: MagpieSettings) -> StorageService:
+    """Create a StorageService instance for testing.
+
+    Uses the test_config fixture to ensure storage is isolated per test.
+    """
+    return StorageService(test_config)
+
+
+@pytest.fixture
+def storage_service(test_config: MagpieSettings) -> StorageService:
+    """Alias for test_storage_service for tests using this naming convention."""
+    return StorageService(test_config)
+
+
+@pytest.fixture
+def token_service(test_config: MagpieSettings) -> TokenService:
+    """Create a TokenService instance for testing."""
+    return TokenService(test_config)
+
+
+# =============================================================================
+# Token Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def admin_token(token_service: TokenService) -> str:
+    """Create an admin token for authentication."""
+    return token_service.create_token("test-admin", TokenScope.ADMIN)
+
+
+@pytest.fixture
+def read_token(token_service: TokenService) -> str:
+    """Create a read-only token for testing non-admin access."""
+    return token_service.create_token("test-reader", TokenScope.READ)
+
+
+@pytest.fixture
+def write_token(token_service: TokenService) -> str:
+    """Create a write token for testing non-admin access."""
+    return token_service.create_token("test-writer", TokenScope.WRITE)
+
+
+# =============================================================================
+# TestClient Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def client(test_storage_service: StorageService) -> TestClient:
+    """Create test client with overridden storage service dependency.
+
+    This is the standard client fixture for most endpoint tests. It overrides
+    the storage service dependency to use a test-isolated storage instance.
+    Auth dependencies are already overridden by the autouse fixture.
+    """
+
+    def override_storage_service() -> StorageService:
+        return test_storage_service
+
+    app.dependency_overrides[get_storage_service] = override_storage_service
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client_no_raise(test_storage_service: StorageService) -> TestClient:
+    """Create test client that doesn't raise server exceptions.
+
+    Used for tests that need to check HTTP error responses without
+    triggering pytest exception handling.
+    """
+
+    def override_storage_service() -> StorageService:
+        return test_storage_service
+
+    app.dependency_overrides[get_storage_service] = override_storage_service
+    yield TestClient(app, raise_server_exceptions=False)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def api_client(test_storage_service: StorageService) -> TestClient:
+    """Create test API client for CLI integration tests.
+
+    Alias for client fixture, used by CLI tests that mock the HTTP client.
+    """
+
+    def override_storage_service() -> StorageService:
+        return test_storage_service
+
+    app.dependency_overrides[get_storage_service] = override_storage_service
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client_with_auth(
+    token_service: TokenService,
+    test_storage_service: StorageService,
+    test_config: MagpieSettings,
+) -> TestClient:
+    """Create test client for testing real authentication.
+
+    This fixture clears the autouse auth overrides so that actual token
+    validation is tested. Use this for tests that verify auth behavior
+    (e.g., token endpoints, GC endpoint auth).
+    """
+    # Clear any auth overrides from the autouse fixture
+    app.dependency_overrides.clear()
+
+    def override_token_service() -> TokenService:
+        return token_service
+
+    def override_storage_service() -> StorageService:
+        return test_storage_service
+
+    def override_settings() -> MagpieSettings:
+        return test_config
+
+    app.dependency_overrides[get_token_service] = override_token_service
+    app.dependency_overrides[get_storage_service] = override_storage_service
+    app.dependency_overrides[get_settings] = override_settings
+    yield TestClient(app, raise_server_exceptions=False)
+    app.dependency_overrides.clear()
+
+
+# =============================================================================
+# CLI Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def cli_runner() -> CliRunner:
+    """Create Click CLI test runner."""
+    return CliRunner()
 
 
 @pytest.fixture
@@ -43,7 +231,7 @@ def cli_runner_no_config() -> CliRunner:
         return cli_override if cli_override else ""
 
     def patched_invoke(*args, **kwargs):
-        # Patch where the functions are used (magpie.cli module), not where they're defined
+        # Patch where the functions are used (magpie.cli module), not where defined
         with patch("magpie.cli.get_server", side_effect=mock_get_server):
             with patch("magpie.cli.get_token", side_effect=mock_get_token):
                 return original_invoke(*args, **kwargs)
@@ -52,10 +240,13 @@ def cli_runner_no_config() -> CliRunner:
     return runner
 
 
+# =============================================================================
+# Auth Override Helpers (for autouse fixture)
+# =============================================================================
+
+
 def _noop_require_admin_scope() -> TokenInfo:
     """No-op override for require_admin_scope in tests."""
-    from magpie.auth.models import TokenScope
-
     return TokenInfo(
         name="test-token",
         scope=TokenScope.ADMIN,
@@ -98,3 +289,44 @@ def override_auth_dependencies(request):
     app.dependency_overrides.pop(require_admin_scope, None)
     app.dependency_overrides.pop(require_admin_scope_header, None)
     app.dependency_overrides.pop(require_write_scope, None)
+
+
+# =============================================================================
+# Helper Functions (not fixtures, but commonly used across tests)
+# =============================================================================
+
+
+def upload_test_artifact(
+    client: TestClient,
+    path: str,
+    content: bytes,
+    source_uri: str | None = None,
+    uploaded_by: str = "test-user",
+) -> dict:
+    """Helper to upload a test artifact and return response data.
+
+    This is a utility function (not a fixture) that can be imported by test
+    modules that need to upload artifacts as part of their test setup.
+
+    Args:
+        client: TestClient instance to use for the upload
+        path: Artifact path (e.g., "test/artifact")
+        content: Binary content to upload
+        source_uri: Optional source URI for provenance
+        uploaded_by: Uploader identifier (defaults to "test-user")
+
+    Returns:
+        dict: JSON response from the upload endpoint containing hash, hash_ref, etc.
+    """
+    files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
+    params = {"uploaded_by": uploaded_by}
+    if source_uri:
+        params["source_uri"] = source_uri
+
+    response = client.post(
+        f"/api/v1/upload/{path}",
+        files=files,
+        params=params if params else None,
+    )
+    assert response.status_code == 200
+    return response.json()

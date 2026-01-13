@@ -3,53 +3,15 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
 from magpie.cli import cli
-from magpie.config import MagpieSettings
-from magpie.server.app import app
-from magpie.server.deps import get_storage_service
-from magpie.storage.service import StorageService
 
 # Patch path for get_client - must match where it's imported/used in the CLI module
 PATCH_GET_CLIENT = "magpie.cli.get_client"
-
-
-@pytest.fixture
-def test_config(tmp_path: Path) -> MagpieSettings:
-    """Create test configuration with temporary paths."""
-    config = MagpieSettings(storage_path=tmp_path)
-    config.temp_path.mkdir(parents=True, exist_ok=True)
-    return config
-
-
-@pytest.fixture
-def test_storage_service(test_config: MagpieSettings) -> StorageService:
-    """Create a StorageService instance for testing."""
-    return StorageService(test_config)
-
-
-@pytest.fixture
-def api_client(test_storage_service: StorageService) -> TestClient:
-    """Create test API client with overridden storage service dependency."""
-
-    def override_storage_service() -> StorageService:
-        return test_storage_service
-
-    app.dependency_overrides[get_storage_service] = override_storage_service
-    yield TestClient(app)
-    app.dependency_overrides.clear()
-
-
-@pytest.fixture
-def cli_runner() -> CliRunner:
-    """Create Click CLI test runner."""
-    return CliRunner()
 
 
 def upload_test_artifact(
