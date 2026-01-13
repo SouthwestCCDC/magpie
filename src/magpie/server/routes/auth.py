@@ -16,8 +16,8 @@ from magpie.server.deps import get_token_service, require_admin_scope
 router = APIRouter()
 
 # Token name validation pattern: alphanumeric start, then alphanumeric, dots, underscores, hyphens
-# Maximum 64 characters total (1 required start + up to 63 more)
-TOKEN_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$"  # nosec B105 - not a password, just a token name regex
+# Length limit enforced via Field(max_length=64) for consistency with TAG_NAME_PATTERN style
+TOKEN_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"  # nosec B105 - not a password, just a token name regex
 
 # Request/Response models for token management
 
@@ -25,9 +25,15 @@ TOKEN_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$"  # nosec B105 - not a 
 class CreateTokenRequest(BaseModel):
     """Request model for creating a new token."""
 
-    # NOTE: max_length duplicates the limit in TOKEN_NAME_PATTERN intentionally.
-    # This keeps length validation explicit in the schema and can yield clearer error messages.
-    name: str = Field(pattern=TOKEN_NAME_PATTERN, max_length=64)
+    name: str = Field(
+        pattern=TOKEN_NAME_PATTERN,
+        max_length=64,
+        description=(
+            "Token name: must start with an alphanumeric character, may contain "
+            "alphanumeric characters, dots (.), underscores (_), or hyphens (-). "
+            "Maximum 64 characters."
+        ),
+    )
     scope: str  # "read", "write", or "admin"
 
 
