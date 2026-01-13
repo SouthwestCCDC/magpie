@@ -25,6 +25,7 @@ from magpie.storage.paths import (
     verify_path_is_descendant,
 )
 from magpie.storage.symlinks import reconcile_symlinks
+from magpie.validation import validate_tag_name
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +265,11 @@ class StorageService:
 
         Raises:
             ArtifactNotFoundError: If hash_ref doesn't resolve to existing blob.
+            ValidationError: If tag name fails validation (invalid format/length).
         """
+        # Validate tag name (defense in depth - also validated at API layer)
+        validate_tag_name(tag_name)
+
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
 
         # Validate blob exists and get short hash for metadata lookup
@@ -301,7 +306,13 @@ class StorageService:
 
         Returns:
             True if tag was removed, False if tag didn't exist.
+
+        Raises:
+            ValidationError: If tag name fails validation (invalid format/length).
         """
+        # Validate tag name (defense in depth - also validated at API layer)
+        validate_tag_name(tag_name)
+
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
 
         # Read manifest to check if tag exists
@@ -335,7 +346,13 @@ class StorageService:
 
         Returns:
             FlushResult with list of affected artifact paths and count.
+
+        Raises:
+            ValidationError: If tag name fails validation (invalid format/length).
         """
+        # Validate tag name (defense in depth - also validated at API layer)
+        validate_tag_name(tag_name)
+
         affected_artifacts: list[str] = []
 
         # Find all .magpie manifest files under storage_path

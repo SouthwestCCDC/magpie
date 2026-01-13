@@ -12,6 +12,7 @@ from magpie.storage.exceptions import ArtifactNotFoundError
 from magpie.storage.manifest import read_manifest
 from magpie.storage.paths import artifact_dir_path
 from magpie.storage.service import StorageService
+from magpie.validation import ValidationError
 
 
 @pytest.fixture
@@ -277,3 +278,83 @@ class TestTagSymlinks:
         assert (artifact_dir / "keep-this").is_symlink()
         assert (artifact_dir / "latest").is_symlink()
         assert not (artifact_dir / "remove-this").exists()
+
+
+class TestTagNameValidation:
+    """Tests for tag name validation in StorageService.
+
+    Defense-in-depth validation at service layer ensures CLI and other
+    non-API callers also get proper validation.
+    """
+
+    def test_create_tag_with_invalid_name_raises_validation_error(
+        self, storage_service: StorageService
+    ) -> None:
+        """create_tag should raise ValidationError for invalid tag name."""
+        artifact_path = "test/invalid-tag-name"
+        _, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
+
+        with pytest.raises(ValidationError, match="must start with alphanumeric"):
+            storage_service.create_tag(artifact_path, hash_ref, "-invalid")
+
+    def test_create_tag_with_empty_name_raises_validation_error(
+        self, storage_service: StorageService
+    ) -> None:
+        """create_tag should raise ValidationError for empty tag name."""
+        artifact_path = "test/empty-tag-name"
+        _, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
+
+        with pytest.raises(ValidationError, match="cannot be empty"):
+            storage_service.create_tag(artifact_path, hash_ref, "")
+
+    def test_create_tag_with_too_long_name_raises_validation_error(
+        self, storage_service: StorageService
+    ) -> None:
+        """create_tag should raise ValidationError for tag name exceeding max length."""
+        artifact_path = "test/long-tag-name"
+        _, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
+        long_name = "a" * 129  # Max is 128
+
+        with pytest.raises(ValidationError, match="exceeds maximum length"):
+            storage_service.create_tag(artifact_path, hash_ref, long_name)
+
+    def test_create_tag_with_special_chars_raises(self, storage_service: StorageService) -> None:
+        """create_tag should raise ValidationError for tag with special chars."""
+        artifact_path = "test/special-chars"
+        _, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
+
+        with pytest.raises(ValidationError):
+            storage_service.create_tag(artifact_path, hash_ref, "v1@beta!")
+
+    def test_remove_tag_with_invalid_name_raises_validation_error(
+        self, storage_service: StorageService
+    ) -> None:
+        """remove_tag should raise ValidationError for invalid tag name."""
+        artifact_path = "test/remove-invalid-name"
+        store_test_artifact(storage_service, artifact_path, b"content")
+
+        with pytest.raises(ValidationError, match="must start with alphanumeric"):
+            storage_service.remove_tag(artifact_path, "-invalid")
+
+    def test_remove_tag_with_empty_name_raises_validation_error(
+        self, storage_service: StorageService
+    ) -> None:
+        """remove_tag should raise ValidationError for empty tag name."""
+        artifact_path = "test/remove-empty-name"
+        store_test_artifact(storage_service, artifact_path, b"content")
+
+        with pytest.raises(ValidationError, match="cannot be empty"):
+            storage_service.remove_tag(artifact_path, "")
+
+    def test_validation_error_is_catchable_as_value_error(
+        self, storage_service: StorageService
+    ) -> None:
+        """ValidationError should be catchable as ValueError for backward compatibility."""
+        artifact_path = "test/catch-as-value-error"
+        _, hash_ref = store_test_artifact(storage_service, artifact_path, b"content")
+
+        try:
+            storage_service.create_tag(artifact_path, hash_ref, "-invalid")
+            assert False, "Should have raised an exception"
+        except ValueError:
+            pass  # ValidationError is a subclass of ValueError
