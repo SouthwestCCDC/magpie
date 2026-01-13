@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import functools
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,8 +30,17 @@ class MagpieSettings(BaseSettings):
     retention_days: int = 90
     debug: bool = False
 
+    # GC settings
+    gc_lock_path: Path = Path("/var/run/magpie-gc.lock")  # MAGPIE_GC_LOCK_PATH
+
     # Upload limits
     max_upload_size: int | None = None  # MAGPIE_MAX_UPLOAD_SIZE (bytes, None = unlimited)
+
+    # S3 backup settings (optional)
+    s3_bucket: str | None = None  # MAGPIE_S3_BUCKET
+
+    # Logging settings
+    log_format: Literal["json", "console"] = "console"  # MAGPIE_LOG_FORMAT
 
     # Observability settings
     sentry_dsn: str | None = None  # MAGPIE_SENTRY_DSN
