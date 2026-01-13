@@ -75,6 +75,12 @@ def _get_auth_status(
 def _get_storage_stats(storage_service: StorageService) -> StorageStats:
     """Calculate storage statistics.
 
+    Note: This function walks the entire storage tree using rglob, which can
+    be slow for large deployments with many artifacts. For production systems
+    with thousands of artifacts, consider caching these statistics or calling
+    this endpoint sparingly. See also check_artifact_nesting() for similar
+    performance considerations.
+
     Args:
         storage_service: StorageService instance.
 

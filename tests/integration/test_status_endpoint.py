@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenService
 from magpie.config import MagpieSettings
 from magpie.server.app import app
@@ -80,6 +81,51 @@ class TestStatusEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert "auth" in data
+        assert data["auth"]["valid"] is False
+
+    def test_status_returns_auth_info_with_valid_token(
+        self, api_client: TestClient, test_token_service: TokenService
+    ) -> None:
+        """Status endpoint validates token and returns scope and name when valid."""
+        token = test_token_service.create_token("test-status-token", TokenScope.READ)
+
+        response = api_client.get(
+            "/api/v1/status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["auth"]["valid"] is True
+        assert data["auth"]["scope"] == "read"
+        assert data["auth"]["name"] == "test-status-token"
+
+    def test_status_returns_auth_info_with_admin_token(
+        self, api_client: TestClient, test_token_service: TokenService
+    ) -> None:
+        """Status endpoint correctly identifies admin scope tokens."""
+        token = test_token_service.create_token("admin-token", TokenScope.ADMIN)
+
+        response = api_client.get(
+            "/api/v1/status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["auth"]["valid"] is True
+        assert data["auth"]["scope"] == "admin"
+        assert data["auth"]["name"] == "admin-token"
+
+    def test_status_returns_invalid_for_bad_token(self, api_client: TestClient) -> None:
+        """Status endpoint returns invalid for malformed or unknown tokens."""
+        response = api_client.get(
+            "/api/v1/status",
+            headers={"Authorization": "Bearer invalid_token_12345"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
         assert data["auth"]["valid"] is False
 
     def test_status_returns_storage_stats(self, api_client: TestClient) -> None:
