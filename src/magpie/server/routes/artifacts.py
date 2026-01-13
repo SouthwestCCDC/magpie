@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from magpie.server.deps import get_storage_service, require_write_scope
 from magpie.storage.exceptions import ArtifactNotFoundError, InvalidArtifactPathError
@@ -107,7 +107,9 @@ class TagResponse(BaseModel):
 class AmendMetadataRequest(BaseModel):
     """Request model for amending artifact metadata."""
 
-    source_uri: str | None = None  # New source URI (None to leave unchanged)
+    source_uri: str | None = Field(
+        default=None, max_length=2048
+    )  # New source URI (None to leave unchanged)
 
 
 class ArtifactPathsResponse(BaseModel):
