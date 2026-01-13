@@ -8,7 +8,6 @@ from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
 from magpie.cli import cli
-
 from tests.integration.conftest import upload_test_artifact
 
 # Patch path for get_client - must match where it's imported/used in the CLI module
