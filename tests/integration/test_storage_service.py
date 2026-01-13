@@ -6,6 +6,7 @@ import io
 
 import pytest
 
+from magpie.config import MagpieSettings
 from magpie.storage.exceptions import ArtifactNotFoundError
 from magpie.storage.service import ArtifactInfo, StorageService
 

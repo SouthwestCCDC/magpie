@@ -30,7 +30,6 @@ from magpie.server.deps import (
 )
 from magpie.storage.service import StorageService
 
-
 # =============================================================================
 # Core Configuration Fixtures
 # =============================================================================
