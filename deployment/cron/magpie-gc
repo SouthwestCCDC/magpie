@@ -9,32 +9,44 @@
 #
 # 2. Add to root's crontab:
 #    crontab -e
-#    # Then paste the cron line below (without the 'root' user field)
+#    # Then paste the command portion only, removing the 'root' user field.
+#    # User crontab format: minute hour day month weekday command
+#    # Example: 0 2 * * * flock -n /var/run/magpie-gc.lock docker compose ...
 #
 # Lock file prevents concurrent GC runs. If GC is already running,
 # flock will exit immediately with status 1 (no error logged).
+# The /var/run directory must exist and be writable by the cron user.
 
 # Environment variables (adjust paths as needed)
 SHELL=/bin/bash
 PATH=/usr/local/bin:/usr/bin:/bin
 MAGPIE_DIR=/opt/magpie
-MAGPIE_GC_LOCK_PATH=/var/run/magpie-gc.lock
+
+# Host-side lock file used by flock to prevent concurrent GC runs.
+LOCK_FILE=/var/run/magpie-gc.lock
 
 # Run GC daily at 2:00 AM
 # Format: minute hour day month weekday user command
 #
-# Docker Compose deployment:
-0 2 * * * root flock -n $MAGPIE_GC_LOCK_PATH docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl gc --quiet 2>&1 | logger -t magpie-gc
+# Uses `docker compose run` so GC works even if the main `magpie` container is
+# stopped (e.g., during maintenance). Creates a temporary container with the
+# same configuration/volumes as the `magpie` service.
+0 2 * * * root flock -n $LOCK_FILE docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl gc --quiet 2>&1 | logger -t magpie-gc
+
+# Alternative: Use `exec` into the running magpie container (requires container to be running)
+# 0 2 * * * root flock -n $LOCK_FILE docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl gc --quiet 2>&1 | logger -t magpie-gc
 
 # Alternative: Direct execution (if not using Docker)
-# 0 2 * * * root flock -n $MAGPIE_GC_LOCK_PATH /usr/local/bin/magpie-ctl gc --quiet 2>&1 | logger -t magpie-gc
+# 0 2 * * * root flock -n $LOCK_FILE /usr/local/bin/magpie-ctl gc --quiet 2>&1 | logger -t magpie-gc
 
 # Alternative schedules:
 # Every 6 hours:
-# 0 */6 * * * root flock -n $MAGPIE_GC_LOCK_PATH docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl gc --quiet 2>&1 | logger -t magpie-gc
+# 0 */6 * * * root flock -n $LOCK_FILE docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl gc --quiet 2>&1 | logger -t magpie-gc
 #
 # Weekly on Sunday at 3 AM:
-# 0 3 * * 0 root flock -n $MAGPIE_GC_LOCK_PATH docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl gc --quiet 2>&1 | logger -t magpie-gc
+# 0 3 * * 0 root flock -n $LOCK_FILE docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl gc --quiet 2>&1 | logger -t magpie-gc
 
-# Custom retention period (override MAGPIE_RETENTION_DAYS):
-# 0 2 * * * root MAGPIE_RETENTION_DAYS=30 flock -n $MAGPIE_GC_LOCK_PATH docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl gc --quiet 2>&1 | logger -t magpie-gc
+# Custom retention period (use CLI flag, not environment variable):
+# NOTE: Environment variables set in cron are not passed into the Docker container.
+# Use CLI flags instead, or configure retention in the container's .env file.
+# 0 2 * * * root flock -n $LOCK_FILE docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl gc --retention-days 30 --quiet 2>&1 | logger -t magpie-gc

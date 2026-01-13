@@ -24,7 +24,10 @@ Documentation=https://github.com/SouthwestCCDC/magpie
 OnCalendar=*-*-* 02:00:00
 
 # Randomize start time within 30 minutes to reduce load spikes
-# (useful if running multiple Magpie instances)
+# (useful if running multiple Magpie instances on shared infrastructure).
+# For single-instance deployments, you may reduce or remove this delay:
+#   RandomizedDelaySec=0      # Exact scheduling
+#   RandomizedDelaySec=300    # 5-minute window
 RandomizedDelaySec=1800
 
 # Run immediately if the scheduled time was missed

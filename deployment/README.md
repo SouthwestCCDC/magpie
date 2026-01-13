@@ -66,16 +66,21 @@ Uses `flock` to prevent concurrent runs.
 The retention period determines how long untagged blobs are kept before becoming
 eligible for garbage collection. Tagged blobs are never deleted by GC.
 
-Configure via environment variable:
+Configure via environment variable in your `.env` or `docker-compose.yml`:
 
 ```bash
-# In .env file or shell environment
+# In .env file (read by Docker Compose)
 MAGPIE_RETENTION_DAYS=30
 ```
 
-Or via command-line override:
+Or via command-line flag (recommended for one-off overrides):
 
 ```bash
+# For Docker deployments, use CLI flags rather than shell environment variables
+# (shell env vars are not passed into the container)
+docker compose run --rm magpie magpie-ctl gc --retention-days 30
+
+# Direct execution
 magpie-ctl gc --retention-days 30
 ```
 
@@ -90,10 +95,13 @@ Align your GC schedule with your retention period:
 
 ### Lock File
 
-The lock file (`MAGPIE_GC_LOCK_PATH`) prevents concurrent GC runs, which could
-cause race conditions or excessive resource usage.
+The lock file prevents concurrent GC runs, which could cause race conditions or
+excessive resource usage.
 
 Default path: `/var/run/magpie-gc.lock`
+
+**Note:** The `/var/run` directory (typically a symlink to `/run`) must exist
+and be writable by the user running GC. This is standard on most Linux systems.
 
 The systemd service uses `ConditionPathExists` to check the lock file before
 starting. The cron configuration uses `flock -n` for the same purpose.
@@ -102,12 +110,8 @@ If GC is already running:
 - systemd: Service fails immediately (check `systemctl status magpie-gc`)
 - cron: `flock` exits silently with status 1
 
-To customize the lock path:
-
-```bash
-# In .env file
-MAGPIE_GC_LOCK_PATH=/var/lock/magpie-gc.lock
-```
+To customize the lock path, edit the cron file's `LOCK_FILE` variable or the
+systemd service's `ExecStartPre`/`ExecStopPost`/`ConditionPathExists` lines.
 
 ### Logging
 
@@ -132,8 +136,8 @@ magpie-ctl gc --json-output
 
 ```ini
 [Timer]
-# Every 6 hours
-OnCalendar=*-*-* 00/6:00:00
+# Every 6 hours (at 00:00, 06:00, 12:00, 18:00)
+OnCalendar=*-*-* 0/6:00:00
 
 # Weekly on Sunday at 3 AM
 OnCalendar=Sun *-*-* 03:00:00
@@ -249,11 +253,16 @@ sudo rm /var/run/magpie-gc.lock
 
 Ensure the service user can:
 - Read the storage directory
-- Write to the lock file path
-- Execute docker commands (if using Docker)
+- Write to the lock file directory (`/var/run`)
+- Execute Docker commands (if using Docker)
 
 For Docker deployments, the user running the cron/systemd service needs access
-to the Docker socket.
+to the Docker socket. By default, the service runs as root. To run as a
+non-root user:
+
+1. Add the user to the `docker` group: `sudo usermod -aG docker <username>`
+2. Uncomment and set `User=<username>` in the systemd service file
+3. Ensure the lock file directory is writable by that user
 
 ---
 

@@ -17,10 +17,14 @@
 [Unit]
 Description=Magpie Garbage Collection
 Documentation=https://github.com/SouthwestCCDC/magpie
-After=network.target
+After=network.target docker.service
+Requires=docker.service
 
 # Prevent concurrent GC runs
-# If GC is already running, this instance will fail immediately
+# If GC is already running, this instance will fail immediately.
+# NOTE: There is a small race window between condition check and lock creation;
+# for most use cases this is acceptable, but high-frequency triggers should use
+# flock-based locking instead.
 ConditionPathExists=!/var/run/magpie-gc.lock
 
 [Service]
@@ -31,15 +35,27 @@ ExecStartPre=/bin/sh -c 'echo $$ > /var/run/magpie-gc.lock'
 ExecStopPost=/bin/rm -f /var/run/magpie-gc.lock
 
 # Run GC via Docker Compose
-# Adjust the path to match your installation
+# Uses `docker compose run` so GC works even if the main `magpie` container is
+# stopped (e.g., during maintenance). Adjust path to match your installation.
 WorkingDirectory=/opt/magpie
-ExecStart=/usr/bin/docker compose exec -T magpie magpie-ctl gc --quiet
+ExecStart=/usr/bin/docker compose run --rm -T magpie magpie-ctl gc --quiet
+
+# Alternative: Use `exec` into the running magpie container instead of `run`.
+# NOTE: This requires the `magpie` container to already be running; GC will
+# fail if the service is stopped when this unit triggers.
+# ExecStart=/usr/bin/docker compose exec -T magpie magpie-ctl gc --quiet
 
 # Alternative: Direct execution (if not using Docker)
 # ExecStart=/usr/local/bin/magpie-ctl gc --quiet
 
+# User configuration (optional)
+# By default, this service runs as root. To run as a different user, uncomment
+# and set User= to a user with Docker socket access (typically in 'docker' group).
+# User=magpie
+
 # Environment overrides (optional)
-# Uncomment and adjust as needed:
+# NOTE: For Docker deployments, these environment variables are passed to the
+# container. Alternatively, use CLI flags (e.g., --retention-days 30).
 # Environment=MAGPIE_RETENTION_DAYS=30
 # Environment=MAGPIE_STORAGE_PATH=/data/artifacts
 
@@ -54,8 +70,8 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 
-# Allow write access to storage and lock file
-ReadWritePaths=/var/run/magpie-gc.lock
+# Allow write access to lock file directory (/var/run is typically a symlink to /run)
+ReadWritePaths=/var/run
 # If using direct execution, also add:
 # ReadWritePaths=/data/artifacts
 
