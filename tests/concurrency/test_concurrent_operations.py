@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import io
 import json
+import re
 from pathlib import Path
 
 import httpx
@@ -226,13 +227,22 @@ class TestConcurrentTagOperations:
         assert len(attempted_tags) >= 1, "At least one tag creation should complete"
 
         # Due to race conditions in manifest updates, some tags may be lost even
-        # if they were successfully created. Verify at least one tag exists and
-        # that the tags present are from our attempted set.
+        # if they were successfully created. A tag can be written to storage but
+        # the task may still throw an exception (e.g., during concurrent manifest
+        # updates), so the tag exists but wasn't added to attempted_tags.
+        # Verify at least one tag exists and that all tags match the expected
+        # pattern (tag-N where N is 0 to num_tags-1).
         info = test_storage_service.get_artifact_info(artifact_path, hash_ref)
         our_tags = [t for t in info.tags if t.startswith("tag-")]
         assert len(our_tags) >= 1, "At least one tag should persist"
+        tag_pattern = re.compile(r"^tag-(\d+)$")
         for tag in our_tags:
-            assert tag in attempted_tags, f"Tag {tag} should be from our attempted set"
+            match = tag_pattern.match(tag)
+            assert match is not None, f"Tag {tag} should match pattern tag-N"
+            tag_num = int(match.group(1))
+            assert 0 <= tag_num < num_tags, (
+                f"Tag number {tag_num} should be in range [0, {num_tags})"
+            )
 
     async def test_concurrent_tag_update(self, test_storage_service: StorageService) -> None:
         """Multiple workers updating same tag to point to different blobs.
