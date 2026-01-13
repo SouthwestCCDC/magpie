@@ -1,4 +1,7 @@
-"""Shared fixtures for concurrency tests."""
+"""Shared fixtures for concurrency tests.
+
+AI-assisted: Generated with Claude Code (Opus 4.5).
+"""
 
 from __future__ import annotations
 

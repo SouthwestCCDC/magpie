@@ -6,12 +6,13 @@ Tests for race conditions and data corruption during concurrent operations:
 3. Upload during GC - Upload completing while GC is running
 4. Concurrent amend - Multiple amend operations on same artifact
 5. Lock contention - Multiple GC processes trying to acquire lock
+
+AI-assisted: Generated with Claude Code (Opus 4.5).
 """
 
 from __future__ import annotations
 
 import asyncio
-import functools
 import hashlib
 import io
 import json
@@ -462,12 +463,10 @@ class TestConcurrentAmend:
             uri = uris[uri_idx]
             try:
                 await asyncio.to_thread(
-                    functools.partial(
-                        test_storage_service.amend_metadata,
-                        artifact_path=artifact_path,
-                        hash_ref=hash_ref,
-                        source_uri=uri,
-                    )
+                    test_storage_service.amend_metadata,
+                    artifact_path=artifact_path,
+                    hash_ref=hash_ref,
+                    source_uri=uri,
                 )
                 return uri
             except (FileNotFoundError, OSError, json.JSONDecodeError):
@@ -520,12 +519,10 @@ class TestConcurrentAmend:
             for i in range(5):
                 try:
                     await asyncio.to_thread(
-                        functools.partial(
-                            test_storage_service.amend_metadata,
-                            artifact_path=artifact_path,
-                            hash_ref=hash_ref,
-                            source_uri=f"https://worker-{worker_id}-iteration-{i}.example.com",
-                        )
+                        test_storage_service.amend_metadata,
+                        artifact_path=artifact_path,
+                        hash_ref=hash_ref,
+                        source_uri=f"https://worker-{worker_id}-iteration-{i}.example.com",
                     )
                 except (FileNotFoundError, OSError, json.JSONDecodeError):
                     # Race conditions can cause these errors during concurrent access
@@ -584,12 +581,10 @@ class TestConcurrentMixedOperations:
         async def amend_task(artifact_path: str, hash_ref: str, amend_num: int) -> None:
             """Amend metadata on existing artifact."""
             await asyncio.to_thread(
-                functools.partial(
-                    test_storage_service.amend_metadata,
-                    artifact_path=artifact_path,
-                    hash_ref=hash_ref,
-                    source_uri=f"https://amend-{amend_num}.example.com",
-                )
+                test_storage_service.amend_metadata,
+                artifact_path=artifact_path,
+                hash_ref=hash_ref,
+                source_uri=f"https://amend-{amend_num}.example.com",
             )
 
         # Build task list with mixed operations
@@ -804,10 +799,12 @@ class TestAsyncClientConcurrency:
     ) -> None:
         """Concurrent HTTP upload requests to different artifact paths.
 
-        Each upload targets a unique artifact path (worker-0, worker-1, etc.),
-        so there are no path conflicts. All uploads should succeed. This differs
-        from the storage service tests which test concurrent uploads to the SAME
-        path, where race conditions can cause failures.
+        Each upload targets a unique leaf path (worker-0, worker-1, etc.) under
+        the shared parent path http-concurrent/. While these share a parent
+        directory, each artifact path is distinct so there are no artifact-level
+        conflicts. All uploads should succeed. This differs from the storage
+        service tests which test concurrent uploads to the SAME artifact path,
+        where race conditions can cause failures.
         """
         num_uploads = 10
 
