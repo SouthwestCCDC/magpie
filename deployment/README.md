@@ -169,7 +169,7 @@ ExecStart=/usr/local/bin/magpie-ctl gc --quiet
 
 **cron**:
 ```bash
-0 2 * * * root flock -n $MAGPIE_GC_LOCK_PATH /usr/local/bin/magpie-ctl gc --quiet 2>&1 | logger -t magpie-gc
+0 2 * * * root flock -n /var/run/magpie-gc.lock /usr/local/bin/magpie-ctl gc --quiet 2>&1 | logger -t magpie-gc
 ```
 
 ### Custom Storage Path

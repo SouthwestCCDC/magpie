@@ -54,8 +54,11 @@ ExecStart=/usr/bin/docker compose run --rm -T magpie magpie-ctl gc --quiet
 # User=magpie
 
 # Environment overrides (optional)
-# NOTE: For Docker deployments, these environment variables are passed to the
-# container. Alternatively, use CLI flags (e.g., --retention-days 30).
+# NOTE: For Docker deployments using `docker compose run`, these environment
+# variables are NOT passed to the container. Configure settings in the
+# container's .env file or docker-compose.yml, or use CLI flags instead
+# (e.g., --retention-days 30). These Environment= lines only apply when
+# using direct execution (non-Docker).
 # Environment=MAGPIE_RETENTION_DAYS=30
 # Environment=MAGPIE_STORAGE_PATH=/data/artifacts
 
