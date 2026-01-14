@@ -149,6 +149,7 @@ class MockClientWithDownload:
     def __exit__(self, *args: object) -> None:
         pass
 
+
 # =============================================================================
 # Core Configuration Fixtures
 # =============================================================================
