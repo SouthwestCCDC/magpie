@@ -95,11 +95,12 @@ class StorageService:
         # Validate artifact path for reserved names
         validate_artifact_path(artifact_path)
 
-        # Check for nesting conflicts with existing artifacts
-        # Note: artifact_dir_path (called by check_artifact_nesting and below)
-        # performs security verification via verify_path_is_descendant internally
-        check_artifact_nesting(self.config.storage_path, artifact_path)
+        # Check for nesting conflicts with existing artifacts.
+        # Skip security verification here since artifact_dir_path below will
+        # perform it; this avoids redundant segment-by-segment symlink resolution.
+        check_artifact_nesting(self.config.storage_path, artifact_path, verify_security=False)
 
+        # Security verification happens here via verify_path_is_descendant
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
 
         # Store blob (handles streaming and hashing)

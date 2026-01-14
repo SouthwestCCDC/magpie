@@ -87,6 +87,18 @@ def verify_path_is_descendant(base: Path, artifact_path: str) -> Path:
         >>> base = Path("/storage/artifacts")
         >>> verify_path_is_descendant(base, "project/artifact")
         PosixPath('/storage/artifacts/project/artifact')
+
+    Performance note:
+        This function performs segment-by-segment symlink resolution, which
+        involves multiple filesystem operations (exists/is_symlink checks and
+        resolve calls) for each path component. For deeply nested paths, this
+        adds some overhead to each artifact operation. The alternative (resolving
+        the full path once and checking containment) is not sufficient because
+        it would miss symlinks in intermediate directories that escape and then
+        return to the base directory. The current approach ensures that no
+        symlink in the path ever escapes, even temporarily, which provides
+        stronger security guarantees. In typical usage with paths of 3-5
+        segments, the overhead is negligible.
     """
     # Resolve base path first (must exist)
     try:
@@ -284,7 +296,7 @@ def validate_artifact_path(artifact_path: str) -> None:
             raise InvalidArtifactPathError("Path segments cannot start with '.'")
 
 
-def check_artifact_nesting(base: Path, artifact_path: str) -> None:
+def check_artifact_nesting(base: Path, artifact_path: str, verify_security: bool = True) -> None:
     """Check that artifact path does not nest with existing artifacts.
 
     Prevents creating artifacts that:
@@ -303,11 +315,15 @@ def check_artifact_nesting(base: Path, artifact_path: str) -> None:
     Args:
         base: Base storage directory path.
         artifact_path: Logical artifact path to check.
+        verify_security: If True (default), verify the resolved path stays within
+            base via symlink-aware validation. Set to False only when the caller
+            will perform security verification separately to avoid redundant
+            filesystem operations.
 
     Raises:
         InvalidArtifactPathError: If path would nest with existing artifacts.
     """
-    proposed_dir = artifact_dir_path(base, artifact_path)
+    proposed_dir = artifact_dir_path(base, artifact_path, verify_security=verify_security)
 
     # Check if proposed path is a child of an existing artifact
     # (test/myartifact/nested when test/myartifact exists)
