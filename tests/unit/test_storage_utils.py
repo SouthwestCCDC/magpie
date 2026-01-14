@@ -98,24 +98,29 @@ class TestShortHash:
 
 
 class TestArtifactDirPath:
-    """Tests for artifact_dir_path function."""
+    """Tests for artifact_dir_path function.
+
+    These tests use verify_security=False because they test path construction
+    logic with hypothetical paths. Security verification is tested separately
+    in test_path_validation.py::TestVerifyPathIsDescendant.
+    """
 
     def test_artifact_dir_path_simple(self) -> None:
         """artifact_dir_path should join base and artifact path."""
         base = Path("/data/artifacts")
-        result = artifact_dir_path(base, "project/component")
+        result = artifact_dir_path(base, "project/component", verify_security=False)
         assert result == Path("/data/artifacts/project/component")
 
     def test_artifact_dir_path_single_segment(self) -> None:
         """artifact_dir_path should work with single-segment paths."""
         base = Path("/storage")
-        result = artifact_dir_path(base, "artifact")
+        result = artifact_dir_path(base, "artifact", verify_security=False)
         assert result == Path("/storage/artifact")
 
     def test_artifact_dir_path_deep_nesting(self) -> None:
         """artifact_dir_path should handle deeply nested paths."""
         base = Path("/data")
-        result = artifact_dir_path(base, "a/b/c/d/e")
+        result = artifact_dir_path(base, "a/b/c/d/e", verify_security=False)
         assert result == Path("/data/a/b/c/d/e")
 
 

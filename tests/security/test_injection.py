@@ -18,6 +18,8 @@ AI-assisted: Generated with Claude Code (Opus 4.5).
 from __future__ import annotations
 
 import io
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -238,9 +240,6 @@ class TestSymlinkAttacks:
         including any symlinks, would escape the storage directory, and rejects
         such paths.
         """
-        import shutil
-        import tempfile
-
         storage_base = test_storage_service.config.storage_path
 
         # Create target directory OUTSIDE the storage root
@@ -293,9 +292,6 @@ class TestSymlinkAttacks:
         Tests that attempting to read artifact info through a symlink that
         escapes the storage directory is rejected.
         """
-        import shutil
-        import tempfile
-
         storage_base = test_storage_service.config.storage_path
 
         # Create target directory OUTSIDE the storage root with some content
@@ -338,9 +334,6 @@ class TestSymlinkAttacks:
         Tests that symlinks anywhere in the artifact path (not just at the root)
         are detected and rejected.
         """
-        import shutil
-        import tempfile
-
         storage_base = test_storage_service.config.storage_path
 
         # Create a legitimate top-level directory
@@ -381,6 +374,53 @@ class TestSymlinkAttacks:
             # Clean up the symlink and the outside temp directory
             symlink_path.unlink(missing_ok=True)
             shutil.rmtree(outside_temp, ignore_errors=True)
+
+    def test_cyclic_symlink_rejected(
+        self, client: TestClient, test_storage_service: StorageService
+    ) -> None:
+        """Cyclic symlinks should be rejected with a clear error message.
+
+        Tests that symlinks forming a cycle (A -> B -> A) are detected
+        and rejected rather than causing infinite loops or crashes.
+        """
+        storage_base = test_storage_service.config.storage_path
+
+        # Create a directory for the cyclic symlinks
+        cycle_dir = storage_base / "cycle_test"
+        cycle_dir.mkdir(parents=True, exist_ok=True)
+
+        symlink_a = cycle_dir / "link_a"
+        symlink_b = cycle_dir / "link_b"
+
+        try:
+            # Create cyclic symlinks: A -> B -> A
+            symlink_a.symlink_to(symlink_b)
+            symlink_b.symlink_to(symlink_a)
+        except OSError:
+            shutil.rmtree(cycle_dir, ignore_errors=True)
+            pytest.skip("Cannot create symlinks on this system")
+
+        try:
+            # Try to upload through the cyclic symlink
+            content = b"test content"
+            files = {"file": ("test.bin", io.BytesIO(content), "application/octet-stream")}
+
+            response = client.post(
+                "/api/v1/upload/cycle_test/link_a/artifact",
+                files=files,
+            )
+
+            # The upload should be rejected due to cyclic symlink
+            # OSError with ELOOP is caught and converted to InvalidArtifactPathError
+            assert response.status_code == 400, (
+                f"Expected 400 for cyclic symlink, got {response.status_code}: {response.text}"
+            )
+            assert "cannot be resolved" in response.text.lower()
+        finally:
+            # Clean up the symlinks
+            symlink_a.unlink(missing_ok=True)
+            symlink_b.unlink(missing_ok=True)
+            shutil.rmtree(cycle_dir, ignore_errors=True)
 
     def test_double_dot_path_normalized_by_http(self, client: TestClient) -> None:
         """Double dot (..) in URL path is normalized by HTTP framework.

@@ -86,25 +86,58 @@ def verify_path_is_descendant(base: Path, artifact_path: str) -> Path:
         >>> verify_path_is_descendant(base, "project/artifact")
         PosixPath('/storage/artifacts/project/artifact')
     """
-    # Construct the full path and resolve symlinks.
-    # Handle OSError for cyclic symlinks (ELOOP: "Too many levels of symbolic links").
+    # Resolve base path first (must exist)
     try:
-        full_path = (base / artifact_path).resolve()
-        base_resolved = base.resolve()
+        base_resolved = base.resolve(strict=True)
+    except OSError as e:
+        raise InvalidArtifactPathError(f"Base path cannot be resolved: {e}")
+
+    # Walk through each segment of the artifact path and verify that
+    # any existing symlinks don't escape the base directory.
+    # This catches both symlink escapes AND cyclic symlinks.
+    current_path = base_resolved
+    segments = artifact_path.split("/") if artifact_path else []
+
+    for segment in segments:
+        current_path = current_path / segment
+
+        # If this component exists, resolve it strictly to detect:
+        # 1. Symlinks that escape the base directory
+        # 2. Cyclic symlinks (will raise OSError with ELOOP)
+        if current_path.exists() or current_path.is_symlink():
+            try:
+                resolved = current_path.resolve(strict=True)
+            except OSError as e:
+                # ELOOP (cyclic symlinks) or other resolution errors
+                raise InvalidArtifactPathError(f"Path '{artifact_path}' cannot be resolved: {e}")
+
+            # Verify the resolved path stays within base
+            try:
+                resolved.relative_to(base_resolved)
+            except ValueError:
+                raise InvalidArtifactPathError(
+                    f"Path '{artifact_path}' resolves outside the storage directory"
+                )
+
+    # Final path construction (may include non-existent components)
+    full_path = base_resolved / artifact_path
+
+    # For non-existent paths, also check using non-strict resolve to catch
+    # ".." segments that could escape the base directory
+    try:
+        resolved_full = full_path.resolve(strict=False)
     except OSError as e:
         raise InvalidArtifactPathError(f"Path '{artifact_path}' cannot be resolved: {e}")
 
-    # Check if the resolved path is under the base directory
-    # Using is_relative_to() which returns True if path is relative to base
     try:
-        full_path.relative_to(base_resolved)
+        resolved_full.relative_to(base_resolved)
     except ValueError:
         raise InvalidArtifactPathError(
             f"Path '{artifact_path}' resolves outside the storage directory"
         )
 
     # Additional check: ensure it's not the base directory itself
-    if full_path == base_resolved:
+    if resolved_full == base_resolved:
         raise InvalidArtifactPathError("Artifact path cannot resolve to storage root")
 
     return full_path
