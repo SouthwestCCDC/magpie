@@ -53,18 +53,24 @@ src/magpie/
 
 ## Implementation Phases
 
-### Phase 1: Core Upload + Filesystem (current)
+### Phase 1: Core Upload + Filesystem (complete)
 - [x] Scaffolding (pyproject.toml, Dockerfile, docker-compose, FastAPI, CLIs, tooling)
-- [ ] Storage operations (compute_hash, store_artifact, create_tag, list_artifacts)
-- [ ] Upload endpoint (stream, hash, dedupe, move, metadata, symlink)
+- [x] Storage operations (compute_hash, store_artifact, create_tag, list_artifacts)
+- [x] Upload endpoint (stream, hash, dedupe, move, metadata, symlink)
 
-### Phase 2: Tags + CLI
-- [ ] Tag endpoints (POST/DELETE)
-- [ ] Full CLI implementation (config, push, get, ls, info, tag, untag, url)
-- [ ] Token auth (forward_auth, SQLite storage)
+### Phase 2: Tags + CLI (complete)
+- [x] Tag endpoints (POST/DELETE)
+- [x] Full CLI implementation (config, push, get, ls, info, tag, untag, url, amend, gc, flush-tag)
+- [x] Token auth (forward_auth, SQLite storage)
 
-### Phase 3: Polish + Deployment
-### Phase 4: S3 Backup
+### Phase 3: Polish + Deployment (complete)
+- [x] amend command/endpoint
+- [x] gc with symlink reconciliation
+- [x] flush-tag with confirmation
+- [x] Observability (Sentry SDK, OpenTelemetry)
+- [x] Production Caddy configuration with TLS
+
+### Phase 4: S3 Backup (future)
 
 ## Key Design Decisions
 
