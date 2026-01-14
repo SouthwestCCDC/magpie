@@ -22,7 +22,6 @@ from magpie.storage.paths import (
     artifact_dir_path,
     check_artifact_nesting,
     validate_artifact_path,
-    verify_path_is_descendant,
 )
 from magpie.storage.symlinks import reconcile_symlinks
 from magpie.validation import validate_tag_name
@@ -96,10 +95,9 @@ class StorageService:
         # Validate artifact path for reserved names
         validate_artifact_path(artifact_path)
 
-        # Defense-in-depth: verify resolved path stays within storage directory
-        verify_path_is_descendant(self.config.storage_path, artifact_path)
-
         # Check for nesting conflicts with existing artifacts
+        # Note: artifact_dir_path (called by check_artifact_nesting and below)
+        # performs security verification via verify_path_is_descendant internally
         check_artifact_nesting(self.config.storage_path, artifact_path)
 
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)

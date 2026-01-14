@@ -281,7 +281,8 @@ class TestSymlinkAttacks:
                 "Upload followed symlink and wrote outside storage!"
             )
         finally:
-            # Clean up the outside temp directory
+            # Clean up the symlink and the outside temp directory
+            symlink_path.unlink(missing_ok=True)
             shutil.rmtree(outside_temp, ignore_errors=True)
 
     def test_symlink_read_artifact_rejected(
@@ -325,6 +326,8 @@ class TestSymlinkAttacks:
             )
             assert "resolves outside" in response.text.lower()
         finally:
+            # Clean up the symlink and the outside temp directory
+            symlink_path.unlink(missing_ok=True)
             shutil.rmtree(outside_temp, ignore_errors=True)
 
     def test_symlink_in_nested_path_rejected(
@@ -375,6 +378,8 @@ class TestSymlinkAttacks:
             )
             assert "resolves outside" in response.text.lower()
         finally:
+            # Clean up the symlink and the outside temp directory
+            symlink_path.unlink(missing_ok=True)
             shutil.rmtree(outside_temp, ignore_errors=True)
 
     def test_double_dot_path_normalized_by_http(self, client: TestClient) -> None:
