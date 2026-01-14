@@ -80,6 +80,39 @@ CLI flag or the `MAGPIE_TIMEOUT` environment variable -- it is intentionally not
 from the config file. This prevents long-lived global configuration from silently
 affecting network behavior. The default is 600 seconds (10 minutes).
 
+### Managing Configuration
+
+Use the `config` command to manage `~/.magpie/config.toml`:
+
+```bash
+# Set server URL and token
+magpie config --server https://magpie.example.com --token mgp_abc123
+
+# Set just the server URL
+magpie config --server https://magpie.example.com
+
+# Set just the token
+magpie config --token mgp_abc123
+
+# Show current configuration
+magpie config --show
+
+# Show current configuration (default if no options given)
+magpie config
+
+# Clear all configuration (removes config file)
+magpie config --clear
+```
+
+Options:
+
+| Option | Description |
+|--------|-------------|
+| `--server URL` | Set the Magpie server URL |
+| `--token TOKEN` | Set the authentication token |
+| `--show` | Show current configuration (mutually exclusive with other options) |
+| `--clear` | Clear all configuration (mutually exclusive with `--server` and `--token`) |
+
 ### Getting a Token
 
 Contact your Magpie administrator to obtain a token. Tokens have scopes:
@@ -143,7 +176,19 @@ magpie get images/ubuntu:latest -o ubuntu-latest.tar.gz
 
 # Skip hash verification (not recommended)
 magpie get images/ubuntu --no-verify
+
+# Force overwrite existing file and re-download even if local hash matches
+magpie get images/ubuntu:latest --force
 ```
+
+Options:
+
+| Option | Description |
+|--------|-------------|
+| `-o`, `--output PATH` | Output file path (default: derived from artifact path) |
+| `--no-verify` | Skip SHA-256 hash verification |
+| `-q`, `--quiet` | Suppress progress output |
+| `-f`, `--force` | Overwrite existing file without prompting, re-download even if local hash matches |
 
 ### View Artifact Metadata
 
@@ -184,6 +229,34 @@ magpie tag images/ubuntu:@e5f6g7h8 --as stable
 # Remove a tag from an artifact
 magpie untag images/ubuntu v1.0
 ```
+
+### Flush a Tag Globally
+
+Remove a tag from all artifacts in the entire storage system:
+
+```bash
+# Preview what would be affected (dry run)
+magpie flush-tag old-release --dry-run
+
+# Remove tag with confirmation prompt
+magpie flush-tag deprecated
+
+# Skip confirmation prompt
+magpie flush-tag deprecated --yes
+
+# Flush protected tags (latest, stable, production, prod, release)
+magpie flush-tag latest --force --yes
+```
+
+Options:
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Show what would be affected without actually removing tags |
+| `--yes`, `-y` | Skip confirmation prompt |
+| `--force`, `-f` | Required to flush protected tags (latest, stable, production, prod, release) |
+
+**Note**: This operation walks the entire storage filesystem and requires admin scope.
 
 ### Get Download URL
 
@@ -267,6 +340,15 @@ mgp_abc123def456...
 
 **Important**: Save this token securely. It cannot be recovered.
 
+To regenerate a compromised admin token:
+
+```bash
+# Revoke existing admin token and generate a new one
+docker compose exec magpie magpie-ctl init --reset-admin-token
+```
+
+This revokes the existing admin token and creates a new one, which is printed to stdout.
+
 ### Creating Additional Tokens
 
 ```bash
@@ -336,7 +418,7 @@ Caddy automatically obtains and renews Let's Encrypt certificates.
 Untagged blobs are automatically eligible for cleanup after the retention period
 (default: 90 days). Tagged blobs are never deleted by GC.
 
-**Preview what would be deleted:**
+**Preview what would be deleted (via client):**
 
 ```bash
 magpie gc --dry-run
@@ -351,13 +433,50 @@ GC Preview (dry run):
   Space reclaimable: 1.2 GB
 ```
 
-**Run garbage collection:**
+**Run garbage collection (via client):**
 
 ```bash
 magpie gc
 ```
 
 **Note**: GC requires an admin token.
+
+**Server-side GC (magpie-ctl)**
+
+For direct server-side garbage collection with more control:
+
+```bash
+# Preview what would be deleted
+docker compose exec magpie magpie-ctl gc --dry-run
+
+# Run garbage collection
+docker compose exec magpie magpie-ctl gc
+
+# Only reconcile symlinks without deleting blobs
+docker compose exec magpie magpie-ctl gc --reconcile-only
+
+# Override retention period (e.g., delete untagged blobs older than 7 days)
+docker compose exec magpie magpie-ctl gc --retention-days 7
+
+# Delete all untagged blobs regardless of age
+docker compose exec magpie magpie-ctl gc --retention-days 0
+
+# Suppress progress output
+docker compose exec magpie magpie-ctl gc --quiet
+
+# Output results as JSON (for scripting/automation)
+docker compose exec magpie magpie-ctl gc --json-output
+```
+
+Options for `magpie-ctl gc`:
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Show what would be deleted without making changes |
+| `--reconcile-only` | Only reconcile symlinks, don't delete blobs |
+| `--retention-days N` | Override retention period (days); 0 = delete all untagged |
+| `-q`, `--quiet` | Suppress progress output |
+| `--json-output` | Output results as JSON for scripting/automation |
 
 ### Troubleshooting
 
@@ -412,7 +531,9 @@ The artifact was already stored; the existing hash was returned.
 | `magpie url PATH:REF` | Get download URL |
 | `magpie tag PATH:REF --as TAG` | Create/update tag |
 | `magpie untag PATH TAG` | Remove tag |
+| `magpie flush-tag TAG` | Remove tag from all artifacts globally |
 | `magpie amend PATH:REF --source-uri URI` | Update metadata |
+| `magpie config [--server URL] [--token TOKEN]` | Manage configuration |
 | `magpie gc [--dry-run]` | Run garbage collection |
 | `magpie version` | Show version |
 
@@ -461,6 +582,7 @@ The artifact was already stored; the existing hash was returned.
 | POST | `/api/v1/tokens` | admin | Create token |
 | DELETE | `/api/v1/tokens/{name}` | admin | Revoke token |
 | POST | `/api/v1/gc` | admin | Run GC |
+| POST | `/api/v1/tags/{tag_name}/flush` | admin | Flush tag globally |
 
 ### curl Examples
 
@@ -499,4 +621,15 @@ curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"name": "ci-bot", "scope": "write"}' \
   https://magpie.example.com/api/v1/tokens
+
+# Flush tag globally (requires admin token)
+# Preview mode (dry run)
+curl -X POST \
+  -H "Authorization: Bearer mgp_admin_token" \
+  "https://magpie.example.com/api/v1/tags/old-release/flush?confirm_walk_filesystem=true&dry_run=true"
+
+# Actually flush the tag
+curl -X POST \
+  -H "Authorization: Bearer mgp_admin_token" \
+  "https://magpie.example.com/api/v1/tags/old-release/flush?confirm_walk_filesystem=true"
 ```
