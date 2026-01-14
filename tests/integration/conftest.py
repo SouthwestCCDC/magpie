@@ -33,7 +33,6 @@ from magpie.server.deps import (
 )
 from magpie.storage.service import StorageService
 
-
 # =============================================================================
 # Mock Classes for CLI Download Tests
 # =============================================================================
