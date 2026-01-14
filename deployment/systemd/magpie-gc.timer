@@ -1,0 +1,41 @@
+# Magpie Garbage Collection Timer
+# Triggers magpie-gc.service on a schedule.
+#
+# Default: Daily at 2:00 AM (local time)
+#
+# Installation:
+#   cp magpie-gc.service /etc/systemd/system/
+#   cp magpie-gc.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now magpie-gc.timer
+#
+# Check timer status:
+#   systemctl list-timers magpie-gc.timer
+#
+# View next scheduled run:
+#   systemctl status magpie-gc.timer
+
+[Unit]
+Description=Magpie Garbage Collection Timer
+Documentation=https://github.com/SouthwestCCDC/magpie
+
+[Timer]
+# Run daily at 2:00 AM
+OnCalendar=*-*-* 02:00:00
+
+# Randomize start time within 30 minutes to reduce load spikes
+# (useful if running multiple Magpie instances on shared infrastructure).
+# For single-instance deployments, you may reduce or remove this delay:
+#   RandomizedDelaySec=0      # Exact scheduling
+#   RandomizedDelaySec=300    # 5-minute window
+RandomizedDelaySec=1800
+
+# Run immediately if the scheduled time was missed
+# (e.g., system was powered off at 2 AM)
+Persistent=true
+
+# Accuracy: allow systemd to batch with other timers
+AccuracySec=60
+
+[Install]
+WantedBy=timers.target
