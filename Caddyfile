@@ -62,11 +62,13 @@
 	}
 
 	# Artifact read operations (GET only) - public access
-	# Matches: GET /api/v1/artifacts/{path}, GET /api/v1/artifacts/{path}/{ref}/info
+	# Matches: GET /api/v1/artifacts (list all paths)
+	#          GET /api/v1/artifacts/{path} (list versions)
+	#          GET /api/v1/artifacts/{path}/{ref}/info (get info)
 	# Note: POST/DELETE to /artifacts/*/tags* are handled by protected routes below
 	@artifacts_read {
 		method GET
-		path_regexp read ^/api/v1/artifacts/.+
+		path_regexp read ^/api/v1/artifacts(/.*)?$
 	}
 	handle @artifacts_read {
 		reverse_proxy magpie:8000
