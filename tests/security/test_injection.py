@@ -18,6 +18,7 @@ AI-assisted: Generated with Claude Code (Opus 4.5).
 from __future__ import annotations
 
 import io
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -220,55 +221,197 @@ class TestUnicodeNormalizationAttacks:
 class TestSymlinkAttacks:
     """Test symlink-based attacks.
 
-    These tests verify that the system properly handles or rejects
-    symlinks that could be used to escape the storage directory or
-    access unauthorized files.
+    These tests verify that the system properly rejects symlinks that
+    could be used to escape the storage directory or access unauthorized
+    files.
 
-    Note: Currently symlinks in the storage directory are followed, which
-    could be a security concern. This test documents the current behavior.
+    Security mechanism: The artifact_dir_path() function uses Path.resolve()
+    to follow symlinks and verifies that the resolved path remains within
+    the storage root directory. This protects both uploads and reads.
     """
 
-    @pytest.mark.xfail(
-        reason="Symlink following is currently allowed - see issue #135 for security review"
-    )
     def test_symlink_in_artifact_path_rejected(
-        self, client: TestClient, test_storage_service: StorageService, tmp_path: Path
+        self, client: TestClient, test_storage_service: StorageService
     ) -> None:
         """Symlinks in artifact paths should not allow escaping storage root.
 
-        This test is marked as xfail because the current implementation
-        follows symlinks. This behavior should be reviewed for security
-        implications.
+        The artifact_dir_path() helper uses resolve() to detect when a path,
+        including any symlinks, would escape the storage directory, and rejects
+        such paths.
         """
         storage_base = test_storage_service.config.storage_path
 
-        # Create a symlink inside storage pointing outside
-        symlink_path = storage_base / "escape_link"
-        target_path = tmp_path / "outside_storage"
-        target_path.mkdir(parents=True, exist_ok=True)
+        # Create target directory OUTSIDE the storage root using context manager
+        # to ensure cleanup even on test failures
+        with tempfile.TemporaryDirectory(prefix="magpie_symlink_test_outside_") as outside_temp:
+            target_path = Path(outside_temp) / "escape_target"
+            target_path.mkdir(parents=True, exist_ok=True)
 
-        try:
-            symlink_path.symlink_to(target_path)
-        except OSError:
-            pytest.skip("Cannot create symlinks on this system")
+            # Create a symlink inside storage pointing outside
+            symlink_path = storage_base / "escape_link"
 
-        # Try to upload through the symlink
-        content = b"test content"
-        files = {"file": ("test.bin", io.BytesIO(content), "application/octet-stream")}
+            try:
+                symlink_path.symlink_to(target_path)
+            except OSError:
+                pytest.skip("Cannot create symlinks on this system")
 
-        response = client.post(
-            "/api/v1/upload/escape_link/artifact",
-            files=files,
-        )
+            try:
+                # Try to upload through the symlink
+                content = b"test content"
+                files = {"file": ("test.bin", io.BytesIO(content), "application/octet-stream")}
 
-        # The storage service should handle this safely
-        # Either reject or store in the actual symlink location (not follow it)
-        if response.status_code == 200:
-            # If upload succeeded, verify it didn't write to the target
-            target_artifact_dir = target_path / "artifact"
-            assert not (target_artifact_dir / "blobs").exists(), (
-                "Upload followed symlink and wrote outside storage!"
+                response = client.post(
+                    "/api/v1/upload/escape_link/artifact",
+                    files=files,
+                )
+
+                # The upload should be rejected because the symlink escapes storage root
+                assert response.status_code == 400, (
+                    f"Expected 400 for symlink escape attempt, got {response.status_code}: "
+                    f"{response.text}"
+                )
+                assert "resolves outside" in response.text.lower()
+
+                # Double-check that nothing was written to the target
+                target_artifact_dir = target_path / "artifact"
+                assert not (target_artifact_dir / "blobs").exists(), (
+                    "Upload followed symlink and wrote outside storage!"
+                )
+            finally:
+                # Clean up the symlink (temp directory cleaned up by context manager)
+                symlink_path.unlink(missing_ok=True)
+
+    def test_symlink_read_artifact_rejected(
+        self, client: TestClient, test_storage_service: StorageService
+    ) -> None:
+        """Symlinks should not allow reading files outside storage root.
+
+        Tests that attempting to read artifact info through a symlink that
+        escapes the storage directory is rejected.
+        """
+        storage_base = test_storage_service.config.storage_path
+
+        # Create target directory OUTSIDE the storage root using context manager
+        # to ensure cleanup even on test failures
+        with tempfile.TemporaryDirectory(prefix="magpie_symlink_read_test_") as outside_temp:
+            target_path = Path(outside_temp) / "sensitive_data"
+            target_path.mkdir(parents=True, exist_ok=True)
+
+            # Create some "sensitive" content that should NOT be readable
+            (target_path / "secret.txt").write_text("sensitive data")
+
+            # Create a symlink inside storage pointing outside
+            symlink_path = storage_base / "escape_link"
+
+            try:
+                symlink_path.symlink_to(target_path)
+            except OSError:
+                pytest.skip("Cannot create symlinks on this system")
+
+            try:
+                # Try to list artifacts through the symlink
+                response = client.get("/api/v1/artifacts/escape_link")
+
+                # The request should be rejected because the symlink escapes storage root
+                assert response.status_code == 400, (
+                    f"Expected 400 for symlink escape attempt, got {response.status_code}: "
+                    f"{response.text}"
+                )
+                assert "resolves outside" in response.text.lower()
+            finally:
+                # Clean up the symlink (temp directory cleaned up by context manager)
+                symlink_path.unlink(missing_ok=True)
+
+    def test_symlink_in_nested_path_rejected(
+        self, client: TestClient, test_storage_service: StorageService
+    ) -> None:
+        """Symlinks in nested paths should also be rejected.
+
+        Tests that symlinks anywhere in the artifact path (not just at the root)
+        are detected and rejected.
+        """
+        storage_base = test_storage_service.config.storage_path
+
+        # Create a legitimate top-level directory
+        legit_dir = storage_base / "project"
+        legit_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create target directory OUTSIDE the storage root using context manager
+        # to ensure cleanup even on test failures
+        with tempfile.TemporaryDirectory(prefix="magpie_nested_symlink_test_") as outside_temp:
+            target_path = Path(outside_temp) / "escape_target"
+            target_path.mkdir(parents=True, exist_ok=True)
+
+            # Create a symlink inside the legitimate directory pointing outside
+            symlink_path = legit_dir / "evil_link"
+
+            try:
+                symlink_path.symlink_to(target_path)
+            except OSError:
+                pytest.skip("Cannot create symlinks on this system")
+
+            try:
+                # Try to upload through the nested symlink
+                content = b"test content"
+                files = {"file": ("test.bin", io.BytesIO(content), "application/octet-stream")}
+
+                response = client.post(
+                    "/api/v1/upload/project/evil_link/artifact",
+                    files=files,
+                )
+
+                # The upload should be rejected
+                assert response.status_code == 400, (
+                    f"Expected 400 for nested symlink escape, got {response.status_code}: "
+                    f"{response.text}"
+                )
+                assert "resolves outside" in response.text.lower()
+            finally:
+                # Clean up the symlink (temp directory cleaned up by context manager)
+                symlink_path.unlink(missing_ok=True)
+
+    def test_cyclic_symlink_rejected(
+        self, client: TestClient, test_storage_service: StorageService
+    ) -> None:
+        """Cyclic symlinks should be rejected with a clear error message.
+
+        Tests that symlinks forming a cycle (A -> B -> A) are detected
+        and rejected rather than causing infinite loops or crashes.
+        """
+        storage_base = test_storage_service.config.storage_path
+
+        # Create a directory for the cyclic symlinks using context manager
+        # to ensure cleanup even on test failures (directory is inside storage_base)
+        with tempfile.TemporaryDirectory(prefix="cycle_test_", dir=storage_base) as cycle_dir_str:
+            cycle_dir = Path(cycle_dir_str)
+            symlink_a = cycle_dir / "link_a"
+            symlink_b = cycle_dir / "link_b"
+
+            try:
+                # Create cyclic symlinks: A -> B -> A
+                symlink_a.symlink_to(symlink_b)
+                symlink_b.symlink_to(symlink_a)
+            except OSError:
+                pytest.skip("Cannot create symlinks on this system")
+
+            # Compute the relative path from storage_base for the API call
+            cycle_dir_name = cycle_dir.name
+
+            # Try to upload through the cyclic symlink
+            content = b"test content"
+            files = {"file": ("test.bin", io.BytesIO(content), "application/octet-stream")}
+
+            response = client.post(
+                f"/api/v1/upload/{cycle_dir_name}/link_a/artifact",
+                files=files,
             )
+
+            # The upload should be rejected due to cyclic symlink
+            # OSError with ELOOP is caught and converted to InvalidArtifactPathError
+            assert response.status_code == 400, (
+                f"Expected 400 for cyclic symlink, got {response.status_code}: {response.text}"
+            )
+            assert "cannot be resolved" in response.text.lower()
 
     def test_double_dot_path_normalized_by_http(self, client: TestClient) -> None:
         """Double dot (..) in URL path is normalized by HTTP framework.

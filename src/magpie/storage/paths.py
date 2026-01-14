@@ -75,31 +75,83 @@ def verify_path_is_descendant(base: Path, artifact_path: str) -> Path:
         artifact_path: Normalized artifact path string (no ".." segments).
 
     Returns:
-        The resolved full path if it is a valid descendant.
+        The unresolved (logical) path after verifying that any existing symlinks
+        in the path do not escape the base directory. Returns ``base / artifact_path``
+        rather than a resolved path, since the artifact may not exist yet.
 
     Raises:
-        InvalidArtifactPathError: If the resolved path escapes the base directory.
+        InvalidArtifactPathError: If the resolved path escapes the base directory,
+            or if the path contains cyclic symlinks.
 
     Example:
         >>> base = Path("/storage/artifacts")
         >>> verify_path_is_descendant(base, "project/artifact")
         PosixPath('/storage/artifacts/project/artifact')
-    """
-    # Construct the full path
-    full_path = (base / artifact_path).resolve()
-    base_resolved = base.resolve()
 
-    # Check if the resolved path is under the base directory
-    # Using is_relative_to() which returns True if path is relative to base
+    Performance note:
+        This function performs segment-by-segment symlink resolution, which
+        involves multiple filesystem operations (exists/is_symlink checks and
+        resolve calls) for each path component. For deeply nested paths, this
+        adds some overhead to each artifact operation. The alternative (resolving
+        the full path once and checking containment) is not sufficient because
+        it would miss symlinks in intermediate directories that escape and then
+        return to the base directory. The current approach ensures that no
+        symlink in the path ever escapes, even temporarily, which provides
+        stronger security guarantees. In typical usage with paths of 3-5
+        segments, the overhead is negligible.
+    """
+    # Resolve base path first (must exist)
     try:
-        full_path.relative_to(base_resolved)
+        base_resolved = base.resolve(strict=True)
+    except OSError as e:
+        raise InvalidArtifactPathError(f"Base path cannot be resolved: {e}")
+
+    # Walk through each segment of the artifact path and verify that
+    # any existing symlinks don't escape the base directory.
+    # This catches both symlink escapes AND cyclic symlinks.
+    current_path = base_resolved
+    segments = artifact_path.split("/") if artifact_path else []
+
+    for segment in segments:
+        current_path = current_path / segment
+
+        # If this component exists, resolve it strictly to detect:
+        # 1. Symlinks that escape the base directory
+        # 2. Cyclic symlinks (will raise OSError with ELOOP)
+        if current_path.exists() or current_path.is_symlink():
+            try:
+                resolved = current_path.resolve(strict=True)
+            except OSError as e:
+                # ELOOP (cyclic symlinks) or other resolution errors
+                raise InvalidArtifactPathError(f"Path '{artifact_path}' cannot be resolved: {e}")
+
+            # Verify the resolved path stays within base
+            try:
+                resolved.relative_to(base_resolved)
+            except ValueError:
+                raise InvalidArtifactPathError(
+                    f"Path '{artifact_path}' resolves outside the storage directory"
+                )
+
+    # Final path construction (may include non-existent components)
+    full_path = base_resolved / artifact_path
+
+    # For non-existent paths, also check using non-strict resolve to catch
+    # ".." segments that could escape the base directory
+    try:
+        resolved_full = full_path.resolve(strict=False)
+    except OSError as e:
+        raise InvalidArtifactPathError(f"Path '{artifact_path}' cannot be resolved: {e}")
+
+    try:
+        resolved_full.relative_to(base_resolved)
     except ValueError:
         raise InvalidArtifactPathError(
             f"Path '{artifact_path}' resolves outside the storage directory"
         )
 
     # Additional check: ensure it's not the base directory itself
-    if full_path == base_resolved:
+    if resolved_full == base_resolved:
         raise InvalidArtifactPathError("Artifact path cannot resolve to storage root")
 
     return full_path
@@ -109,17 +161,55 @@ def verify_path_is_descendant(base: Path, artifact_path: str) -> Path:
 RESERVED_SEGMENTS = {"blobs", "metadata", ".magpie"}
 
 
-def artifact_dir_path(base: Path, artifact_path: str) -> Path:
+def artifact_dir_path(base: Path, artifact_path: str, verify_security: bool = True) -> Path:
     """Construct artifact directory path from base and artifact path.
+
+    Security: By default, this function verifies that the resolved path remains
+    within the storage base directory. This protects against symlink attacks
+    where a symlink inside storage could point to files outside storage.
 
     Args:
         base: Base storage directory path.
         artifact_path: Logical artifact path (e.g., "project/component/artifact").
+        verify_security: If True (default), verify the resolved path (following
+            symlinks) stays within ``base``. This must remain enabled for any
+            path derived from user input or external callers.
+
+            Set to False only for trusted internal operations that:
+
+            * never accept untrusted/user-supplied paths, and
+            * operate on paths that have already been validated and persisted
+              (for example, paths recovered from an internal index or metadata
+              store that was created using :func:`verify_path_is_descendant`).
+
+            Example (internal maintenance job)::
+
+                base = Path("/var/lib/magpie/storage")
+                # 'stored_path' is read from Magpie's own metadata and was
+                # originally created via normalize_artifact_path() and
+                # verify_path_is_descendant(), not from user input.
+                stored_path = "project/component/artifact"
+                artifact_dir_path(base, stored_path, verify_security=False)
+                # Returns: PosixPath('/var/lib/magpie/storage/project/component/artifact')
+
+            Do not disable security checks for raw request parameters or CLI
+            arguments.
 
     Returns:
         Full path to artifact directory.
+
+    Raises:
+        InvalidArtifactPathError: If verify_security is True and the resolved
+            path would escape the base directory (e.g., via symlink), or if
+            the path contains cyclic symlinks.
     """
-    return base / artifact_path
+    result = base / artifact_path
+    if verify_security:
+        # Delegate security verification to shared helper to avoid duplication.
+        # This will raise InvalidArtifactPathError if the resolved path escapes base
+        # or if there are cyclic symlinks.
+        verify_path_is_descendant(base, artifact_path)
+    return result
 
 
 def blob_path(artifact_dir: Path, hash_ref: str) -> Path:
@@ -206,7 +296,7 @@ def validate_artifact_path(artifact_path: str) -> None:
             raise InvalidArtifactPathError("Path segments cannot start with '.'")
 
 
-def check_artifact_nesting(base: Path, artifact_path: str) -> None:
+def check_artifact_nesting(base: Path, artifact_path: str, verify_security: bool = True) -> None:
     """Check that artifact path does not nest with existing artifacts.
 
     Prevents creating artifacts that:
@@ -225,11 +315,15 @@ def check_artifact_nesting(base: Path, artifact_path: str) -> None:
     Args:
         base: Base storage directory path.
         artifact_path: Logical artifact path to check.
+        verify_security: If True (default), verify the resolved path stays within
+            base via symlink-aware validation. Set to False only when the caller
+            will perform security verification separately to avoid redundant
+            filesystem operations.
 
     Raises:
         InvalidArtifactPathError: If path would nest with existing artifacts.
     """
-    proposed_dir = artifact_dir_path(base, artifact_path)
+    proposed_dir = artifact_dir_path(base, artifact_path, verify_security=verify_security)
 
     # Check if proposed path is a child of an existing artifact
     # (test/myartifact/nested when test/myartifact exists)
