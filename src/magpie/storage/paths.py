@@ -75,7 +75,9 @@ def verify_path_is_descendant(base: Path, artifact_path: str) -> Path:
         artifact_path: Normalized artifact path string (no ".." segments).
 
     Returns:
-        The resolved full path if it is a valid descendant.
+        The unresolved (logical) path after verifying that any existing symlinks
+        in the path do not escape the base directory. Returns ``base / artifact_path``
+        rather than a resolved path, since the artifact may not exist yet.
 
     Raises:
         InvalidArtifactPathError: If the resolved path escapes the base directory,
