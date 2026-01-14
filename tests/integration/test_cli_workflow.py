@@ -13,123 +13,21 @@ from __future__ import annotations
 import hashlib
 import io
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
 from magpie.cli import cli
 from magpie.storage.service import StorageService
-from tests.integration.conftest import upload_test_artifact
+from tests.integration.conftest import (
+    MockClientWithDownload,
+    MockStreamResponse,
+    upload_test_artifact,
+)
 
 # Patch path for get_client - must match where it's imported/used in the CLI module
 PATCH_GET_CLIENT = "magpie.cli.get_client"
-
-
-class MockStreamResponse:
-    """Mock streaming response for download tests."""
-
-    def __init__(self, status_code: int, content: bytes) -> None:
-        self.status_code = status_code
-        self._content = content
-        self.headers = {"content-length": str(len(content))}
-
-    def iter_bytes(self):
-        """Yield content in chunks."""
-        yield self._content
-
-    def read(self) -> bytes:
-        """Read full response body."""
-        return self._content
-
-    def __enter__(self) -> "MockStreamResponse":
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        pass
-
-
-class MockClientWithDownload:
-    """Wrapper around TestClient that handles download endpoints.
-
-    The /artifacts/{path}/{hash_ref} download path isn't a real API endpoint -
-    it's typically served by a static file server. This wrapper intercepts
-    those requests and returns the appropriate content.
-    """
-
-    def __init__(self, api_client: TestClient, storage_service: StorageService) -> None:
-        self.api_client = api_client
-        self.storage_service = storage_service
-
-    def get(self, url: str) -> MagicMock:
-        """Handle GET requests, routing downloads to storage."""
-        if url.startswith("/artifacts/"):
-            return self._handle_download(url)
-        return self.api_client.get(url)
-
-    def stream(self, method: str, url: str) -> MockStreamResponse:
-        """Handle streaming requests for downloads."""
-        if method == "GET" and url.startswith("/artifacts/"):
-            return self._handle_stream_download(url)
-        response = self.api_client.get(url)
-        return MockStreamResponse(response.status_code, response.content)
-
-    def post(self, url: str, **kwargs: object) -> MagicMock:
-        """Delegate POST to api_client."""
-        return self.api_client.post(url, **kwargs)
-
-    def delete(self, url: str, **kwargs: object) -> MagicMock:
-        """Delegate DELETE to api_client."""
-        return self.api_client.delete(url, **kwargs)
-
-    def patch(self, url: str, **kwargs: object) -> MagicMock:
-        """Delegate PATCH to api_client."""
-        return self.api_client.patch(url, **kwargs)
-
-    def _get_download_content(self, url: str) -> tuple[int, bytes]:
-        """Get download content and status code for a URL."""
-        from magpie.storage.blob import read_blob
-        from magpie.storage.paths import artifact_dir_path
-
-        parts = url.split("/")
-
-        if "blobs" in parts:
-            # Pattern: /artifacts/{path}/blobs/{hash}
-            blobs_idx = parts.index("blobs")
-            path = "/".join(parts[2:blobs_idx])
-            hash_ref = "@" + parts[blobs_idx + 1]
-        else:
-            # Pattern: /artifacts/{path}/{hash_ref}
-            hash_ref = parts[-1]
-            path = "/".join(parts[2:-1])
-
-        try:
-            info = self.storage_service.get_artifact_info(path, hash_ref)
-            artifact_dir = artifact_dir_path(self.storage_service.config.storage_path, path)
-            blob_file = read_blob(artifact_dir, info.hash)
-            content = blob_file.read_bytes()
-            return 200, content
-        except Exception:
-            return 404, b""
-
-    def _handle_download(self, url: str) -> MagicMock:
-        """Handle download from /artifacts/ URL."""
-        status_code, content = self._get_download_content(url)
-        response = MagicMock()
-        response.status_code = status_code
-        response.content = content
-        return response
-
-    def _handle_stream_download(self, url: str) -> MockStreamResponse:
-        """Handle streaming download from /artifacts/ URLs."""
-        status_code, content = self._get_download_content(url)
-        return MockStreamResponse(status_code, content)
-
-    def __enter__(self) -> "MockClientWithDownload":
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        pass
 
 
 class TestMultiSegmentPathPush:
@@ -695,6 +593,7 @@ class TestHashRefVsTagRetrieval:
         test_content = b"content for path verification"
         files = {"file": ("artifact.bin", io.BytesIO(test_content), "application/octet-stream")}
         upload_response = api_client.post("/api/v1/upload/pathtest/verify", files=files)
+        assert upload_response.status_code == 200
         upload_data = upload_response.json()
         hash_ref = upload_data["hash_ref"]
 
@@ -761,12 +660,14 @@ class TestHashRefVsTagRetrieval:
         content_v1 = b"version 1 content"
         files_v1 = {"file": ("artifact.bin", io.BytesIO(content_v1), "application/octet-stream")}
         upload_v1 = api_client.post("/api/v1/upload/versions/test", files=files_v1)
+        assert upload_v1.status_code == 200
         hash_ref_v1 = upload_v1.json()["hash_ref"]
 
         # Upload second version (this becomes "latest")
         content_v2 = b"version 2 content - different"
         files_v2 = {"file": ("artifact.bin", io.BytesIO(content_v2), "application/octet-stream")}
-        api_client.post("/api/v1/upload/versions/test", files=files_v2)
+        upload_v2 = api_client.post("/api/v1/upload/versions/test", files=files_v2)
+        assert upload_v2.status_code == 200
 
         mock_client = MockClientWithDownload(api_client, test_storage_service)
 
