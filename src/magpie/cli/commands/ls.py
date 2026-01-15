@@ -50,7 +50,8 @@ def ls(ctx: CLIContext, artifact_path: str | None) -> None:
 
     with ctx.get_client() as client:
         # Case 1: No path provided - list all artifact paths
-        if not artifact_path:
+        # Also treat "/" as empty (user may intuitively use "/" to mean "root"/all)
+        if not artifact_path or artifact_path.strip("/") == "":
             _list_paths(ctx, client, "")
             return
 

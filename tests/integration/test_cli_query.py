@@ -129,6 +129,31 @@ class TestLsCommand:
         # Should NOT list other paths
         assert "images/ubuntu" not in result.output
 
+    def test_ls_with_root_slash_lists_all(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Ls with "/" treats it as listing all artifacts."""
+        # Upload artifacts at different paths
+        upload_test_artifact(api_client, "test/artifact1", b"content1")
+        upload_test_artifact(api_client, "test/artifact2", b"content2")
+        upload_test_artifact(api_client, "images/ubuntu", b"content3")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "ls", "/"],
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        # Should list all paths, one per line (same as no argument)
+        assert "test/artifact1" in result.output
+        assert "test/artifact2" in result.output
+        assert "images/ubuntu" in result.output
+        # Should NOT show table headers (not listing versions)
+        assert "HASH" not in result.output
+
     def test_ls_with_leading_slash_normalizes(
         self, cli_runner: CliRunner, api_client: TestClient
     ) -> None:
