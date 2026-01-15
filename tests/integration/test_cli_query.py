@@ -132,7 +132,7 @@ class TestLsCommand:
     def test_ls_with_root_slash_lists_all(
         self, cli_runner: CliRunner, api_client: TestClient
     ) -> None:
-        """Ls with "/" treats it as listing all artifacts."""
+        """Test that 'magpie ls /' lists all artifacts instead of showing an error."""
         # Upload artifacts at different paths
         upload_test_artifact(api_client, "test/artifact1", b"content1")
         upload_test_artifact(api_client, "test/artifact2", b"content2")
