@@ -164,11 +164,11 @@
 	}
 
 	# Artifact read operations (GET only) - public access
-	# Matches: GET /api/v1/artifacts/{path}, GET /api/v1/artifacts/{path}/{ref}/info
+	# Matches: GET /api/v1/artifacts, GET /api/v1/artifacts/{path}, GET /api/v1/artifacts/{path}/{ref}/info
 	# Note: POST/DELETE to /artifacts/*/tags* are handled by protected routes below
 	@artifacts_read {
 		method GET
-		path_regexp read ^/api/v1/artifacts/.+
+		path /api/v1/artifacts*
 	}
 	handle @artifacts_read {
 		reverse_proxy magpie:8000
@@ -204,7 +204,7 @@
 	# Matches: PATCH /api/v1/artifacts/{path}/{ref}
 	@artifacts_amend {
 		method PATCH
-		path_regexp amend ^/api/v1/artifacts/.+
+		path /api/v1/artifacts*
 	}
 	handle @artifacts_amend {
 		forward_auth magpie:8000 {
@@ -218,7 +218,8 @@
 	# Matches: POST /api/v1/artifacts/{path}/{ref}/tags
 	#          DELETE /api/v1/artifacts/{path}/tags/{tag_name}
 	@artifacts_tags {
-		path_regexp tags ^/api/v1/artifacts/.+/tags
+		method POST DELETE
+		path /api/v1/artifacts/*/tags*
 	}
 	handle @artifacts_tags {
 		forward_auth magpie:8000 {

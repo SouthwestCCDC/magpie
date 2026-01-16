@@ -1,0 +1,1097 @@
+#!/bin/bash
+# Magpie Artifact Storage - Installer Script
+#
+# Installs and manages magpie on Debian 12/13 using Docker Compose.
+#
+# Usage:
+#   install.sh install [options]    Install magpie
+#   install.sh update               Update to latest version
+#   install.sh uninstall [options]  Remove magpie
+#   install.sh status               Show service status
+#   install.sh logs [options]       View container logs
+#
+# For detailed help: install.sh --help
+
+set -euo pipefail
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+SCRIPT_VERSION="1.0.0"
+SCRIPT_NAME="$(basename "$0")"
+GITHUB_REPO="SouthwestCCDC/magpie"
+GITHUB_BRANCH="default"
+
+# Default configuration
+DEFAULT_INSTALL_DIR="/opt/magpie"
+DEFAULT_TLS_MODE="off"
+DEFAULT_HTTP_PORT="8080"
+DEFAULT_HTTPS_PORT="8443"
+DEFAULT_TRUSTED_PROXIES="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+
+# =============================================================================
+# Global variables (populated during config)
+# =============================================================================
+
+INSTALL_DIR=""
+DATA_DIR=""
+TLS_MODE=""
+DOMAIN=""
+HTTP_PORT=""
+HTTPS_PORT=""
+TLS_CERT=""
+TLS_KEY=""
+TRUSTED_PROXIES=""
+NONINTERACTIVE="false"
+FORCE="false"
+PURGE="false"
+YES="false"
+FOLLOW="false"
+LINES="100"
+
+# =============================================================================
+# Helper functions
+# =============================================================================
+
+log() {
+    echo "[magpie] $*"
+}
+
+log_error() {
+    echo "[magpie] ERROR: $*" >&2
+}
+
+log_warn() {
+    echo "[magpie] WARNING: $*" >&2
+}
+
+die() {
+    log_error "$@"
+    exit 1
+}
+
+confirm() {
+    local prompt="$1"
+    if [[ "$YES" == "true" ]]; then
+        return 0
+    fi
+    if [[ "$NONINTERACTIVE" == "true" ]]; then
+        die "Cannot prompt in noninteractive mode. Use --yes to skip confirmations."
+    fi
+    read -r -p "[magpie] $prompt [y/N] " response
+    case "$response" in
+        [yY][eE][sS]|[yY]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+prompt_value() {
+    local prompt="$1"
+    local default="$2"
+    local var_name="$3"
+
+    if [[ "$NONINTERACTIVE" == "true" ]]; then
+        # Use default in noninteractive mode
+        printf -v "$var_name" '%s' "$default"
+        return
+    fi
+
+    local display_default=""
+    [[ -n "$default" ]] && display_default=" [$default]"
+
+    read -r -p "[magpie] $prompt$display_default: " value
+    if [[ -z "$value" ]]; then
+        printf -v "$var_name" '%s' "$default"
+    else
+        printf -v "$var_name" '%s' "$value"
+    fi
+}
+
+prompt_choice() {
+    local prompt="$1"
+    local options="$2"  # Space-separated
+    local default="$3"
+    local var_name="$4"
+
+    if [[ "$NONINTERACTIVE" == "true" ]]; then
+        printf -v "$var_name" '%s' "$default"
+        return
+    fi
+
+    echo "[magpie] $prompt"
+    local i=1
+    local opt_array=()
+    for opt in $options; do
+        opt_array+=("$opt")
+        local marker=""
+        [[ "$opt" == "$default" ]] && marker=" (default)"
+        echo "  $i) $opt$marker"
+        ((i++))
+    done
+
+    while true; do
+        read -r -p "[magpie] Enter choice [1-${#opt_array[@]}]: " choice
+        if [[ -z "$choice" ]]; then
+            printf -v "$var_name" '%s' "$default"
+            return
+        fi
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#opt_array[@]} )); then
+            printf -v "$var_name" '%s' "${opt_array[$((choice-1))]}"
+            return
+        fi
+        echo "[magpie] Invalid choice. Please enter a number between 1 and ${#opt_array[@]}."
+    done
+}
+
+# =============================================================================
+# Prerequisite checks
+# =============================================================================
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        die "This script must be run as root"
+    fi
+}
+
+check_os() {
+    if [[ ! -f /etc/os-release ]]; then
+        die "Cannot detect OS (missing /etc/os-release)"
+    fi
+
+    # shellcheck source=/dev/null
+    source /etc/os-release
+
+    if [[ "${ID:-}" != "debian" ]]; then
+        die "This script requires Debian (found: ${ID:-unknown})"
+    fi
+
+    if [[ ! "${VERSION_ID:-}" =~ ^(12|13)$ ]]; then
+        die "This script requires Debian 12 or 13 (found: ${VERSION_ID:-unknown})"
+    fi
+
+    log "Detected Debian ${VERSION_ID}"
+}
+
+check_docker() {
+    if ! command -v docker &>/dev/null; then
+        die "Docker is not installed. Install Docker first: https://docs.docker.com/engine/install/debian/"
+    fi
+
+    if ! docker compose version &>/dev/null; then
+        die "Docker Compose v2 is not installed. Install the docker-compose-plugin package."
+    fi
+
+    if ! docker info &>/dev/null; then
+        die "Docker daemon is not running. Start it with: systemctl start docker"
+    fi
+
+    log "Docker and Docker Compose v2 available"
+}
+
+check_curl() {
+    if ! command -v curl &>/dev/null; then
+        die "curl is not installed. Install it with: apt-get install curl"
+    fi
+    log "curl available"
+}
+
+check_git() {
+    if ! command -v git &>/dev/null; then
+        die "git is not installed. Install it with: apt-get install git"
+    fi
+    log "git available"
+}
+
+check_prerequisites() {
+    check_root
+    check_os
+    check_curl
+    check_git
+    check_docker
+}
+
+# =============================================================================
+# Configuration validation
+# =============================================================================
+
+validate_config() {
+    local errors=()
+
+    # TLS mode validation
+    case "$TLS_MODE" in
+        off|auto|manual) ;;
+        *) errors+=("Invalid TLS mode: $TLS_MODE (must be off, auto, or manual)") ;;
+    esac
+
+    # Domain required for TLS
+    if [[ "$TLS_MODE" != "off" ]] && [[ -z "$DOMAIN" ]]; then
+        errors+=("Domain is required for TLS mode '$TLS_MODE'")
+    fi
+
+    # Certificate paths for manual TLS
+    if [[ "$TLS_MODE" == "manual" ]]; then
+        if [[ -z "$TLS_CERT" ]]; then
+            errors+=("TLS certificate path required for manual TLS mode (--tls-cert)")
+        elif [[ ! -f "$TLS_CERT" ]]; then
+            errors+=("TLS certificate not found: $TLS_CERT")
+        fi
+
+        if [[ -z "$TLS_KEY" ]]; then
+            errors+=("TLS key path required for manual TLS mode (--tls-key)")
+        elif [[ ! -f "$TLS_KEY" ]]; then
+            errors+=("TLS key not found: $TLS_KEY")
+        fi
+    fi
+
+    # Port validation
+    if ! [[ "$HTTP_PORT" =~ ^[0-9]+$ ]] || (( HTTP_PORT < 1 || HTTP_PORT > 65535 )); then
+        errors+=("Invalid HTTP port: $HTTP_PORT")
+    fi
+
+    if ! [[ "$HTTPS_PORT" =~ ^[0-9]+$ ]] || (( HTTPS_PORT < 1 || HTTPS_PORT > 65535 )); then
+        errors+=("Invalid HTTPS port: $HTTPS_PORT")
+    fi
+
+    # Directory validation
+    if [[ -z "$INSTALL_DIR" ]]; then
+        errors+=("Install directory cannot be empty")
+    fi
+
+    if [[ ${#errors[@]} -gt 0 ]]; then
+        log_error "Configuration validation failed:"
+        for err in "${errors[@]}"; do
+            echo "  - $err" >&2
+        done
+        exit 1
+    fi
+}
+
+# =============================================================================
+# Installation state checks
+# =============================================================================
+
+check_existing_installation() {
+    if [[ -d "$INSTALL_DIR" ]]; then
+        if [[ "$FORCE" != "true" ]]; then
+            die "Installation directory already exists: $INSTALL_DIR\nUse --force to overwrite, or 'update' to update existing installation."
+        fi
+
+        log_warn "Overwriting existing installation at $INSTALL_DIR"
+
+        # Stop existing services gracefully
+        if systemctl is-active magpie.service &>/dev/null; then
+            log "Stopping existing services..."
+            systemctl stop magpie.service || true
+        fi
+    fi
+}
+
+verify_installation() {
+    if [[ ! -d "$INSTALL_DIR" ]]; then
+        die "Magpie is not installed at $INSTALL_DIR\nRun '$SCRIPT_NAME install' first."
+    fi
+
+    if [[ ! -f "${INSTALL_DIR}/etc/.env" ]]; then
+        die "Configuration not found at ${INSTALL_DIR}/etc/.env"
+    fi
+}
+
+load_existing_config() {
+    if [[ -f "${INSTALL_DIR}/etc/.env" ]]; then
+        # shellcheck source=/dev/null
+        source "${INSTALL_DIR}/etc/.env"
+
+        # Map env vars to script variables
+        DATA_DIR="${MAGPIE_DATA_DIR:-$DATA_DIR}"
+        HTTP_PORT="${MAGPIE_HTTP_PORT:-$HTTP_PORT}"
+        HTTPS_PORT="${MAGPIE_HTTPS_PORT:-$HTTPS_PORT}"
+        DOMAIN="${MAGPIE_DOMAIN:-$DOMAIN}"
+    fi
+}
+
+# =============================================================================
+# Configuration gathering (interactive)
+# =============================================================================
+
+gather_config() {
+    log "Gathering configuration..."
+
+    # Install directory
+    if [[ -z "$INSTALL_DIR" ]]; then
+        prompt_value "Installation directory" "$DEFAULT_INSTALL_DIR" INSTALL_DIR
+    fi
+
+    # Data directory
+    if [[ -z "$DATA_DIR" ]]; then
+        DATA_DIR="${INSTALL_DIR}/data"
+        prompt_value "Data storage directory" "$DATA_DIR" DATA_DIR
+    fi
+
+    # TLS mode
+    if [[ -z "$TLS_MODE" ]]; then
+        prompt_choice "TLS mode" "off auto manual" "$DEFAULT_TLS_MODE" TLS_MODE
+    fi
+
+    # Domain (if TLS enabled)
+    if [[ "$TLS_MODE" != "off" ]] && [[ -z "$DOMAIN" ]]; then
+        prompt_value "Domain name (e.g., magpie.example.com)" "" DOMAIN
+    fi
+
+    # Certificate paths (if manual TLS)
+    if [[ "$TLS_MODE" == "manual" ]]; then
+        if [[ -z "$TLS_CERT" ]]; then
+            prompt_value "TLS certificate path" "" TLS_CERT
+        fi
+        if [[ -z "$TLS_KEY" ]]; then
+            prompt_value "TLS private key path" "" TLS_KEY
+        fi
+    fi
+
+    # Ports
+    if [[ -z "$HTTP_PORT" ]]; then
+        HTTP_PORT="$DEFAULT_HTTP_PORT"
+    fi
+    if [[ -z "$HTTPS_PORT" ]]; then
+        HTTPS_PORT="$DEFAULT_HTTPS_PORT"
+    fi
+
+    # Trusted proxies
+    if [[ -z "$TRUSTED_PROXIES" ]]; then
+        TRUSTED_PROXIES="$DEFAULT_TRUSTED_PROXIES"
+    fi
+}
+
+# =============================================================================
+# File generation
+# =============================================================================
+
+generate_env_file() {
+    log "Generating environment configuration..."
+
+    cat > "${INSTALL_DIR}/etc/.env" << EOF
+# Magpie configuration
+# Generated by install.sh v${SCRIPT_VERSION} on $(date -Iseconds)
+# Re-run 'install.sh install --force' to regenerate
+
+# Docker Compose settings
+MAGPIE_DATA_DIR=${DATA_DIR}
+MAGPIE_HTTP_PORT=${HTTP_PORT}
+MAGPIE_HTTPS_PORT=${HTTPS_PORT}
+MAGPIE_DOMAIN=${DOMAIN:-}
+
+# Server settings
+MAGPIE_DEBUG=false
+MAGPIE_LOG_FORMAT=json
+MAGPIE_RETENTION_DAYS=90
+EOF
+}
+
+generate_caddyfile() {
+    # Generate Caddyfile by copying and patching Caddyfile.prod from repo
+    # This ensures route definitions stay in sync with the canonical source
+    # See issue #156 for planned templating improvements
+
+    local source_caddyfile="${INSTALL_DIR}/repo/Caddyfile.prod"
+    local dest_caddyfile="${INSTALL_DIR}/etc/Caddyfile"
+
+    if [[ ! -f "$source_caddyfile" ]]; then
+        die "Caddyfile.prod not found in cloned repo: $source_caddyfile"
+    fi
+
+    log "Generating Caddyfile (TLS mode: ${TLS_MODE})..."
+
+    case "$TLS_MODE" in
+        off)
+            # HTTP-only mode for running behind a reverse proxy
+            # - Replace site address with http://:80
+            # - Add trusted_proxies for client IP preservation
+            # - Remove HSTS header (not applicable to HTTP)
+
+            # Start with header comment
+            cat > "$dest_caddyfile" << EOF
+# Magpie Caddyfile - TLS Mode: off (HTTP only, behind reverse proxy)
+# Generated by install.sh v${SCRIPT_VERSION} from Caddyfile.prod
+#
+# Caddy listens on port 80 inside the container.
+# Docker maps host:${HTTP_PORT} -> container:80
+
+EOF
+            # Copy the global options block, adding trusted_proxies
+            cat >> "$dest_caddyfile" << EOF
+{
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+	admin off
+
+	servers {
+		trusted_proxies static ${TRUSTED_PROXIES}
+	}
+}
+
+EOF
+            # Extract the site block contents (everything between the site address and final closing brace)
+            # and wrap it with http://:80
+            echo "http://:80 {" >> "$dest_caddyfile"
+
+            # Extract route definitions from Caddyfile.prod (skip global block and site address)
+            # Start after the site block opening, end before final closing brace
+            sed -n '/^{\$MAGPIE_DOMAIN}/,/^}$/p' "$source_caddyfile" | \
+                sed '1d;$d' | \
+                sed '/Strict-Transport-Security/d' >> "$dest_caddyfile"
+
+            echo "}" >> "$dest_caddyfile"
+            ;;
+
+        auto)
+            # Let's Encrypt automatic TLS
+            # - Replace {$MAGPIE_DOMAIN} with actual domain
+            cp "$source_caddyfile" "$dest_caddyfile"
+            sed -i "s/{\\\$MAGPIE_DOMAIN}/${DOMAIN}/g" "$dest_caddyfile"
+
+            # Add generation header
+            sed -i "1i# Generated by install.sh v${SCRIPT_VERSION} (TLS mode: auto)" "$dest_caddyfile"
+            ;;
+
+        manual)
+            # Manual TLS with user-provided certificates
+            # - Replace {$MAGPIE_DOMAIN} with actual domain
+            # - Add tls directive with cert paths
+            cp "$source_caddyfile" "$dest_caddyfile"
+            sed -i "s/{\\\$MAGPIE_DOMAIN}/${DOMAIN}/g" "$dest_caddyfile"
+
+            # Add tls directive after the site address line
+            sed -i "/${DOMAIN} {/a\\	tls ${TLS_CERT} ${TLS_KEY}" "$dest_caddyfile"
+
+            # Add generation header
+            sed -i "1i# Generated by install.sh v${SCRIPT_VERSION} (TLS mode: manual)" "$dest_caddyfile"
+            ;;
+    esac
+
+    log "Caddyfile generated at ${dest_caddyfile}"
+}
+
+generate_systemd_service() {
+    log "Generating systemd service unit..."
+
+    cat > /etc/systemd/system/magpie.service << EOF
+# Magpie Artifact Storage Service
+# Generated by install.sh v${SCRIPT_VERSION}
+
+[Unit]
+Description=Magpie Artifact Storage
+Documentation=https://github.com/${GITHUB_REPO}
+After=network-online.target docker.service
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${INSTALL_DIR}
+EnvironmentFile=${INSTALL_DIR}/etc/.env
+
+ExecStart=/usr/bin/docker compose --env-file ${INSTALL_DIR}/etc/.env up --no-build
+ExecStop=/usr/bin/docker compose --env-file ${INSTALL_DIR}/etc/.env down
+
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=magpie
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+generate_gc_units() {
+    log "Generating GC timer units..."
+
+    cat > /etc/systemd/system/magpie-gc.service << EOF
+# Magpie Garbage Collection Service
+# Generated by install.sh v${SCRIPT_VERSION}
+
+[Unit]
+Description=Magpie Garbage Collection
+Documentation=https://github.com/${GITHUB_REPO}
+After=network.target docker.service
+Requires=docker.service
+
+ConditionPathExists=!/var/run/magpie-gc.lock
+
+[Service]
+Type=oneshot
+WorkingDirectory=${INSTALL_DIR}
+
+ExecStartPre=/bin/sh -c 'echo \$\$ > /var/run/magpie-gc.lock'
+ExecStopPost=/bin/rm -f /var/run/magpie-gc.lock
+
+ExecStart=/usr/bin/docker compose --env-file ${INSTALL_DIR}/etc/.env run --rm -T magpie magpie-ctl gc --quiet
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=magpie-gc
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/run
+
+TimeoutStartSec=3600
+EOF
+
+    cat > /etc/systemd/system/magpie-gc.timer << 'EOF'
+# Magpie Garbage Collection Timer
+# Generated by install.sh
+
+[Unit]
+Description=Magpie Garbage Collection Timer
+Documentation=https://github.com/SouthwestCCDC/magpie
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+RandomizedDelaySec=1800
+Persistent=true
+AccuracySec=60
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
+# =============================================================================
+# Repository and image handling
+# =============================================================================
+
+clone_repo() {
+    log "Cloning magpie repository..."
+
+    local repo_url="https://github.com/${GITHUB_REPO}.git"
+    local repo_dir="${INSTALL_DIR}/repo"
+
+    # Remove existing repo if present
+    rm -rf "$repo_dir"
+
+    # Shallow clone for speed
+    if ! git clone --depth 1 --branch "$GITHUB_BRANCH" "$repo_url" "$repo_dir"; then
+        die "Failed to clone repository from $repo_url"
+    fi
+
+    # Copy compose files to install directory
+    cp "${repo_dir}/docker-compose.yml" "${INSTALL_DIR}/"
+    cp "${repo_dir}/docker-compose.prod.yml" "${INSTALL_DIR}/" 2>/dev/null || true
+
+    log "Repository cloned successfully"
+}
+
+patch_compose_for_caddyfile() {
+    # Patch docker-compose.yml to mount our generated Caddyfile
+    log "Patching Docker Compose for custom Caddyfile..."
+
+    local compose_file="${INSTALL_DIR}/docker-compose.yml"
+    local pattern="./Caddyfile:/etc/caddy/Caddyfile:ro"
+
+    # Validate that the pattern exists before patching
+    if ! grep -q "$pattern" "$compose_file"; then
+        die "Cannot patch docker-compose.yml: expected Caddyfile mount pattern not found.\nExpected: $pattern"
+    fi
+
+    # Replace the Caddyfile mount path
+    sed -i "s|./Caddyfile:/etc/caddy/Caddyfile:ro|${INSTALL_DIR}/etc/Caddyfile:/etc/caddy/Caddyfile:ro|g" \
+        "$compose_file"
+
+    # Validate that the replacement succeeded
+    if grep -q "$pattern" "$compose_file"; then
+        die "Failed to patch docker-compose.yml: Caddyfile mount pattern was not replaced"
+    fi
+
+    if ! grep -q "${INSTALL_DIR}/etc/Caddyfile:/etc/caddy/Caddyfile:ro" "$compose_file"; then
+        die "Failed to patch docker-compose.yml: new Caddyfile mount path not found after replacement"
+    fi
+}
+
+build_images() {
+    log "Building magpie Docker image (this may take a few minutes)..."
+
+    cd "${INSTALL_DIR}/repo"
+
+    if ! docker build -t magpie:latest .; then
+        die "Failed to build magpie image"
+    fi
+
+    log "Image built successfully"
+}
+
+patch_compose_for_local_image() {
+    # Replace 'build: .' with 'image: magpie:latest' so we use our pre-built image
+    log "Configuring Docker Compose to use local image..."
+
+    sed -i 's|build: \.|image: magpie:latest|g' "${INSTALL_DIR}/docker-compose.yml"
+}
+
+# =============================================================================
+# Service management
+# =============================================================================
+
+pull_images() {
+    log "Pulling Docker images..."
+    cd "$INSTALL_DIR"
+    docker compose --env-file "${INSTALL_DIR}/etc/.env" pull
+}
+
+start_services() {
+    log "Starting services..."
+    systemctl daemon-reload
+    systemctl enable magpie.service
+    systemctl enable magpie-gc.timer
+    systemctl start magpie.service
+    systemctl start magpie-gc.timer
+}
+
+wait_for_healthy() {
+    log "Waiting for services to be healthy..."
+
+    local max_attempts=30
+    local attempt=1
+    local health_url="http://127.0.0.1:${HTTP_PORT}/health"
+
+    while (( attempt <= max_attempts )); do
+        if curl -sf "$health_url" >/dev/null 2>&1; then
+            log "Services are healthy"
+            return 0
+        fi
+        echo -n "."
+        sleep 2
+        ((attempt++))
+    done
+
+    echo ""
+    log_warn "Services may not be fully healthy. Check 'magpie logs' for details."
+}
+
+run_init() {
+    log "Initializing database..."
+
+    cd "$INSTALL_DIR"
+
+    # Retry logic for container exec (container may need time to start)
+    local max_retries=5
+    local retry_delay=5
+    local attempt=1
+    local output
+    local init_success=false
+
+    while (( attempt <= max_retries )); do
+        log "Attempting database initialization (attempt $attempt/$max_retries)..."
+
+        if output=$(docker compose --env-file "${INSTALL_DIR}/etc/.env" exec -T magpie magpie-ctl init 2>&1); then
+            init_success=true
+            break
+        fi
+
+        # Check if it's a "container not running" type error vs actual init failure
+        if echo "$output" | grep -qiE "(already initialized|admin token already exists)"; then
+            # Not an error - database was already initialized
+            log "Database already initialized"
+            return 0
+        fi
+
+        if echo "$output" | grep -qiE "(no container|not running|is not running)"; then
+            log_warn "Container not ready, waiting ${retry_delay}s before retry..."
+            sleep "$retry_delay"
+            ((attempt++))
+        else
+            # Some other error - might be transient, retry anyway
+            log_warn "Init attempt failed: $output"
+            sleep "$retry_delay"
+            ((attempt++))
+        fi
+    done
+
+    if [[ "$init_success" != "true" ]]; then
+        die "Failed to initialize database after $max_retries attempts.\nLast error: $output\nCheck container logs with: $SCRIPT_NAME logs"
+    fi
+
+    # Extract admin token from output
+    local token
+    token=$(echo "$output" | grep -Eo 'mgp_[[:alnum:]]+' || true)
+
+    if [[ -n "$token" ]]; then
+        echo ""
+        echo "=============================================="
+        echo "  IMPORTANT: Save your admin token!"
+        echo "=============================================="
+        echo ""
+        echo "  Admin token: $token"
+        echo ""
+        echo "  This token will not be shown again."
+        echo "  Store it securely for administrative access."
+        echo "=============================================="
+        echo ""
+    else
+        log "Database initialized (admin token already exists)"
+    fi
+}
+
+# =============================================================================
+# Commands
+# =============================================================================
+
+cmd_install() {
+    log "Starting magpie installation..."
+
+    check_prerequisites
+    gather_config
+    validate_config
+    check_existing_installation
+
+    # Create directory structure
+    log "Creating directory structure..."
+    mkdir -p "${INSTALL_DIR}/etc"
+    mkdir -p "${DATA_DIR}"
+
+    # Clone repo first (needed for Caddyfile.prod and Dockerfile)
+    clone_repo
+
+    # Generate configuration files
+    generate_env_file
+    generate_caddyfile  # Uses Caddyfile.prod from cloned repo
+    generate_systemd_service
+    generate_gc_units
+
+    # Build image and configure compose
+    build_images
+    patch_compose_for_caddyfile
+    patch_compose_for_local_image
+
+    # Pull Caddy image
+    log "Pulling Caddy image..."
+    docker pull caddy:2-alpine
+
+    # Start everything
+    start_services
+    wait_for_healthy
+    run_init
+
+    echo ""
+    log "Installation complete!"
+    echo ""
+    echo "  Installation directory: ${INSTALL_DIR}"
+    echo "  Data directory: ${DATA_DIR}"
+    echo "  TLS mode: ${TLS_MODE}"
+    if [[ "$TLS_MODE" == "off" ]]; then
+        echo "  Listening on: http://127.0.0.1:${HTTP_PORT}"
+        echo ""
+        echo "  Configure your reverse proxy to forward to this address."
+    else
+        echo "  Domain: ${DOMAIN}"
+    fi
+    echo ""
+    echo "  Manage with:"
+    echo "    systemctl status magpie"
+    echo "    $SCRIPT_NAME status"
+    echo "    $SCRIPT_NAME logs -f"
+    echo ""
+}
+
+cmd_update() {
+    log "Updating magpie..."
+
+    INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+    verify_installation
+    load_existing_config
+
+    cd "$INSTALL_DIR"
+
+    log "Pulling latest images..."
+    docker compose --env-file "${INSTALL_DIR}/etc/.env" pull
+
+    log "Restarting services..."
+    systemctl restart magpie.service
+
+    wait_for_healthy
+
+    log "Update complete!"
+}
+
+cmd_uninstall() {
+    log "Uninstalling magpie..."
+
+    INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+    verify_installation
+    load_existing_config
+
+    if [[ "$PURGE" == "true" ]]; then
+        if ! confirm "This will permanently delete all artifacts and data. Continue?"; then
+            log "Uninstall cancelled."
+            exit 0
+        fi
+    else
+        if ! confirm "This will stop and remove magpie (data will be preserved). Continue?"; then
+            log "Uninstall cancelled."
+            exit 0
+        fi
+    fi
+
+    log "Stopping services..."
+    systemctl stop magpie.service 2>/dev/null || true
+    systemctl stop magpie-gc.timer 2>/dev/null || true
+    systemctl disable magpie.service 2>/dev/null || true
+    systemctl disable magpie-gc.timer 2>/dev/null || true
+
+    cd "$INSTALL_DIR"
+    log "Removing containers and volumes..."
+    docker compose --env-file "${INSTALL_DIR}/etc/.env" down --volumes 2>/dev/null || true
+
+    log "Removing systemd units..."
+    rm -f /etc/systemd/system/magpie.service
+    rm -f /etc/systemd/system/magpie-gc.service
+    rm -f /etc/systemd/system/magpie-gc.timer
+    systemctl daemon-reload
+
+    if [[ "$PURGE" == "true" ]]; then
+        log "Removing data directory: ${DATA_DIR}"
+        rm -rf "${DATA_DIR}"
+    fi
+
+    log "Removing installation directory: ${INSTALL_DIR}"
+    rm -rf "${INSTALL_DIR}"
+
+    log "Uninstall complete!"
+    if [[ "$PURGE" != "true" ]]; then
+        echo "  Data directory preserved at: ${DATA_DIR}"
+        echo "  Use --purge to remove data as well."
+    fi
+}
+
+cmd_status() {
+    INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+    verify_installation
+    load_existing_config
+
+    echo "=== Magpie Status ==="
+    echo ""
+
+    echo "--- Systemd Service ---"
+    systemctl status magpie.service --no-pager 2>/dev/null || echo "  Service not running"
+    echo ""
+
+    echo "--- Container Status ---"
+    cd "$INSTALL_DIR"
+    docker compose --env-file "${INSTALL_DIR}/etc/.env" ps 2>/dev/null || echo "  No containers"
+    echo ""
+
+    echo "--- Health Check ---"
+    local health_url="http://127.0.0.1:${HTTP_PORT:-8080}/health"
+    if curl -sf "$health_url" >/dev/null 2>&1; then
+        echo "  API: healthy ($health_url)"
+    else
+        echo "  API: unhealthy or unreachable ($health_url)"
+    fi
+    echo ""
+
+    echo "--- GC Timer ---"
+    systemctl status magpie-gc.timer --no-pager 2>/dev/null || echo "  Timer not active"
+}
+
+cmd_logs() {
+    INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+    verify_installation
+
+    cd "$INSTALL_DIR"
+
+    local follow_flag=""
+    [[ "$FOLLOW" == "true" ]] && follow_flag="-f"
+
+    # shellcheck disable=SC2086
+    docker compose --env-file "${INSTALL_DIR}/etc/.env" logs $follow_flag --tail="$LINES" "$@"
+}
+
+# =============================================================================
+# Help and usage
+# =============================================================================
+
+show_help() {
+    cat << EOF
+Magpie Installer v${SCRIPT_VERSION}
+
+Usage: $SCRIPT_NAME <command> [options]
+
+Commands:
+  install     Install magpie (fresh installation)
+  update      Update to latest version
+  uninstall   Remove magpie
+  status      Show service status
+  logs        View container logs
+
+Install options:
+  --install-dir PATH      Installation directory (default: $DEFAULT_INSTALL_DIR)
+  --data-dir PATH         Data storage directory (default: INSTALL_DIR/data)
+  --tls-mode MODE         TLS mode: off, auto, manual (default: $DEFAULT_TLS_MODE)
+  --domain DOMAIN         Domain name (required for auto/manual TLS)
+  --tls-cert PATH         TLS certificate path (required for manual TLS)
+  --tls-key PATH          TLS key path (required for manual TLS)
+  --http-port PORT        HTTP port (default: $DEFAULT_HTTP_PORT)
+  --https-port PORT       HTTPS port (default: $DEFAULT_HTTPS_PORT)
+  --trusted-proxies CIDR  Trusted proxy CIDRs (default: RFC1918 ranges)
+  --noninteractive        Skip interactive prompts
+  --force                 Overwrite existing installation
+
+Uninstall options:
+  --yes, -y               Skip confirmation prompts
+  --purge                 Also remove data directory
+
+Logs options:
+  -f, --follow            Follow log output
+  -n, --lines N           Number of lines to show (default: 100)
+
+Examples:
+  # Interactive installation
+  sudo $SCRIPT_NAME install
+
+  # Non-interactive installation (HTTP-only, behind proxy)
+  sudo $SCRIPT_NAME install --tls-mode off --noninteractive
+
+  # Installation with Let's Encrypt
+  sudo $SCRIPT_NAME install --tls-mode auto --domain magpie.example.com
+
+  # Update existing installation
+  sudo $SCRIPT_NAME update
+
+  # View logs
+  sudo $SCRIPT_NAME logs -f
+
+  # Uninstall (preserve data)
+  sudo $SCRIPT_NAME uninstall
+
+  # Uninstall completely
+  sudo $SCRIPT_NAME uninstall --purge --yes
+
+EOF
+}
+
+# =============================================================================
+# Argument parsing
+# =============================================================================
+
+parse_args() {
+    local command=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            install|update|uninstall|status|logs)
+                command="$1"
+                shift
+                ;;
+            --install-dir)
+                INSTALL_DIR="$2"
+                shift 2
+                ;;
+            --data-dir)
+                DATA_DIR="$2"
+                shift 2
+                ;;
+            --tls-mode)
+                TLS_MODE="$2"
+                shift 2
+                ;;
+            --domain)
+                DOMAIN="$2"
+                shift 2
+                ;;
+            --tls-cert)
+                TLS_CERT="$2"
+                shift 2
+                ;;
+            --tls-key)
+                TLS_KEY="$2"
+                shift 2
+                ;;
+            --http-port)
+                HTTP_PORT="$2"
+                shift 2
+                ;;
+            --https-port)
+                HTTPS_PORT="$2"
+                shift 2
+                ;;
+            --trusted-proxies)
+                TRUSTED_PROXIES="$2"
+                shift 2
+                ;;
+            --noninteractive)
+                NONINTERACTIVE="true"
+                shift
+                ;;
+            --force)
+                FORCE="true"
+                shift
+                ;;
+            --purge)
+                PURGE="true"
+                shift
+                ;;
+            --yes|-y)
+                YES="true"
+                shift
+                ;;
+            --follow|-f)
+                FOLLOW="true"
+                shift
+                ;;
+            --lines|-n)
+                LINES="$2"
+                shift 2
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            --version|-v)
+                echo "$SCRIPT_NAME v${SCRIPT_VERSION}"
+                exit 0
+                ;;
+            -*)
+                die "Unknown option: $1\nUse --help for usage information."
+                ;;
+            *)
+                # Pass remaining args to command (e.g., service names for logs)
+                break
+                ;;
+        esac
+    done
+
+    if [[ -z "$command" ]]; then
+        show_help
+        exit 1
+    fi
+
+    # Execute command
+    case "$command" in
+        install) cmd_install ;;
+        update) cmd_update ;;
+        uninstall) cmd_uninstall ;;
+        status) cmd_status ;;
+        logs) cmd_logs "$@" ;;
+    esac
+}
+
+# =============================================================================
+# Main
+# =============================================================================
+
+main() {
+    if [[ $# -eq 0 ]]; then
+        show_help
+        exit 1
+    fi
+
+    parse_args "$@"
+}
+
+main "$@"
