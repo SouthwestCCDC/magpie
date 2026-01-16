@@ -93,7 +93,7 @@ prompt_value() {
 
     if [[ "$NONINTERACTIVE" == "true" ]]; then
         # Use default in noninteractive mode
-        eval "$var_name=\"$default\""
+        printf -v "$var_name" '%s' "$default"
         return
     fi
 
@@ -102,9 +102,9 @@ prompt_value() {
 
     read -r -p "[magpie] $prompt$display_default: " value
     if [[ -z "$value" ]]; then
-        eval "$var_name=\"$default\""
+        printf -v "$var_name" '%s' "$default"
     else
-        eval "$var_name=\"$value\""
+        printf -v "$var_name" '%s' "$value"
     fi
 }
 
@@ -115,7 +115,7 @@ prompt_choice() {
     local var_name="$4"
 
     if [[ "$NONINTERACTIVE" == "true" ]]; then
-        eval "$var_name=\"$default\""
+        printf -v "$var_name" '%s' "$default"
         return
     fi
 
@@ -133,11 +133,11 @@ prompt_choice() {
     while true; do
         read -r -p "[magpie] Enter choice [1-${#opt_array[@]}]: " choice
         if [[ -z "$choice" ]]; then
-            eval "$var_name=\"$default\""
+            printf -v "$var_name" '%s' "$default"
             return
         fi
         if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#opt_array[@]} )); then
-            eval "$var_name=\"${opt_array[$((choice-1))]}\""
+            printf -v "$var_name" '%s' "${opt_array[$((choice-1))]}"
             return
         fi
         echo "[magpie] Invalid choice. Please enter a number between 1 and ${#opt_array[@]}."
@@ -189,9 +189,25 @@ check_docker() {
     log "Docker and Docker Compose v2 available"
 }
 
+check_curl() {
+    if ! command -v curl &>/dev/null; then
+        die "curl is not installed. Install it with: apt-get install curl"
+    fi
+    log "curl available"
+}
+
+check_git() {
+    if ! command -v git &>/dev/null; then
+        die "git is not installed. Install it with: apt-get install git"
+    fi
+    log "git available"
+}
+
 check_prerequisites() {
     check_root
     check_os
+    check_curl
+    check_git
     check_docker
 }
 
@@ -577,9 +593,26 @@ patch_compose_for_caddyfile() {
     # Patch docker-compose.yml to mount our generated Caddyfile
     log "Patching Docker Compose for custom Caddyfile..."
 
+    local compose_file="${INSTALL_DIR}/docker-compose.yml"
+    local pattern="./Caddyfile:/etc/caddy/Caddyfile:ro"
+
+    # Validate that the pattern exists before patching
+    if ! grep -q "$pattern" "$compose_file"; then
+        die "Cannot patch docker-compose.yml: expected Caddyfile mount pattern not found.\nExpected: $pattern"
+    fi
+
     # Replace the Caddyfile mount path
     sed -i "s|./Caddyfile:/etc/caddy/Caddyfile:ro|${INSTALL_DIR}/etc/Caddyfile:/etc/caddy/Caddyfile:ro|g" \
-        "${INSTALL_DIR}/docker-compose.yml"
+        "$compose_file"
+
+    # Validate that the replacement succeeded
+    if grep -q "$pattern" "$compose_file"; then
+        die "Failed to patch docker-compose.yml: Caddyfile mount pattern was not replaced"
+    fi
+
+    if ! grep -q "${INSTALL_DIR}/etc/Caddyfile:/etc/caddy/Caddyfile:ro" "$compose_file"; then
+        die "Failed to patch docker-compose.yml: new Caddyfile mount path not found after replacement"
+    fi
 }
 
 build_images() {
@@ -646,33 +679,62 @@ run_init() {
 
     cd "$INSTALL_DIR"
 
-    # Wait a moment for the container to be ready
-    sleep 3
-
-    # Run init inside the container
+    # Retry logic for container exec (container may need time to start)
+    local max_retries=5
+    local retry_delay=5
+    local attempt=1
     local output
-    if output=$(docker compose --env-file "${INSTALL_DIR}/etc/.env" exec -T magpie magpie-ctl init 2>&1); then
-        # Extract admin token from output
-        local token
-        token=$(echo "$output" | grep -oP 'mgp_[a-zA-Z0-9]+' || true)
+    local init_success=false
 
-        if [[ -n "$token" ]]; then
-            echo ""
-            echo "=============================================="
-            echo "  IMPORTANT: Save your admin token!"
-            echo "=============================================="
-            echo ""
-            echo "  Admin token: $token"
-            echo ""
-            echo "  This token will not be shown again."
-            echo "  Store it securely for administrative access."
-            echo "=============================================="
-            echo ""
-        else
-            log "Database initialized (admin token already exists)"
+    while (( attempt <= max_retries )); do
+        log "Attempting database initialization (attempt $attempt/$max_retries)..."
+
+        if output=$(docker compose --env-file "${INSTALL_DIR}/etc/.env" exec -T magpie magpie-ctl init 2>&1); then
+            init_success=true
+            break
         fi
+
+        # Check if it's a "container not running" type error vs actual init failure
+        if echo "$output" | grep -qiE "(already initialized|admin token already exists)"; then
+            # Not an error - database was already initialized
+            log "Database already initialized"
+            return 0
+        fi
+
+        if echo "$output" | grep -qiE "(no container|not running|is not running)"; then
+            log_warn "Container not ready, waiting ${retry_delay}s before retry..."
+            sleep "$retry_delay"
+            ((attempt++))
+        else
+            # Some other error - might be transient, retry anyway
+            log_warn "Init attempt failed: $output"
+            sleep "$retry_delay"
+            ((attempt++))
+        fi
+    done
+
+    if [[ "$init_success" != "true" ]]; then
+        die "Failed to initialize database after $max_retries attempts.\nLast error: $output\nCheck container logs with: $SCRIPT_NAME logs"
+    fi
+
+    # Extract admin token from output
+    local token
+    token=$(echo "$output" | grep -Eo 'mgp_[[:alnum:]]+' || true)
+
+    if [[ -n "$token" ]]; then
+        echo ""
+        echo "=============================================="
+        echo "  IMPORTANT: Save your admin token!"
+        echo "=============================================="
+        echo ""
+        echo "  Admin token: $token"
+        echo ""
+        echo "  This token will not be shown again."
+        echo "  Store it securely for administrative access."
+        echo "=============================================="
+        echo ""
     else
-        log_warn "Database may already be initialized: $output"
+        log "Database initialized (admin token already exists)"
     fi
 }
 
