@@ -257,7 +257,7 @@ pkill -f "magpie-ctl gc"
 
 Note: Unlike the old `ConditionPathExists` approach, `flock` automatically
 releases locks when processes exit (even on crash), so manual lock file cleanup
-is rarely needed.
+is not needed.
 
 ### Permission Errors
 
