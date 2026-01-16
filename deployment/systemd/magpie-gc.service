@@ -20,33 +20,25 @@ Documentation=https://github.com/SouthwestCCDC/magpie
 After=network.target docker.service
 Requires=docker.service
 
-# Prevent concurrent GC runs
-# If GC is already running, this instance will fail immediately.
-# NOTE: There is a small race window between condition check and lock creation;
-# for most use cases this is acceptable, but high-frequency triggers should use
-# flock-based locking instead.
-ConditionPathExists=!/var/run/magpie-gc.lock
-
 [Service]
 Type=oneshot
 
-# Create lock file before starting, remove on exit
-ExecStartPre=/bin/sh -c 'echo $$ > /var/run/magpie-gc.lock'
-ExecStopPost=/bin/rm -f /var/run/magpie-gc.lock
-
-# Run GC via Docker Compose
+# Run GC via Docker Compose with flock-based locking
+# Uses `flock -n` to prevent concurrent runs. If GC is already running, flock
+# exits immediately with a non-zero status. Unlike ConditionPathExists, flock
+# automatically handles stale lock files from crashed processes.
 # Uses `docker compose run` so GC works even if the main `magpie` container is
 # stopped (e.g., during maintenance). Adjust path to match your installation.
 WorkingDirectory=/opt/magpie
-ExecStart=/usr/bin/docker compose run --rm -T magpie magpie-ctl gc --quiet
+ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl gc --quiet
 
 # Alternative: Use `exec` into the running magpie container instead of `run`.
 # NOTE: This requires the `magpie` container to already be running; GC will
 # fail if the service is stopped when this unit triggers.
-# ExecStart=/usr/bin/docker compose exec -T magpie magpie-ctl gc --quiet
+# ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose exec -T magpie magpie-ctl gc --quiet
 
 # Alternative: Direct execution (if not using Docker)
-# ExecStart=/usr/local/bin/magpie-ctl gc --quiet
+# ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/local/bin/magpie-ctl gc --quiet
 
 # User configuration (optional)
 # By default, this service runs as root. To run as a different user, uncomment
@@ -77,6 +69,12 @@ PrivateTmp=true
 ReadWritePaths=/var/run
 # If using direct execution, also add:
 # ReadWritePaths=/data/artifacts
+# 
+# NOTE: ProtectHome=true and ProtectSystem=strict may prevent access to
+# MAGPIE_DATA_DIR if configured to paths in /home or other protected locations.
+# If you encounter permission errors, either:
+#   1. Use a non-protected path like /opt/magpie/data or /var/lib/magpie
+#   2. Adjust security settings (e.g., ProtectHome=false or add ReadWritePaths)
 
 # Timeouts
 # GC can take a while for large storage; adjust as needed

@@ -521,16 +521,14 @@ Documentation=https://github.com/${GITHUB_REPO}
 After=network.target docker.service
 Requires=docker.service
 
-ConditionPathExists=!/var/run/magpie-gc.lock
-
 [Service]
 Type=oneshot
 WorkingDirectory=${INSTALL_DIR}
 
-ExecStartPre=/bin/sh -c 'echo \$\$ > /var/run/magpie-gc.lock'
-ExecStopPost=/bin/rm -f /var/run/magpie-gc.lock
-
-ExecStart=/usr/bin/docker compose --env-file ${INSTALL_DIR}/etc/.env run --rm -T magpie magpie-ctl gc --quiet
+# Use flock to prevent concurrent runs. If GC is already running, flock exits
+# immediately. Unlike ConditionPathExists, flock automatically handles stale
+# lock files from crashed processes.
+ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose --env-file ${INSTALL_DIR}/etc/.env run --rm -T magpie magpie-ctl gc --quiet
 
 StandardOutput=journal
 StandardError=journal
