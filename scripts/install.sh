@@ -808,7 +808,20 @@ cmd_update() {
 
     cd "$INSTALL_DIR"
 
-    log "Pulling latest images..."
+    log "Pulling latest repository code..."
+    cd "${INSTALL_DIR}/repo"
+    if ! git pull; then
+        die "Failed to pull latest repository code"
+    fi
+
+    log "Rebuilding magpie image..."
+    if ! docker build -t magpie:latest .; then
+        die "Failed to rebuild magpie image"
+    fi
+
+    cd "$INSTALL_DIR"
+
+    log "Pulling external images..."
     docker compose --env-file "${INSTALL_DIR}/etc/.env" pull
 
     log "Restarting services..."
