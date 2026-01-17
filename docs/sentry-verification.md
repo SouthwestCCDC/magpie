@@ -212,5 +212,5 @@ Or configure in the code (future enhancement).
 ## References
 
 - [Sentry FastAPI Documentation](https://docs.sentry.io/platforms/python/integrations/fastapi/)
-- [Magpie Design Doc - Observability](../docs/design.md#sentry-integration)
-- [Magpie Configuration](../docs/user-guide.md#server-environment-variables)
+- [Magpie Design Doc - Observability](./design.md#sentry-integration)
+- [Magpie Configuration](./user-guide.md#server-environment-variables)
