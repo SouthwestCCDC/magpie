@@ -124,7 +124,7 @@ class TokenService:
                         f"Provided token must start with 'mgp_' (not 'mgp_ADMIN_') for scope {scope.value}"
                     )
                 expected_prefix = "mgp_"
-            
+
             # Validate token format (must be non-empty after prefix)
             if len(plaintext_token) <= len(expected_prefix):
                 raise ValueError(f"Provided token is too short (must have content after prefix)")
