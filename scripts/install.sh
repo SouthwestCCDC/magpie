@@ -810,12 +810,12 @@ cmd_update() {
 
     log "Pulling latest repository code..."
     cd "${INSTALL_DIR}/repo"
-    if ! git pull; then
+    if ! git pull origin "$GITHUB_BRANCH"; then
         die "Failed to pull latest repository code"
     fi
 
     log "Rebuilding magpie image..."
-    if ! docker build -t magpie:latest .; then
+    if ! docker build --pull -t magpie:latest .; then
         die "Failed to rebuild magpie image"
     fi
 
