@@ -140,7 +140,7 @@ mkdir -p "$BACKUP_ROOT"
 
 # Create incremental backup with hardlinks to previous backup
 rsync -av --exclude='.tmp/' \
-  --link-dest="$CURRENT" \
+  --link-dest="$CURRENT/artifacts/" \
   "$STORAGE_PATH/" "$SNAPSHOT/artifacts/"
 
 # Update current symlink
@@ -615,7 +615,6 @@ Requires=magpie-backup.service
 
 [Timer]
 # Run daily at 2 AM
-OnCalendar=daily
 OnCalendar=*-*-* 02:00:00
 Persistent=true
 
@@ -663,7 +662,7 @@ Add rotation to backup script:
 ```bash
 # At end of backup-magpie.sh
 # Keep last 30 daily backups
-find /backup/magpie -maxdepth 1 -type d -mtime +30 -exec rm -rf {} \;
+find /backup/magpie -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} \;
 
 # Or keep last 7 backups
 ls -t /backup/magpie | tail -n +8 | xargs -I {} rm -rf /backup/magpie/{}
@@ -765,12 +764,12 @@ echo "Restored $MANIFESTS manifests and $BLOBS blobs"
 
 # Check manifest integrity
 INVALID_MANIFESTS=0
-find "$TEST_PATH/artifacts" -name ".magpie" | while read manifest; do
+while IFS= read -r manifest; do
   if ! jq . "$manifest" > /dev/null 2>&1; then
     echo "WARN: Invalid manifest: $manifest"
     INVALID_MANIFESTS=$((INVALID_MANIFESTS + 1))
   fi
-done
+done < <(find "$TEST_PATH/artifacts" -name ".magpie")
 if [ $INVALID_MANIFESTS -gt 0 ]; then
   echo "ERROR: Found $INVALID_MANIFESTS invalid manifests"
   exit 1
@@ -897,10 +896,10 @@ rsync -av --exclude='.tmp/' --exclude='*/blobs/*' /data/artifacts/ /backup/manif
 df -h /backup
 
 # Clean old backups
-find /backup/magpie -type d -mtime +30 -exec rm -rf {} \;
+find /backup/magpie -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} \;
 
 # Compress old backups
-find /backup/magpie -type d -mtime +7 | xargs -I {} tar czf {}.tar.gz {} && rm -rf {}
+find /backup/magpie -mindepth 1 -maxdepth 1 -type d -mtime +7 | xargs -I {} tar czf {}.tar.gz {} && rm -rf {}
 ```
 
 ### Restore Issues
@@ -987,3 +986,7 @@ sqlite3 /data/artifacts/.magpie.db "PRAGMA integrity_check;"
 
 For production deployments, combine automated daily backups with periodic restore testing
 to ensure business continuity.
+
+---
+
+*This documentation was generated with AI assistance (Claude Code w/ Opus 4.5)*
