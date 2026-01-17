@@ -20,6 +20,7 @@ Magpie stores data in three primary locations that must be backed up:
 | Component | Default Location | Description | Criticality |
 |-----------|-----------------|-------------|-------------|
 | **Storage directory** | `/data/artifacts/` | Blob files, manifests, symlinks | Critical |
+| **Metadata directory** | `/data/artifacts/*/metadata/` | Blob provenance (uploader, timestamps) | High |
 | **SQLite database** | `/data/artifacts/.magpie.db` | Authentication tokens | High |
 | **Configuration files** | Container environment/`.env` | Server settings | Medium |
 
@@ -30,9 +31,11 @@ Magpie stores data in three primary locations that must be backed up:
 ├── .magpie.db              # SQLite database (tokens)
 ├── .tmp/                   # Temporary upload staging
 ├── {artifact-path}/        # Artifact directories (e.g., images/ubuntu/)
-│   ├── .magpie             # Manifest JSON (tags, metadata)
+│   ├── .magpie             # Manifest JSON (tags)
 │   ├── blobs/              # Content-addressed blob storage
-│   │   └── {hash}          # Actual artifact files (SHA-256)
+│   │   └── {hash}          # Actual artifact files (8-char SHA-256 prefix)
+│   ├── metadata/           # Blob provenance sidecars
+│   │   └── {hash}.json     # Uploader, timestamps, source URI
 │   ├── latest -> blobs/{hash}  # Symlinks for tags
 │   ├── stable -> blobs/{hash}
 │   └── v1.0 -> blobs/{hash}
@@ -157,14 +160,16 @@ To back up only the token database (fast, for frequent snapshots):
 #!/bin/bash
 # backup-magpie-db.sh - Database-only backup
 
-STORAGE_PATH="/data/artifacts"
 BACKUP_PATH="/backup/magpie-db/$(date +%Y%m%d-%H%M%S)"
 
 mkdir -p "$BACKUP_PATH"
 
 # SQLite online backup (safe during writes)
+# Note: Backup to container temp dir first, then copy to host
 docker compose exec -T magpie \
-  sqlite3 /data/artifacts/.magpie.db ".backup '$BACKUP_PATH/magpie.db'"
+  sqlite3 /data/artifacts/.magpie.db ".backup '/tmp/magpie.db'"
+docker compose cp magpie:/tmp/magpie.db "$BACKUP_PATH/magpie.db"
+docker compose exec -T magpie rm /tmp/magpie.db
 
 echo "Database backup completed: $BACKUP_PATH/magpie.db"
 ```
@@ -282,6 +287,9 @@ docker compose stop magpie
 # Restore database file
 cp "$BACKUP_PATH/magpie.db" /data/artifacts/.magpie.db
 
+# Checkpoint any WAL data to ensure database consistency
+sqlite3 /data/artifacts/.magpie.db "PRAGMA wal_checkpoint(TRUNCATE);"
+
 # Set permissions
 chown 1000:1000 /data/artifacts/.magpie.db
 
@@ -326,15 +334,14 @@ If no backup exists, you can rebuild manually:
 ls -l /data/artifacts/images/ubuntu/blobs/
 
 # Manually recreate manifest (example structure)
+# Note: Manifest only contains tags; metadata is stored in separate
+# sidecar files at metadata/{hash}.json (uploaded_by, uploaded_at, source_uri)
 cat > /data/artifacts/images/ubuntu/.magpie <<'EOF'
 {
-  "blobs": {
-    "abc123...": {
-      "uploaded_at": "2026-01-15T10:30:00Z",
-      "uploaded_by": "ci-bot",
-      "source_uri": null,
-      "tags": ["latest", "v2.0"]
-    }
+  "version": 1,
+  "tags": {
+    "latest": "@abc12345",
+    "v2.0": "@abc12345"
   }
 }
 EOF
@@ -440,7 +447,7 @@ docker compose exec magpie magpie-ctl gc --reconcile-only
 ```bash
 # Restore missing blobs from backup
 ARTIFACT="images/ubuntu"
-MISSING_HASH="abc123..."
+MISSING_HASH="abc12345"
 
 rsync -av "$BACKUP_PATH/artifacts/$ARTIFACT/blobs/$MISSING_HASH" \
   "/data/artifacts/$ARTIFACT/blobs/$MISSING_HASH"
@@ -680,52 +687,52 @@ echo "=== Backup Verification ==="
 
 # Check backup exists
 if [ ! -d "$BACKUP_PATH" ]; then
-  echo "❌ Backup directory not found"
+  echo "[FAIL] Backup directory not found"
   exit 1
 fi
-echo "✓ Backup directory exists"
+echo "[OK] Backup directory exists"
 
 # Check storage directory
 if [ ! -d "$BACKUP_PATH/artifacts" ]; then
-  echo "❌ Storage directory not backed up"
+  echo "[FAIL] Storage directory not backed up"
   exit 1
 fi
-echo "✓ Storage directory backed up"
+echo "[OK] Storage directory backed up"
 
 # Check database
 if [ ! -f "$BACKUP_PATH/magpie.db" ] && [ ! -f "$BACKUP_PATH/artifacts/.magpie.db" ]; then
-  echo "⚠ Database not found in backup"
+  echo "[WARN] Database not found in backup"
 else
-  echo "✓ Database backed up"
+  echo "[OK] Database backed up"
 fi
 
 # Count artifacts
 ARTIFACT_COUNT=$(find "$BACKUP_PATH/artifacts" -name ".magpie" | wc -l)
-echo "✓ Found $ARTIFACT_COUNT artifact manifests"
+echo "[OK] Found $ARTIFACT_COUNT artifact manifests"
 
 # Count blobs
 BLOB_COUNT=$(find "$BACKUP_PATH/artifacts" -type f -path "*/blobs/*" | wc -l)
-echo "✓ Found $BLOB_COUNT blobs"
+echo "[OK] Found $BLOB_COUNT blobs"
 
 # Check size
 SIZE=$(du -sh "$BACKUP_PATH" | cut -f1)
-echo "✓ Backup size: $SIZE"
+echo "[OK] Backup size: $SIZE"
 
 # Verify manifest JSON syntax
 echo "Checking manifest files..."
 INVALID_COUNT=0
 while IFS= read -r manifest; do
   if ! jq . "$manifest" > /dev/null 2>&1; then
-    echo "❌ Invalid JSON in $manifest"
+    echo "[FAIL] Invalid JSON in $manifest"
     INVALID_COUNT=$((INVALID_COUNT + 1))
   fi
 done < <(find "$BACKUP_PATH/artifacts" -name ".magpie")
 
 if [ $INVALID_COUNT -gt 0 ]; then
-  echo "❌ Found $INVALID_COUNT invalid manifest(s)"
+  echo "[FAIL] Found $INVALID_COUNT invalid manifest(s)"
   exit 1
 fi
-echo "✓ All manifests are valid JSON"
+echo "[OK] All manifests are valid JSON"
 
 echo ""
 echo "=== Verification Complete ==="
