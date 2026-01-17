@@ -80,12 +80,14 @@ When a human visits `/artifacts/*`:
 
 ### Step 4: Get the Authentik Endpoint
 
-The forward auth endpoint URL will be:
+The forward auth endpoint URL format for Authentik (as of v2023.8+) is:
 ```
 https://authentik.example.com/outpost.goauthentik.io/auth/caddy
 ```
 
 Replace `authentik.example.com` with your Authentik domain.
+
+**Note**: This path structure is specific to Authentik's Caddy integration. Verify the exact path in your Authentik version's documentation if using a different version. The path may vary in older versions or custom outpost configurations.
 
 ## Magpie Configuration
 
@@ -128,7 +130,7 @@ handle /artifacts/* {
 }
 ```
 
-3. Restart the Caddy container:
+3. Restart the Caddy container (run from the directory containing docker-compose.prod.yml):
 
 ```bash
 docker compose -f docker-compose.prod.yml restart caddy

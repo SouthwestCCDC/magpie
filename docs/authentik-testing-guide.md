@@ -27,7 +27,8 @@ This guide provides instructions for manually testing the Authentik SSO integrat
 ### Setup
 ```bash
 # Get an admin token
-export MAGPIE_TOKEN=$(docker exec magpie-magpie-1 magpie-ctl token create --name test-token --scope admin | grep "Token:" | awk '{print $2}')
+# Note: Container name may vary. Use 'docker compose ps' to find the correct name.
+export MAGPIE_TOKEN=$(docker compose -f docker-compose.prod.yml exec -T magpie magpie-ctl token create --name test-token --scope admin | grep "Token:" | awk '{print $2}')
 echo $MAGPIE_TOKEN
 ```
 
@@ -246,8 +247,8 @@ magpie get test/browser-upload:latest
 
 **Diagnosis**:
 ```bash
-# Check Caddy logs
-docker logs magpie-caddy-1 | grep forward_auth
+# Check Caddy logs (use 'docker compose ps' to find container name if needed)
+docker compose -f docker-compose.prod.yml logs caddy | grep forward_auth
 
 # Check Authentik provider configuration
 # Verify External Host matches MAGPIE_DOMAIN exactly
@@ -267,7 +268,7 @@ docker logs magpie-caddy-1 | grep forward_auth
 **Diagnosis**:
 ```bash
 # Check which headers Authentik is sending
-docker logs magpie-caddy-1 | grep X-authentik
+docker compose -f docker-compose.prod.yml logs caddy | grep X-authentik
 
 # Verify forward_auth block copies correct headers
 grep "copy_headers" Caddyfile.prod
@@ -310,7 +311,7 @@ curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
 grep -A3 "handle /artifacts" Caddyfile.prod
 
 # Verify AUTHENTIK_FORWARD_AUTH_URL is empty
-docker exec magpie-caddy-1 env | grep AUTHENTIK
+docker compose -f docker-compose.prod.yml exec caddy env | grep AUTHENTIK
 ```
 
 **Solution**:
