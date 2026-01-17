@@ -109,15 +109,19 @@ class TokenService:
             if scope == TokenScope.ADMIN:
                 # Admin tokens must have mgp_ADMIN_ prefix
                 if not plaintext_token.startswith("mgp_ADMIN_"):
+                    token_preview = plaintext_token[:20] + "..." if len(plaintext_token) > 20 else plaintext_token
                     raise ValueError(
-                        f"Provided token must start with 'mgp_ADMIN_' for scope {scope.value}"
+                        f"Provided token must start with 'mgp_ADMIN_' for scope {scope.value}, "
+                        f"got: {token_preview}"
                     )
                 expected_prefix = "mgp_ADMIN_"
             else:
                 # Read/write tokens must have mgp_ prefix but NOT mgp_ADMIN_
                 if not plaintext_token.startswith("mgp_"):
+                    token_preview = plaintext_token[:20] + "..." if len(plaintext_token) > 20 else plaintext_token
                     raise ValueError(
-                        f"Provided token must start with 'mgp_' for scope {scope.value}"
+                        f"Provided token must start with 'mgp_' for scope {scope.value}, "
+                        f"got: {token_preview}"
                     )
                 if plaintext_token.startswith("mgp_ADMIN_"):
                     raise ValueError(
@@ -127,7 +131,10 @@ class TokenService:
 
             # Validate token format (must be non-empty after prefix)
             if len(plaintext_token) <= len(expected_prefix):
-                raise ValueError(f"Provided token is too short (must have content after prefix)")
+                raise ValueError(
+                    f"Provided token is too short (must have content after '{expected_prefix}' prefix, "
+                    f"minimum length: {len(expected_prefix) + 1})"
+                )
 
         # Hash the token for storage
         token_hash = self._hash_token(plaintext_token)
