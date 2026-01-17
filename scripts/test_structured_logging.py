@@ -2,17 +2,18 @@
 """Manual test script to demonstrate structured logging output.
 
 This script simulates the logging behavior without starting the full server.
+
+Prerequisites:
+    pip install structlog pydantic-settings
+
 Run with:
     python3 scripts/test_structured_logging.py
+
+Or from the project root with the package installed:
+    python3 -m scripts.test_structured_logging
 """
 
 from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import structlog
 

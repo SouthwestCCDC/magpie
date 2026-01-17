@@ -91,7 +91,7 @@ def _add_otel_context(
 
         span = trace.get_current_span()
         ctx = span.get_span_context()
-        if span and ctx.is_valid:
+        if ctx.is_valid:
             event_dict["trace_id"] = format(ctx.trace_id, "032x")
             event_dict["span_id"] = format(ctx.span_id, "016x")
     except (ImportError, AttributeError):

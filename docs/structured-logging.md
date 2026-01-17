@@ -214,7 +214,11 @@ except Exception as e:
 Run the demonstration script to see structured logging in action:
 
 ```bash
+# From project root, with package installed (pip install -e .)
 python3 scripts/test_structured_logging.py
+
+# Or using PYTHONPATH
+PYTHONPATH=src python3 scripts/test_structured_logging.py
 ```
 
 This will show examples of JSON and console output formats with various log events.
