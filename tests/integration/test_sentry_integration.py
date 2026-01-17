@@ -108,51 +108,53 @@ class TestSentryIntegration:
         assert call_kwargs.get("send_default_pii") is False
 
 
+@pytest.fixture
+def test_config_no_sentry(tmp_path: Path) -> MagpieSettings:
+    """Create test configuration without Sentry DSN."""
+    config = MagpieSettings(storage_path=tmp_path, sentry_dsn=None)
+    config.temp_path.mkdir(parents=True, exist_ok=True)
+    return config
+
+
+@pytest.fixture
+def test_storage_service_no_sentry(
+    test_config_no_sentry: MagpieSettings,
+) -> StorageService:
+    """Create a StorageService instance for testing without Sentry."""
+    return StorageService(test_config_no_sentry)
+
+
+@pytest.fixture
+def client_no_sentry(
+    test_storage_service_no_sentry: StorageService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[TestClient, MagicMock]]:
+    """Create test client without Sentry configuration.
+
+    Yields:
+        Tuple of (TestClient, mock_sentry_init) for testing.
+    """
+
+    def override_storage_service() -> StorageService:
+        return test_storage_service_no_sentry
+
+    app.dependency_overrides[get_storage_service] = override_storage_service
+
+    # Clear cached settings and ensure no SENTRY_DSN is set
+    get_settings.cache_clear()
+    monkeypatch.delenv("MAGPIE_SENTRY_DSN", raising=False)
+
+    # Patch sentry_sdk.init directly since setup_sentry imports sentry_sdk locally
+    with patch("sentry_sdk.init") as mock_sentry_init:
+        with TestClient(app) as client:
+            yield client, mock_sentry_init
+
+    app.dependency_overrides.clear()
+    get_settings.cache_clear()
+
+
 class TestSentryNotInitializedWithoutDSN:
     """Tests that Sentry is not initialized when DSN is not provided."""
-
-    @pytest.fixture
-    def test_config_no_sentry(self, tmp_path: Path) -> MagpieSettings:
-        """Create test configuration without Sentry DSN."""
-        config = MagpieSettings(storage_path=tmp_path, sentry_dsn=None)
-        config.temp_path.mkdir(parents=True, exist_ok=True)
-        return config
-
-    @pytest.fixture
-    def test_storage_service_no_sentry(
-        self, test_config_no_sentry: MagpieSettings
-    ) -> StorageService:
-        """Create a StorageService instance for testing without Sentry."""
-        return StorageService(test_config_no_sentry)
-
-    @pytest.fixture
-    def client_no_sentry(
-        self,
-        test_storage_service_no_sentry: StorageService,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> Iterator[tuple[TestClient, MagicMock]]:
-        """Create test client without Sentry configuration.
-
-        Yields:
-            Tuple of (TestClient, mock_sentry_init) for testing.
-        """
-
-        def override_storage_service() -> StorageService:
-            return test_storage_service_no_sentry
-
-        app.dependency_overrides[get_storage_service] = override_storage_service
-
-        # Clear cached settings and ensure no SENTRY_DSN is set
-        get_settings.cache_clear()
-        monkeypatch.delenv("MAGPIE_SENTRY_DSN", raising=False)
-
-        # Patch sentry_sdk.init directly since setup_sentry imports sentry_sdk locally
-        with patch("sentry_sdk.init") as mock_sentry_init:
-            with TestClient(app) as client:
-                yield client, mock_sentry_init
-
-        app.dependency_overrides.clear()
-        get_settings.cache_clear()
 
     def test_sentry_not_initialized_without_dsn(
         self, client_no_sentry: tuple[TestClient, MagicMock]
