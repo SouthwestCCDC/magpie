@@ -35,6 +35,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         request_id = str(uuid.uuid4())
 
         # Bind request_id to structlog context for this request
+        # Note: structlog.contextvars uses Python's contextvars which are
+        # automatically isolated per async task, so concurrent requests
+        # won't interfere with each other
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)
 
@@ -87,4 +90,5 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         finally:
             # Clear context vars after request
+            # Note: This is safe because contextvars are isolated per async task
             structlog.contextvars.clear_contextvars()

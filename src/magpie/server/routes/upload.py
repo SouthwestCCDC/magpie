@@ -36,17 +36,22 @@ class SizeLimitedReader:
     beyond max_size bytes from the start of the stream.
     """
 
-    def __init__(self, stream: IO[bytes], max_size: int) -> None:
+    def __init__(self, stream: IO[bytes], max_size: int | None = None) -> None:
         """Initialize size-limited reader.
 
         Args:
             stream: Underlying file stream to wrap.
-            max_size: Maximum allowed bytes to read.
+            max_size: Maximum allowed bytes to read (None = no limit).
         """
         self._stream = stream
         self._max_size = max_size
         self._bytes_read = 0
         self._high_water_mark = 0  # Maximum position ever reached
+
+    @property
+    def bytes_read(self) -> int:
+        """Get total bytes read from stream."""
+        return self._high_water_mark
 
     def read(self, size: int = -1) -> bytes:
         """Read from stream, enforcing size limit.
@@ -76,7 +81,7 @@ class SizeLimitedReader:
         self._bytes_read += len(data)
         # Update high water mark - this never decreases, preventing seek bypass attacks
         self._high_water_mark = max(self._high_water_mark, self._bytes_read)
-        if self._high_water_mark > self._max_size:
+        if self._max_size is not None and self._high_water_mark > self._max_size:
             # NOTE: Revealing the exact limit is intentional - it helps legitimate users
             # understand the constraint. The limit is not security-sensitive information;
             # it's a configuration value that would be documented anyway.
@@ -195,12 +200,9 @@ async def upload_artifact(
                 message="Upload without X-Magpie-User header and no uploaded_by param",
             )
 
-    # Wrap file stream with size limiter if max_upload_size is configured
-    # This provides defense-in-depth for clients that send more than Content-Length
-    if max_size is not None:
-        file_stream = SizeLimitedReader(file.file, max_size)
-    else:
-        file_stream = file.file
+    # Wrap file stream with size tracker/limiter
+    # Always wrap to track actual bytes read; enforces limit if max_size is set
+    file_stream = SizeLimitedReader(file.file, max_size)
 
     # Track upload timing
     start_time = time.perf_counter()
@@ -221,6 +223,9 @@ async def upload_artifact(
     # Calculate upload duration
     duration_ms = (time.perf_counter() - start_time) * 1000
 
+    # Get actual bytes read from stream
+    actual_size = file_stream.bytes_read
+
     # Use blobs/ path for hash-based downloads (info.hash_ref has @ prefix)
     blob_name = info.hash_ref.lstrip("@")
     download_url = f"/artifacts/{path}/blobs/{blob_name}"
@@ -231,7 +236,7 @@ async def upload_artifact(
         artifact_path=path,
         hash=info.hash,
         hash_ref=info.hash_ref,
-        size_bytes=content_length,
+        size_bytes=actual_size,  # Actual file size, not including multipart overhead
         duration_ms=round(duration_ms, 2),
         uploaded_by=effective_user,
         is_duplicate=is_duplicate,
