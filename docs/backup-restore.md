@@ -92,8 +92,8 @@ rsync -av --exclude='.tmp/' "$STORAGE_PATH/" "$BACKUP_PATH/artifacts/"
 # If database is actively being written, use SQLite backup
 docker compose exec -T "$DOCKER_CONTAINER" \
   sqlite3 /data/artifacts/.magpie.db ".backup '/data/artifacts/.magpie.db.backup'"
-cp "$STORAGE_PATH/.magpie.db.backup" "$BACKUP_PATH/magpie.db"
-rm "$STORAGE_PATH/.magpie.db.backup"
+docker compose cp "$DOCKER_CONTAINER":/data/artifacts/.magpie.db.backup "$BACKUP_PATH/magpie.db"
+docker compose exec -T "$DOCKER_CONTAINER" rm /data/artifacts/.magpie.db.backup
 
 # Backup configuration
 cp .env "$BACKUP_PATH/env" 2>/dev/null || true
@@ -142,7 +142,7 @@ rsync -av --exclude='.tmp/' \
 
 # Update current symlink
 rm -f "$CURRENT"
-ln -s "$SNAPSHOT" "$CURRENT"
+ln -s "$(basename "$SNAPSHOT")" "$CURRENT"
 
 echo "Incremental backup completed: $SNAPSHOT"
 ```
@@ -713,12 +713,18 @@ echo "✓ Backup size: $SIZE"
 
 # Verify manifest JSON syntax
 echo "Checking manifest files..."
-find "$BACKUP_PATH/artifacts" -name ".magpie" | while read manifest; do
+INVALID_COUNT=0
+while IFS= read -r manifest; do
   if ! jq . "$manifest" > /dev/null 2>&1; then
     echo "❌ Invalid JSON in $manifest"
-    exit 1
+    INVALID_COUNT=$((INVALID_COUNT + 1))
   fi
-done
+done < <(find "$BACKUP_PATH/artifacts" -name ".magpie")
+
+if [ $INVALID_COUNT -gt 0 ]; then
+  echo "❌ Found $INVALID_COUNT invalid manifest(s)"
+  exit 1
+fi
 echo "✓ All manifests are valid JSON"
 
 echo ""
@@ -751,9 +757,17 @@ BLOBS=$(find "$TEST_PATH/artifacts" -type f -path "*/blobs/*" | wc -l)
 echo "Restored $MANIFESTS manifests and $BLOBS blobs"
 
 # Check manifest integrity
+INVALID_MANIFESTS=0
 find "$TEST_PATH/artifacts" -name ".magpie" | while read manifest; do
-  jq . "$manifest" > /dev/null || echo "WARN: Invalid manifest: $manifest"
+  if ! jq . "$manifest" > /dev/null 2>&1; then
+    echo "WARN: Invalid manifest: $manifest"
+    INVALID_MANIFESTS=$((INVALID_MANIFESTS + 1))
+  fi
 done
+if [ $INVALID_MANIFESTS -gt 0 ]; then
+  echo "ERROR: Found $INVALID_MANIFESTS invalid manifests"
+  exit 1
+fi
 
 # Cleanup
 rm -rf "$TEST_PATH"
