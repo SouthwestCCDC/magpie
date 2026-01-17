@@ -253,6 +253,92 @@ class TestInitCommand:
         assert token_info.name == "admin"
 
 
+class TestInitJsonOutput:
+    """Tests for init command JSON output with --admin-token."""
+
+    def test_init_with_admin_token_json_output(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Init --admin-token with --format json returns valid JSON with token."""
+        custom_token = "mgp_ADMIN_json_test_token_xyz_abcdefgh"
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(
+                cli, ["--format", "json", "init", "--admin-token", custom_token]
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        output = json.loads(result.output.strip())
+        # JSON output wraps in {"status": "ok", "data": {...}}
+        assert output["status"] == "ok"
+        data = output["data"]
+        assert data["admin_token"] == custom_token
+        assert "storage_path" in data
+        assert "database_path" in data
+        assert data["token_already_existed"] is False
+
+    def test_init_with_invalid_token_json_output(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Init --admin-token with invalid token and --format json returns JSON error."""
+        invalid_token = "mgp_wrong_prefix_123"
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(
+                cli, ["--format", "json", "init", "--admin-token", invalid_token]
+            )
+
+        assert result.exit_code == 1, f"Output: {result.output}"
+        output = json.loads(result.output.strip())
+        # Error output uses {"status": "ok", "data": {"error": ...}} structure
+        data = output.get("data", output)
+        assert "error" in data
+        assert "mgp_ADMIN_" in data["error"]
+
+    def test_init_reset_with_custom_token_json_output(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Init --reset-admin-token --admin-token with --format json returns valid JSON."""
+        custom_token = "mgp_ADMIN_reset_json_test_456_abcdefgh"
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            # First init creates a token
+            result1 = cli_runner.invoke(cli, ["init"])
+            assert result1.exit_code == 0
+
+            # Reset with custom token and JSON output
+            result2 = cli_runner.invoke(
+                cli,
+                ["--format", "json", "init", "--reset-admin-token", "--admin-token", custom_token],
+            )
+
+        assert result2.exit_code == 0, f"Output: {result2.output}"
+        output = json.loads(result2.output.strip())
+        # JSON output wraps in {"status": "ok", "data": {...}}
+        assert output["status"] == "ok"
+        data = output["data"]
+        assert data["admin_token"] == custom_token
+        assert data["token_already_existed"] is False
+
+    def test_init_empty_token_json_output(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Init --admin-token with empty suffix and --format json returns JSON error."""
+        empty_token = "mgp_ADMIN_"
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(
+                cli, ["--format", "json", "init", "--admin-token", empty_token]
+            )
+
+        assert result.exit_code == 1, f"Output: {result.output}"
+        output = json.loads(result.output.strip())
+        # Error output uses {"status": "ok", "data": {"error": ...}} structure
+        data = output.get("data", output)
+        assert "error" in data
+        assert "too short" in data["error"]
+
+
 class TestGCCommand:
     """Tests for gc command."""
 

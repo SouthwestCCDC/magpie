@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import secrets
 import sqlite3
 from dataclasses import dataclass
@@ -24,6 +25,12 @@ if TYPE_CHECKING:
     from magpie.config import MagpieSettings
 
 
+logger = logging.getLogger(__name__)
+
+# Minimum recommended token length (including prefix)
+# Auto-generated tokens are 54+ chars (10 char prefix + 43 char token_urlsafe(32))
+RECOMMENDED_MIN_TOKEN_LENGTH = 32
+
 # Scope hierarchy levels (higher number = more permissions)
 _SCOPE_LEVELS = {
     TokenScope.READ: 1,
@@ -42,6 +49,29 @@ class TokenInfo:
 
     name: str
     scope: TokenScope
+
+
+class TokenError(ValueError):
+    """Base exception for token-related errors.
+
+    Inherits from ValueError for backward compatibility.
+    """
+
+    pass
+
+
+class TokenExistsError(TokenError):
+    """Raised when attempting to create a token that already exists."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(f"Token name '{name}' already exists")
+
+
+class TokenFormatError(TokenError):
+    """Raised when a token has invalid format (wrong prefix, too short, etc.)."""
+
+    pass
 
 
 class TokenService:
@@ -86,8 +116,8 @@ class TokenService:
             Plaintext token string (mgp_... format) - only returned once.
 
         Raises:
-            ValueError: If token name already exists, is invalid, or provided token
-                has incorrect format.
+            TokenExistsError: If token name already exists.
+            TokenFormatError: If provided token has incorrect format.
             ValidationError: If token name fails validation (invalid format/length).
         """
         # Validate token name (defense in depth - also validated at API layer)
@@ -107,25 +137,38 @@ class TokenService:
             if scope == TokenScope.ADMIN:
                 # Admin tokens must have mgp_ADMIN_ prefix
                 if not plaintext_token.startswith("mgp_ADMIN_"):
-                    raise ValueError("Provided token must start with 'mgp_ADMIN_' for admin scope")
+                    raise TokenFormatError(
+                        "Provided token must start with 'mgp_ADMIN_' for admin scope"
+                    )
                 expected_prefix = "mgp_ADMIN_"
             else:
                 # Read/write tokens must have mgp_ prefix but NOT mgp_ADMIN_
                 if not plaintext_token.startswith("mgp_"):
-                    raise ValueError(
+                    raise TokenFormatError(
                         f"Provided token must start with 'mgp_' for {scope.value} scope"
                     )
                 if plaintext_token.startswith("mgp_ADMIN_"):
-                    raise ValueError(
+                    raise TokenFormatError(
                         f"Provided token must start with 'mgp_' (not 'mgp_ADMIN_') for {scope.value} scope"
                     )
                 expected_prefix = "mgp_"
 
             # Validate token format (must be non-empty after prefix)
             if len(plaintext_token) <= len(expected_prefix):
-                raise ValueError(
+                raise TokenFormatError(
                     f"Provided token is too short (must have content after '{expected_prefix}' prefix, "
                     f"minimum length: {len(expected_prefix) + 1})"
+                )
+
+            # Warn if custom token is shorter than recommended
+            # (we don't reject to avoid breaking changes, but log a warning)
+            if len(plaintext_token) < RECOMMENDED_MIN_TOKEN_LENGTH:
+                logger.warning(
+                    "Custom token for '%s' is shorter than recommended (%d chars). "
+                    "Consider using at least %d characters for adequate entropy.",
+                    name,
+                    len(plaintext_token),
+                    RECOMMENDED_MIN_TOKEN_LENGTH,
                 )
 
         # Hash the token for storage
@@ -145,7 +188,7 @@ class TokenService:
         try:
             save_token(conn, token)
         except sqlite3.IntegrityError as e:
-            raise ValueError(f"Token name '{name}' already exists") from e
+            raise TokenExistsError(name) from e
         finally:
             conn.close()
 

@@ -354,6 +354,19 @@ The token must start with `mgp_ADMIN_` and contain additional characters after t
 - Moving installations while keeping the same token
 - CI/CD pipelines that need predictable tokens
 
+!!! warning "Security Considerations for Custom Tokens"
+
+    When using custom admin tokens, follow these security best practices:
+
+    - **Generate tokens securely**: Use cryptographically secure random generation
+      (e.g., `openssl rand -base64 32` or `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
+    - **Minimum entropy**: Custom tokens should be at least 32 characters total
+      (including the `mgp_ADMIN_` prefix) to match the entropy of auto-generated tokens
+    - **Avoid predictable patterns**: Never use sequential values, dictionary words,
+      or easily guessable patterns
+    - **Treat as secrets**: Store tokens in secure secret management systems,
+      never in version control or logs
+
 To regenerate a compromised admin token:
 
 ```bash

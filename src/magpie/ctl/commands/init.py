@@ -6,7 +6,7 @@ import click
 
 from magpie.auth.database import init_database
 from magpie.auth.models import TokenScope
-from magpie.auth.service import TokenService
+from magpie.auth.service import TokenExistsError, TokenFormatError, TokenService
 from magpie.cli.formatting import (
     CommandResult,
     is_json_output,
@@ -126,8 +126,8 @@ def init(ctx: CTLContext, reset_admin_token: bool, admin_token: str | None) -> N
             plaintext_token = token_service.create_token(
                 ADMIN_TOKEN_NAME, TokenScope.ADMIN, admin_token
             )
-        except ValueError as e:
-            # Token validation failed
+        except TokenFormatError as e:
+            # Token format validation failed
             if is_json_output():
                 output_result(
                     CommandResult(
@@ -159,28 +159,26 @@ def init(ctx: CTLContext, reset_admin_token: bool, admin_token: str | None) -> N
                 click.echo("ADMIN TOKEN (store securely, only shown once!):")
                 click.echo(plaintext_token)
                 click.echo("=" * 60)
-        except ValueError as e:
-            # Check if it's a token validation error or token already exists
-            if "already exists" in str(e):
-                # Token already exists
-                token_already_exists = True
-                if not is_json_output():
-                    click.echo("")
-                    click.echo("Admin token already exists. Use --reset-admin-token to regenerate.")
-            else:
-                # Token validation failed
-                if is_json_output():
-                    output_result(
-                        CommandResult(
-                            data={
-                                "error": str(e),
-                            },
-                            human_output="",
-                        )
+        except TokenExistsError:
+            # Token already exists
+            token_already_exists = True
+            if not is_json_output():
+                click.echo("")
+                click.echo("Admin token already exists. Use --reset-admin-token to regenerate.")
+        except TokenFormatError as e:
+            # Token format validation failed
+            if is_json_output():
+                output_result(
+                    CommandResult(
+                        data={
+                            "error": str(e),
+                        },
+                        human_output="",
                     )
-                else:
-                    click.echo(f"Error: {e}", err=True)
-                raise SystemExit(1)
+                )
+            else:
+                click.echo(f"Error: {e}", err=True)
+            raise SystemExit(1)
 
     # JSON output
     if is_json_output():
