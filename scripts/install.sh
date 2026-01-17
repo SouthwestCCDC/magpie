@@ -620,7 +620,7 @@ build_images() {
 
     cd "${INSTALL_DIR}/repo"
 
-    if ! docker build -t magpie:latest .; then
+    if ! docker build --pull -t magpie:latest .; then
         die "Failed to build magpie image"
     fi
 
@@ -807,6 +807,11 @@ cmd_update() {
     load_existing_config
 
     cd "$INSTALL_DIR"
+
+    # Verify repo directory exists
+    if [[ ! -d "${INSTALL_DIR}/repo" ]]; then
+        die "Repository directory not found at ${INSTALL_DIR}/repo\nThe installation may be corrupted. Try reinstalling with 'install --force'."
+    fi
 
     log "Pulling latest repository code..."
     cd "${INSTALL_DIR}/repo"
