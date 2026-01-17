@@ -298,3 +298,108 @@ class TestTokenNameValidation:
             assert False, "Should have raised an exception"
         except ValueError:
             pass  # ValidationError is a subclass of ValueError
+
+
+class TestCreateTokenWithProvidedToken:
+    """Tests for TokenService.create_token with plaintext_token parameter."""
+
+    def test_create_token_with_provided_admin_token(self, token_service: TokenService) -> None:
+        """create_token should accept and use provided admin token."""
+        provided_token = "mgp_ADMIN_my_custom_token_123"
+
+        result = token_service.create_token("custom-admin", TokenScope.ADMIN, provided_token)
+
+        assert result == provided_token
+        # Verify it can be validated
+        token_info = token_service.validate_token(provided_token)
+        assert token_info is not None
+        assert token_info.name == "custom-admin"
+        assert token_info.scope == TokenScope.ADMIN
+
+    def test_create_token_with_provided_write_token(self, token_service: TokenService) -> None:
+        """create_token should accept and use provided write token."""
+        provided_token = "mgp_my_write_token_456"
+
+        result = token_service.create_token("custom-write", TokenScope.WRITE, provided_token)
+
+        assert result == provided_token
+        # Verify it can be validated
+        token_info = token_service.validate_token(provided_token)
+        assert token_info is not None
+        assert token_info.name == "custom-write"
+        assert token_info.scope == TokenScope.WRITE
+
+    def test_create_token_with_provided_read_token(self, token_service: TokenService) -> None:
+        """create_token should accept and use provided read token."""
+        provided_token = "mgp_my_read_token_789"
+
+        result = token_service.create_token("custom-read", TokenScope.READ, provided_token)
+
+        assert result == provided_token
+
+    def test_create_token_rejects_wrong_prefix_for_admin(
+        self, token_service: TokenService
+    ) -> None:
+        """create_token should reject token without mgp_ADMIN_ prefix for admin scope."""
+        wrong_token = "mgp_not_admin_token"
+
+        with pytest.raises(ValueError, match="must start with 'mgp_ADMIN_'"):
+            token_service.create_token("bad-admin", TokenScope.ADMIN, wrong_token)
+
+    def test_create_token_rejects_admin_prefix_for_write(
+        self, token_service: TokenService
+    ) -> None:
+        """create_token should reject mgp_ADMIN_ prefix for write scope."""
+        wrong_token = "mgp_ADMIN_should_not_be_admin"
+
+        with pytest.raises(ValueError, match="must start with 'mgp_'"):
+            token_service.create_token("bad-write", TokenScope.WRITE, wrong_token)
+
+    def test_create_token_rejects_admin_prefix_for_read(
+        self, token_service: TokenService
+    ) -> None:
+        """create_token should reject mgp_ADMIN_ prefix for read scope."""
+        wrong_token = "mgp_ADMIN_should_not_be_admin"
+
+        with pytest.raises(ValueError, match="must start with 'mgp_'"):
+            token_service.create_token("bad-read", TokenScope.READ, wrong_token)
+
+    def test_create_token_rejects_empty_token_after_prefix(
+        self, token_service: TokenService
+    ) -> None:
+        """create_token should reject token that is just the prefix."""
+        empty_admin_token = "mgp_ADMIN_"
+        empty_regular_token = "mgp_"
+
+        with pytest.raises(ValueError, match="too short"):
+            token_service.create_token("empty-admin", TokenScope.ADMIN, empty_admin_token)
+
+        with pytest.raises(ValueError, match="too short"):
+            token_service.create_token("empty-write", TokenScope.WRITE, empty_regular_token)
+
+    def test_create_token_rejects_token_without_mgp_prefix(
+        self, token_service: TokenService
+    ) -> None:
+        """create_token should reject token without any mgp prefix."""
+        no_prefix_token = "ADMIN_my_token_123"
+
+        with pytest.raises(ValueError, match="must start with"):
+            token_service.create_token("no-prefix", TokenScope.ADMIN, no_prefix_token)
+
+    def test_create_token_provided_token_stores_correctly(
+        self, token_service: TokenService, test_config: MagpieSettings
+    ) -> None:
+        """create_token with provided token should store hash correctly."""
+        provided_token = "mgp_ADMIN_test_storage_token"
+
+        token_service.create_token("storage-test", TokenScope.ADMIN, provided_token)
+
+        # Check database stores hash, not plaintext
+        conn = get_connection(test_config.database_path)
+        cursor = conn.execute("SELECT token_hash FROM tokens WHERE name = ?", ("storage-test",))
+        row = cursor.fetchone()
+        conn.close()
+
+        assert row is not None
+        assert row["token_hash"] != provided_token
+        assert len(row["token_hash"]) == 64  # SHA-256 hex length

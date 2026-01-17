@@ -66,10 +66,12 @@ class TokenService:
         # Ensure database is initialized
         init_database(self.db_path)
 
-    def create_token(self, name: str, scope: TokenScope) -> str:
+    def create_token(
+        self, name: str, scope: TokenScope, plaintext_token: str | None = None
+    ) -> str:
         """Create a new token and return the plaintext (only visible once).
 
-        Uses secrets.token_urlsafe(32) for secure random generation.
+        Uses secrets.token_urlsafe(32) for secure random generation by default.
         Stores SHA-256 hash of token, never the plaintext.
 
         Token Prefix Convention:
@@ -79,25 +81,39 @@ class TokenService:
         Args:
             name: Human-readable name for the token (must be unique).
             scope: Permission level (read/write/admin).
+            plaintext_token: Optional pre-generated token. If provided, must match
+                the expected prefix for the scope. Used for admin token initialization.
 
         Returns:
             Plaintext token string (mgp_... format) - only returned once.
 
         Raises:
-            ValueError: If token name already exists or is invalid.
+            ValueError: If token name already exists, is invalid, or provided token
+                has incorrect format.
             ValidationError: If token name fails validation (invalid format/length).
         """
         # Validate token name (defense in depth - also validated at API layer)
         validate_token_name(name)
 
-        # Generate secure random token
-        random_part = secrets.token_urlsafe(32)
+        if plaintext_token is None:
+            # Generate secure random token
+            random_part = secrets.token_urlsafe(32)
 
-        # Add prefix based on scope
-        if scope == TokenScope.ADMIN:
-            plaintext_token = f"mgp_ADMIN_{random_part}"
+            # Add prefix based on scope
+            if scope == TokenScope.ADMIN:
+                plaintext_token = f"mgp_ADMIN_{random_part}"
+            else:
+                plaintext_token = f"mgp_{random_part}"
         else:
-            plaintext_token = f"mgp_{random_part}"
+            # Validate provided token has correct prefix
+            expected_prefix = "mgp_ADMIN_" if scope == TokenScope.ADMIN else "mgp_"
+            if not plaintext_token.startswith(expected_prefix):
+                raise ValueError(
+                    f"Provided token must start with '{expected_prefix}' for scope {scope.value}"
+                )
+            # Validate token format (must be non-empty after prefix)
+            if len(plaintext_token) <= len(expected_prefix):
+                raise ValueError(f"Provided token is too short (must have content after prefix)")
 
         # Hash the token for storage
         token_hash = self._hash_token(plaintext_token)
