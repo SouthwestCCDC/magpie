@@ -11,9 +11,9 @@
 #
 # Environment variable configuration:
 #   MAGPIE_DOMAIN - The domain name for the service (REQUIRED - no default)
-#   AUTHENTIK_FORWARD_AUTH_URL - Authentik forward auth endpoint (OPTIONAL)
-#     Example: https://authentik.example.com/outpost.goauthentik.io/auth/caddy
-#     When set, enables Authentik SSO for /artifacts/* browsing
+#   AUTHENTIK_HOST - Authentik server hostname (OPTIONAL)
+#     Example: authentik.example.com
+#     When set (and SSO block uncommented), enables Authentik SSO for /artifacts/* browsing
 #
 # TLS options:
 #   1. Automatic TLS via Let's Encrypt (default)
@@ -212,20 +212,31 @@
 	#
 	# AUTHENTIK SSO INTEGRATION:
 	# To enable Authentik SSO for human browser access, set these environment variables:
-	#   - AUTHENTIK_FORWARD_AUTH_URL: The Authentik forward auth endpoint
-	#     Example: https://authentik.example.com/outpost.goauthentik.io/auth/caddy
+	#   - AUTHENTIK_HOST: The Authentik server hostname (e.g., authentik.example.com)
 	#
 	# When enabled, users browsing /artifacts/* via web browser will be redirected
 	# to Authentik for authentication. Bearer token access via API continues to work.
 	#
-	# To enable, uncomment the forward_auth block below and set AUTHENTIK_FORWARD_AUTH_URL
+	# To enable, uncomment the forward_auth block below and set AUTHENTIK_HOST
 	# environment variable in your deployment configuration.
+	#
+	# Uncomment and configure for Authentik SSO:
+	# handle /artifacts/* {
+	#     # Strip client-provided auth headers (defense-in-depth)
+	#     request_header -X-authentik-username
+	#     request_header -X-authentik-email
+	#     request_header -X-authentik-name
+	#
+	#     forward_auth {$AUTHENTIK_HOST} {
+	#         uri /outpost.goauthentik.io/auth/caddy
+	#         copy_headers X-authentik-username X-authentik-email X-authentik-name X-authentik-groups
+	#     }
+	#     root * /data
+	#     file_server browse
+	# }
+
+	# Default handler (no SSO) - comment out when enabling Authentik SSO above:
 	handle /artifacts/* {
-		# Uncomment the following block to enable Authentik SSO:
-		# forward_auth {
-		# 	uri {$AUTHENTIK_FORWARD_AUTH_URL}
-		# 	copy_headers X-authentik-username X-authentik-email X-authentik-name
-		# }
 		root * /data
 		file_server browse
 	}

@@ -96,8 +96,8 @@ Replace `authentik.example.com` with your Authentik domain.
 Add this environment variable to your Magpie deployment:
 
 ```bash
-# Authentik SSO configuration
-AUTHENTIK_FORWARD_AUTH_URL=https://authentik.example.com/outpost.goauthentik.io/auth/caddy
+# Authentik SSO configuration - just the hostname, not the full URL
+AUTHENTIK_HOST=authentik.example.com
 ```
 
 ### Docker Compose Configuration
@@ -109,7 +109,7 @@ services:
   caddy:
     environment:
       - MAGPIE_DOMAIN=magpie.example.com
-      - AUTHENTIK_FORWARD_AUTH_URL=https://authentik.example.com/outpost.goauthentik.io/auth/caddy
+      - AUTHENTIK_HOST=authentik.example.com
 ```
 
 ### Enable Forward Auth in Caddyfile
@@ -117,37 +117,50 @@ services:
 The forward_auth block is commented out by default in `Caddyfile.prod`. To enable Authentik SSO:
 
 1. Locate the `/artifacts/*` handler section in `Caddyfile.prod`
-2. Uncomment the forward_auth block:
+2. Comment out the default handler (without SSO)
+3. Uncomment the Authentik SSO handler block:
 
 ```Caddy
 handle /artifacts/* {
-    forward_auth {
-        uri {$AUTHENTIK_FORWARD_AUTH_URL}
-        copy_headers X-authentik-username X-authentik-email X-authentik-name
+    # Strip client-provided auth headers (defense-in-depth)
+    request_header -X-authentik-username
+    request_header -X-authentik-email
+    request_header -X-authentik-name
+
+    forward_auth {$AUTHENTIK_HOST} {
+        uri /outpost.goauthentik.io/auth/caddy
+        copy_headers X-authentik-username X-authentik-email X-authentik-name X-authentik-groups
     }
     root * /data
     file_server browse
 }
 ```
 
-3. Restart the Caddy container (run from the directory containing docker-compose.prod.yml):
+4. Restart the Caddy container (run from the directory containing docker-compose.prod.yml):
 
 ```bash
 docker compose -f docker-compose.prod.yml restart caddy
 ```
 
+**Note:** The `request_header -X-authentik-*` directives strip any client-provided headers before authentication. This prevents malicious clients from spoofing identity headers.
+
 ### Alternative: Manual Caddyfile Configuration
 
-If you're not using environment variables, you can hardcode the Authentik URL in `Caddyfile.prod`:
+If you're not using environment variables, you can hardcode the Authentik hostname in `Caddyfile.prod`:
 
 1. Locate the `/artifacts/*` handler section
-2. Uncomment and edit the forward_auth directive:
+2. Comment out the default handler and uncomment the SSO handler:
 
 ```Caddy
 handle /artifacts/* {
-    forward_auth {
-        uri https://authentik.example.com/outpost.goauthentik.io/auth/caddy
-        copy_headers X-authentik-username X-authentik-email X-authentik-name
+    # Strip client-provided auth headers (defense-in-depth)
+    request_header -X-authentik-username
+    request_header -X-authentik-email
+    request_header -X-authentik-name
+
+    forward_auth authentik.example.com {
+        uri /outpost.goauthentik.io/auth/caddy
+        copy_headers X-authentik-username X-authentik-email X-authentik-name X-authentik-groups
     }
     root * /data
     file_server browse
@@ -270,11 +283,13 @@ After configuration, Magpie supports:
 If you need custom attributes from Authentik (e.g., team membership), configure additional headers in the Caddy forward_auth block:
 
 ```Caddy
-forward_auth {
-    uri https://authentik.example.com/outpost.goauthentik.io/auth/caddy
-    copy_headers X-authentik-username X-authentik-email X-authentik-name X-authentik-groups
+forward_auth {$AUTHENTIK_HOST} {
+    uri /outpost.goauthentik.io/auth/caddy
+    copy_headers X-authentik-username X-authentik-email X-authentik-name X-authentik-groups X-authentik-uid
 }
 ```
+
+Remember to also add corresponding `request_header -X-authentik-<attr>` directives to strip those headers from incoming requests.
 
 ### Logging User Access
 
@@ -304,8 +319,8 @@ Deploy with the forward_auth block commented (default state). Artifacts remain p
 
 ### Phase 2: Enable Authentik SSO
 
-1. Set `AUTHENTIK_FORWARD_AUTH_URL` environment variable
-2. Uncomment the forward_auth block in Caddyfile.prod
+1. Set `AUTHENTIK_HOST` environment variable
+2. Comment out the default handler and uncomment the Authentik SSO handler in Caddyfile.prod
 3. Restart Caddy container
 4. Test with manual testing guide
 
@@ -326,4 +341,4 @@ To disable SSO, comment out the forward_auth block and restart Caddy.
 - [Authentik Forward Auth Documentation](https://goauthentik.io/docs/providers/proxy/forward_auth)
 - [Caddy forward_auth Directive](https://caddyserver.com/docs/caddyfile/directives/forward_auth)
 - Magpie Design Doc: `docs/design.md` (line 370 for auth architecture)
-- Magpie Issue #98: Authentik SSO integration specification
+- Magpie Issue #176: Authentik SSO integration specification
