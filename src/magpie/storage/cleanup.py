@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import structlog
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import structlog
 
 from magpie.storage.manifest import read_manifest
 from magpie.storage.paths import manifest_path

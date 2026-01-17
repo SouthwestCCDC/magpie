@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import structlog
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
+
+import structlog
 
 from magpie.storage.blob import store_blob
 from magpie.storage.exceptions import ArtifactNotFoundError

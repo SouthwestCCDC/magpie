@@ -8,11 +8,12 @@ while this module contains the core logic.
 from __future__ import annotations
 
 import json
-import structlog
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+
+import structlog
 
 from magpie.storage.cleanup import CleanupStats, cleanup_artifact_directories
 from magpie.storage.exceptions import ArtifactNotFoundError
@@ -211,7 +212,9 @@ def _scan_artifacts(
                     blob_age_days = get_blob_age_days(artifact_dir, blob_hash, now)
 
                     if blob_age_days is None:
-                        logger.debug("gc_skipping_blob", blob_hash=blob_hash[:12], reason="unknown_age")
+                        logger.debug(
+                            "gc_skipping_blob", blob_hash=blob_hash[:12], reason="unknown_age"
+                        )
                         continue
 
                     # Check if blob is older than retention period

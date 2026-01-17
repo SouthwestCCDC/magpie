@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import structlog
 from datetime import datetime
 from typing import Annotated
 
+import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pydantic import BaseModel, Field
 

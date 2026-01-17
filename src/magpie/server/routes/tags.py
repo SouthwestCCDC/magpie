@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import structlog
 from typing import Annotated
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel
 
