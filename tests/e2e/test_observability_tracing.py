@@ -1,7 +1,7 @@
 """E2E tests for OpenTelemetry tracing integration.
 
 Tests that OpenTelemetry instrumentation code doesn't break the complete
-request flow: upload -> tag -> info.
+request flow: upload -> tag -> download.
 """
 
 from __future__ import annotations
@@ -30,29 +30,26 @@ class TestOpenTelemetryDoesNotBreakWorkflow:
         This verifies that OTEL instrumentation doesn't break normal operation
         when disabled, and validates the default configuration.
         """
+        artifact_path = "e2e-tests/no-otel-test"
 
-        def perform_workflow(artifact_path: str) -> None:
-            """Upload, tag, and query an artifact."""
-            # Upload
-            upload_response = authenticated_client.post(
-                f"/api/v1/upload/{artifact_path}",
-                files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
-            )
-            assert upload_response.status_code == 200
-            artifact_hash = upload_response.json()["hash"]
+        # Upload
+        upload_response = authenticated_client.post(
+            f"/api/v1/upload/{artifact_path}",
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+        )
+        assert upload_response.status_code == 200
+        artifact_hash = upload_response.json()["hash"]
 
-            # Tag
-            tag_response = authenticated_client.post(
-                f"/api/v1/artifacts/{artifact_path}/{artifact_hash}/tags",
-                json={"tag": "v1.0"},
-            )
-            assert tag_response.status_code in (200, 201)
+        # Tag
+        tag_response = authenticated_client.post(
+            f"/api/v1/artifacts/{artifact_path}/{artifact_hash}/tags",
+            json={"tag": "v1.0"},
+        )
+        assert tag_response.status_code in (200, 201)
 
-            # Info
-            info_response = authenticated_client.get(
-                f"/api/v1/artifacts/{artifact_path}/{artifact_hash}/info"
-            )
-            assert info_response.status_code == 200
-
-        # Perform workflow - all operations should complete successfully
-        perform_workflow("e2e-tests/no-otel-test")
+        # Download
+        download_response = authenticated_client.get(
+            f"/api/v1/artifacts/{artifact_path}/{artifact_hash}"
+        )
+        assert download_response.status_code == 200
+        assert download_response.content == test_artifact_content
