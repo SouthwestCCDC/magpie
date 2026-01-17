@@ -103,15 +103,16 @@ Default path: `/var/run/magpie-gc.lock`
 **Note:** The `/var/run` directory (typically a symlink to `/run`) must exist
 and be writable by the user running GC. This is standard on most Linux systems.
 
-The systemd service uses `ConditionPathExists` to check the lock file before
-starting. The cron configuration uses `flock -n` for the same purpose.
+The systemd service uses `flock -n` for atomic locking. The cron configuration
+also uses `flock -n`. Unlike `ConditionPathExists`, `flock` automatically
+handles stale lock files from crashed processes.
 
 If GC is already running:
-- systemd: Service fails immediately (check `systemctl status magpie-gc`)
+- systemd: `flock` exits immediately with status 1 (check `systemctl status magpie-gc`)
 - cron: `flock` exits silently with status 1
 
 To customize the lock path, edit the cron file's `LOCK_FILE` variable or the
-systemd service's `ExecStartPre`/`ExecStopPost`/`ConditionPathExists` lines.
+systemd service's `ExecStart` line.
 
 ### Logging
 
@@ -237,17 +238,26 @@ docker compose exec magpie magpie-ctl gc --dry-run
 3. Check for lock file: `ls -la /var/run/magpie-gc.lock`
 4. Check service logs: `journalctl -u magpie-gc.service -n 50`
 
-### Lock File Stuck
+### Lock File Issues
 
-If GC was interrupted, the lock file may remain:
+With `flock`-based locking (used in both systemd and cron), stale locks from
+crashed processes are automatically handled. However, if you need to manually
+verify or clean up:
 
 ```bash
 # Check if GC is actually running
 pgrep -f "magpie-ctl gc"
 
-# If not running, remove stale lock
-sudo rm /var/run/magpie-gc.lock
+# View lock file (if curious - no cleanup needed with flock)
+ls -la /var/run/magpie-gc.lock
+
+# Force-stop a stuck GC process (only if truly stuck)
+pkill -f "magpie-ctl gc"
 ```
+
+Note: Unlike the old `ConditionPathExists` approach, `flock` automatically
+releases locks when processes exit (even on crash), so manual lock file cleanup
+is not needed.
 
 ### Permission Errors
 
@@ -263,6 +273,27 @@ non-root user:
 1. Add the user to the `docker` group: `sudo usermod -aG docker <username>`
 2. Uncomment and set `User=<username>` in the systemd service file
 3. Ensure the lock file directory is writable by that user
+
+**Security Hardening Limitations**
+
+The systemd service includes security hardening (`ProtectHome=true`,
+`ProtectSystem=strict`) which may prevent access to `MAGPIE_DATA_DIR` if
+configured to paths in `/home` or other protected locations.
+
+If you encounter permission errors with a custom data directory:
+
+1. **Recommended:** Use a non-protected path like `/opt/magpie/data` or `/var/lib/magpie`
+2. **Alternative:** Adjust security settings in the systemd service:
+   - Set `ProtectHome=false` if DATA_DIR is in `/home`
+   - Add `ReadWritePaths=/path/to/your/data` for other protected paths
+3. **Alternative:** For non-Docker deployments, explicitly add your data path:
+   ```ini
+   ReadWritePaths=/var/run /custom/path/to/data
+   ```
+
+Note: For Docker deployments, the container already has access to the mounted
+data directory, so this limitation typically only affects direct (non-Docker)
+execution.
 
 ---
 
