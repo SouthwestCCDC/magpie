@@ -222,5 +222,5 @@ This is a future enhancement. See design.md for planned release tracking impleme
 ## References
 
 - [Sentry FastAPI Documentation](https://docs.sentry.io/platforms/python/integrations/fastapi/)
-- [Magpie Design Doc - Observability Section](./design.md)
+- [Magpie Design Doc - Sentry Integration](./design.md#sentry-integration)
 - [Magpie User Guide - Configuration](./user-guide.md)

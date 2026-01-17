@@ -93,11 +93,12 @@ class TestSentryIntegration:
         # Verify DSN was passed
         assert call_kwargs["dsn"] == "https://test@sentry.io/123"
 
-        # Verify integrations include FastAPI
+        # Verify integrations include both FastAPI and Starlette
         integrations = call_kwargs["integrations"]
         integration_types = [type(i).__name__ for i in integrations]
         assert (
-            "FastApiIntegration" in integration_types or "StarletteIntegration" in integration_types
+            "FastApiIntegration" in integration_types
+            and "StarletteIntegration" in integration_types
         )
 
         # Verify environment is set
