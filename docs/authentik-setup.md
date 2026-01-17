@@ -91,11 +91,10 @@ Replace `authentik.example.com` with your Authentik domain.
 
 ### Environment Variables
 
-Add these environment variables to your Magpie deployment:
+Add this environment variable to your Magpie deployment:
 
 ```bash
 # Authentik SSO configuration
-AUTHENTIK_ENABLED=true
 AUTHENTIK_FORWARD_AUTH_URL=https://authentik.example.com/outpost.goauthentik.io/auth/caddy
 ```
 
@@ -108,16 +107,39 @@ services:
   caddy:
     environment:
       - MAGPIE_DOMAIN=magpie.example.com
-      - AUTHENTIK_ENABLED=true
       - AUTHENTIK_FORWARD_AUTH_URL=https://authentik.example.com/outpost.goauthentik.io/auth/caddy
 ```
 
-### Manual Caddyfile Configuration
+### Enable Forward Auth in Caddyfile
 
-If you're not using the environment variable approach, you can edit `Caddyfile.prod` directly:
+The forward_auth block is commented out by default in `Caddyfile.prod`. To enable Authentik SSO:
+
+1. Locate the `/artifacts/*` handler section in `Caddyfile.prod`
+2. Uncomment the forward_auth block:
+
+```Caddy
+handle /artifacts/* {
+    forward_auth {
+        uri {$AUTHENTIK_FORWARD_AUTH_URL}
+        copy_headers X-authentik-username X-authentik-email X-authentik-name
+    }
+    root * /data
+    file_server browse
+}
+```
+
+3. Restart the Caddy container:
+
+```bash
+docker compose -f docker-compose.prod.yml restart caddy
+```
+
+### Alternative: Manual Caddyfile Configuration
+
+If you're not using environment variables, you can hardcode the Authentik URL in `Caddyfile.prod`:
 
 1. Locate the `/artifacts/*` handler section
-2. Add the forward_auth directive before the file_server
+2. Uncomment and edit the forward_auth directive:
 
 ```Caddy
 handle /artifacts/* {
@@ -274,19 +296,28 @@ For fine-grained access control (e.g., restrict certain artifact paths), impleme
 
 ## Migration Path
 
-### Phase 1: Enable Authentik (Optional)
+### Phase 1: Deploy Without SSO (Default)
 
-Deploy with `AUTHENTIK_ENABLED=false` initially. Artifacts remain publicly browsable (existing behavior).
+Deploy with the forward_auth block commented (default state). Artifacts remain publicly browsable (existing behavior).
 
-### Phase 2: Enable for Humans
+### Phase 2: Enable Authentik SSO
 
-Set `AUTHENTIK_ENABLED=true`. Humans must use SSO to browse. CI/CD continues with bearer tokens.
+1. Set `AUTHENTIK_FORWARD_AUTH_URL` environment variable
+2. Uncomment the forward_auth block in Caddyfile.prod
+3. Restart Caddy container
+4. Test with manual testing guide
+
+Humans must use SSO to browse. CI/CD continues with bearer tokens.
 
 ### Phase 3: Monitor and Adjust
 
 - Review Caddy access logs for authentication patterns
 - Adjust Authentik session duration if needed
 - Update policies based on team feedback
+
+### Rollback
+
+To disable SSO, comment out the forward_auth block and restart Caddy.
 
 ## References
 
