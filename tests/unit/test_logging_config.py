@@ -13,6 +13,24 @@ from magpie.config import MagpieSettings
 from magpie.logging_config import configure_logging
 
 
+@pytest.fixture(autouse=True)
+def reset_logging():
+    """Reset structlog and logging state between tests for isolation."""
+    # Reset before test
+    structlog.reset_defaults()
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.WARNING)  # Reset to default level
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    yield
+    # Reset after test
+    structlog.reset_defaults()
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.WARNING)
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+
+
 def test_configure_logging_json_format(monkeypatch):
     """Test that JSON format configures structlog with JSON renderer."""
     # Create settings with JSON format

@@ -19,13 +19,16 @@ from magpie.server.routes.status import router as status_router
 from magpie.server.routes.tags import router as tags_router
 from magpie.server.routes.upload import router as upload_router
 
+# Configure logging at module level, before app creation,
+# so logging is available during middleware initialization
+configure_logging(get_settings())
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan context manager for startup/shutdown events."""
-    # Startup: Initialize logging and observability
+    # Startup: Initialize observability (logging already configured at module level)
     settings = get_settings()
-    configure_logging(settings)
     setup_observability(app, settings)
     yield
     # Shutdown: cleanup if needed

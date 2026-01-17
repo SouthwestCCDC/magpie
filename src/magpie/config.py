@@ -43,7 +43,7 @@ class MagpieSettings(BaseSettings):
     s3_bucket: str | None = None  # MAGPIE_S3_BUCKET
 
     # Logging settings
-    log_format: Literal["json", "console"] = "console"  # MAGPIE_LOG_FORMAT
+    log_format: Literal["json", "console"] = "json"  # MAGPIE_LOG_FORMAT
 
     # Observability settings
     sentry_dsn: str | None = None  # MAGPIE_SENTRY_DSN

@@ -66,10 +66,12 @@ def configure_logging(settings: MagpieSettings) -> None:
     )
 
     # Configure stdlib logging to work with structlog
+    # Use force=True to allow reconfiguration (important for tests)
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
         level=logging.DEBUG if settings.debug else logging.INFO,
+        force=True,
     )
 
 
