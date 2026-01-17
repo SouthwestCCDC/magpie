@@ -262,12 +262,11 @@ validate_config() {
     if [[ -z "$DATA_DIR" ]]; then
         errors+=("Data directory cannot be empty")
     elif [[ ! "$DATA_DIR" =~ ^/ ]]; then
-        # Only check for absolute path if DATA_DIR is not empty
         errors+=("Data directory must be an absolute path: $DATA_DIR")
     fi
 
     # Warn about /home with ProtectHome=true
-    if [[ -n "$DATA_DIR" ]] && [[ "$DATA_DIR" =~ ^/home/ ]]; then
+    if [[ "$DATA_DIR" =~ ^/home/ ]]; then
         log_warn "Data directory is under /home: $DATA_DIR"
         log_warn "The GC service uses ProtectHome=true for security hardening."
         log_warn "This will prevent GC from accessing paths under /home."
