@@ -8,7 +8,7 @@ while this module contains the core logic.
 from __future__ import annotations
 
 import json
-import logging
+import structlog
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +20,7 @@ from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
 from magpie.storage.symlinks import ReconcileStats, reconcile_symlinks
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 @dataclass
@@ -124,7 +124,7 @@ def get_blob_age_days(artifact_dir: Path, blob_hash: str, now: datetime) -> int 
         pass
     except (PermissionError, OSError) as e:
         # Unexpected I/O errors - log and fall back
-        logger.warning("Error reading metadata for blob %s: %s", blob_hash[:12], e)
+        logger.warning("gc_metadata_error", blob_hash=blob_hash[:12], error=str(e))
 
     # Fall back to file mtime
     if blob_file.exists():
@@ -166,7 +166,7 @@ def _scan_artifacts(
         artifact_path = str(artifact_dir.relative_to(storage_path))
         result.artifacts_scanned += 1
 
-        logger.debug("Processing artifact: %s", artifact_path)
+        logger.debug("gc_processing_artifact", artifact_path=artifact_path)
 
         # Read manifest to get tagged hashes
         # Manifest stores full hashes, but blobs are stored with short hashes (8 chars)
@@ -211,16 +211,16 @@ def _scan_artifacts(
                     blob_age_days = get_blob_age_days(artifact_dir, blob_hash, now)
 
                     if blob_age_days is None:
-                        logger.debug("Skipping blob %s (unknown age)", blob_hash[:12])
+                        logger.debug("gc_skipping_blob", blob_hash=blob_hash[:12], reason="unknown_age")
                         continue
 
                     # Check if blob is older than retention period
                     if blob_age_days < retention_days:
                         logger.debug(
-                            "Keeping blob %s (%d days old < %d)",
-                            blob_hash[:12],
-                            blob_age_days,
-                            retention_days,
+                            "gc_keeping_blob",
+                            blob_hash=blob_hash[:12],
+                            age_days=blob_age_days,
+                            retention_days=retention_days,
                         )
                         continue
 
@@ -267,7 +267,12 @@ def _delete_blobs(
 
     for idx, blob in enumerate(blobs_to_delete):
         if not dry_run:
-            logger.debug("Deleting blob %s (%d days old)", blob.blob_hash[:12], blob.age_days)
+            logger.debug(
+                "gc_deleting_blob",
+                blob_hash=blob.blob_hash[:12],
+                age_days=blob.age_days,
+                artifact_path=blob.artifact_path,
+            )
 
             blob.blob_file.unlink()
 
@@ -374,5 +379,19 @@ def run_gc(
         cleanup_stats = _cleanup_directories(artifact_dirs, storage_path, dry_run)
         result.cleanup_stats = cleanup_stats
         result.items_removed = cleanup_stats.total_removed
+
+    # Log GC completion with summary
+    logger.info(
+        "gc_complete",
+        dry_run=dry_run,
+        reconcile_only=reconcile_only,
+        artifacts_scanned=result.artifacts_scanned,
+        blobs_found=result.blobs_found,
+        blobs_deleted=result.blobs_deleted,
+        space_reclaimed_bytes=result.space_reclaimed_bytes,
+        symlinks_checked=result.symlinks_checked,
+        symlinks_fixed=result.symlinks_fixed,
+        items_removed=result.items_removed,
+    )
 
     return result, blobs_to_delete

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import logging
+import time
 from typing import IO, Annotated
 
+import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 
@@ -14,7 +15,7 @@ from magpie.storage.exceptions import InvalidArtifactPathError
 from magpie.storage.paths import normalize_artifact_path
 from magpie.storage.service import StorageService
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 router = APIRouter()
 
@@ -189,8 +190,9 @@ async def upload_artifact(
         effective_user = uploaded_by
         if uploaded_by == "anonymous":
             logger.warning(
-                "Upload request without X-Magpie-User header and no uploaded_by param, "
-                "using 'anonymous' - this may indicate unauthenticated access"
+                "anonymous_upload",
+                artifact_path=path,
+                message="Upload without X-Magpie-User header and no uploaded_by param",
             )
 
     # Wrap file stream with size limiter if max_upload_size is configured
@@ -199,6 +201,9 @@ async def upload_artifact(
         file_stream = SizeLimitedReader(file.file, max_size)
     else:
         file_stream = file.file
+
+    # Track upload timing
+    start_time = time.perf_counter()
 
     try:
         info, is_duplicate = storage_service.store_artifact(
@@ -213,9 +218,25 @@ async def upload_artifact(
             detail=str(e),
         )
 
+    # Calculate upload duration
+    duration_ms = (time.perf_counter() - start_time) * 1000
+
     # Use blobs/ path for hash-based downloads (info.hash_ref has @ prefix)
     blob_name = info.hash_ref.lstrip("@")
     download_url = f"/artifacts/{path}/blobs/{blob_name}"
+
+    # Log upload completion with structured fields
+    logger.info(
+        "upload_complete",
+        artifact_path=path,
+        hash=info.hash,
+        hash_ref=info.hash_ref,
+        size_bytes=content_length,
+        duration_ms=round(duration_ms, 2),
+        uploaded_by=effective_user,
+        is_duplicate=is_duplicate,
+        source_uri=source_uri,
+    )
 
     return UploadResponse(
         hash=info.hash,

@@ -8,7 +8,9 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 
 from magpie.config import get_settings
+from magpie.logging_config import configure_logging
 from magpie.server.errors import register_exception_handlers
+from magpie.server.middleware import RequestLoggingMiddleware
 from magpie.server.observability import setup_observability
 from magpie.server.routes.artifacts import router as artifacts_router
 from magpie.server.routes.auth import router as auth_router
@@ -21,8 +23,9 @@ from magpie.server.routes.upload import router as upload_router
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan context manager for startup/shutdown events."""
-    # Startup: Initialize observability
+    # Startup: Initialize logging and observability
     settings = get_settings()
+    configure_logging(settings)
     setup_observability(app, settings)
     yield
     # Shutdown: cleanup if needed
@@ -34,6 +37,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Add middleware for request logging and correlation
+app.add_middleware(RequestLoggingMiddleware)
 
 register_exception_handlers(app)
 app.include_router(upload_router)

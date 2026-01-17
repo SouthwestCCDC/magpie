@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+import structlog
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
@@ -14,7 +14,7 @@ from magpie.server.subprocess_utils import CtlCommandError, run_ctl_command
 from magpie.validation import TAG_NAME_MAX_LENGTH, TAG_NAME_PATTERN
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class FlushTagResponse(BaseModel):
@@ -80,9 +80,10 @@ async def flush_tag(
     try:
         result = await run_ctl_command(cmd)
     except CtlCommandError as e:
-        logger.error(f"Flush tag command failed: {e}")
+        logger.error("flush_tag_failed", tag_name=tag_name, error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Flush tag operation failed") from e
     except asyncio.TimeoutError:
+        logger.error("flush_tag_timeout", tag_name=tag_name)
         raise HTTPException(status_code=504, detail="Operation timed out")
 
     return FlushTagResponse(
