@@ -478,6 +478,16 @@ Options for `magpie-ctl gc`:
 | `-q`, `--quiet` | Suppress progress output |
 | `--json-output` | Output results as JSON for scripting/automation |
 
+### Backup and Disaster Recovery
+
+For backup procedures, restore operations, and disaster recovery scenarios, see the
+[Backup and Restore Guide](backup-restore.md). This guide covers:
+
+- What to back up (storage directory, database, configuration)
+- Automated backup scripts and systemd timers
+- Step-by-step restore procedures
+- Recovery scenarios (corrupted manifests, lost database, partial data loss)
+
 ### Troubleshooting
 
 #### "No server configured"

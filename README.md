@@ -32,7 +32,11 @@ magpie ls images/ubuntu
 magpie tag images/ubuntu:latest --as stable
 ```
 
-See [docs/user-guide.md](docs/user-guide.md) for complete documentation.
+## Documentation
+
+- [User Guide](docs/user-guide.md) - Complete CLI and API reference
+- [Backup and Restore Guide](docs/backup-restore.md) - Backup procedures and disaster recovery
+- [Design Document](docs/design.md) - Architecture and implementation details
 
 ## Development
 
