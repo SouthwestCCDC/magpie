@@ -42,6 +42,9 @@ class SizeLimitedReader:
         Args:
             stream: Underlying file stream to wrap.
             max_size: Maximum allowed bytes to read (None = no limit).
+                     When None, reader tracks bytes but doesn't enforce a limit.
+                     This is backward compatible - existing callers that pass
+                     a concrete max_size continue to work unchanged.
         """
         self._stream = stream
         self._max_size = max_size

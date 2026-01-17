@@ -35,9 +35,10 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         request_id = str(uuid.uuid4())
 
         # Bind request_id to structlog context for this request
-        # Note: structlog.contextvars uses Python's contextvars which are
-        # automatically isolated per async task, so concurrent requests
-        # won't interfere with each other
+        # Note: Python's contextvars are automatically copied when creating child tasks
+        # (each request is an async task), so this is isolated per-request. We clear
+        # first to ensure clean state, then bind the request_id. This middleware should
+        # run early in the middleware chain before other middleware that might set context.
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)
 
