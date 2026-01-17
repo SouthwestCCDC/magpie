@@ -84,6 +84,33 @@ def init(ctx: CTLContext, reset_admin_token: bool, admin_token: str | None) -> N
     plaintext_token: str | None = None
     token_already_exists = False
 
+    # Validate custom token format early (before revoking existing token)
+    if admin_token is not None:
+        if not admin_token.startswith("mgp_ADMIN_"):
+            error_msg = "Provided token must start with 'mgp_ADMIN_' for admin scope"
+            if is_json_output():
+                output_result(
+                    CommandResult(
+                        data={"error": error_msg},
+                        human_output="",
+                    )
+                )
+            else:
+                click.echo(f"Error: {error_msg}", err=True)
+            raise SystemExit(1)
+        if len(admin_token) <= len("mgp_ADMIN_"):
+            error_msg = "Provided token is too short (must have content after 'mgp_ADMIN_' prefix)"
+            if is_json_output():
+                output_result(
+                    CommandResult(
+                        data={"error": error_msg},
+                        human_output="",
+                    )
+                )
+            else:
+                click.echo(f"Error: {error_msg}", err=True)
+            raise SystemExit(1)
+
     if reset_admin_token:
         # Revoke existing admin token first
         if ctx.debug:
@@ -139,9 +166,7 @@ def init(ctx: CTLContext, reset_admin_token: bool, admin_token: str | None) -> N
                 token_already_exists = True
                 if not is_json_output():
                     click.echo("")
-                    click.echo(
-                        "Admin token already exists. Use --reset-admin-token to regenerate."
-                    )
+                    click.echo("Admin token already exists. Use --reset-admin-token to regenerate.")
             else:
                 # Token validation failed
                 if is_json_output():

@@ -337,27 +337,21 @@ class TestCreateTokenWithProvidedToken:
 
         assert result == provided_token
 
-    def test_create_token_rejects_wrong_prefix_for_admin(
-        self, token_service: TokenService
-    ) -> None:
+    def test_create_token_rejects_wrong_prefix_for_admin(self, token_service: TokenService) -> None:
         """create_token should reject token without mgp_ADMIN_ prefix for admin scope."""
         wrong_token = "mgp_not_admin_token"
 
         with pytest.raises(ValueError, match="must start with 'mgp_ADMIN_'"):
             token_service.create_token("bad-admin", TokenScope.ADMIN, wrong_token)
 
-    def test_create_token_rejects_admin_prefix_for_write(
-        self, token_service: TokenService
-    ) -> None:
+    def test_create_token_rejects_admin_prefix_for_write(self, token_service: TokenService) -> None:
         """create_token should reject mgp_ADMIN_ prefix for write scope."""
         wrong_token = "mgp_ADMIN_should_not_be_admin"
 
         with pytest.raises(ValueError, match="must start with 'mgp_'"):
             token_service.create_token("bad-write", TokenScope.WRITE, wrong_token)
 
-    def test_create_token_rejects_admin_prefix_for_read(
-        self, token_service: TokenService
-    ) -> None:
+    def test_create_token_rejects_admin_prefix_for_read(self, token_service: TokenService) -> None:
         """create_token should reject mgp_ADMIN_ prefix for read scope."""
         wrong_token = "mgp_ADMIN_should_not_be_admin"
 

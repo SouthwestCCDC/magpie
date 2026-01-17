@@ -66,9 +66,7 @@ class TokenService:
         # Ensure database is initialized
         init_database(self.db_path)
 
-    def create_token(
-        self, name: str, scope: TokenScope, plaintext_token: str | None = None
-    ) -> str:
+    def create_token(self, name: str, scope: TokenScope, plaintext_token: str | None = None) -> str:
         """Create a new token and return the plaintext (only visible once).
 
         Uses secrets.token_urlsafe(32) for secure random generation by default.
@@ -109,23 +107,17 @@ class TokenService:
             if scope == TokenScope.ADMIN:
                 # Admin tokens must have mgp_ADMIN_ prefix
                 if not plaintext_token.startswith("mgp_ADMIN_"):
-                    token_preview = plaintext_token[:20] + "..." if len(plaintext_token) > 20 else plaintext_token
-                    raise ValueError(
-                        f"Provided token must start with 'mgp_ADMIN_' for scope {scope.value}, "
-                        f"got: {token_preview}"
-                    )
+                    raise ValueError("Provided token must start with 'mgp_ADMIN_' for admin scope")
                 expected_prefix = "mgp_ADMIN_"
             else:
                 # Read/write tokens must have mgp_ prefix but NOT mgp_ADMIN_
                 if not plaintext_token.startswith("mgp_"):
-                    token_preview = plaintext_token[:20] + "..." if len(plaintext_token) > 20 else plaintext_token
                     raise ValueError(
-                        f"Provided token must start with 'mgp_' for scope {scope.value}, "
-                        f"got: {token_preview}"
+                        f"Provided token must start with 'mgp_' for {scope.value} scope"
                     )
                 if plaintext_token.startswith("mgp_ADMIN_"):
                     raise ValueError(
-                        f"Provided token must start with 'mgp_' (not 'mgp_ADMIN_') for scope {scope.value}"
+                        f"Provided token must start with 'mgp_' (not 'mgp_ADMIN_') for {scope.value} scope"
                     )
                 expected_prefix = "mgp_"
 
