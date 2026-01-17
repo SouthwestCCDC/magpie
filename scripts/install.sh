@@ -258,6 +258,24 @@ validate_config() {
         errors+=("Install directory cannot be empty")
     fi
 
+    # Data directory validation
+    if [[ -z "$DATA_DIR" ]]; then
+        errors+=("Data directory cannot be empty")
+    elif [[ ! "$DATA_DIR" =~ ^/ ]]; then
+        # Only check for absolute path if DATA_DIR is not empty
+        errors+=("Data directory must be an absolute path: $DATA_DIR")
+    fi
+
+    # Warn about /home with ProtectHome=true
+    if [[ -n "$DATA_DIR" ]] && [[ "$DATA_DIR" =~ ^/home/ ]]; then
+        log_warn "Data directory is under /home: $DATA_DIR"
+        log_warn "The GC service uses ProtectHome=true for security hardening."
+        log_warn "This will prevent GC from accessing paths under /home."
+        log_warn "Consider using a path like /srv/magpie/data or /opt/magpie/data instead."
+        log_warn "See https://github.com/SouthwestCCDC/magpie/issues/159 for details."
+        errors+=("Data directory under /home is not compatible with GC service hardening")
+    fi
+
     if [[ ${#errors[@]} -gt 0 ]]; then
         log_error "Configuration validation failed:"
         for err in "${errors[@]}"; do
@@ -932,6 +950,9 @@ Commands:
 Install options:
   --install-dir PATH      Installation directory (default: $DEFAULT_INSTALL_DIR)
   --data-dir PATH         Data storage directory (default: INSTALL_DIR/data)
+                          Must be an absolute path. Paths under /home are not
+                          supported due to systemd hardening (ProtectHome=true).
+                          Recommended: /srv/magpie/data or /opt/magpie/data
   --tls-mode MODE         TLS mode: off, auto, manual (default: $DEFAULT_TLS_MODE)
   --domain DOMAIN         Domain name (required for auto/manual TLS)
   --tls-cert PATH         TLS certificate path (required for manual TLS)
@@ -956,6 +977,9 @@ Examples:
 
   # Non-interactive installation (HTTP-only, behind proxy)
   sudo $SCRIPT_NAME install --tls-mode off --noninteractive
+
+  # Installation with custom data directory
+  sudo $SCRIPT_NAME install --data-dir /srv/magpie/data
 
   # Installation with Let's Encrypt
   sudo $SCRIPT_NAME install --tls-mode auto --domain magpie.example.com
