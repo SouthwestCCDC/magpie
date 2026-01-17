@@ -256,6 +256,8 @@ validate_config() {
     # Directory validation
     if [[ -z "$INSTALL_DIR" ]]; then
         errors+=("Install directory cannot be empty")
+    elif [[ ! "$INSTALL_DIR" =~ ^/ ]]; then
+        errors+=("Install directory must be an absolute path: $INSTALL_DIR")
     fi
 
     # Data directory validation
@@ -266,13 +268,24 @@ validate_config() {
     fi
 
     # Warn about /home with ProtectHome=true
-    if [[ "$DATA_DIR" =~ ^/home/ ]]; then
+    if [[ "$DATA_DIR" =~ ^/home(/|$) ]]; then
         log_warn "Data directory is under /home: $DATA_DIR"
         log_warn "The GC service uses ProtectHome=true for security hardening."
         log_warn "This will prevent GC from accessing paths under /home."
         log_warn "Consider using a path like /srv/magpie/data or /opt/magpie/data instead."
         log_warn "See https://github.com/SouthwestCCDC/magpie/issues/159 for details."
         errors+=("Data directory under /home is not compatible with GC service hardening")
+    fi
+
+    # Writability check
+    local parent_dir
+    if [[ -d "$DATA_DIR" ]]; then
+        parent_dir="$DATA_DIR"
+    else
+        parent_dir="$(dirname "$DATA_DIR")"
+    fi
+    if [[ -d "$parent_dir" ]] && [[ ! -w "$parent_dir" ]]; then
+        errors+=("Data directory path is not writable: $parent_dir")
     fi
 
     if [[ ${#errors[@]} -gt 0 ]]; then
@@ -951,6 +964,7 @@ Install options:
   --data-dir PATH         Data storage directory (default: INSTALL_DIR/data)
                           Must be an absolute path. Paths under /home are not
                           supported due to systemd hardening (ProtectHome=true).
+                          Note: Symlinks to /home paths will also fail with GC service.
                           Recommended: /srv/magpie/data or /opt/magpie/data
   --tls-mode MODE         TLS mode: off, auto, manual (default: $DEFAULT_TLS_MODE)
   --domain DOMAIN         Domain name (required for auto/manual TLS)
