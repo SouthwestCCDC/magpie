@@ -11,6 +11,9 @@
 #
 # Environment variable configuration:
 #   MAGPIE_DOMAIN - The domain name for the service (REQUIRED - no default)
+#   AUTHENTIK_FORWARD_AUTH_URL - Authentik forward auth endpoint (OPTIONAL)
+#     Example: https://authentik.example.com/outpost.goauthentik.io/auth/caddy
+#     When set, enables Authentik SSO for /artifacts/* browsing
 #
 # TLS options:
 #   1. Automatic TLS via Let's Encrypt (default)
@@ -21,15 +24,31 @@
 # AUTHENTICATION FLOW (forward_auth)
 # =============================================================================
 #
-# Protected routes use Caddy's forward_auth to validate Bearer tokens:
+# Magpie supports two authentication methods:
 #
-# 1. Client sends request with "Authorization: Bearer <token>" header
-# 2. Caddy makes subrequest to /api/v1/auth/validate with the same headers
-# 3. Auth endpoint validates token and returns:
-#    - 200 OK with X-Magpie-User and X-Magpie-Scope headers (valid token)
-#    - 401 Unauthorized (invalid/missing token)
-# 4. If auth returns 200, Caddy copies identity headers to upstream request
-# 5. If auth returns 401, Caddy returns 401 to client (request blocked)
+# 1. BEARER TOKENS (for API access):
+#    Protected routes use Caddy's forward_auth to validate Bearer tokens:
+#
+#    a. Client sends request with "Authorization: Bearer <token>" header
+#    b. Caddy makes subrequest to /api/v1/auth/validate with the same headers
+#    c. Auth endpoint validates token and returns:
+#       - 200 OK with X-Magpie-User and X-Magpie-Scope headers (valid token)
+#       - 401 Unauthorized (invalid/missing token)
+#    d. If auth returns 200, Caddy copies identity headers to upstream request
+#    e. If auth returns 401, Caddy returns 401 to client (request blocked)
+#
+# 2. AUTHENTIK SSO (for browser access to /artifacts/*):
+#    When AUTHENTIK_FORWARD_AUTH_URL is set, users browsing /artifacts/* are
+#    authenticated via Authentik SSO:
+#
+#    a. Browser requests /artifacts/*
+#    b. Caddy sends request to Authentik forward auth endpoint
+#    c. If no valid session, Authentik redirects browser to login page
+#    d. After login, Authentik validates session and returns user headers:
+#       - X-authentik-username, X-authentik-email, X-authentik-name
+#    e. Caddy forwards request with user identity headers
+#
+#    See docs/authentik-setup.md for complete setup instructions.
 #
 # =============================================================================
 # ROUTE PROTECTION SUMMARY
@@ -45,21 +64,29 @@
 #   - DELETE /api/v1/tokens/*              - Revoke tokens (admin)
 #   - POST   /api/v1/gc                    - Garbage collection (admin)
 #
-# PUBLIC ROUTES (no authentication required):
+# PUBLIC ROUTES (no authentication required by default):
 #   - GET    /api/v1/artifacts/*           - List artifacts, get info
 #   - GET    /api/v1/auth/validate         - Auth validation endpoint
 #   - GET    /health                       - Health check
 #   - GET    /artifacts/*                  - Static file downloads + directory browsing
+#                                             (Can be protected with Authentik SSO - see below)
 #
 # =============================================================================
 # HEADER PROPAGATION
 # =============================================================================
 #
 # On successful authentication, these headers are copied to upstream:
+#
+# Bearer Token Authentication:
 #   - X-Magpie-User:  Token name (identifies the authenticated client)
 #   - X-Magpie-Scope: Permission level (read, write, or admin)
 #
-# The FastAPI backend can use these headers for authorization decisions.
+# Authentik SSO Authentication (when enabled):
+#   - X-authentik-username: Authentik username
+#   - X-authentik-email:    User's email address
+#   - X-authentik-name:     User's display name
+#
+# The FastAPI backend can use these headers for authorization decisions and logging.
 #
 # =============================================================================
 
@@ -182,7 +209,23 @@
 	# refs, filenames) to anyone who can access this endpoint. This is intentional
 	# for Magpie's use case (artifact discovery). If you need to restrict
 	# browsing, remove the "browse" argument from file_server below.
+	#
+	# AUTHENTIK SSO INTEGRATION:
+	# To enable Authentik SSO for human browser access, set these environment variables:
+	#   - AUTHENTIK_FORWARD_AUTH_URL: The Authentik forward auth endpoint
+	#     Example: https://authentik.example.com/outpost.goauthentik.io/auth/caddy
+	#
+	# When enabled, users browsing /artifacts/* via web browser will be redirected
+	# to Authentik for authentication. Bearer token access via API continues to work.
+	#
+	# To enable, uncomment the forward_auth block below and set AUTHENTIK_FORWARD_AUTH_URL
+	# environment variable in your deployment configuration.
 	handle /artifacts/* {
+		# Uncomment the following block to enable Authentik SSO:
+		# forward_auth {
+		# 	uri {$AUTHENTIK_FORWARD_AUTH_URL}
+		# 	copy_headers X-authentik-username X-authentik-email X-authentik-name
+		# }
 		root * /data
 		file_server browse
 	}

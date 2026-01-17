@@ -33,6 +33,25 @@ Magpie provides a simple, reliable way to:
 - **Configuration bundles**: Versioned config packages for deployment
 - **Firmware distribution**: Immutable firmware blobs with version tags
 
+### Authentication Methods
+
+Magpie supports two authentication methods:
+
+1. **Bearer Tokens** (for CLI, API, and automation)
+   - Scoped tokens: read, write, or admin
+   - Created via `magpie-ctl token create`
+   - Used in `Authorization: Bearer <token>` header
+   - Required for CLI operations and API access
+
+2. **Authentik SSO** (for browser access, optional)
+   - Web-based browsing of `/artifacts/*` paths
+   - Seamless SSO integration for team members
+   - Configured server-side (see [docs/authentik-setup.md](authentik-setup.md))
+   - Does not affect CLI or API access
+
+This guide focuses on CLI usage with bearer tokens. For Authentik SSO setup,
+see the [Authentik Integration Guide](authentik-setup.md).
+
 ## Client Setup
 
 ### Installation
