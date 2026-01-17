@@ -814,17 +814,17 @@ cmd_update() {
     fi
 
     log "Pulling latest repository code..."
-    cd "${INSTALL_DIR}/repo"
-    if ! git pull origin "$GITHUB_BRANCH"; then
-        die "Failed to pull latest repository code"
+    if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "$GITHUB_BRANCH"; then
+        die "Failed to fetch latest repository code"
+    fi
+    if ! git -C "${INSTALL_DIR}/repo" reset --hard "origin/$GITHUB_BRANCH"; then
+        die "Failed to reset repository to latest code"
     fi
 
     log "Rebuilding magpie image..."
-    if ! docker build --pull -t magpie:latest .; then
+    if ! docker build --pull -t magpie:latest "${INSTALL_DIR}/repo"; then
         die "Failed to rebuild magpie image"
     fi
-
-    cd "$INSTALL_DIR"
 
     log "Pulling external images..."
     docker compose --env-file "${INSTALL_DIR}/etc/.env" pull
@@ -835,6 +835,11 @@ cmd_update() {
     wait_for_healthy
 
     log "Update complete!"
+    echo ""
+    echo "  Note: docker-compose.yml and Caddyfile are not updated automatically"
+    echo "  to preserve local customizations. If upstream has breaking changes to"
+    echo "  these files, reinstall with: $SCRIPT_NAME install --force"
+    echo ""
 }
 
 cmd_uninstall() {
