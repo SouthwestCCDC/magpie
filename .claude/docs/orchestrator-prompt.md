@@ -18,7 +18,7 @@ You are the **orchestrator** coordinating subagents that implement features, fix
 
 ## Critical Rules (READ FIRST)
 
-These four rules are non-negotiable:
+These five rules are non-negotiable:
 
 ### 1. Isolated Worktrees - Always
 
@@ -44,7 +44,7 @@ The subagent definition files in `.claude/agents/` contain specialized prompts a
 
 ## Available Subagents
 
-Specialized subagent definitions are in `/home/george/swccdc/magpie/.claude/agents/`. Use the Task tool to launch them.
+Specialized subagent definitions are in `.claude/agents/` (relative to project root). Use the Task tool to launch them.
 
 | Agent | Model | Use For |
 |-------|-------|---------|
@@ -87,20 +87,20 @@ These expand on the critical rules above with specific commands and procedures.
 
 ```bash
 # Create worktree for a new issue - ALWAYS fetch first to get latest default
-cd /home/george/swccdc/magpie
+# Run from the main repo directory
 git fetch origin
 
 # Use timestamp for uniqueness (allows multiple attempts at same issue)
 WORKTREE_NAME="issue-${ISSUE_NUMBER}-$(date +%s)"
 git worktree add "../magpie-worktrees/${WORKTREE_NAME}" -b "fix/issue-${ISSUE_NUMBER}-$(date +%s)" origin/default
 
-# Worktrees live in: /home/george/swccdc/magpie-worktrees/
+# Worktrees live in: ../magpie-worktrees/ (sibling to repo)
 ```
 
 Branch naming: `fix/issue-{N}-{timestamp}` (e.g., `fix/issue-79-1736661234`)
 
 **When launching subagents**, always include:
-> **Work ONLY in the existing worktree**: `/home/george/swccdc/magpie-worktrees/issue-{N}-{name}/`
+> **Work ONLY in the existing worktree**: `../magpie-worktrees/issue-{N}-{name}/`
 > Do NOT cd to the main repo. Do NOT create new worktrees unless explicitly told to.
 
 ### CI Verification (Rule 2)
@@ -147,8 +147,8 @@ This is the subagent's responsibility, not yours. You verify it was done.
 - Use `gh pr checks` to verify CI status
 
 ```bash
-# Only if you really need a quick peek
-tail -50 /tmp/claude/-home-george-swccdc/tasks/{agent_id}.output
+# Only if you really need a quick peek (path varies by system)
+tail -50 /tmp/claude/*/tasks/{agent_id}.output
 ```
 
 ## Common Subagent Prompts
@@ -160,7 +160,8 @@ Copy and adapt these prompts when launching subagents. The key instructions (wor
 Implement issue #{N}: {title}
 
 Create a worktree and branch (use timestamp for uniqueness):
-cd /home/george/swccdc/magpie && git fetch origin
+# From the main repo directory
+git fetch origin
 WORKTREE="issue-{N}-$(date +%s)"
 git worktree add "../magpie-worktrees/${WORKTREE}" -b "fix/${WORKTREE}" origin/default
 cd "../magpie-worktrees/${WORKTREE}"
@@ -182,7 +183,7 @@ IMPORTANT: Work ONLY in the worktree you create. Do not touch the main repo.
 ```
 Address review comments on PR #{N}.
 
-Work ONLY in: /home/george/swccdc/magpie-worktrees/issue-{M}-{name}/
+Work ONLY in: ../magpie-worktrees/issue-{M}-{name}/
 Do NOT cd to the main repo or create new worktrees.
 
 1. Fetch comments: `gh api repos/SouthwestCCDC/magpie/pulls/{N}/comments`
@@ -205,7 +206,7 @@ CRITICAL: All GitHub comments MUST include AI disclosure footer.
 ```
 Fix CI failures on PR #{N}.
 
-Work ONLY in: /home/george/swccdc/magpie-worktrees/issue-{M}-{name}/
+Work ONLY in: ../magpie-worktrees/issue-{M}-{name}/
 Do NOT cd to the main repo or create new worktrees.
 
 1. Check failures: `gh pr checks {N} --repo SouthwestCCDC/magpie`
@@ -219,7 +220,7 @@ Do NOT cd to the main repo or create new worktrees.
 Use this when you need details from a completed agent but don't want to flood context:
 ```
 Summarize the work done by the agent whose output is at:
-/tmp/claude/-home-george-swccdc/tasks/{agent_id}.output
+{Use TaskOutput tool or check /tmp/claude/*/tasks/{agent_id}.output}
 
 Provide:
 1. What was accomplished (files changed, commits made)
@@ -245,7 +246,7 @@ gh pr list --repo SouthwestCCDC/magpie --state open --json number,title,headRefN
 
 ## Assessment Document
 
-The `/home/george/swccdc/magpie/docs/assessment-findings.md` tracks known issues and their resolution status. Update it when issues are resolved.
+The `docs/assessment-findings.md` file tracks known issues and their resolution status. Update it when issues are resolved.
 
 ## Startup Checklist
 
@@ -253,8 +254,8 @@ When beginning a new orchestrator session:
 
 1. **Read this prompt** - You're doing it now
 2. **Check open PRs** - `gh pr list --repo SouthwestCCDC/magpie --state open --json number,title,headRefName`
-3. **List worktrees** - `git -C /home/george/swccdc/magpie worktree list` - Remove stale ones from merged PRs
-4. **Check assessment** - Read `/home/george/swccdc/magpie/docs/assessment-findings.md` for known issues
+3. **List worktrees** - `git worktree list` - Remove stale ones from merged PRs
+4. **Check assessment** - Read `docs/assessment-findings.md` for known issues
 5. **Check open issues** - `gh issue list --repo SouthwestCCDC/magpie --state open --limit 30`
 6. **Review subagent definitions** - Scan `.claude/agents/*.md` files if launching agents
 
@@ -262,8 +263,7 @@ When beginning a new orchestrator session:
 
 | Document | Purpose |
 |----------|---------|
-| `docs/repo/magpie/orchestrator-prompt.md` | This file - orchestrator instructions |
-| `docs/repo/magpie/proposed-issues.md` | Issue tracking and planning decisions |
+| `.claude/docs/orchestrator-prompt.md` | This file - orchestrator instructions |
 | `docs/assessment-findings.md` | Known issues and resolution status |
 | `.github/copilot-instructions.md` | Project conventions and architecture |
 | `docs/design.md` | Architecture decisions |

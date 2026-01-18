@@ -43,11 +43,12 @@ You write and update documentation to:
 
 | File | Purpose |
 |------|---------|
-| `docs/user-guide.md` | CLI usage, workflows, examples |
-| `docs/admin-guide.md` | Server administration, operations |
+| `docs/user-guide.md` | CLI usage, workflows, examples, admin operations |
 | `docs/design.md` | Architecture decisions (read-only reference) |
 | `.github/copilot-instructions.md` | AI assistant context |
 | `CLAUDE.md` | Claude Code specific instructions |
+
+Note: Admin procedures are documented in `docs/user-guide.md` alongside CLI usage.
 
 ## Documentation Standards
 

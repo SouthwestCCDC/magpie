@@ -46,9 +46,9 @@ Before making ANY file changes:
 3. NEVER modify files outside your worktree
 4. NEVER work in the main repo checkout
 
-Worktree locations:
-- Worktrees: `/home/george/swccdc/magpie-worktrees/{task-name}/`
-- Main repo (DO NOT MODIFY): `/home/george/swccdc/magpie/`
+Worktree locations (relative to repo root):
+- Worktrees: `../magpie-worktrees/{task-name}/`
+- Main repo (DO NOT MODIFY): The directory containing `.git` (use `$CLAUDE_PROJECT_DIR` if available)
 
 ### Worktree Verification Commands
 ```bash
@@ -65,18 +65,18 @@ When starting work:
 
 2. **Check for Existing Worktree**: The orchestrator may have already created one.
    ```bash
-   git -C /home/george/swccdc/magpie worktree list
+   git worktree list
    ```
 
 3. **Create Worktree if Needed**:
    ```bash
-   cd /home/george/swccdc/magpie
+   # From the main repo directory
    git fetch origin
 
    WORKTREE_NAME="issue-${ISSUE_NUMBER}-$(date +%s)"
-   WORKTREE_PATH="/home/george/swccdc/magpie-worktrees/${WORKTREE_NAME}"
+   WORKTREE_PATH="../magpie-worktrees/${WORKTREE_NAME}"
 
-   git worktree add "${WORKTREE_PATH}" -b "fix/issue-${ISSUE_NUMBER}" origin/default
+   git worktree add "${WORKTREE_PATH}" -b "fix/issue-${ISSUE_NUMBER}-$(date +%s)" origin/default
 
    cd "${WORKTREE_PATH}"
    ```

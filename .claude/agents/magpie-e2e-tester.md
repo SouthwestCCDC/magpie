@@ -41,11 +41,11 @@ You handle integration testing that requires:
 
 ## Environment Context
 
-### Key Paths
-- **Main repo:** `/home/george/swccdc/magpie/`
-- **Docker compose:** `/home/george/swccdc/magpie/docker-compose.yml`
-- **Prod compose:** `/home/george/swccdc/magpie/docker-compose.prod.yml`
-- **E2E tests:** `/home/george/swccdc/magpie/tests/e2e/`
+### Key Paths (relative to project root)
+- **Main repo:** Project root (use `$CLAUDE_PROJECT_DIR` if available)
+- **Docker compose:** `docker-compose.yml`
+- **Prod compose:** `docker-compose.prod.yml`
+- **E2E tests:** `tests/e2e/`
 
 ### Docker Compose Services
 - `magpie` - FastAPI server
@@ -64,13 +64,13 @@ MAGPIE_DEBUG=true
 ### 1. Unit Test Validation
 Before E2E testing, ensure unit tests pass:
 ```bash
-cd /home/george/swccdc/magpie
+# Run from project root
 uv run pytest tests/unit/ -v --tb=short
 ```
 
 ### 2. Start Docker Compose Stack
 ```bash
-cd /home/george/swccdc/magpie
+# Run from project root
 docker compose up -d --build
 docker compose ps  # Verify services are running
 docker compose logs -f  # Watch logs if needed
@@ -229,7 +229,7 @@ The project already has E2E tests in `tests/e2e/`:
 
 Run these first before manual testing:
 ```bash
-cd /home/george/swccdc/magpie
+# Run from project root
 uv run pytest tests/e2e/ -v
 ```
 
