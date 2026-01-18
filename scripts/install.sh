@@ -256,6 +256,36 @@ validate_config() {
     # Directory validation
     if [[ -z "$INSTALL_DIR" ]]; then
         errors+=("Install directory cannot be empty")
+    elif [[ ! "$INSTALL_DIR" =~ ^/ ]]; then
+        errors+=("Install directory must be an absolute path: $INSTALL_DIR")
+    fi
+
+    # Data directory validation
+    if [[ -z "$DATA_DIR" ]]; then
+        errors+=("Data directory cannot be empty")
+    elif [[ ! "$DATA_DIR" =~ ^/ ]]; then
+        errors+=("Data directory must be an absolute path: $DATA_DIR")
+    fi
+
+    # Warn about /home with ProtectHome=true
+    if [[ "$DATA_DIR" =~ ^/home(/|$) ]]; then
+        log_warn "Data directory is under /home: $DATA_DIR"
+        log_warn "The GC service uses ProtectHome=true for security hardening."
+        log_warn "This will prevent GC from accessing paths under /home."
+        log_warn "Consider using a path like /srv/magpie/data or /opt/magpie/data instead."
+        log_warn "See https://github.com/SouthwestCCDC/magpie/issues/159 for details."
+        errors+=("Data directory under /home is not compatible with GC service hardening")
+    fi
+
+    # Writability check
+    local parent_dir
+    if [[ -d "$DATA_DIR" ]]; then
+        parent_dir="$DATA_DIR"
+    else
+        parent_dir="$(dirname "$DATA_DIR")"
+    fi
+    if [[ -d "$parent_dir" ]] && [[ ! -w "$parent_dir" ]]; then
+        errors+=("Data directory path is not writable: $parent_dir")
     fi
 
     if [[ ${#errors[@]} -gt 0 ]]; then
@@ -521,16 +551,14 @@ Documentation=https://github.com/${GITHUB_REPO}
 After=network.target docker.service
 Requires=docker.service
 
-ConditionPathExists=!/var/run/magpie-gc.lock
-
 [Service]
 Type=oneshot
 WorkingDirectory=${INSTALL_DIR}
 
-ExecStartPre=/bin/sh -c 'echo \$\$ > /var/run/magpie-gc.lock'
-ExecStopPost=/bin/rm -f /var/run/magpie-gc.lock
-
-ExecStart=/usr/bin/docker compose --env-file ${INSTALL_DIR}/etc/.env run --rm -T magpie magpie-ctl gc --quiet
+# Use flock to prevent concurrent runs. If GC is already running, flock exits
+# immediately. Unlike ConditionPathExists, flock automatically handles stale
+# lock files from crashed processes.
+ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose --env-file ${INSTALL_DIR}/etc/.env run --rm -T magpie magpie-ctl gc --quiet
 
 StandardOutput=journal
 StandardError=journal
@@ -932,6 +960,10 @@ Commands:
 Install options:
   --install-dir PATH      Installation directory (default: $DEFAULT_INSTALL_DIR)
   --data-dir PATH         Data storage directory (default: INSTALL_DIR/data)
+                          Must be an absolute path. Paths under /home are not
+                          supported due to systemd hardening (ProtectHome=true).
+                          Note: Symlinks to /home paths will also fail with GC service.
+                          Recommended: /srv/magpie/data or /opt/magpie/data
   --tls-mode MODE         TLS mode: off, auto, manual (default: $DEFAULT_TLS_MODE)
   --domain DOMAIN         Domain name (required for auto/manual TLS)
   --tls-cert PATH         TLS certificate path (required for manual TLS)
@@ -956,6 +988,9 @@ Examples:
 
   # Non-interactive installation (HTTP-only, behind proxy)
   sudo $SCRIPT_NAME install --tls-mode off --noninteractive
+
+  # Installation with custom data directory
+  sudo $SCRIPT_NAME install --data-dir /srv/magpie/data
 
   # Installation with Let's Encrypt
   sudo $SCRIPT_NAME install --tls-mode auto --domain magpie.example.com
