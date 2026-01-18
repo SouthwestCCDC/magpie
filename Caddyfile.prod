@@ -38,7 +38,7 @@
 #    e. If auth returns 401, Caddy returns 401 to client (request blocked)
 #
 # 2. AUTHENTIK SSO (for browser access to /artifacts/*):
-#    When AUTHENTIK_FORWARD_AUTH_URL is set, users browsing /artifacts/* are
+#    When AUTHENTIK_HOST is set, users browsing /artifacts/* are
 #    authenticated via Authentik SSO:
 #
 #    a. Browser requests /artifacts/*
@@ -226,6 +226,7 @@
 	#     request_header -X-authentik-username
 	#     request_header -X-authentik-email
 	#     request_header -X-authentik-name
+	#     request_header -X-authentik-groups
 	#
 	#     forward_auth {$AUTHENTIK_HOST} {
 	#         uri /outpost.goauthentik.io/auth/caddy

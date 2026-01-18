@@ -6,7 +6,7 @@ This guide provides instructions for manually testing the Authentik SSO integrat
 
 - Magpie deployed with `docker-compose.prod.yml`
 - Authentik configured per [authentik-setup.md](authentik-setup.md)
-- `AUTHENTIK_FORWARD_AUTH_URL` environment variable set (if enabling SSO)
+- `AUTHENTIK_HOST` environment variable set (if enabling SSO)
 - Bearer token for API testing (create via `magpie-ctl token create`)
 
 ## Test Plan Overview
@@ -64,7 +64,7 @@ curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
 
 **Purpose**: Verify Authentik SSO redirects unauthenticated users.
 
-**Note**: This test only applies if `AUTHENTIK_FORWARD_AUTH_URL` is configured and the forward_auth block is uncommented in Caddyfile.prod.
+**Note**: This test only applies if `AUTHENTIK_HOST` is configured and the forward_auth block is uncommented in Caddyfile.prod.
 
 ### Steps
 1. Open an incognito/private browser window
@@ -310,13 +310,13 @@ curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
 # Check if forward_auth block is commented
 grep -A3 "handle /artifacts" Caddyfile.prod
 
-# Verify AUTHENTIK_FORWARD_AUTH_URL is empty
+# Verify AUTHENTIK_HOST is empty
 docker compose -f docker-compose.prod.yml exec caddy env | grep AUTHENTIK
 ```
 
 **Solution**:
 - Ensure forward_auth block in `/artifacts/*` handler is commented
-- Or ensure `AUTHENTIK_FORWARD_AUTH_URL` env var is not set
+- Or ensure `AUTHENTIK_HOST` env var is not set
 - Restart Caddy after configuration changes
 
 ## Automated Testing (Future Work)
@@ -359,7 +359,7 @@ After completing tests, document results:
 - Magpie version: [version]
 - Authentik version: [version]
 - Caddy version: [version]
-- AUTHENTIK_FORWARD_AUTH_URL: [set/unset]
+- AUTHENTIK_HOST: [set/unset]
 ```
 
 Include any errors, unexpected behavior, or edge cases encountered.

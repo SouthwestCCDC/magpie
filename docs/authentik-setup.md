@@ -126,6 +126,7 @@ handle /artifacts/* {
     request_header -X-authentik-username
     request_header -X-authentik-email
     request_header -X-authentik-name
+    request_header -X-authentik-groups
 
     forward_auth {$AUTHENTIK_HOST} {
         uri /outpost.goauthentik.io/auth/caddy
@@ -157,6 +158,7 @@ handle /artifacts/* {
     request_header -X-authentik-username
     request_header -X-authentik-email
     request_header -X-authentik-name
+    request_header -X-authentik-groups
 
     forward_auth authentik.example.com {
         uri /outpost.goauthentik.io/auth/caddy
