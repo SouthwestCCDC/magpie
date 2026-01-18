@@ -6,7 +6,7 @@ import click
 
 from magpie.auth.database import init_database
 from magpie.auth.models import TokenScope
-from magpie.auth.service import TokenService
+from magpie.auth.service import TokenExistsError, TokenFormatError, TokenService
 from magpie.cli.formatting import (
     CommandResult,
     is_json_output,
@@ -23,8 +23,13 @@ ADMIN_TOKEN_NAME = "admin"  # nosec B105 - not a password, just a token name
     is_flag=True,
     help="Regenerate break-glass admin token (revokes existing).",
 )
+@click.option(
+    "--admin-token",
+    default=None,
+    help="Specify admin token instead of generating a random one. Must start with 'mgp_ADMIN_'.",
+)
 @click.pass_obj
-def init(ctx: CTLContext, reset_admin_token: bool) -> None:
+def init(ctx: CTLContext, reset_admin_token: bool, admin_token: str | None) -> None:
     """Initialize Magpie storage and generate admin token.
 
     Creates storage directories and SQLite database if they don't exist.
@@ -36,11 +41,22 @@ def init(ctx: CTLContext, reset_admin_token: bool) -> None:
     Use --reset-admin-token to revoke the existing admin token and
     generate a new one (useful if the token was compromised).
 
+    Use --admin-token to specify a custom token instead of generating
+    a random one. The token must start with 'mgp_ADMIN_'.
+
+    Args:
+        ctx: Click context containing settings and debug flag.
+        reset_admin_token: If True, revokes existing admin token before creating new one.
+        admin_token: Optional custom token to use instead of generating random one.
+            Must start with 'mgp_ADMIN_' and have content after the prefix.
+
     Examples:
 
         magpie-ctl init
 
         magpie-ctl init --reset-admin-token
+
+        magpie-ctl init --admin-token mgp_ADMIN_custom_token_here
     """
     settings = ctx.settings
 
@@ -68,6 +84,33 @@ def init(ctx: CTLContext, reset_admin_token: bool) -> None:
     plaintext_token: str | None = None
     token_already_exists = False
 
+    # Validate custom token format early (before revoking existing token)
+    if admin_token is not None:
+        if not admin_token.startswith("mgp_ADMIN_"):
+            error_msg = "Provided token must start with 'mgp_ADMIN_' for admin scope"
+            if is_json_output():
+                output_result(
+                    CommandResult(
+                        data={"error": error_msg},
+                        human_output="",
+                    )
+                )
+            else:
+                click.echo(f"Error: {error_msg}", err=True)
+            raise SystemExit(1)
+        if len(admin_token) <= len("mgp_ADMIN_"):
+            error_msg = "Provided token is too short (must have content after 'mgp_ADMIN_' prefix)"
+            if is_json_output():
+                output_result(
+                    CommandResult(
+                        data={"error": error_msg},
+                        human_output="",
+                    )
+                )
+            else:
+                click.echo(f"Error: {error_msg}", err=True)
+            raise SystemExit(1)
+
     if reset_admin_token:
         # Revoke existing admin token first
         if ctx.debug:
@@ -78,8 +121,26 @@ def init(ctx: CTLContext, reset_admin_token: bool) -> None:
         elif not revoked and not is_json_output():
             click.echo("No existing admin token found to revoke")
 
-        # Create new admin token
-        plaintext_token = token_service.create_token(ADMIN_TOKEN_NAME, TokenScope.ADMIN)
+        # Create new admin token (with provided token if specified)
+        try:
+            plaintext_token = token_service.create_token(
+                ADMIN_TOKEN_NAME, TokenScope.ADMIN, admin_token
+            )
+        except TokenFormatError as e:
+            # Token format validation failed
+            if is_json_output():
+                output_result(
+                    CommandResult(
+                        data={
+                            "error": str(e),
+                        },
+                        human_output="",
+                    )
+                )
+            else:
+                click.echo(f"Error: {e}", err=True)
+            raise SystemExit(1)
+
         if not is_json_output():
             click.echo("")
             click.echo("=" * 60)
@@ -89,19 +150,35 @@ def init(ctx: CTLContext, reset_admin_token: bool) -> None:
     else:
         # Try to create admin token (may fail if already exists)
         try:
-            plaintext_token = token_service.create_token(ADMIN_TOKEN_NAME, TokenScope.ADMIN)
+            plaintext_token = token_service.create_token(
+                ADMIN_TOKEN_NAME, TokenScope.ADMIN, admin_token
+            )
             if not is_json_output():
                 click.echo("")
                 click.echo("=" * 60)
                 click.echo("ADMIN TOKEN (store securely, only shown once!):")
                 click.echo(plaintext_token)
                 click.echo("=" * 60)
-        except ValueError:
+        except TokenExistsError:
             # Token already exists
             token_already_exists = True
             if not is_json_output():
                 click.echo("")
                 click.echo("Admin token already exists. Use --reset-admin-token to regenerate.")
+        except TokenFormatError as e:
+            # Token format validation failed
+            if is_json_output():
+                output_result(
+                    CommandResult(
+                        data={
+                            "error": str(e),
+                        },
+                        human_output="",
+                    )
+                )
+            else:
+                click.echo(f"Error: {e}", err=True)
+            raise SystemExit(1)
 
     # JSON output
     if is_json_output():

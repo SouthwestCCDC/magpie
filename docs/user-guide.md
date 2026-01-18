@@ -359,11 +359,41 @@ mgp_abc123def456...
 
 **Important**: Save this token securely. It cannot be recovered.
 
+#### Using a Custom Admin Token
+
+You can specify a custom admin token during initialization instead of generating a random one:
+
+```bash
+# Initialize with a specific admin token
+docker compose exec magpie magpie-ctl init --admin-token mgp_ADMIN_your_token_here
+```
+
+The token must start with `mgp_ADMIN_` and contain additional characters after the prefix. This is useful for:
+- Automation scenarios where the token needs to be pre-configured
+- Moving installations while keeping the same token
+- CI/CD pipelines that need predictable tokens
+
+!!! warning "Security Considerations for Custom Tokens"
+
+    When using custom admin tokens, follow these security best practices:
+
+    - **Generate tokens securely**: Use cryptographically secure random generation
+      (e.g., `openssl rand -base64 32` or `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
+    - **Minimum entropy**: Custom tokens should have at least 32 characters of entropy
+      after the `mgp_ADMIN_` prefix (auto-generated tokens use 43 random characters)
+    - **Avoid predictable patterns**: Never use sequential values, dictionary words,
+      or easily guessable patterns
+    - **Treat as secrets**: Store tokens in secure secret management systems,
+      never in version control or logs
+
 To regenerate a compromised admin token:
 
 ```bash
 # Revoke existing admin token and generate a new one
 docker compose exec magpie magpie-ctl init --reset-admin-token
+
+# Or revoke and set a specific new token
+docker compose exec magpie magpie-ctl init --reset-admin-token --admin-token mgp_ADMIN_new_token
 ```
 
 This revokes the existing admin token and creates a new one, which is printed to stdout.
