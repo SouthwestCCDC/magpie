@@ -344,3 +344,6 @@ To disable SSO, comment out the forward_auth block and restart Caddy.
 - [Caddy forward_auth Directive](https://caddyserver.com/docs/caddyfile/directives/forward_auth)
 - Magpie Design Doc: `docs/design.md` (line 370 for auth architecture)
 - Magpie Issue #176: Authentik SSO integration specification
+
+---
+*This documentation was generated with AI assistance (Claude Code w/ Opus 4.5).*

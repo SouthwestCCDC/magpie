@@ -19,6 +19,7 @@ This guide provides instructions for manually testing the Authentik SSO integrat
 | 4 | Session persistence | No re-login after closing tab |
 | 5 | API access unaffected | CLI commands work with bearer tokens |
 | 6 | Invalid token rejection | 401 error for invalid tokens |
+| 7 | Mixed authentication coexistence | Both auth methods work independently |
 
 ## Test 1: Bearer Token Authentication (API)
 
@@ -363,3 +364,6 @@ After completing tests, document results:
 ```
 
 Include any errors, unexpected behavior, or edge cases encountered.
+
+---
+*This documentation was generated with AI assistance (Claude Code w/ Opus 4.5).*
