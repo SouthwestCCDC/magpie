@@ -211,7 +211,7 @@
 	# browsing, remove the "browse" argument from file_server below.
 	#
 	# AUTHENTIK SSO INTEGRATION:
-	# To enable Authentik SSO for human browser access, set these environment variables:
+	# To enable Authentik SSO for human browser access, set this environment variable:
 	#   - AUTHENTIK_HOST: The Authentik server hostname (e.g., authentik.example.com)
 	#
 	# When enabled, users browsing /artifacts/* via web browser will be redirected
