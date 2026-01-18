@@ -17,6 +17,9 @@
 # Optional Environment Variables:
 #   MAGPIE_HTTP_PORT  - External HTTP port (default: 80)
 #   MAGPIE_HTTPS_PORT - External HTTPS port (default: 443)
+#   AUTHENTIK_HOST    - Authentik server hostname for SSO
+#                       (e.g., authentik.example.com)
+#                       See docs/authentik-setup.md for setup instructions
 #
 # Note: For Let's Encrypt auto-TLS, ensure:
 # - Port 443 is publicly accessible
@@ -39,6 +42,9 @@ services:
     environment:
       # MAGPIE_DOMAIN is required - Let's Encrypt will fail without a valid domain
       - MAGPIE_DOMAIN=${MAGPIE_DOMAIN:?MAGPIE_DOMAIN must be set}
+      # Optional: Authentik SSO integration for browser access to /artifacts/*
+      # See docs/authentik-setup.md for setup instructions
+      - AUTHENTIK_HOST=${AUTHENTIK_HOST:-}
     depends_on:
       magpie:
         condition: service_healthy

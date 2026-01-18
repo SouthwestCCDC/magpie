@@ -8,7 +8,7 @@ container images, and other binary assets.
 - **Content-addressed storage**: Artifacts stored by SHA-256 hash with automatic deduplication
 - **Mutable tags**: Human-readable tags (`latest`, `stable`, `v1.0`) pointing to specific blobs
 - **Provenance tracking**: Optional source URI metadata for traceability
-- **Token authentication**: Scoped tokens (read, write, admin) for CI/CD and machine access
+- **Dual authentication**: Bearer tokens for API/CLI access, optional Authentik SSO for browser access
 - **Garbage collection**: Automatic cleanup of untagged artifacts past retention period
 - **Observability**: Sentry integration and OpenTelemetry support
 
@@ -76,6 +76,7 @@ The production configuration (`docker-compose.prod.yml` and `Caddyfile.prod`) in
 - Automatic TLS via Let's Encrypt (or manual certificate configuration)
 - Security headers (HSTS, X-Frame-Options, CSP, etc.)
 - JSON access logging
+- Optional Authentik SSO integration for browser access (see [docs/authentik-setup.md](docs/authentik-setup.md))
 - Rate limiting must be configured at the infrastructure layer. See [issue #129](https://github.com/SouthwestCCDC/magpie/issues/129) for implementation options (custom Caddy build, FastAPI middleware, or load balancer).
 
 For manual TLS certificates, edit `Caddyfile.prod` and uncomment the `tls` directive
