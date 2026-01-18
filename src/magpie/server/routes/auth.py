@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
+import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
@@ -15,6 +16,7 @@ from magpie.server.deps import get_token_service, require_admin_scope
 from magpie.validation import TOKEN_NAME_MAX_LENGTH, TOKEN_NAME_PATTERN
 
 router = APIRouter()
+logger = structlog.get_logger()
 
 # Request/Response models for token management
 
@@ -86,6 +88,7 @@ async def validate_auth(
     """
     # Check for missing Authorization header
     if authorization is None:
+        logger.warning("auth_validation_failed", reason="missing_header")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing Authorization header",
@@ -93,6 +96,7 @@ async def validate_auth(
 
     # Check for Bearer prefix
     if not authorization.startswith("Bearer "):
+        logger.warning("auth_validation_failed", reason="malformed_header")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Malformed Authorization header: expected 'Bearer <token>'",
@@ -105,10 +109,18 @@ async def validate_auth(
     token_info = token_service.validate_token(token)
 
     if token_info is None:
+        logger.warning("auth_validation_failed", reason="invalid_token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or disabled token",
         )
+
+    # Log successful validation
+    logger.info(
+        "auth_validation_success",
+        token_name=token_info.name,
+        scope=token_info.scope.value,
+    )
 
     # Return success with identity headers
     return Response(

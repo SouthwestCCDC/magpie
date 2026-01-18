@@ -43,10 +43,10 @@ class TestMagpieSettingsDefaults:
         settings = MagpieSettings()
         assert settings.s3_bucket is None
 
-    def test_default_log_format_console(self) -> None:
-        """Default log_format should be 'console'."""
+    def test_default_log_format_json(self) -> None:
+        """Default log_format should be 'json' for production use."""
         settings = MagpieSettings()
-        assert settings.log_format == "console"
+        assert settings.log_format == "json"
 
 
 class TestMagpieSettingsPathDerivation:

@@ -8,7 +8,9 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 
 from magpie.config import get_settings
+from magpie.logging_config import configure_logging
 from magpie.server.errors import register_exception_handlers
+from magpie.server.middleware import RequestLoggingMiddleware
 from magpie.server.observability import setup_observability
 from magpie.server.routes.artifacts import router as artifacts_router
 from magpie.server.routes.auth import router as auth_router
@@ -17,11 +19,15 @@ from magpie.server.routes.status import router as status_router
 from magpie.server.routes.tags import router as tags_router
 from magpie.server.routes.upload import router as upload_router
 
+# Configure logging at module level, before app creation,
+# so logging is available during middleware initialization
+configure_logging(get_settings())
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan context manager for startup/shutdown events."""
-    # Startup: Initialize observability
+    # Startup: Initialize observability (logging already configured at module level)
     settings = get_settings()
     setup_observability(app, settings)
     yield
@@ -34,6 +40,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Add middleware for request logging and correlation
+app.add_middleware(RequestLoggingMiddleware)
 
 register_exception_handlers(app)
 app.include_router(upload_router)

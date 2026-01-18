@@ -143,6 +143,68 @@ class TestSizeLimitedReader:
         reader.read(4)
         assert reader.tell() == 4
 
+    def test_bytes_read_initially_zero(self) -> None:
+        """bytes_read property should return 0 before any reads."""
+        data = b"test data"
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=100)
+
+        assert reader.bytes_read == 0
+
+    def test_bytes_read_tracks_after_single_read(self) -> None:
+        """bytes_read property should track bytes after reading."""
+        data = b"test data"
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=100)
+
+        reader.read(5)
+        assert reader.bytes_read == 5
+
+    def test_bytes_read_tracks_cumulative_reads(self) -> None:
+        """bytes_read property should track cumulative bytes across reads."""
+        data = b"0123456789"
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=100)
+
+        reader.read(3)
+        assert reader.bytes_read == 3
+        reader.read(4)
+        assert reader.bytes_read == 7
+
+    def test_bytes_read_returns_high_water_mark(self) -> None:
+        """bytes_read should return high water mark, not current position."""
+        data = b"0123456789"
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=100)
+
+        # Read to position 8
+        reader.read(8)
+        assert reader.bytes_read == 8
+
+        # Seek back to position 2
+        reader.seek(2, 0)
+        # bytes_read should still be 8 (high water mark)
+        assert reader.bytes_read == 8
+
+    def test_bytes_read_preserved_after_seek(self) -> None:
+        """bytes_read should be preserved after seek operations."""
+        data = b"0123456789"
+        stream = io.BytesIO(data)
+        reader = SizeLimitedReader(stream, max_size=100)
+
+        reader.read(6)
+        high_mark = reader.bytes_read
+
+        # Various seek operations should not reduce bytes_read
+        reader.seek(0, 0)  # SEEK_SET to start
+        assert reader.bytes_read == high_mark
+
+        reader.seek(2, 1)  # SEEK_CUR forward
+        assert reader.bytes_read == high_mark
+
+        reader.seek(0, 2)  # SEEK_END
+        assert reader.bytes_read >= high_mark  # May increase if stream is larger
+
     def test_seek_end_basic(self) -> None:
         """SEEK_END should position at end of stream."""
         data = b"0123456789"

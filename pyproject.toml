@@ -18,6 +18,7 @@ dependencies = [
     "opentelemetry-exporter-otlp",
     "rich",
     "tomli_w",
+    "structlog",
 ]
 
 [project.scripts]

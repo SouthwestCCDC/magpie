@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import structlog
 
 from magpie.storage.manifest import read_manifest
 from magpie.storage.paths import manifest_path
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 @dataclass
@@ -80,7 +81,7 @@ def cleanup_artifact_directories(
         stats.empty_blobs_dirs += 1
         stats.removed_paths.append(rel_path)
         if not dry_run:
-            logger.debug("Removing empty blobs directory: %s", rel_path)
+            logger.debug("cleanup_removing_empty_blobs_dir", path=rel_path)
             blobs_dir.rmdir()
 
     # Check and remove empty metadata/ directory
@@ -90,7 +91,7 @@ def cleanup_artifact_directories(
         stats.empty_metadata_dirs += 1
         stats.removed_paths.append(rel_path)
         if not dry_run:
-            logger.debug("Removing empty metadata directory: %s", rel_path)
+            logger.debug("cleanup_removing_empty_metadata_dir", path=rel_path)
             metadata_dir.rmdir()
 
     # Check and remove .magpie if no tags remain
@@ -102,7 +103,7 @@ def cleanup_artifact_directories(
             stats.empty_manifests += 1
             stats.removed_paths.append(rel_path)
             if not dry_run:
-                logger.debug("Removing empty manifest: %s", rel_path)
+                logger.debug("cleanup_removing_empty_manifest", path=rel_path)
                 manifest_file.unlink()
 
     # Check and remove artifact directory if completely empty
@@ -111,7 +112,7 @@ def cleanup_artifact_directories(
         stats.empty_artifact_dirs += 1
         stats.removed_paths.append(rel_path)
         if not dry_run:
-            logger.debug("Removing empty artifact directory: %s", rel_path)
+            logger.debug("cleanup_removing_empty_artifact_dir", path=rel_path)
             artifact_dir.rmdir()
 
         # Clean up empty parent directories up to storage_root
@@ -151,7 +152,7 @@ def _cleanup_empty_parents(
         stats.removed_paths.append(rel_path)
 
         if not dry_run:
-            logger.debug("Removing empty parent directory: %s", rel_path)
+            logger.debug("cleanup_removing_empty_parent_dir", path=rel_path)
             current.rmdir()
 
         current = current.parent

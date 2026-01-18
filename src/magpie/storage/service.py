@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
+
+import structlog
 
 from magpie.storage.blob import store_blob
 from magpie.storage.exceptions import ArtifactNotFoundError
@@ -26,7 +27,7 @@ from magpie.storage.paths import (
 from magpie.storage.symlinks import reconcile_symlinks
 from magpie.validation import validate_tag_name
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 if TYPE_CHECKING:
     from magpie.config import MagpieSettings
@@ -287,6 +288,14 @@ class StorageService:
         # Get all tags pointing to this hash
         tags = self._get_tags_for_hash(artifact_dir, full_hash)
 
+        logger.info(
+            "tag_created",
+            operation="create_tag",
+            tag_name=tag_name,
+            artifact_path=artifact_path,
+            hash_ref=short_hash_name,
+        )
+
         return ArtifactInfo(
             hash=full_hash,
             hash_ref=short_hash(full_hash),
@@ -319,9 +328,10 @@ class StorageService:
 
         if tag_name not in manifest.tags:
             logger.warning(
-                "Tag '%s' not found in artifact '%s', nothing to remove",
-                tag_name,
-                artifact_path,
+                "tag_not_found",
+                tag_name=tag_name,
+                artifact_path=artifact_path,
+                message="Tag not found, nothing to remove",
             )
             return False
 
@@ -330,6 +340,12 @@ class StorageService:
 
         # Reconcile symlinks to remove the symlink
         reconcile_symlinks(artifact_dir, manifest)
+
+        logger.info(
+            "tag_removed",
+            tag_name=tag_name,
+            artifact_path=artifact_path,
+        )
 
         return True
 
@@ -371,6 +387,14 @@ class StorageService:
                 if not dry_run:
                     # Actually remove the tag
                     self.remove_tag(artifact_path, tag_name)
+
+        logger.info(
+            "tag_flushed",
+            operation="flush_tag",
+            tag_name=tag_name,
+            dry_run=dry_run,
+            affected_count=len(affected_artifacts),
+        )
 
         return FlushResult(
             tag_name=tag_name,

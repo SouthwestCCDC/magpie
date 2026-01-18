@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Annotated
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
@@ -15,7 +15,7 @@ from magpie.server.deps import require_admin_scope
 from magpie.server.subprocess_utils import CtlCommandError, run_ctl_command
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger()
 
 
 class GCResponse(BaseModel):
@@ -82,9 +82,10 @@ async def trigger_gc(
     try:
         result = await run_ctl_command(cmd)
     except CtlCommandError as e:
-        logger.error(f"GC command failed: {e}")
+        logger.error("gc_command_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Garbage collection failed") from e
     except asyncio.TimeoutError:
+        logger.error("gc_timeout")
         raise HTTPException(status_code=504, detail="Operation timed out")
 
     return GCResponse(
