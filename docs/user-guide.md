@@ -360,8 +360,8 @@ The token must start with `mgp_ADMIN_` and contain additional characters after t
 
     - **Generate tokens securely**: Use cryptographically secure random generation
       (e.g., `openssl rand -base64 32` or `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
-    - **Minimum entropy**: Custom tokens should be at least 32 characters total
-      (including the `mgp_ADMIN_` prefix) to match the entropy of auto-generated tokens
+    - **Minimum entropy**: Custom tokens should have at least 32 characters of entropy
+      after the `mgp_ADMIN_` prefix (auto-generated tokens use 43 random characters)
     - **Avoid predictable patterns**: Never use sequential values, dictionary words,
       or easily guessable patterns
     - **Treat as secrets**: Store tokens in secure secret management systems,
