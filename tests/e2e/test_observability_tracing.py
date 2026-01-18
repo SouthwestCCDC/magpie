@@ -16,8 +16,8 @@ class TestOpenTelemetryDoesNotBreakWorkflow:
     """Tests that OTEL instrumentation code doesn't break normal operation.
 
     Note: These tests verify the application works correctly with OTEL code
-    present but disabled (default). For actual trace verification, see
-    tests/unit/test_observability.py which uses InMemorySpanExporter.
+    present but disabled (default). For actual trace verification with
+    InMemorySpanExporter, see tests/unit/test_observability.py.
     """
 
     def test_workflow_completes_with_otel_disabled(
@@ -47,9 +47,7 @@ class TestOpenTelemetryDoesNotBreakWorkflow:
         )
         assert tag_response.status_code in (200, 201)
 
-        # Download
-        download_response = authenticated_client.get(
-            f"/api/v1/artifacts/{artifact_path}/{artifact_hash}"
-        )
+        # Download (uses /artifacts/ endpoint which serves files directly)
+        download_response = authenticated_client.get(f"/artifacts/{artifact_path}/{artifact_hash}")
         assert download_response.status_code == 200
         assert download_response.content == test_artifact_content
