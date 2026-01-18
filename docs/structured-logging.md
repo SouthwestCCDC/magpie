@@ -247,3 +247,7 @@ Example Loki query:
    - `info`: Normal operations and milestones
    - `warning`: Recoverable issues
    - `error`: Errors requiring attention
+
+---
+
+*This documentation was generated with AI assistance (Claude Code w/ Opus 4.5).*
