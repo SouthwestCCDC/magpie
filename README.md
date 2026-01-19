@@ -144,3 +144,60 @@ uv run pytest --cov=magpie
 uv run ruff check .
 uv run ruff format --check .
 ```
+
+## Releases
+
+Releases are automated via GitHub Actions when a version tag is pushed.
+
+### Release Process
+
+1. Update version in `pyproject.toml`
+2. Commit the change:
+   ```bash
+   git add pyproject.toml
+   git commit -m "Release v1.0.0"
+   ```
+3. Create and push the tag:
+   ```bash
+   git tag v1.0.0
+   git push origin default --tags
+   ```
+
+The release workflow will:
+- Validate the tag matches `pyproject.toml` version
+- Build multi-arch container images (amd64, arm64)
+- Push to `ghcr.io/southwestccdc/magpie`
+- Create a GitHub Release with auto-generated changelog
+- Attach `scripts/install.sh` as a release asset
+
+### Container Tags
+
+| Git Tag | Container Tags |
+|---------|----------------|
+| `v1.0.0` | `1.0.0`, `1.0`, `1`, `latest` |
+| `v1.0.1` | `1.0.1`, `1.0`, `1`, `latest` |
+| `v2.0.0-rc1` | `2.0.0-rc1` (no `latest`) |
+
+**Note on tag mutability**
+
+- Full version tags (`MAJOR.MINOR.PATCH`, e.g. `1.0.1`) are immutable and always point to the
+  exact release that created them.
+- Major/minor tags (`MAJOR`, `MAJOR.MINOR`, e.g. `1`, `1.0`) are **mutable** and will be moved
+  to the latest patch release in that series (e.g. `1.0` and `1` move from `1.0.0` to `1.0.1`).
+- `latest` is also **mutable** and always points to the most recent stable release.
+
+If you require a non-changing reference for deployments, pin to the full version tag
+(e.g. `ghcr.io/southwestccdc/magpie:1.0.1`).
+
+### Installing from Release
+
+```bash
+# Server: Use container from registry
+docker pull ghcr.io/southwestccdc/magpie:latest
+
+# Client: Install from git tag
+uv pip install git+https://github.com/SouthwestCCDC/magpie@v1.0.0
+```
+
+---
+*Release documentation generated with AI assistance (Claude Code w/ Opus 4.5).*
