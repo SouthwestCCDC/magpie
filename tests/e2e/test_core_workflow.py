@@ -97,7 +97,7 @@ class TestArtifactUpload:
                     "magpie",
                     "push",
                     temp_file,
-                    "--path",
+                    "--to",
                     "e2e-tests/push-test",
                 ],
                 cwd=PROJECT_ROOT,
@@ -185,7 +185,7 @@ class TestArtifactListing:
 
         assert response.status_code == 200
         data = response.json()
-        assert "artifacts" in data or isinstance(data, list)
+        assert "versions" in data or isinstance(data, list)
 
 
 @pytest.mark.e2e
@@ -306,7 +306,7 @@ class TestTagging:
         # Create tag via API
         response = authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/api-tag-test/{artifact_hash}/tags",
-            json={"tag": "v1.0"},
+            json={"tag_name": "v1.0"},
         )
 
         assert response.status_code in (200, 201)

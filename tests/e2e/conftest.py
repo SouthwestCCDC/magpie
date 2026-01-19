@@ -238,16 +238,24 @@ def create_token_via_api(
     return response.json()["token"]
 
 
-@pytest.fixture
-def read_token(http_client: httpx.Client, admin_token: str) -> str:
-    """Create a read-only token for testing."""
-    return create_token_via_api(http_client, admin_token, "test-reader", "read")
+@pytest.fixture(scope="session")
+def read_token(base_url: str, admin_token: str) -> str:
+    """Create a read-only token for testing.
+
+    Session-scoped to avoid duplicate token name errors across tests.
+    """
+    with httpx.Client(base_url=base_url, timeout=30.0) as client:
+        return create_token_via_api(client, admin_token, "test-reader", "read")
 
 
-@pytest.fixture
-def write_token(http_client: httpx.Client, admin_token: str) -> str:
-    """Create a write token for testing."""
-    return create_token_via_api(http_client, admin_token, "test-writer", "write")
+@pytest.fixture(scope="session")
+def write_token(base_url: str, admin_token: str) -> str:
+    """Create a write token for testing.
+
+    Session-scoped to avoid duplicate token name errors across tests.
+    """
+    with httpx.Client(base_url=base_url, timeout=30.0) as client:
+        return create_token_via_api(client, admin_token, "test-writer", "write")
 
 
 def upload_artifact(

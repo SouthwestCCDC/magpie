@@ -43,7 +43,7 @@ class TestOpenTelemetryDoesNotBreakWorkflow:
         # Tag
         tag_response = authenticated_client.post(
             f"/api/v1/artifacts/{artifact_path}/{artifact_hash}/tags",
-            json={"tag": "v1.0"},
+            json={"tag_name": "v1.0"},
         )
         assert tag_response.status_code in (200, 201)
 

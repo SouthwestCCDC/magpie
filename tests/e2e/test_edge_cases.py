@@ -101,7 +101,7 @@ class TestTagUpdate:
         # Tag v1 as "latest"
         authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/tag-update-test/{hash_v1}/tags",
-            json={"tag": "latest"},
+            json={"tag_name": "latest"},
         )
 
         # Upload v2
@@ -114,7 +114,7 @@ class TestTagUpdate:
         # Update "latest" tag to point to v2
         response = authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/tag-update-test/{hash_v2}/tags",
-            json={"tag": "latest"},
+            json={"tag_name": "latest"},
         )
 
         assert response.status_code in (200, 201)
@@ -149,7 +149,7 @@ class TestTagRemoval:
         # Create tag
         authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/untag-test/{artifact_hash}/tags",
-            json={"tag": "to-remove"},
+            json={"tag_name": "to-remove"},
         )
 
         # Remove tag
@@ -185,7 +185,7 @@ class TestTagRemoval:
         # Create tag
         authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/cli-untag-test/{artifact_hash}/tags",
-            json={"tag": "cli-remove"},
+            json={"tag_name": "cli-remove"},
         )
 
         env = os.environ.copy()
@@ -272,7 +272,7 @@ class TestGarbageCollection:
         # Tag it to prevent GC
         authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/gc-preserve-test/{artifact_hash}/tags",
-            json={"tag": "keep"},
+            json={"tag_name": "keep"},
         )
 
         env = os.environ.copy()
