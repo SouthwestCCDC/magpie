@@ -35,7 +35,7 @@ jobs:
       - name: Validate pyproject.toml version matches tag
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          PYPROJECT_VERSION=$(grep -Po '(?<=^version = ")[^"]+' pyproject.toml)
+          PYPROJECT_VERSION=$(grep -Po '^version\s*=\s*"\K[^"]+' pyproject.toml)
 
           if [ "$TAG_VERSION" != "$PYPROJECT_VERSION" ]; then
             echo "::error::Version mismatch! Tag: v$TAG_VERSION, pyproject.toml: $PYPROJECT_VERSION"
