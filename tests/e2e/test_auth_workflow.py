@@ -146,9 +146,11 @@ class TestReadTokenPermissions:
         artifact_hash = upload_response.json()["hash"]
 
         # Try to create tag with read token
+        # API expects ref to be either a tag name or @{short_hash} format
+        hash_ref = f"@{artifact_hash[:8]}"
         response = http_client.post(
-            f"/api/v1/artifacts/e2e-tests/read-tag-test/{artifact_hash}/tags",
-            json={"tag": "latest"},
+            f"/api/v1/artifacts/e2e-tests/read-tag-test/{hash_ref}/tags",
+            json={"tag_name": "stable"},
             headers={"Authorization": f"Bearer {read_token}"},
         )
 
@@ -231,9 +233,11 @@ class TestWriteTokenPermissions:
         artifact_hash = upload_response.json()["hash"]
 
         # Create tag
+        # API expects ref to be either a tag name or @{short_hash} format
+        hash_ref = f"@{artifact_hash[:8]}"
         response = http_client.post(
-            f"/api/v1/artifacts/e2e-tests/write-tag-test/{artifact_hash}/tags",
-            json={"tag": "latest"},
+            f"/api/v1/artifacts/e2e-tests/write-tag-test/{hash_ref}/tags",
+            json={"tag_name": "stable"},
             headers={"Authorization": f"Bearer {write_token}"},
         )
 

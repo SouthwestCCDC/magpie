@@ -150,7 +150,8 @@ def admin_token(docker_services: dict[str, str]) -> str:
     """Get admin token from initialized system.
 
     Runs magpie-ctl init inside the container to get the admin token.
-    Since tests run with an isolated data directory, this is always a fresh init.
+    Uses --reset-admin-token to ensure we always get a fresh token, even if
+    one already exists (e.g., from cached Docker volumes or incomplete cleanup).
     """
     compose_cmd = [
         "docker",
@@ -161,10 +162,10 @@ def admin_token(docker_services: dict[str, str]) -> str:
     env = os.environ.copy()
     env["COMPOSE_PROJECT_NAME"] = docker_services["project_name"]
 
-    # Run magpie-ctl init inside the container
-    # No --reset-admin-token needed since we use isolated temp data directory
+    # Run magpie-ctl init with --reset-admin-token to ensure we always get a token
+    # This handles cases where isolation fails (cached volumes, incomplete cleanup)
     result = subprocess.run(
-        [*compose_cmd, "exec", "-T", "magpie", "magpie-ctl", "init"],
+        [*compose_cmd, "exec", "-T", "magpie", "magpie-ctl", "init", "--reset-admin-token"],
         cwd=PROJECT_ROOT,
         env=env,
         capture_output=True,
@@ -237,16 +238,24 @@ def create_token_via_api(
     return response.json()["token"]
 
 
-@pytest.fixture
-def read_token(http_client: httpx.Client, admin_token: str) -> str:
-    """Create a read-only token for testing."""
-    return create_token_via_api(http_client, admin_token, "test-reader", "read")
+@pytest.fixture(scope="session")
+def read_token(base_url: str, admin_token: str) -> str:
+    """Create a read-only token for testing.
+
+    Session-scoped to avoid duplicate token name errors across tests.
+    """
+    with httpx.Client(base_url=base_url, timeout=30.0) as client:
+        return create_token_via_api(client, admin_token, "test-reader", "read")
 
 
-@pytest.fixture
-def write_token(http_client: httpx.Client, admin_token: str) -> str:
-    """Create a write token for testing."""
-    return create_token_via_api(http_client, admin_token, "test-writer", "write")
+@pytest.fixture(scope="session")
+def write_token(base_url: str, admin_token: str) -> str:
+    """Create a write token for testing.
+
+    Session-scoped to avoid duplicate token name errors across tests.
+    """
+    with httpx.Client(base_url=base_url, timeout=30.0) as client:
+        return create_token_via_api(client, admin_token, "test-writer", "write")
 
 
 def upload_artifact(

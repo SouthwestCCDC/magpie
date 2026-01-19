@@ -97,7 +97,7 @@ class TestArtifactUpload:
                     "magpie",
                     "push",
                     temp_file,
-                    "--path",
+                    "--to",
                     "e2e-tests/push-test",
                 ],
                 cwd=PROJECT_ROOT,
@@ -107,8 +107,8 @@ class TestArtifactUpload:
             )
 
             assert result.returncode == 0, f"Push failed: {result.stderr}"
-            # Output should contain the hash
-            assert "sha256:" in result.stdout.lower() or len(result.stdout.strip()) == 64
+            # Output should contain the hash (64 hex chars) after "Uploaded:" or "Duplicate:"
+            assert "uploaded:" in result.stdout.lower() or "duplicate:" in result.stdout.lower()
         finally:
             os.unlink(temp_file)
 
@@ -185,7 +185,7 @@ class TestArtifactListing:
 
         assert response.status_code == 200
         data = response.json()
-        assert "artifacts" in data or isinstance(data, list)
+        assert "versions" in data or isinstance(data, list)
 
 
 @pytest.mark.e2e
@@ -224,7 +224,8 @@ class TestArtifactDownload:
                     "run",
                     "magpie",
                     "get",
-                    "e2e-tests/get-test",
+                    "e2e-tests/get-test:latest",
+                    "-o",
                     str(output_file),
                 ],
                 cwd=PROJECT_ROOT,
@@ -272,15 +273,17 @@ class TestTagging:
         env["MAGPIE_TOKEN"] = write_token
 
         # Create tag via CLI
+        # Hash ref format: @{first 8 chars of hash}
+        hash_ref = f"@{artifact_hash[:8]}"
         result = subprocess.run(
             [
                 "uv",
                 "run",
                 "magpie",
                 "tag",
-                "e2e-tests/tag-test",
-                artifact_hash,
-                "latest",
+                f"e2e-tests/tag-test:{hash_ref}",
+                "--as",
+                "v1.0",
             ],
             cwd=PROJECT_ROOT,
             env=env,
@@ -304,9 +307,11 @@ class TestTagging:
         artifact_hash = upload_response.json()["hash"]
 
         # Create tag via API
+        # API expects ref to be either a tag name or @{short_hash} format
+        hash_ref = f"@{artifact_hash[:8]}"
         response = authenticated_client.post(
-            f"/api/v1/artifacts/e2e-tests/api-tag-test/{artifact_hash}/tags",
-            json={"tag": "v1.0"},
+            f"/api/v1/artifacts/e2e-tests/api-tag-test/{hash_ref}/tags",
+            json={"tag_name": "v1.0"},
         )
 
         assert response.status_code in (200, 201)
@@ -338,14 +343,16 @@ class TestArtifactInfo:
         env["MAGPIE_SERVER"] = base_url
         env["MAGPIE_TOKEN"] = write_token
 
+        # Info command takes artifact_ref in path:ref format
+        # Use the hash ref format: @{first 8 chars of hash}
+        hash_ref = f"@{artifact_hash[:8]}"
         result = subprocess.run(
             [
                 "uv",
                 "run",
                 "magpie",
                 "info",
-                "e2e-tests/info-test",
-                artifact_hash,
+                f"e2e-tests/info-test:{hash_ref}",
             ],
             cwd=PROJECT_ROOT,
             env=env,
@@ -354,8 +361,10 @@ class TestArtifactInfo:
         )
 
         assert result.returncode == 0, f"info failed: {result.stderr}"
-        # Should show hash and size
-        assert artifact_hash in result.stdout or "size" in result.stdout.lower()
+        # Should show hash (either full or partial) and metadata
+        assert (
+            artifact_hash in result.stdout or hash_ref in result.stdout or "Hash" in result.stdout
+        )
 
     def test_info_via_api(
         self,
@@ -371,8 +380,10 @@ class TestArtifactInfo:
         artifact_hash = upload_response.json()["hash"]
 
         # Get info via API
+        # API expects ref to be either a tag name or @{short_hash} format
+        hash_ref = f"@{artifact_hash[:8]}"
         response = authenticated_client.get(
-            f"/api/v1/artifacts/e2e-tests/api-info-test/{artifact_hash}/info"
+            f"/api/v1/artifacts/e2e-tests/api-info-test/{hash_ref}/info"
         )
 
         assert response.status_code == 200

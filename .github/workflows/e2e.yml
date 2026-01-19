@@ -1,0 +1,52 @@
+# End-to-end tests against the full docker-compose stack
+#
+# This workflow:
+# 1. Builds the magpie Docker image
+# 2. Starts the full stack (Caddy + FastAPI) via docker-compose
+# 3. Waits for health checks to pass
+# 4. Runs E2E tests that exercise the complete flow:
+#    - System initialization and token management
+#    - Artifact upload/download via API and CLI
+#    - Tagging and listing operations
+#    - Caddy direct artifact serving
+#    - Authentication and authorization flows
+
+name: E2E Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, default]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up just
+        uses: extractions/setup-just@v2
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Build Docker image
+        run: docker compose build
+
+      - name: Run E2E tests
+        run: just e2e
