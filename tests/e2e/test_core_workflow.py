@@ -107,8 +107,8 @@ class TestArtifactUpload:
             )
 
             assert result.returncode == 0, f"Push failed: {result.stderr}"
-            # Output should contain the hash
-            assert "sha256:" in result.stdout.lower() or len(result.stdout.strip()) == 64
+            # Output should contain the hash (64 hex chars) after "Uploaded:" or "Duplicate:"
+            assert "uploaded:" in result.stdout.lower() or "duplicate:" in result.stdout.lower()
         finally:
             os.unlink(temp_file)
 
