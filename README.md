@@ -187,3 +187,6 @@ docker pull ghcr.io/southwestccdc/magpie:latest
 # Client: Install from git tag
 uv pip install git+https://github.com/SouthwestCCDC/magpie@v1.0.0
 ```
+
+---
+*Release documentation generated with AI assistance (Claude Code w/ Opus 4.5).*
