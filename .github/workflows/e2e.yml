@@ -50,7 +50,3 @@ jobs:
 
       - name: Run E2E tests
         run: just e2e
-
-      - name: Show docker-compose logs on failure
-        if: failure()
-        run: docker compose logs --tail=200
