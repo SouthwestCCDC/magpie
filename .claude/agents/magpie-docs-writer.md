@@ -13,8 +13,8 @@ assistant: \"I'll use the magpie-docs-writer agent to update the user documentat
 
 <example>
 Context: Admin procedures need documentation.
-user: \"Document the backup and restore procedures in the admin guide\"
-assistant: \"I'll launch the magpie-docs-writer to create the backup documentation.\"
+user: \"Document the backup and restore procedures in the user guide\"
+assistant: \"I'll launch the magpie-docs-writer to add backup documentation to user-guide.md.\"
 <Task tool call to launch magpie-docs-writer>
 </example>
 

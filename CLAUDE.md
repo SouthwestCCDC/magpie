@@ -86,10 +86,10 @@ For orchestrated work, use the `/magpie-orchestrator` skill.
 
 ## AI Disclosure
 
-All GitHub comments must include AI disclosure per workspace policy:
+All GitHub comments must include AI disclosure per workspace policy (include model when known):
 
 ```
-(AI-generated via Claude Code)
+(AI-generated via Claude Code w/ Opus 4.5)
 ```
 
 Commit messages should include:

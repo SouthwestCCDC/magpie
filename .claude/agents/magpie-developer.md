@@ -166,7 +166,7 @@ When addressing PR review comments:
    gh api repos/SouthwestCCDC/magpie/pulls/${PR_NUMBER}/comments/${COMMENT_ID}/replies \
      -X POST -f body="Fixed in commit ${SHA}. ${explanation}
 
-   (AI-generated via Claude Code)"
+   (AI-generated via Claude Code w/ Opus 4.5)"
    ```
 
 **CRITICAL**: All GitHub comments MUST include the AI disclosure footer.

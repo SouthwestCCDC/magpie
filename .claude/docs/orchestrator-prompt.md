@@ -125,14 +125,14 @@ If CI fails, launch a subagent to fix it. Do not mark work as complete until CI 
 gh api repos/SouthwestCCDC/magpie/pulls/{PR}/comments/{COMMENT_ID}/replies \
   -X POST -f body="Fixed in commit {SHA}. {Brief explanation of the fix}.
 
-(AI-generated via Claude Code)"
+(AI-generated via Claude Code w/ Opus 4.5)"
 ```
 
-**IMPORTANT**: All GitHub comments must include AI disclosure per workspace policy. Add a footer line: `(AI-generated via Claude Code)`
+**IMPORTANT**: All GitHub comments must include AI disclosure per workspace policy. Add a footer line: `(AI-generated via Claude Code w/ Opus 4.5)`
 
 **When launching subagents for PR comments**, include:
 > After fixing each comment, reply to it on GitHub acknowledging the fix with the commit SHA.
-> IMPORTANT: All GitHub comments MUST end with: `(AI-generated via Claude Code)`
+> IMPORTANT: All GitHub comments MUST end with: `(AI-generated via Claude Code w/ Opus 4.5)`
 
 This is the subagent's responsibility, not yours. You verify it was done.
 
@@ -193,7 +193,7 @@ Do NOT cd to the main repo or create new worktrees.
      gh api repos/SouthwestCCDC/magpie/pulls/{N}/comments/{ID}/replies \
        -X POST -f body="Fixed in {SHA}. {explanation}
 
-(AI-generated via Claude Code)"
+(AI-generated via Claude Code w/ Opus 4.5)"
 3. Run lint and tests locally
 4. Commit with descriptive message + `Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>`
 5. Push
