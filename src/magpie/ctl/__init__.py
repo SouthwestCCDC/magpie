@@ -76,11 +76,12 @@ def version() -> None:
 
 
 # Register subcommands
-from magpie.ctl.commands import flush_tag, gc, init, token  # noqa: E402
+from magpie.ctl.commands import flush_tag, gc, init, sync, token  # noqa: E402
 
 cli.add_command(init)
 cli.add_command(gc)
 cli.add_command(flush_tag)
+cli.add_command(sync)
 cli.add_command(token)
 
 

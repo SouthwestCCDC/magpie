@@ -41,6 +41,7 @@ class MagpieSettings(BaseSettings):
 
     # S3 backup settings (optional)
     s3_bucket: str | None = None  # MAGPIE_S3_BUCKET
+    s3_prefix: str = ""  # MAGPIE_S3_PREFIX - optional prefix for S3 keys
 
     # Logging settings
     log_format: Literal["json", "console"] = "json"  # MAGPIE_LOG_FORMAT
