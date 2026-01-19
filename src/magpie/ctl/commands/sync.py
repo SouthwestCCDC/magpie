@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
+import subprocess  # nosec B404 - subprocess needed for rclone/aws CLI calls
 from pathlib import Path
 from typing import TYPE_CHECKING
 
