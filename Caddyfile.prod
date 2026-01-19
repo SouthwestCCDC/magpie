@@ -56,6 +56,7 @@
 #
 # PROTECTED ROUTES (require valid Bearer token):
 #   - POST   /api/v1/upload/*              - Artifact uploads
+#   - GET    /api/v1/artifacts/*           - List artifacts, get info
 #   - POST   /api/v1/artifacts/*/tags      - Create/update tags
 #   - DELETE /api/v1/artifacts/*/tags/*    - Remove tags
 #   - POST   /api/v1/tags/*/flush          - Flush tags globally
@@ -63,13 +64,12 @@
 #   - POST   /api/v1/tokens                - Create tokens (admin)
 #   - DELETE /api/v1/tokens/*              - Revoke tokens (admin)
 #   - POST   /api/v1/gc                    - Garbage collection (admin)
+#   - GET    /artifacts/*                  - Static file downloads (except /artifacts/public/*)
 #
-# PUBLIC ROUTES (no authentication required by default):
-#   - GET    /api/v1/artifacts/*           - List artifacts, get info
+# PUBLIC ROUTES (no authentication required):
 #   - GET    /api/v1/auth/validate         - Auth validation endpoint
 #   - GET    /health                       - Health check
-#   - GET    /artifacts/*                  - Static file downloads + directory browsing
-#                                             (Can be protected with Authentik SSO - see below)
+#   - GET    /artifacts/public/*           - Public static file downloads
 #
 # =============================================================================
 # HEADER PROPAGATION
@@ -190,38 +190,50 @@
 		reverse_proxy magpie:8000
 	}
 
-	# Artifact read operations (GET only) - public access
+	# Public artifacts - no authentication required
+	# Files placed in /data/artifacts/public/ are accessible without auth
+	handle /artifacts/public/* {
+		root * /data
+		file_server browse
+	}
+
+	# =========================================================================
+	# PROTECTED ROUTES - Require valid Bearer token via forward_auth
+	# =========================================================================
+
+	# Artifact read operations (GET only) - requires valid Bearer token
 	# Matches: GET /api/v1/artifacts, GET /api/v1/artifacts/{path}, GET /api/v1/artifacts/{path}/{ref}/info
-	# Note: POST/DELETE to /artifacts/*/tags* are handled by protected routes below
+	# Note: POST/DELETE to /artifacts/*/tags* are handled separately below
 	@artifacts_read {
 		method GET
 		path /api/v1/artifacts*
 	}
 	handle @artifacts_read {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
 		reverse_proxy magpie:8000
 	}
 
-	# Static artifact downloads - served directly by Caddy for performance
-	# Files accessed via /artifacts/{artifact_path}/{ref} symlinks
+	# Protected artifact downloads - requires valid Bearer token
+	# Static files accessed via /artifacts/{artifact_path}/{ref} symlinks
 	# Directory browsing enabled for discovery and debugging
 	#
 	# SECURITY NOTE: Directory browsing exposes the artifact structure (paths,
-	# refs, filenames) to anyone who can access this endpoint. This is intentional
-	# for Magpie's use case (artifact discovery). If you need to restrict
+	# refs, filenames) to authenticated users. If you need to restrict
 	# browsing, remove the "browse" argument from file_server below.
 	#
-	# AUTHENTIK SSO INTEGRATION:
-	# To enable Authentik SSO for human browser access, set this environment variable:
+	# AUTHENTIK SSO INTEGRATION (OPTIONAL):
+	# To enable Authentik SSO for human browser access in addition to Bearer
+	# tokens, set this environment variable:
 	#   - AUTHENTIK_HOST: The Authentik server hostname (e.g., authentik.example.com)
 	#
 	# When enabled, users browsing /artifacts/* via web browser will be redirected
 	# to Authentik for authentication. Bearer token access via API continues to work.
 	#
-	# To enable, uncomment the forward_auth block below and set AUTHENTIK_HOST
-	# environment variable in your deployment configuration.
-	#
-	# Uncomment and configure for Authentik SSO:
-	# handle /artifacts/* {
+	# To enable Authentik SSO instead of Bearer auth, replace the forward_auth
+	# block below with:
 	#     # Strip client-provided auth headers (defense-in-depth)
 	#     request_header -X-authentik-username
 	#     request_header -X-authentik-email
@@ -232,19 +244,14 @@
 	#         uri /outpost.goauthentik.io/auth/caddy
 	#         copy_headers X-authentik-username X-authentik-email X-authentik-name X-authentik-groups
 	#     }
-	#     root * /data
-	#     file_server browse
-	# }
-
-	# Default handler (no SSO) - comment out when enabling Authentik SSO above:
 	handle /artifacts/* {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
 		root * /data
 		file_server browse
 	}
-
-	# =========================================================================
-	# PROTECTED ROUTES - Require valid Bearer token via forward_auth
-	# =========================================================================
 
 	# Upload endpoint - requires write or admin scope
 	handle /api/v1/upload/* {
