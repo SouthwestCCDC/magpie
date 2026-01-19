@@ -1,7 +1,7 @@
 # Magpie Assessment Findings
 
 Assessment conducted: 2026-01-11
-Re-validated: 2026-01-13 (post PR #147, #150 merge)
+Re-validated: 2026-01-19 (doc cleanup)
 
 ## Status Legend
 - [ ] Not started
@@ -55,14 +55,14 @@ Re-validated: 2026-01-13 (post PR #147, #150 merge)
 
 ## 5. Missing Operational Documentation
 
-**Status**: [~] PARTIALLY RESOLVED - #7 closed, #8 still open
+**Status**: [x] RESOLVED - #7 closed, #8 closed
 **Priority**: Low (Documentation - expected for new codebase)
-**Related issues**: #7 (closed), #8 (open)
+**Related issues**: #7 (closed), #8 (closed)
 
 - Issue #7 (Manual Acceptance Testing Plan): CLOSED
-- Issue #8 (Installation and Admin Guides): Still OPEN
+- Issue #8 (Installation and Admin Guides): CLOSED (PR #157 - installer script)
 
-User guide exists and is excellent; operational docs for administrators remain a gap.
+User guide exists and is excellent. PR #157 added `scripts/install.sh` with install, update, uninstall, status, and logs commands for Debian 12/13 deployment.
 
 ---
 
@@ -70,6 +70,7 @@ User guide exists and is excellent; operational docs for administrators remain a
 
 **Status**: [ ] Not started
 **Priority**: Low
+**Issue**: #164
 
 | Issue | Location | Notes |
 |-------|----------|-------|
@@ -94,19 +95,19 @@ User guide exists and is excellent; operational docs for administrators remain a
 
 ---
 
-## 8. Design Docs Pending Features (Deferred)
+## 8. Design Docs Pending Features
 
-**Status**: [~] Partially implemented
+**Status**: [x] RESOLVED - all implemented or closed
 **Priority**: Low (Future work)
+**Updated**: 2026-01-19
 
-Features in design docs but not implemented:
-- S3 backup sync (`magpie-ctl sync --to-s3/--from-s3`) - Phase 4
-- Authentik SSO integration - Future work
-- Structured logging with structlog - Not prioritized
-- Custom OTEL metrics (magpie_uploads_total, etc.) - Not prioritized
-- ~~Upload size limits~~ - **IMPLEMENTED** via Issue #103 (`MAGPIE_MAX_UPLOAD_SIZE`)
-
-These are acknowledged deferrals, not bugs.
+Features from design docs - status:
+- S3 backup sync - **#175** CLOSED
+- Authentik SSO integration - **#176** CLOSED
+- Structured logging with structlog - **#167** CLOSED
+- OpenTelemetry tracing - **#168** CLOSED
+- Sentry error tracking - **#169** CLOSED
+- Upload size limits - **#103** CLOSED (`MAGPIE_MAX_UPLOAD_SIZE`)
 
 ---
 
