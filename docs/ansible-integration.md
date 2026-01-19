@@ -101,29 +101,30 @@ For immutable deployments, pin to a specific blob hash:
 
 ## Checksum Verification
 
-### Using Magpie's SHA-256 Checksums
+### Using Hash References for Immutable Downloads
 
-If your Magpie deployment provides `.sha256` sidecar files, you can verify
-downloads automatically:
+The most reliable verification method is to use Magpie's hash-based blob
+references. When you download via a hash ref, you are guaranteed to get
+exactly that content:
 
 ```yaml
-- name: Get checksum for artifact
-  ansible.builtin.uri:
-    url: "{{ magpie_server }}/artifacts/binaries/app/latest.sha256"
-    headers:
-      Authorization: "Bearer {{ magpie_token }}"
-    return_content: true
-  register: checksum_result
+vars:
+  # Pin to specific blob hashes for verified, immutable deployments
+  artifact_hashes:
+    scoring_engine: "a1b2c3d4e5f6"  # Short hash from tag listing
+    config_bundle: "9f8e7d6c5b4a"
 
-- name: Download artifact with checksum verification
-  ansible.builtin.get_url:
-    url: "{{ magpie_server }}/artifacts/binaries/app/latest"
-    dest: /opt/app/binary
-    headers:
-      Authorization: "Bearer {{ magpie_token }}"
-    checksum: "sha256:{{ checksum_result.content | trim }}"
-    mode: "0755"
+tasks:
+  - name: Download artifact by hash (content-verified)
+    ansible.builtin.get_url:
+      url: "{{ magpie_server }}/artifacts/scoring/engine/blobs/{{ artifact_hashes.scoring_engine }}"
+      dest: /opt/scoring/engine
+      headers:
+        Authorization: "Bearer {{ magpie_token }}"
+      mode: "0755"
 ```
+
+Use `magpie tags <artifact-path>` to list tags with their blob hashes.
 
 ### Pre-defined Checksum in Variables
 
@@ -354,34 +355,26 @@ For large artifacts, increase the timeout:
 
 If checksum verification fails:
 
-1. Verify the checksum source matches the artifact version
-2. Try re-downloading (network corruption)
-3. Check if artifact was updated between checksum fetch and download
+1. Verify the checksum in your variables matches the current artifact version
+2. Try re-downloading (possible network corruption)
+3. Use hash refs instead of mutable tags for guaranteed consistency
+
+For critical deployments, use hash-based blob references to guarantee content
+integrity. Hash refs are immutable--they always return the same content:
 
 ```yaml
-# Atomic checksum + download pattern
-- name: Get checksum and download atomically
-  block:
-    - name: Fetch checksum
-      ansible.builtin.uri:
-        url: "{{ magpie_server }}/artifacts/app/binary/stable.sha256"
-        headers:
-          Authorization: "Bearer {{ magpie_token }}"
-        return_content: true
-      register: checksum
+vars:
+  # Get hash from: magpie tags app/binary
+  app_binary_hash: "a1b2c3d4"
 
-    - name: Download with verification
-      ansible.builtin.get_url:
-        url: "{{ magpie_server }}/artifacts/app/binary/stable"
-        dest: /opt/app/binary
-        headers:
-          Authorization: "Bearer {{ magpie_token }}"
-        checksum: "sha256:{{ checksum.content | trim }}"
-        mode: "0755"
-  rescue:
-    - name: Handle download failure
-      ansible.builtin.fail:
-        msg: "Failed to download artifact: checksum may have changed"
+tasks:
+  - name: Download by hash ref (guaranteed immutable)
+    ansible.builtin.get_url:
+      url: "{{ magpie_server }}/artifacts/app/binary/blobs/{{ app_binary_hash }}"
+      dest: /opt/app/binary
+      headers:
+        Authorization: "Bearer {{ magpie_token }}"
+      mode: "0755"
 ```
 
 ## Security Best Practices
@@ -399,7 +392,9 @@ If checksum verification fails:
      no_log: true
    ```
 4. **Pin versions for production** - Use specific tags or hash refs instead of `latest`
-5. **Verify checksums** - Always verify integrity for security-sensitive artifacts
+5. **Verify integrity** - For security-sensitive artifacts, use one of these approaches:
+   - **Hash refs** (recommended): Download via `/blobs/<hash>` for content-addressed immutability
+   - **Pre-defined checksums**: Store expected SHA-256 in vault-encrypted variables
 6. **Rotate tokens periodically** - Update vault-stored tokens on a schedule
 
 ## See Also
@@ -407,3 +402,7 @@ If checksum verification fails:
 - [User Guide](user-guide.md) - CLI usage and server administration
 - [Authentik Integration](authentik-setup.md) - SSO for browser access
 - [Design Document](design.md) - Architecture and design decisions
+
+---
+
+*This documentation was created with AI assistance (Claude Code w/ Opus 4.5).*
