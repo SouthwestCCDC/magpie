@@ -362,7 +362,9 @@ class TestArtifactInfo:
 
         assert result.returncode == 0, f"info failed: {result.stderr}"
         # Should show hash (either full or partial) and metadata
-        assert artifact_hash in result.stdout or hash_ref in result.stdout or "Hash" in result.stdout
+        assert (
+            artifact_hash in result.stdout or hash_ref in result.stdout or "Hash" in result.stdout
+        )
 
     def test_info_via_api(
         self,

@@ -52,6 +52,8 @@ class TestOpenTelemetryDoesNotBreakWorkflow:
         # Download (uses /artifacts/ endpoint which serves files directly)
         # Blobs are stored with short 8-char hash prefix
         short_hash = artifact_hash[:8]
-        download_response = authenticated_client.get(f"/artifacts/{artifact_path}/blobs/{short_hash}")
+        download_response = authenticated_client.get(
+            f"/artifacts/{artifact_path}/blobs/{short_hash}"
+        )
         assert download_response.status_code == 200
         assert download_response.content == test_artifact_content
