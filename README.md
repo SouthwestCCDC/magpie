@@ -144,3 +144,46 @@ uv run pytest --cov=magpie
 uv run ruff check .
 uv run ruff format --check .
 ```
+
+## Releases
+
+Releases are automated via GitHub Actions when a version tag is pushed.
+
+### Release Process
+
+1. Update version in `pyproject.toml`
+2. Commit the change:
+   ```bash
+   git add pyproject.toml
+   git commit -m "Release v1.0.0"
+   ```
+3. Create and push the tag:
+   ```bash
+   git tag v1.0.0
+   git push origin default --tags
+   ```
+
+The release workflow will:
+- Validate the tag matches `pyproject.toml` version
+- Build multi-arch container images (amd64, arm64)
+- Push to `ghcr.io/southwestccdc/magpie`
+- Create a GitHub Release with auto-generated changelog
+- Attach `scripts/install.sh` as a release asset
+
+### Container Tags
+
+| Git Tag | Container Tags |
+|---------|----------------|
+| `v1.0.0` | `1.0.0`, `1.0`, `1`, `latest` |
+| `v1.0.1` | `1.0.1`, `1.0`, `1`, `latest` |
+| `v2.0.0-rc1` | `2.0.0-rc1` (no `latest`) |
+
+### Installing from Release
+
+```bash
+# Server: Use container from registry
+docker pull ghcr.io/southwestccdc/magpie:latest
+
+# Client: Install from git tag
+uv pip install git+https://github.com/SouthwestCCDC/magpie@v1.0.0
+```
