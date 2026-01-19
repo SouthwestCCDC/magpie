@@ -187,7 +187,7 @@ def _sync_to_s3_rclone(
                 click.echo(f"Running: {' '.join(cmd)}", err=True)
 
             try:
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603 - cmd args are validated config values
                     cmd,
                     capture_output=True,
                     text=True,
@@ -267,7 +267,7 @@ def _sync_to_s3_aws(
                 click.echo(f"Running: {' '.join(cmd)}", err=True)
 
             try:
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603 - cmd args are validated config values
                     cmd,
                     capture_output=True,
                     text=True,
