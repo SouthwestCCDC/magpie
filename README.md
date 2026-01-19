@@ -178,6 +178,17 @@ The release workflow will:
 | `v1.0.1` | `1.0.1`, `1.0`, `1`, `latest` |
 | `v2.0.0-rc1` | `2.0.0-rc1` (no `latest`) |
 
+**Note on tag mutability**
+
+- Full version tags (`MAJOR.MINOR.PATCH`, e.g. `1.0.1`) are immutable and always point to the
+  exact release that created them.
+- Major/minor tags (`MAJOR`, `MAJOR.MINOR`, e.g. `1`, `1.0`) are **mutable** and will be moved
+  to the latest patch release in that series (e.g. `1.0` and `1` move from `1.0.0` to `1.0.1`).
+- `latest` is also **mutable** and always points to the most recent stable release.
+
+If you require a non-changing reference for deployments, pin to the full version tag
+(e.g. `ghcr.io/southwestccdc/magpie:1.0.1`).
+
 ### Installing from Release
 
 ```bash
