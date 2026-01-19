@@ -20,8 +20,14 @@ fi
 [[ -z "$file_path" ]] && exit 0
 
 # Security: Validate path is within project directory
-project_root=$(pwd)
-resolved_path=$(realpath -m -- "$file_path" 2>/dev/null || echo "")
+# Use CLAUDE_PROJECT_DIR if available, otherwise pwd
+project_root="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+resolved_path=$(realpath -m -- "$file_path" 2>/dev/null)
+
+# Determine log file location (project-local)
+log_dir="$project_root/.claude/logs"
+mkdir -p "$log_dir" 2>/dev/null || true
+log_file="$log_dir/ruff_format.log"
 
 # Only format Python files within the project directory
 if [[ -n "$resolved_path" ]] \
@@ -29,7 +35,7 @@ if [[ -n "$resolved_path" ]] \
     && [[ "$resolved_path" == *.py ]] \
     && [[ -f "$resolved_path" ]]; then
     # Run ruff format; log errors but don't fail the hook
-    if ! uv run ruff format "$resolved_path" 2>>/tmp/claude_ruff_format.log; then
-        echo "ruff format failed for '$resolved_path'. See /tmp/claude_ruff_format.log" >&2
+    if ! uv run ruff format "$resolved_path" 2>>"$log_file"; then
+        echo "ruff format failed for '$resolved_path'. See $log_file" >&2
     fi
 fi

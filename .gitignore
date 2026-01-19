@@ -46,3 +46,6 @@ data/
 # Environment
 .env
 .env.local
+
+# Claude Code hook logs
+.claude/logs/
