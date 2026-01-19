@@ -50,7 +50,8 @@ Magpie supports two authentication methods:
    - Does not affect CLI or API access
 
 This guide focuses on CLI usage with bearer tokens. For Authentik SSO setup,
-see the [Authentik Integration Guide](authentik-setup.md).
+see the [Authentik Integration Guide](authentik-setup.md). For using Magpie
+with Ansible playbooks, see the [Ansible Integration Guide](ansible-integration.md).
 
 ## Client Setup
 
