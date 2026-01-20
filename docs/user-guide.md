@@ -75,6 +75,8 @@ To install a specific version, replace the tag (e.g., `@v0.1.0-rc4`) with the de
 release tag. Check [GitHub releases](https://github.com/SouthwestCCDC/magpie/releases)
 for available versions.
 
+> *This section was generated with AI assistance (Claude Code w/ Opus 4.5).*
+
 This installs two CLI tools:
 - `magpie` - Client for interacting with the server
 - `magpie-ctl` - Server administration tool
