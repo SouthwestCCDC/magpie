@@ -57,12 +57,25 @@ with Ansible playbooks, see the [Ansible Integration Guide](ansible-integration.
 
 ### Installation
 
-Install from source:
+Install the magpie CLI using pip or uv:
 
 ```bash
+# With uv (recommended)
+uv pip install git+https://github.com/SouthwestCCDC/magpie.git@v0.1.0-rc4
+
+# With pip
+pip install git+https://github.com/SouthwestCCDC/magpie.git@v0.1.0-rc4
+
+# For development (from local clone)
 cd magpie
-pip install .
+uv pip install -e .
 ```
+
+To install a specific version, replace the tag (e.g., `@v0.1.0-rc4`) with the desired
+release tag. Check [GitHub releases](https://github.com/SouthwestCCDC/magpie/releases)
+for available versions.
+
+> *This section was generated with AI assistance (Claude Code w/ Opus 4.5).*
 
 This installs two CLI tools:
 - `magpie` - Client for interacting with the server
