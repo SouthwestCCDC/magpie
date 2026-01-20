@@ -854,3 +854,724 @@ def from_s3(
             for error in all_errors:
                 click.echo(f"  - {error}", err=True)
             raise SystemExit(1)
+
+
+def _list_s3_files_rclone(bucket: str, prefix: str, pattern: str, debug: bool) -> list[str]:
+    """List files in S3 matching a pattern using rclone.
+
+    Args:
+        bucket: S3 bucket name.
+        prefix: S3 key prefix.
+        pattern: Glob pattern to filter files (e.g., "*.magpie" or "*/blobs/*").
+        debug: If True, show debug output.
+
+    Returns:
+        List of relative paths matching the pattern.
+    """
+    # Build source path
+    src_base = f"s3://{bucket}"
+    if prefix:
+        src_base = f"{src_base}/{prefix.strip('/')}"
+
+    cmd = [
+        RCLONE_CMD,
+        "lsf",
+        src_base,
+        "--recursive",
+        "--files-only",
+        "--include",
+        pattern,
+    ]
+
+    if debug:
+        click.echo(f"Running: {' '.join(cmd)}", err=True)
+
+    try:
+        result = subprocess.run(  # nosec B603 - cmd args are validated config values
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            if debug:
+                click.echo(f"rclone lsf failed: {result.stderr}", err=True)
+            return []
+
+        # Parse output - one file per line
+        return [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+    except Exception as e:
+        if debug:
+            click.echo(f"Error running rclone: {e}", err=True)
+        return []
+
+
+def _list_s3_files_aws(bucket: str, prefix: str, pattern: str, debug: bool) -> list[str]:
+    """List files in S3 matching a pattern using AWS CLI.
+
+    Args:
+        bucket: S3 bucket name.
+        prefix: S3 key prefix.
+        pattern: Glob pattern to filter files (e.g., "*.magpie" or "*/blobs/*").
+        debug: If True, show debug output.
+
+    Returns:
+        List of relative paths matching the pattern.
+    """
+    import fnmatch
+
+    # Build S3 prefix for listing
+    s3_prefix = prefix.strip("/") + "/" if prefix else ""
+
+    cmd = [
+        AWS_CMD,
+        "s3",
+        "ls",
+        f"s3://{bucket}/{s3_prefix}",
+        "--recursive",
+    ]
+
+    if debug:
+        click.echo(f"Running: {' '.join(cmd)}", err=True)
+
+    try:
+        result = subprocess.run(  # nosec B603 - cmd args are validated config values
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            if debug:
+                click.echo(f"aws s3 ls failed: {result.stderr}", err=True)
+            return []
+
+        # Parse output - format is: date time size key
+        # Example: 2024-01-01 12:00:00  1234 prefix/path/file.txt
+        files = []
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            # Split on whitespace, key is the last part
+            parts = line.split()
+            if len(parts) >= 4:
+                # Key is everything after date, time, size
+                key = " ".join(parts[3:])
+                # Remove the prefix to get relative path
+                if s3_prefix and key.startswith(s3_prefix):
+                    relative_path = key[len(s3_prefix) :]
+                else:
+                    relative_path = key
+
+                # Filter by pattern using fnmatch
+                if fnmatch.fnmatch(relative_path, pattern):
+                    files.append(relative_path)
+
+        return files
+    except Exception as e:
+        if debug:
+            click.echo(f"Error running aws cli: {e}", err=True)
+        return []
+
+
+def _get_s3_file_content_rclone(bucket: str, prefix: str, path: str, debug: bool) -> str | None:
+    """Get file content from S3 using rclone.
+
+    Args:
+        bucket: S3 bucket name.
+        prefix: S3 key prefix.
+        path: Relative path within the prefix.
+        debug: If True, show debug output.
+
+    Returns:
+        File content as string, or None on error.
+    """
+    # Build full S3 path
+    s3_path = _build_s3_path(bucket, prefix, path)
+
+    cmd = [
+        RCLONE_CMD,
+        "cat",
+        s3_path,
+    ]
+
+    if debug:
+        click.echo(f"Running: {' '.join(cmd)}", err=True)
+
+    try:
+        result = subprocess.run(  # nosec B603 - cmd args are validated config values
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            if debug:
+                click.echo(f"rclone cat failed: {result.stderr}", err=True)
+            return None
+        return result.stdout
+    except Exception as e:
+        if debug:
+            click.echo(f"Error running rclone: {e}", err=True)
+        return None
+
+
+def _get_s3_file_content_aws(bucket: str, prefix: str, path: str, debug: bool) -> str | None:
+    """Get file content from S3 using AWS CLI.
+
+    Args:
+        bucket: S3 bucket name.
+        prefix: S3 key prefix.
+        path: Relative path within the prefix.
+        debug: If True, show debug output.
+
+    Returns:
+        File content as string, or None on error.
+    """
+    import tempfile
+
+    # Build full S3 key
+    s3_key = f"{prefix.strip('/')}/{path}" if prefix else path
+
+    # Create temp file to download to
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        cmd = [
+            AWS_CMD,
+            "s3",
+            "cp",
+            f"s3://{bucket}/{s3_key}",
+            tmp_path,
+            "--quiet",
+        ]
+
+        if debug:
+            click.echo(f"Running: {' '.join(cmd)}", err=True)
+
+        result = subprocess.run(  # nosec B603 - cmd args are validated config values
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            if debug:
+                click.echo(f"aws s3 cp failed: {result.stderr}", err=True)
+            return None
+
+        # Read content from temp file
+        with open(tmp_path, encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        if debug:
+            click.echo(f"Error running aws cli: {e}", err=True)
+        return None
+    finally:
+        # Clean up temp file
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def _delete_s3_file_rclone(bucket: str, prefix: str, path: str, debug: bool) -> bool:
+    """Delete a file from S3 using rclone.
+
+    Args:
+        bucket: S3 bucket name.
+        prefix: S3 key prefix.
+        path: Relative path within the prefix.
+        debug: If True, show debug output.
+
+    Returns:
+        True if deleted successfully, False otherwise.
+    """
+    s3_path = _build_s3_path(bucket, prefix, path)
+
+    cmd = [
+        RCLONE_CMD,
+        "deletefile",
+        s3_path,
+    ]
+
+    if debug:
+        click.echo(f"Running: {' '.join(cmd)}", err=True)
+
+    try:
+        result = subprocess.run(  # nosec B603 - cmd args are validated config values
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.returncode == 0
+    except Exception as e:
+        if debug:
+            click.echo(f"Error running rclone: {e}", err=True)
+        return False
+
+
+def _delete_s3_file_aws(bucket: str, prefix: str, path: str, debug: bool) -> bool:
+    """Delete a file from S3 using AWS CLI.
+
+    Args:
+        bucket: S3 bucket name.
+        prefix: S3 key prefix.
+        path: Relative path within the prefix.
+        debug: If True, show debug output.
+
+    Returns:
+        True if deleted successfully, False otherwise.
+    """
+    s3_key = f"{prefix.strip('/')}/{path}" if prefix else path
+
+    cmd = [
+        AWS_CMD,
+        "s3",
+        "rm",
+        f"s3://{bucket}/{s3_key}",
+    ]
+
+    if debug:
+        click.echo(f"Running: {' '.join(cmd)}", err=True)
+
+    try:
+        result = subprocess.run(  # nosec B603 - cmd args are validated config values
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.returncode == 0
+    except Exception as e:
+        if debug:
+            click.echo(f"Error running aws cli: {e}", err=True)
+        return False
+
+
+def _get_s3_file_size_rclone(
+    bucket: str, prefix: str, paths: list[str], debug: bool
+) -> dict[str, int]:
+    """Get file sizes from S3 using rclone.
+
+    Args:
+        bucket: S3 bucket name.
+        prefix: S3 key prefix.
+        paths: List of relative paths to get sizes for.
+        debug: If True, show debug output.
+
+    Returns:
+        Dict mapping path to size in bytes.
+    """
+    if not paths:
+        return {}
+
+    # Build source path
+    src_base = f"s3://{bucket}"
+    if prefix:
+        src_base = f"{src_base}/{prefix.strip('/')}"
+
+    # Use rclone lsl to get sizes (long listing)
+    cmd = [
+        RCLONE_CMD,
+        "lsl",
+        src_base,
+        "--recursive",
+        "--files-only",
+    ]
+
+    if debug:
+        click.echo(f"Running: {' '.join(cmd)}", err=True)
+
+    try:
+        result = subprocess.run(  # nosec B603 - cmd args are validated config values
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return {}
+
+        # Parse output - format: size date time path
+        sizes = {}
+        paths_set = set(paths)
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            parts = line.split()
+            if len(parts) >= 4:
+                try:
+                    size = int(parts[0])
+                    # Path is the rest after size, date, time
+                    path = " ".join(parts[3:])
+                    if path in paths_set:
+                        sizes[path] = size
+                except (ValueError, IndexError):
+                    continue
+        return sizes
+    except Exception as e:
+        if debug:
+            click.echo(f"Error running rclone: {e}", err=True)
+        return {}
+
+
+def _get_s3_file_size_aws(
+    bucket: str, prefix: str, paths: list[str], debug: bool
+) -> dict[str, int]:
+    """Get file sizes from S3 using AWS CLI.
+
+    Args:
+        bucket: S3 bucket name.
+        prefix: S3 key prefix.
+        paths: List of relative paths to get sizes for.
+        debug: If True, show debug output.
+
+    Returns:
+        Dict mapping path to size in bytes.
+    """
+    if not paths:
+        return {}
+
+    # Build S3 prefix for listing
+    s3_prefix = prefix.strip("/") + "/" if prefix else ""
+
+    cmd = [
+        AWS_CMD,
+        "s3",
+        "ls",
+        f"s3://{bucket}/{s3_prefix}",
+        "--recursive",
+    ]
+
+    if debug:
+        click.echo(f"Running: {' '.join(cmd)}", err=True)
+
+    try:
+        result = subprocess.run(  # nosec B603 - cmd args are validated config values
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return {}
+
+        # Parse output - format: date time size key
+        sizes = {}
+        paths_set = set(paths)
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            parts = line.split()
+            if len(parts) >= 4:
+                try:
+                    size = int(parts[2])
+                    key = " ".join(parts[3:])
+                    if s3_prefix and key.startswith(s3_prefix):
+                        relative_path = key[len(s3_prefix) :]
+                    else:
+                        relative_path = key
+                    if relative_path in paths_set:
+                        sizes[relative_path] = size
+                except (ValueError, IndexError):
+                    continue
+        return sizes
+    except Exception as e:
+        if debug:
+            click.echo(f"Error running aws cli: {e}", err=True)
+        return {}
+
+
+def _parse_manifest_content(content: str) -> set[str]:
+    """Parse manifest JSON and extract tagged blob hashes.
+
+    Args:
+        content: JSON content of the manifest file.
+
+    Returns:
+        Set of blob hash names (8-char prefixes, without @ symbol).
+    """
+    import json
+
+    try:
+        data = json.loads(content)
+        tags = data.get("tags", {})
+        # Extract blob names from hash refs (e.g., "@abc12345" -> "abc12345")
+        return {hash_ref.lstrip("@")[:8] for hash_ref in tags.values() if hash_ref}
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return set()
+
+
+def _extract_blob_name_from_path(path: str) -> str | None:
+    """Extract blob name from a blob path.
+
+    Args:
+        path: Path like "artifact/blobs/abc12345" or "proj/artifact/blobs/def67890".
+
+    Returns:
+        Blob name (e.g., "abc12345") or None if path doesn't look like a blob.
+    """
+    parts = path.split("/")
+    # Find "blobs" in the path and get the next part
+    for i, part in enumerate(parts):
+        if part == "blobs" and i + 1 < len(parts):
+            return parts[i + 1]
+    return None
+
+
+def _find_orphaned_blobs(
+    bucket: str,
+    prefix: str,
+    sync_tool: str,
+    debug: bool,
+    quiet: bool,
+) -> tuple[list[str], int, int, int, list[str]]:
+    """Find orphaned blobs in S3 that are not referenced by any manifest.
+
+    Args:
+        bucket: S3 bucket name.
+        prefix: S3 key prefix.
+        sync_tool: Either "rclone" or "aws".
+        debug: If True, show debug output.
+        quiet: If True, suppress progress output.
+
+    Returns:
+        Tuple of (orphaned_blob_paths, manifest_count, tagged_blob_count, total_blob_count, errors).
+    """
+    errors: list[str] = []
+
+    # Choose list function based on sync tool
+    if sync_tool == RCLONE_CMD:
+        list_files = _list_s3_files_rclone
+        get_content = _get_s3_file_content_rclone
+    else:
+        list_files = _list_s3_files_aws
+        get_content = _get_s3_file_content_aws
+
+    # Step 1: List all manifest files
+    if not quiet and not is_json_output():
+        click.echo("Scanning S3 for manifests...")
+
+    # Use **/.magpie pattern to match hidden .magpie files in artifact directories
+    manifest_paths = list_files(bucket, prefix, "**/.magpie", debug)
+
+    # Filter to only .magpie files (AWS CLI pattern matching is different)
+    manifest_paths = [p for p in manifest_paths if p.endswith(".magpie")]
+
+    if debug:
+        click.echo(f"Found {len(manifest_paths)} manifest files", err=True)
+
+    # Step 2: Parse manifests and build set of tagged blob hashes
+    if not quiet and not is_json_output():
+        click.echo("Parsing manifests...")
+
+    tagged_blobs: set[str] = set()
+    for manifest_path in manifest_paths:
+        content = get_content(bucket, prefix, manifest_path, debug)
+        if content:
+            hashes = _parse_manifest_content(content)
+            tagged_blobs.update(hashes)
+        else:
+            errors.append(f"Failed to read manifest: {manifest_path}")
+
+    if debug:
+        click.echo(f"Found {len(tagged_blobs)} unique tagged blob hashes", err=True)
+
+    # Step 3: List all blob files in S3
+    if not quiet and not is_json_output():
+        click.echo("Scanning S3 for blobs...")
+
+    blob_paths = list_files(bucket, prefix, "*/blobs/*", debug)
+    # Filter to actual blob files (not directories or other files)
+    blob_paths = [p for p in blob_paths if "/blobs/" in p]
+
+    if debug:
+        click.echo(f"Found {len(blob_paths)} blob files", err=True)
+
+    # Step 4: Find orphaned blobs (not referenced by any manifest)
+    orphaned_paths: list[str] = []
+    for blob_path in blob_paths:
+        blob_name = _extract_blob_name_from_path(blob_path)
+        if blob_name and blob_name not in tagged_blobs:
+            orphaned_paths.append(blob_path)
+
+    return orphaned_paths, len(manifest_paths), len(tagged_blobs), len(blob_paths), errors
+
+
+@sync.command("gc-s3")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=True,
+    help="Show what would be deleted without deleting (default).",
+)
+@click.option(
+    "--execute",
+    is_flag=True,
+    default=False,
+    help="Actually delete orphaned blobs. Required to perform deletion.",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Suppress progress output.",
+)
+@click.pass_obj
+def gc_s3(ctx: CTLContext, dry_run: bool, execute: bool, quiet: bool) -> None:
+    """Garbage collect orphaned blobs from S3 backup.
+
+    This command identifies and removes blobs in S3 that are not referenced
+    by any manifest file. This prevents S3 storage from growing unbounded
+    when local GC removes blobs that have been synced to S3.
+
+    The command uses S3's own manifests as the source of truth, meaning it
+    can run independently of local storage state.
+
+    SAFE BY DEFAULT: This command only previews deletions unless --execute
+    is explicitly provided. Always review the preview before executing.
+
+    Examples:
+
+        # Preview what would be deleted (default behavior)
+        magpie-ctl sync gc-s3
+
+        # Actually delete orphaned blobs
+        magpie-ctl sync gc-s3 --execute
+
+        # With explicit bucket
+        MAGPIE_S3_BUCKET=my-bucket magpie-ctl sync gc-s3
+    """
+    settings = ctx.settings
+
+    # If --execute is provided, disable dry_run
+    if execute:
+        dry_run = False
+
+    # Check S3 configuration
+    if not settings.s3_bucket:
+        msg = "MAGPIE_S3_BUCKET environment variable is required"
+        if is_json_output():
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+        else:
+            raise click.ClickException(msg)
+
+    # Find sync tool
+    sync_tool = _find_sync_tool()
+    if not sync_tool:
+        msg = "Neither rclone nor aws CLI found. Please install one of them."
+        if is_json_output():
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+        else:
+            raise click.ClickException(msg)
+
+    if ctx.debug:
+        click.echo(f"Using sync tool: {sync_tool}", err=True)
+        click.echo(f"S3 bucket: {settings.s3_bucket}", err=True)
+        click.echo(f"S3 prefix: {settings.s3_prefix or '(none)'}", err=True)
+        click.echo(f"Dry run: {dry_run}", err=True)
+
+    # Find orphaned blobs
+    orphaned_paths, manifest_count, tagged_count, total_blobs, errors = _find_orphaned_blobs(
+        settings.s3_bucket,
+        settings.s3_prefix,
+        sync_tool,
+        ctx.debug,
+        quiet or is_json_output(),
+    )
+
+    # Get sizes of orphaned blobs
+    if sync_tool == RCLONE_CMD:
+        sizes = _get_s3_file_size_rclone(
+            settings.s3_bucket, settings.s3_prefix, orphaned_paths, ctx.debug
+        )
+    else:
+        sizes = _get_s3_file_size_aws(
+            settings.s3_bucket, settings.s3_prefix, orphaned_paths, ctx.debug
+        )
+
+    total_orphaned_bytes = sum(sizes.get(p, 0) for p in orphaned_paths)
+
+    # Delete orphaned blobs if not dry-run
+    deleted_count = 0
+    deleted_bytes = 0
+    if not dry_run and orphaned_paths:
+        if sync_tool == RCLONE_CMD:
+            delete_fn = _delete_s3_file_rclone
+        else:
+            delete_fn = _delete_s3_file_aws
+
+        if not quiet and not is_json_output():
+            click.echo(f"Deleting {len(orphaned_paths)} orphaned blob(s)...")
+
+        with count_progress(
+            "Deleting orphaned blobs", len(orphaned_paths), quiet=quiet or is_json_output()
+        ) as (progress, task_id):
+            for blob_path in orphaned_paths:
+                if delete_fn(settings.s3_bucket, settings.s3_prefix, blob_path, ctx.debug):
+                    deleted_count += 1
+                    deleted_bytes += sizes.get(blob_path, 0)
+                else:
+                    errors.append(f"Failed to delete: {blob_path}")
+
+                if progress and task_id is not None:
+                    progress.update(task_id, advance=1)
+
+    # Output results
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "dry_run": dry_run,
+                    "sync_tool": sync_tool,
+                    "manifests_found": manifest_count,
+                    "tagged_blobs": tagged_count,
+                    "total_blobs": total_blobs,
+                    "orphaned_count": len(orphaned_paths),
+                    "orphaned_bytes": total_orphaned_bytes,
+                    "orphaned_paths": orphaned_paths if dry_run else [],
+                    "deleted_count": deleted_count,
+                    "deleted_bytes": deleted_bytes,
+                    "errors": errors,
+                },
+                human_output="",
+            )
+        )
+    else:
+        click.echo("")
+        if dry_run:
+            click.echo("S3 Garbage Collection Preview:")
+        else:
+            click.echo("S3 Garbage Collection Complete:")
+
+        click.echo(f"  Sync tool: {sync_tool}")
+        click.echo(f"  Manifests found: {manifest_count}")
+        click.echo(f"  Tagged blobs: {tagged_count}")
+        click.echo(f"  Total blobs in S3: {total_blobs}")
+        click.echo(f"  Orphaned blobs: {len(orphaned_paths)} ({format_size(total_orphaned_bytes)})")
+
+        if dry_run:
+            if orphaned_paths:
+                click.echo("")
+                click.echo("Orphaned blobs that would be deleted:")
+                for path in orphaned_paths[:20]:  # Show first 20
+                    size_str = format_size(sizes.get(path, 0))
+                    click.echo(f"  - {path} ({size_str})")
+                if len(orphaned_paths) > 20:
+                    click.echo(f"  ... and {len(orphaned_paths) - 20} more")
+                click.echo("")
+                click.echo(
+                    f"Would delete {len(orphaned_paths)} blob(s). Run with --execute to proceed."
+                )
+            else:
+                click.echo("")
+                click.echo("No orphaned blobs found. S3 storage is clean.")
+        else:
+            click.echo(f"  Deleted: {deleted_count} blob(s) ({format_size(deleted_bytes)})")
+
+        if errors:
+            click.echo("")
+            click.echo("Errors:")
+            for error in errors:
+                click.echo(f"  - {error}", err=True)
+            raise SystemExit(1)
