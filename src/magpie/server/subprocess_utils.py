@@ -87,4 +87,6 @@ async def run_ctl_command(cmd: list[str], timeout: float = 300.0) -> dict[str, A
     try:
         return json.loads(stdout_text)
     except json.JSONDecodeError as e:
-        raise CtlCommandError(f"Invalid JSON from magpie-ctl: {e}") from e
+        # Include first 200 chars of stdout for debugging JSON parse errors
+        preview = stdout_text[:200] + "..." if len(stdout_text) > 200 else stdout_text
+        raise CtlCommandError(f"Invalid JSON from magpie-ctl: {e}. Output: {preview!r}") from e

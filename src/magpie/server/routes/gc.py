@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import Annotated
 
 import structlog
@@ -72,8 +73,9 @@ async def trigger_gc(
             items_removed=0,
         )
 
-    # Build command
-    cmd = ["magpie-ctl", "gc", "--json-output"]
+    # Build command - use sys.executable to call Python directly instead of relying
+    # on the wrapper script being in PATH. This is more reliable for subprocess calls.
+    cmd = [sys.executable, "-m", "magpie.ctl", "gc", "--json-output"]
     if dry_run:
         cmd.append("--dry-run")
     if retention_days_override is not None:
@@ -82,10 +84,19 @@ async def trigger_gc(
     try:
         result = await run_ctl_command(cmd)
     except CtlCommandError as e:
-        logger.error("gc_command_failed", error=str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Garbage collection failed") from e
+        logger.error(
+            "gc_command_failed",
+            error=str(e),
+            stderr=e.stderr,
+            command=cmd,
+        )
+        # Include error detail in debug mode for easier troubleshooting
+        detail = (
+            f"Garbage collection failed: {e}" if settings.debug else "Garbage collection failed"
+        )
+        raise HTTPException(status_code=500, detail=detail) from e
     except asyncio.TimeoutError:
-        logger.error("gc_timeout")
+        logger.error("gc_timeout", command=cmd)
         raise HTTPException(status_code=504, detail="Operation timed out")
 
     return GCResponse(
