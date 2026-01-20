@@ -72,7 +72,7 @@ class TestStatusEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert "version" in data
-        assert data["version"] == "0.1.0-rc2"
+        assert data["version"] == "0.1.0-rc3"
 
     def test_status_returns_auth_info_without_token(self, api_client: TestClient) -> None:
         """Status endpoint returns auth info showing no valid token."""
