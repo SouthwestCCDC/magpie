@@ -18,10 +18,12 @@ set -euo pipefail
 # Constants
 # =============================================================================
 
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.1.0"
 SCRIPT_NAME="$(basename "$0")"
 GITHUB_REPO="SouthwestCCDC/magpie"
 GITHUB_BRANCH="default"
+GHCR_IMAGE="ghcr.io/southwestccdc/magpie"
+MAGPIE_VERSION="0.1.0-rc2"
 
 # Default configuration
 DEFAULT_INSTALL_DIR="/opt/magpie"
@@ -49,6 +51,7 @@ PURGE="false"
 YES="false"
 FOLLOW="false"
 LINES="100"
+FROM_SOURCE="false"
 
 # =============================================================================
 # Helper functions
@@ -685,20 +688,29 @@ patch_compose_for_tls_certs() {
     log "TLS certificate mount added to docker-compose.yml"
 }
 
-build_images() {
-    log "Building magpie Docker image (this may take a few minutes)..."
-
-    cd "${INSTALL_DIR}/repo"
-
-    if ! docker build --pull -t magpie:latest .; then
-        die "Failed to build magpie image"
+pull_or_build_image() {
+    if [[ "$FROM_SOURCE" == "true" ]]; then
+        log "Building magpie Docker image from source (this may take a few minutes)..."
+        cd "${INSTALL_DIR}/repo"
+        if ! docker build --pull -t magpie:latest .; then
+            die "Failed to build magpie image"
+        fi
+        log "Image built successfully"
+    else
+        local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}"
+        log "Pulling magpie image from container registry..."
+        log "  Image: ${image_tag}"
+        if ! docker pull "$image_tag"; then
+            die "Failed to pull magpie image from ${image_tag}"
+        fi
+        # Tag as magpie:latest for compose compatibility
+        docker tag "$image_tag" magpie:latest
+        log "Image pulled successfully"
     fi
-
-    log "Image built successfully"
 }
 
 patch_compose_for_local_image() {
-    # Replace 'build: .' with 'image: magpie:latest' so we use our pre-built image
+    # Replace 'build: .' with 'image: magpie:latest' so we use our pre-built/pulled image
     log "Configuring Docker Compose to use local image..."
 
     sed -i 's|build: \.|image: magpie:latest|g' "${INSTALL_DIR}/docker-compose.yml"
@@ -834,8 +846,8 @@ cmd_install() {
     generate_systemd_service
     generate_gc_units
 
-    # Build image and configure compose
-    build_images
+    # Pull or build image and configure compose
+    pull_or_build_image
     patch_compose_for_caddyfile
     patch_compose_for_tls_certs
     patch_compose_for_local_image
@@ -884,17 +896,27 @@ cmd_update() {
         die "Repository directory not found at ${INSTALL_DIR}/repo\nThe installation may be corrupted. Try reinstalling with 'install --force'."
     fi
 
-    log "Pulling latest repository code..."
-    if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "$GITHUB_BRANCH"; then
-        die "Failed to fetch latest repository code"
-    fi
-    if ! git -C "${INSTALL_DIR}/repo" reset --hard "origin/$GITHUB_BRANCH"; then
-        die "Failed to reset repository to latest code"
-    fi
+    if [[ "$FROM_SOURCE" == "true" ]]; then
+        log "Pulling latest repository code..."
+        if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "$GITHUB_BRANCH"; then
+            die "Failed to fetch latest repository code"
+        fi
+        if ! git -C "${INSTALL_DIR}/repo" reset --hard "origin/$GITHUB_BRANCH"; then
+            die "Failed to reset repository to latest code"
+        fi
 
-    log "Rebuilding magpie image..."
-    if ! docker build --pull -t magpie:latest "${INSTALL_DIR}/repo"; then
-        die "Failed to rebuild magpie image"
+        log "Rebuilding magpie image from source..."
+        if ! docker build --pull -t magpie:latest "${INSTALL_DIR}/repo"; then
+            die "Failed to rebuild magpie image"
+        fi
+    else
+        local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}"
+        log "Pulling latest magpie image from container registry..."
+        log "  Image: ${image_tag}"
+        if ! docker pull "$image_tag"; then
+            die "Failed to pull magpie image from ${image_tag}"
+        fi
+        docker tag "$image_tag" magpie:latest
     fi
 
     log "Pulling external images..."
@@ -1039,6 +1061,10 @@ Install options:
   --trusted-proxies CIDR  Trusted proxy CIDRs (default: RFC1918 ranges)
   --noninteractive        Skip interactive prompts
   --force                 Overwrite existing installation
+  --from-source           Build image from source instead of pulling from ghcr.io
+
+Update options:
+  --from-source           Rebuild image from source instead of pulling from ghcr.io
 
 Uninstall options:
   --yes, -y               Skip confirmation prompts
@@ -1131,6 +1157,10 @@ parse_args() {
                 ;;
             --force)
                 FORCE="true"
+                shift
+                ;;
+            --from-source)
+                FROM_SOURCE="true"
                 shift
                 ;;
             --purge)
