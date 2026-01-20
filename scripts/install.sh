@@ -23,7 +23,7 @@ SCRIPT_NAME="$(basename "$0")"
 GITHUB_REPO="SouthwestCCDC/magpie"
 GITHUB_BRANCH="default"
 GHCR_IMAGE="ghcr.io/southwestccdc/magpie"
-MAGPIE_VERSION="0.1.0-rc2"
+MAGPIE_VERSION="0.1.0-rc3"
 
 # Default configuration
 DEFAULT_INSTALL_DIR="/opt/magpie"
@@ -920,7 +920,8 @@ cmd_update() {
     fi
 
     log "Pulling external images..."
-    docker compose --env-file "${INSTALL_DIR}/etc/.env" pull
+    # Only pull caddy - magpie image is already handled above
+    docker compose --env-file "${INSTALL_DIR}/etc/.env" pull caddy
 
     log "Restarting services..."
     systemctl restart magpie.service
