@@ -23,7 +23,7 @@ SCRIPT_NAME="$(basename "$0")"
 GITHUB_REPO="SouthwestCCDC/magpie"
 GITHUB_BRANCH="default"
 GHCR_IMAGE="ghcr.io/southwestccdc/magpie"
-MAGPIE_VERSION="0.1.0-rc3"
+MAGPIE_VERSION="0.1.0-rc4"
 
 # Default configuration
 DEFAULT_INSTALL_DIR="/opt/magpie"
@@ -639,7 +639,8 @@ patch_compose_for_caddyfile() {
     local pattern="./Caddyfile:/etc/caddy/Caddyfile:ro"
 
     # Validate that the pattern exists before patching
-    if ! grep -q "$pattern" "$compose_file"; then
+    # Use -F for fixed string matching (. is literal, not regex wildcard)
+    if ! grep -qF "$pattern" "$compose_file"; then
         die "Cannot patch docker-compose.yml: expected Caddyfile mount pattern not found.\nExpected: $pattern"
     fi
 
@@ -648,11 +649,11 @@ patch_compose_for_caddyfile() {
         "$compose_file"
 
     # Validate that the replacement succeeded
-    if grep -q "$pattern" "$compose_file"; then
+    if grep -qF "$pattern" "$compose_file"; then
         die "Failed to patch docker-compose.yml: Caddyfile mount pattern was not replaced"
     fi
 
-    if ! grep -q "${INSTALL_DIR}/etc/Caddyfile:/etc/caddy/Caddyfile:ro" "$compose_file"; then
+    if ! grep -qF "${INSTALL_DIR}/etc/Caddyfile:/etc/caddy/Caddyfile:ro" "$compose_file"; then
         die "Failed to patch docker-compose.yml: new Caddyfile mount path not found after replacement"
     fi
 }

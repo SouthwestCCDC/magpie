@@ -2,6 +2,6 @@
 
 from magpie.config import MagpieSettings, get_settings
 
-__version__ = "0.1.0-rc3"
+__version__ = "0.1.0-rc4"
 
 __all__ = ["MagpieSettings", "get_settings", "__version__"]
