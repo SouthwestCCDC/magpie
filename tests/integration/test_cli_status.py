@@ -115,7 +115,7 @@ class TestStatusCommand:
 
         assert result.exit_code == 0
         assert "Version:" in result.output
-        assert "0.1.0-rc3" in result.output
+        assert "0.1.0-rc4" in result.output
 
     def test_status_shows_auth_no_token(
         self, cli_runner_no_config: CliRunner, api_client: TestClient
@@ -192,7 +192,7 @@ class TestStatusCommand:
         assert "data" in data
         assert data["data"]["server"] == "http://test"
         assert data["data"]["status"] == "ok"
-        assert data["data"]["version"] == "0.1.0-rc3"
+        assert data["data"]["version"] == "0.1.0-rc4"
         assert "auth" in data["data"]
         assert "storage" in data["data"]
 
