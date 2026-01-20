@@ -224,7 +224,6 @@ class TestTagRemoval:
 class TestGarbageCollection:
     """Tests for garbage collection operations."""
 
-    @pytest.mark.xfail(reason="GC endpoint returns 500 - pre-existing bug to be fixed separately")
     def test_gc_cleans_expired_untagged_blobs(
         self,
         docker_services: dict[str, str],
@@ -261,7 +260,6 @@ class TestGarbageCollection:
         # GC should run without error (may not clean anything if not expired)
         assert result.returncode == 0, f"gc failed: {result.stderr}"
 
-    @pytest.mark.xfail(reason="GC endpoint returns 500 - pre-existing bug to be fixed separately")
     def test_gc_preserves_tagged_blobs(
         self,
         docker_services: dict[str, str],

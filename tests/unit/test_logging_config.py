@@ -36,9 +36,9 @@ def test_configure_logging_json_format(monkeypatch):
     # Create settings with JSON format
     settings = MagpieSettings(log_format="json", debug=False)
 
-    # Capture logging output
+    # Capture logging output (logs go to stderr, not stdout)
     log_stream = StringIO()
-    monkeypatch.setattr("sys.stdout", log_stream)
+    monkeypatch.setattr("sys.stderr", log_stream)
 
     # Configure logging
     configure_logging(settings)
@@ -99,9 +99,9 @@ def test_structured_logging_with_context(monkeypatch):
     """Test that context variables work with structlog."""
     settings = MagpieSettings(log_format="json", debug=False)
 
-    # Capture logging output
+    # Capture logging output (logs go to stderr, not stdout)
     log_stream = StringIO()
-    monkeypatch.setattr("sys.stdout", log_stream)
+    monkeypatch.setattr("sys.stderr", log_stream)
 
     configure_logging(settings)
 

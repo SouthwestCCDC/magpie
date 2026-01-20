@@ -115,14 +115,39 @@ def gc(
 
     # For subprocess --json-output, run without progress bars and return structured JSON
     if json_output:
-        result, _ = run_gc(
-            storage_path=storage_path,
-            retention_days=retention_days,
-            dry_run=dry_run,
-            reconcile_only=reconcile_only,
-            progress_callback=None,
+        # Suppress all structlog output when outputting JSON to keep stdout clean
+        # Use a processor that drops all log events
+        import structlog
+
+        def drop_all_logs(
+            logger: object, method_name: str, event_dict: dict
+        ) -> structlog.typing.WrappedLogger:
+            raise structlog.DropEvent
+
+        structlog.configure(
+            processors=[drop_all_logs],
+            cache_logger_on_first_use=False,
         )
-        _output_json(result, dry_run)
+
+        try:
+            result, _ = run_gc(
+                storage_path=storage_path,
+                retention_days=retention_days,
+                dry_run=dry_run,
+                reconcile_only=reconcile_only,
+                progress_callback=None,
+            )
+            _output_json(result, dry_run)
+        except Exception as e:
+            # Intentionally broad exception handler for subprocess integration:
+            # When called with --json-output by the server's GC endpoint, we must
+            # always output valid JSON so the server can parse the error. Without
+            # this, exceptions would cause Click to print a traceback which the
+            # server can't parse, resulting in an opaque "Garbage collection failed"
+            # error with no details. See issue #209.
+            error_data = {"error": str(e)}
+            click.echo(json.dumps(error_data))
+            raise SystemExit(1)
         return
 
     # Suppress progress output in JSON mode
