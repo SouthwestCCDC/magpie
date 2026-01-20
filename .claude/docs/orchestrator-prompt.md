@@ -244,10 +244,6 @@ Check open PRs:
 gh pr list --repo SouthwestCCDC/magpie --state open --json number,title,headRefName
 ```
 
-## Assessment Document
-
-The `docs/assessment-findings.md` file tracks known issues and their resolution status. Update it when issues are resolved.
-
 ## Startup Checklist
 
 When beginning a new orchestrator session:
@@ -255,16 +251,14 @@ When beginning a new orchestrator session:
 1. **Read this prompt** - You're doing it now
 2. **Check open PRs** - `gh pr list --repo SouthwestCCDC/magpie --state open --json number,title,headRefName`
 3. **List worktrees** - `git worktree list` - Remove stale ones from merged PRs
-4. **Check assessment** - Read `docs/assessment-findings.md` for known issues
-5. **Check open issues** - `gh issue list --repo SouthwestCCDC/magpie --state open --limit 30`
-6. **Review subagent definitions** - Scan `.claude/agents/*.md` files if launching agents
+4. **Check open issues** - `gh issue list --repo SouthwestCCDC/magpie --state open --limit 30`
+5. **Review subagent definitions** - Scan `.claude/agents/*.md` files if launching agents
 
 ## Key Documents
 
 | Document | Purpose |
 |----------|---------|
 | `.claude/docs/orchestrator-prompt.md` | This file - orchestrator instructions |
-| `docs/assessment-findings.md` | Known issues and resolution status |
 | `.github/copilot-instructions.md` | Project conventions and architecture |
 | `docs/design.md` | Architecture decisions |
 | `docs/user-guide.md` | User-facing documentation |
