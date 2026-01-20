@@ -117,11 +117,11 @@ def gc(
     if json_output:
         # Suppress all structlog output when outputting JSON to keep stdout clean
         # Use a processor that drops all log events
+        from typing import NoReturn
+
         import structlog
 
-        def drop_all_logs(
-            logger: object, method_name: str, event_dict: dict
-        ) -> structlog.typing.WrappedLogger:
+        def drop_all_logs(logger: object, method_name: str, event_dict: dict) -> NoReturn:
             raise structlog.DropEvent
 
         structlog.configure(
