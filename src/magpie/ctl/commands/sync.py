@@ -1352,10 +1352,8 @@ def _find_orphaned_blobs(
     if not quiet and not is_json_output():
         click.echo("Scanning S3 for manifests...")
 
-    manifest_paths = list_files(bucket, prefix, "*.magpie", debug)
-    # Also try pattern that matches nested paths
-    if not manifest_paths:
-        manifest_paths = list_files(bucket, prefix, "**/.magpie", debug)
+    # Use **/.magpie pattern to match hidden .magpie files in artifact directories
+    manifest_paths = list_files(bucket, prefix, "**/.magpie", debug)
 
     # Filter to only .magpie files (AWS CLI pattern matching is different)
     manifest_paths = [p for p in manifest_paths if p.endswith(".magpie")]
@@ -1448,7 +1446,6 @@ def gc_s3(ctx: CTLContext, dry_run: bool, execute: bool, quiet: bool) -> None:
 
     # If --execute is provided, disable dry_run
     if execute:
-        dry_run = True  # Will be flipped to False below
         dry_run = False
 
     # Check S3 configuration
