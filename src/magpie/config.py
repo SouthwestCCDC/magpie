@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import functools
+import ipaddress
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,6 +58,34 @@ class MagpieSettings(BaseSettings):
     # Example: "10.0.0.0/8,192.168.1.0/24"
     # NOTE: This setting is consumed by Caddy, not the Python application
     allowed_cidrs: str = ""  # MAGPIE_ALLOWED_CIDRS
+
+    @field_validator("allowed_cidrs")
+    @classmethod
+    def validate_cidrs(cls, v: str) -> str:
+        """Validate CIDR notation for IP allow-listing.
+
+        Args:
+            v: Comma-separated CIDR ranges (e.g., "10.0.0.0/8,192.168.1.0/24")
+
+        Returns:
+            The validated CIDR string
+
+        Raises:
+            ValueError: If any CIDR range has invalid notation
+        """
+        if not v:
+            return v
+
+        for cidr in v.split(","):
+            cidr = cidr.strip()
+            if not cidr:
+                continue
+            try:
+                ipaddress.ip_network(cidr, strict=False)
+            except ValueError as e:
+                raise ValueError(f"Invalid CIDR notation '{cidr}': {e}") from e
+
+        return v
 
     @model_validator(mode="after")
     def derive_paths(self) -> Self:
