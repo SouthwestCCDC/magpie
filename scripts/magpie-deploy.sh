@@ -984,6 +984,11 @@ cmd_uninstall() {
     if [[ "$PURGE" != "true" ]]; then
         echo "  Data directory preserved at: ${DATA_DIR}"
         echo "  Use --purge to remove data as well."
+        echo ""
+        echo "  NOTE: If you reinstall with different settings (e.g., different UID/GID"
+        echo "  in container configuration), you may encounter permission issues with"
+        echo "  the preserved data directory. In that case, you may need to manually"
+        echo "  adjust ownership: chown -R <new-uid>:<new-gid> ${DATA_DIR}"
     fi
 }
 
@@ -1047,7 +1052,7 @@ Commands:
   status      Show service status
   logs        View container logs
 
-Install options:
+Install options (only used with 'install' command):
   --install-dir PATH      Installation directory (default: $DEFAULT_INSTALL_DIR)
   --data-dir PATH         Data storage directory (default: INSTALL_DIR/data)
                           Must be an absolute path. Paths under /home are not
@@ -1061,7 +1066,7 @@ Install options:
   --http-port PORT        HTTP port (default: $DEFAULT_HTTP_PORT)
   --https-port PORT       HTTPS port (default: $DEFAULT_HTTPS_PORT)
   --trusted-proxies CIDR  Trusted proxy CIDRs (default: RFC1918 ranges)
-  --noninteractive        Skip interactive prompts
+  --noninteractive        Skip interactive prompts (use defaults for all config)
   --force                 Overwrite existing installation
   --from-source           Build image from source instead of pulling from ghcr.io
 
@@ -1069,8 +1074,10 @@ Update options:
   --from-source           Rebuild image from source instead of pulling from ghcr.io
 
 Uninstall options:
-  --yes, -y               Skip confirmation prompts
-  --purge                 Also remove data directory
+  --yes, -y               Skip confirmation prompts (auto-confirm uninstall)
+  --purge                 Also remove data directory (requires --yes for non-interactive)
+                          Without --purge: preserves data directory for reinstallation
+                          With --purge: permanently deletes all artifacts and data
 
 Logs options:
   -f, --follow            Follow log output
