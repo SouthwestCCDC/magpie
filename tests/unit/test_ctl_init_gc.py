@@ -1042,6 +1042,52 @@ class TestGCJsonOutput:
         assert "GC Summary:" not in result.output
         assert "Artifacts scanned:" not in result.output
 
+    @pytest.mark.parametrize(
+        ("exception_type", "error_message"),
+        [
+            pytest.param(RuntimeError, "Simulated storage failure", id="runtime-error"),
+            pytest.param(OSError, "Permission denied", id="os-error"),
+        ],
+    )
+    def test_gc_json_output_exception_returns_json_error(
+        self,
+        cli_runner: CliRunner,
+        test_settings: MagpieSettings,
+        exception_type: type[Exception],
+        error_message: str,
+    ) -> None:
+        """GC --json-output returns JSON error when run_gc raises exception.
+
+        This tests the intentional broad exception handler at gc.py:141-150.
+        When called with --json-output by the server's GC endpoint, we must
+        always output valid JSON so the server can parse the error. The broad
+        exception catch is deliberate - see issue #209 for context.
+        """
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc"},
+            untagged_hashes=[],
+            blob_ages_days={"tagged_hash_abc": 0},
+        )
+
+        # Mock run_gc to raise an exception
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            with patch(
+                "magpie.ctl.commands.gc.run_gc",
+                side_effect=exception_type(error_message),
+            ):
+                result = cli_runner.invoke(cli, ["gc", "--json-output"])
+
+        # Should exit with error code 1
+        assert result.exit_code == 1, f"Output: {result.output}"
+
+        # Output should be valid JSON with error message
+        output = json.loads(result.output.strip())
+        assert "error" in output
+        assert error_message in output["error"]
+
 
 class TestFlushTagCommand:
     """Tests for flush-tag command."""
