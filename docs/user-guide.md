@@ -312,6 +312,33 @@ magpie amend images/ubuntu:latest --source-uri https://github.com/example/repo
 magpie amend images/ubuntu:latest --source-uri ""
 ```
 
+### Check Server Status
+
+```bash
+# Check server health and connection
+magpie status
+
+# Output as JSON
+magpie --format json status
+```
+
+Output:
+```
+Server:    https://magpie.example.com
+Status:    HEALTHY
+Version:   0.1.0-rc5
+Auth:      Token valid (write scope, name: deployer)
+Storage:   15.2 GB used
+Artifacts: 42 total
+Blobs:     156 total
+```
+
+The `status` command displays:
+- Server URL and availability
+- Server version
+- Authentication status (token validity, scope, name)
+- Storage statistics (total size, artifact count, blob count)
+
 ## Server Setup
 
 ### Docker Compose Deployment
@@ -436,10 +463,20 @@ docker compose exec magpie magpie-ctl token revoke ci-reader
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MAGPIE_STORAGE_PATH` | `/data/artifacts` | Root directory for artifact storage |
+| `MAGPIE_TEMP_PATH` | `{storage_path}/.tmp` | Temporary file storage during uploads |
+| `MAGPIE_DATABASE_PATH` | `{storage_path}/.magpie.db` | SQLite database location for tokens |
 | `MAGPIE_RETENTION_DAYS` | `90` | Days before untagged blobs can be GC'd |
+| `MAGPIE_GC_LOCK_PATH` | `/var/run/magpie-gc.lock` | Lock file path to prevent concurrent GC |
+| `MAGPIE_MAX_UPLOAD_SIZE` | (none) | Maximum upload size in bytes (None = unlimited) |
 | `MAGPIE_DEBUG` | `false` | Enable debug logging |
+| `MAGPIE_LOG_FORMAT` | `json` | Log format: `json` or `console` |
 | `MAGPIE_SENTRY_DSN` | (none) | Sentry DSN for error tracking |
 | `MAGPIE_OTEL_ENABLED` | `false` | Enable OpenTelemetry tracing |
+| `MAGPIE_OTEL_ENDPOINT` | (none) | OpenTelemetry collector endpoint |
+| `MAGPIE_OTEL_SERVICE_NAME` | `magpie` | Service name for OpenTelemetry traces |
+| `MAGPIE_S3_BUCKET` | (none) | S3 bucket for backup/restore operations |
+| `MAGPIE_S3_PREFIX` | `""` | Optional prefix for S3 keys |
+| `MAGPIE_ALLOWED_CIDRS` | `""` | Comma-separated CIDR ranges for IP allow-listing (used by Caddy) |
 
 ### TLS Configuration
 
@@ -551,6 +588,107 @@ For backup procedures, restore operations, and disaster recovery scenarios, see 
 - Step-by-step restore procedures
 - Recovery scenarios (corrupted manifests, lost database, partial data loss)
 
+#### S3 Sync Commands
+
+Magpie includes `magpie-ctl sync` commands for backing up and restoring artifacts to/from S3.
+
+**Prerequisites:**
+- Set `MAGPIE_S3_BUCKET` environment variable
+- Optionally set `MAGPIE_S3_PREFIX` to add a prefix to all S3 keys
+- Configure AWS credentials via environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) or IAM role
+- Install either `rclone` (preferred) or AWS CLI
+
+**Backup to S3:**
+
+```bash
+# Preview what would be synced
+docker compose exec magpie magpie-ctl sync to-s3 --dry-run
+
+# Sync tagged artifacts to S3
+docker compose exec magpie magpie-ctl sync to-s3
+
+# With custom bucket
+MAGPIE_S3_BUCKET=my-backup-bucket docker compose exec magpie magpie-ctl sync to-s3
+
+# Suppress progress output
+docker compose exec magpie magpie-ctl sync to-s3 --quiet
+```
+
+Only artifacts with at least one tag are synced. Untagged blobs are not backed up.
+Sync is incremental - only changed files are uploaded.
+
+**Restore from S3:**
+
+```bash
+# Preview what would be restored
+docker compose exec magpie magpie-ctl sync from-s3 --dry-run
+
+# Restore from S3 (fails if data exists)
+docker compose exec magpie magpie-ctl sync from-s3
+
+# Force restore even if data exists (may overwrite)
+docker compose exec magpie magpie-ctl sync from-s3 --force
+
+# Skip integrity verification after restore
+docker compose exec magpie magpie-ctl sync from-s3 --skip-verify
+
+# Suppress progress output
+docker compose exec magpie magpie-ctl sync from-s3 --quiet
+```
+
+By default, refuses to restore if data already exists to prevent accidental overwrites.
+Use `--force` to override this check.
+
+**Garbage collect S3 backup:**
+
+```bash
+# Preview orphaned blobs in S3 (default, safe)
+docker compose exec magpie magpie-ctl sync gc-s3
+
+# Actually delete orphaned blobs
+docker compose exec magpie magpie-ctl sync gc-s3 --execute
+
+# Suppress progress output
+docker compose exec magpie magpie-ctl sync gc-s3 --quiet
+```
+
+This command identifies and removes blobs in S3 that are not referenced by any manifest file.
+It prevents S3 storage from growing unbounded when local GC removes blobs that have been synced to S3.
+
+**Note:** The command is safe by default - it only previews deletions unless `--execute` is explicitly provided.
+
+### Exit Codes and Error Handling
+
+**CLI Exit Codes:**
+
+The `magpie` CLI uses standard Unix exit codes:
+
+- `0` - Success
+- `1` - Error (any failure condition)
+
+**API Error Response Format:**
+
+All API errors return JSON with a `detail` field:
+
+```json
+{
+  "detail": "Error message describing what went wrong"
+}
+```
+
+HTTP status codes follow REST conventions:
+
+| Status | Meaning | Example |
+|--------|---------|---------|
+| 200 | Success | Artifact retrieved successfully |
+| 400 | Bad Request | Invalid artifact path or malformed request |
+| 401 | Unauthorized | Missing or invalid authentication token |
+| 403 | Forbidden | Valid token but insufficient permissions |
+| 404 | Not Found | Artifact or tag does not exist |
+| 409 | Conflict | Tag already exists (on create), data exists (on restore) |
+| 413 | Payload Too Large | Upload exceeds `MAGPIE_MAX_UPLOAD_SIZE` |
+| 500 | Internal Server Error | Server-side error (check logs) |
+
 ### Troubleshooting
 
 #### "No server configured"
@@ -606,6 +744,7 @@ The artifact was already stored; the existing hash was returned.
 | `magpie untag PATH TAG` | Remove tag |
 | `magpie flush-tag TAG` | Remove tag from all artifacts globally |
 | `magpie amend PATH:REF --source-uri URI` | Update metadata |
+| `magpie status` | Check server health and connectivity |
 | `magpie config [--server URL] [--token TOKEN]` | Manage configuration |
 | `magpie gc [--dry-run]` | Run garbage collection |
 | `magpie version` | Show version |
@@ -628,7 +767,19 @@ The artifact was already stored; the existing hash was returned.
 | `MAGPIE_HTTP_PORT` | Deploy | External HTTP port (default: 8080) |
 | `MAGPIE_HTTPS_PORT` | Deploy | External HTTPS port (default: 8443) |
 | `MAGPIE_STORAGE_PATH` | Server | Storage directory |
+| `MAGPIE_TEMP_PATH` | Server | Temporary file storage during uploads |
+| `MAGPIE_DATABASE_PATH` | Server | SQLite database location for tokens |
 | `MAGPIE_RETENTION_DAYS` | Server | GC retention period |
+| `MAGPIE_GC_LOCK_PATH` | Server | Lock file path to prevent concurrent GC |
+| `MAGPIE_MAX_UPLOAD_SIZE` | Server | Maximum upload size in bytes (None = unlimited) |
+| `MAGPIE_LOG_FORMAT` | Server | Log format: json or console |
+| `MAGPIE_SENTRY_DSN` | Server | Sentry DSN for error tracking |
+| `MAGPIE_OTEL_ENABLED` | Server | Enable OpenTelemetry tracing |
+| `MAGPIE_OTEL_ENDPOINT` | Server | OpenTelemetry collector endpoint |
+| `MAGPIE_OTEL_SERVICE_NAME` | Server | Service name for OpenTelemetry traces |
+| `MAGPIE_S3_BUCKET` | Server | S3 bucket for backup/restore operations |
+| `MAGPIE_S3_PREFIX` | Server | Optional prefix for S3 keys |
+| `MAGPIE_ALLOWED_CIDRS` | Server | Comma-separated CIDR ranges for IP allow-listing |
 | `MAGPIE_DEBUG` | Both | Enable debug mode |
 
 ### API Endpoints
