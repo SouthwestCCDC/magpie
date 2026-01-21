@@ -197,8 +197,8 @@ rclone sync /data/artifacts/ remote:magpie-backup/artifacts/ \
   --exclude '.tmp/**'
 ```
 
-**Note:** S3 sync integration (`magpie-ctl sync --to-s3`) is planned for Phase 4.
-See [design.md](design.md) Phase 4 for implementation roadmap.
+**Note:** S3 sync integration (`magpie-ctl sync --to-s3`) is planned for future implementation.
+See [design.md](design.md) Future Work section for details.
 
 ---
 

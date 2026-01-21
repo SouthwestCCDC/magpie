@@ -3,7 +3,7 @@
 > **Note:** This document was developed with assistance from Claude Code based on analysis of the
 > current artifacts infrastructure and iterative design discussions.
 
-**Status:** Implementation In Progress
+**Status:** Released
 **Authors:** George (with Claude Code)
 **Date:** January 2026
 **Repository:** [SouthwestCCDC/magpie](https://github.com/SouthwestCCDC/magpie)
@@ -17,8 +17,7 @@
 3. [Requirements](#requirements)
 4. [Proposed Design](#proposed-design)
 5. [Resolved Design Questions](#resolved-design-questions)
-6. [Implementation Phases](#implementation-phases)
-7. [Future Work](#future-work)
+6. [Future Work](#future-work)
 
 ---
 
@@ -782,95 +781,17 @@ for unified identity. Design allows this addition later.
 
 ---
 
-## Implementation Phases
-
-### Phase 1: Core Upload + Filesystem Structure
-
-1. **Project scaffolding** *(complete)*
-   - Repository: `SouthwestCCDC/magpie`
-   - pyproject.toml with uv, Python 3.13+, FastAPI, Click
-   - Dockerfile (multi-stage with uv), docker-compose (Caddy + service)
-   - Basic FastAPI app with `/health` endpoint
-   - CLI entry points: `magpie`, `magpie-ctl`
-   - Tooling: ruff (lint + format), bandit, pre-commit hooks
-   - Structured logging setup (structlog, JSON format)
-
-2. **Storage operations**
-   - `compute_hash(file)` - SHA-256, return short hash
-   - `store_artifact(path, file, metadata)` - write blob + JSON sidecar + update `.magpie`
-   - `create_tag(path, hash, tag_name)` - update `.magpie`, create symlink
-   - `list_artifacts(path)` - read directory, parse `.magpie` and JSON sidecars
-
-3. **Upload endpoint**
-   - Stream upload to temp file
-   - Compute hash, check for duplicates
-   - Move to content-addressed location
-   - Write metadata JSON, update `.magpie` manifest
-   - Create `latest` symlink
-
-4. **Local dev with Caddy**
-   - docker-compose with Caddy + service
-   - Caddy serves /data/artifacts directly
-   - API proxied to service
-
-### Phase 2: Tags + CLI
-
-1. **Tag endpoints**
-   - POST/DELETE updates `.magpie` + symlinks
-   - flush-tag walks filesystem
-
-2. **CLI tools**
-   - `magpie` (client): config, push, get, ls, info, tag, untag, url
-   - `magpie-ctl` (server): init, gc, token (create/list/revoke)
-   - `get` fetches metadata first for hash verification
-   - Config stored in `~/.magpie/config.toml`
-
-3. **Token auth**
-   - `/api/v1/auth/validate` endpoint for Caddy forward_auth
-   - Token CRUD endpoints (`/api/v1/tokens`)
-   - Token storage (SQLite with WAL mode)
-   - Caddy forward_auth integration
-
-### Phase 3: Polish + Deployment
-
-1. **Additional features**
-   - `amend` command/endpoint
-   - `gc` with symlink reconciliation
-   - `flush-tag` with confirmation
-
-2. **Observability**
-   - Sentry SDK integration (FastAPI + magpie-ctl)
-   - OpenTelemetry instrumentation (traces + metrics)
-   - Caddy structured logging + OTEL module
-   - Custom metrics (uploads, GC stats, storage usage)
-
-3. **Deployment**
-   - Ansible role in infra-deployment
-   - Authentik integration for SSO
-   - Parallel operation with v1
-
-### Phase 4: S3 Backup (Fast-Follow)
-
-1. **S3 sync implementation** (in `magpie-ctl`)
-   - `magpie-ctl sync --to-s3` - backup tagged artifacts
-   - `magpie-ctl sync --from-s3` - restore, recreate symlinks from `.magpie`
-   - S3 GC (remove objects no longer tagged locally)
-
-2. **Systemd timer** for periodic `magpie-ctl sync --to-s3`
-3. **S3 bucket configuration** in Terraform
-
----
-
 ## Future Work
 
-Items explicitly out of scope for initial implementation:
+Items deferred for future implementation:
 
-1. **OpenNebula integration** - Auto-refresh when `latest` changes
-2. **Granular token scopes** - Per-team, per-service permissions
-3. **Token enable/disable** - Toggle without regenerating
-4. **Web UI** - Beyond Caddy file browser
-5. **Notifications** - Webhook on new uploads
-6. **Checksums** - Automatic `.sha256` generation and validation
+1. **S3 backup integration** - `magpie-ctl sync --to-s3` and `--from-s3` commands for backing up tagged artifacts
+2. **OpenNebula integration** - Auto-refresh when `latest` changes
+3. **Granular token scopes** - Per-team, per-service permissions
+4. **Token enable/disable** - Toggle without regenerating
+5. **Web UI** - Beyond Caddy file browser
+6. **Notifications** - Webhook on new uploads
+7. **Checksums** - Automatic `.sha256` generation and validation
 
 ---
 
