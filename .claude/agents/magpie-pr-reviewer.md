@@ -78,6 +78,13 @@ gh pr diff {N} --repo SouthwestCCDC/magpie
 - [ ] Tests are readable and maintainable
 - [ ] Mocks are appropriate (not over-mocking)
 
+**Test Failure Accountability:**
+If tests were modified as part of this PR:
+- [ ] Test changes are justified (not just "making tests pass")
+- [ ] Any claims of "pre-existing failures" have evidence (test fails on base branch)
+- [ ] Any claims of "infrastructure issues" have evidence (unrelated to code paths)
+- [ ] New code isn't breaking existing behavior that tests were validating
+
 **Documentation:**
 - [ ] Code is self-documenting or has appropriate comments
 - [ ] Public APIs have docstrings

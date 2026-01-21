@@ -151,6 +151,7 @@ tests/
    ```bash
    uv run bandit -r src/
    ```
+4. **Handle failures correctly**: If tests fail after your changes, assume YOUR CHANGE caused it. Do not blame infrastructure, flaky tests, or pre-existing issues without evidence (e.g., showing the test fails on the base branch).
 
 ## PR Comment Handling
 
