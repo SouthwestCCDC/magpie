@@ -23,7 +23,7 @@ SCRIPT_NAME="$(basename "$0")"
 GITHUB_REPO="SouthwestCCDC/magpie"
 GITHUB_BRANCH="default"
 GHCR_IMAGE="ghcr.io/southwestccdc/magpie"
-MAGPIE_VERSION="0.1.0-rc4"
+MAGPIE_VERSION="0.1.0-rc5"
 
 # Default configuration
 DEFAULT_INSTALL_DIR="/opt/magpie"
