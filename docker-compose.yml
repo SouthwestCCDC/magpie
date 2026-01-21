@@ -25,6 +25,8 @@ services:
       - ${MAGPIE_DATA_DIR:-./data/artifacts}:/data/artifacts:ro  # Read-only for static serving
       - caddy_data:/data
       - caddy_config:/config
+    environment:
+      - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-}
     depends_on:
       - magpie
     restart: unless-stopped
