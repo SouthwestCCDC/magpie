@@ -380,15 +380,15 @@ class TestDirectoryBrowsing:
         authenticated_client: httpx.Client,
         test_artifact_content: bytes,
     ) -> None:
-        """Verify browsing /artifacts/ returns directory listing."""
+        """Verify browsing /artifacts/ requires authentication."""
         # Upload an artifact first to ensure there's something to list
         authenticated_client.post(
             "/api/v1/upload/e2e-tests/browse-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
         )
 
-        # Browse the artifacts root directory
-        response = http_client.get("/artifacts/")
+        # Browse the artifacts root directory with authentication
+        response = authenticated_client.get("/artifacts/")
 
         assert response.status_code == 200
         # Caddy's browse directive returns HTML
@@ -404,7 +404,7 @@ class TestDirectoryBrowsing:
         authenticated_client: httpx.Client,
         test_artifact_content: bytes,
     ) -> None:
-        """Verify browsing artifact directory shows blobs, metadata, etc."""
+        """Verify browsing artifact directory requires authentication."""
         # Upload an artifact
         upload_response = authenticated_client.post(
             "/api/v1/upload/e2e-tests/browse-path-test",
@@ -412,8 +412,8 @@ class TestDirectoryBrowsing:
         )
         assert upload_response.status_code == 200
 
-        # Browse the specific artifact directory
-        response = http_client.get("/artifacts/e2e-tests/browse-path-test/")
+        # Browse the specific artifact directory with authentication
+        response = authenticated_client.get("/artifacts/e2e-tests/browse-path-test/")
 
         assert response.status_code == 200
         assert "text/html" in response.headers.get("content-type", "")
@@ -430,9 +430,10 @@ class TestDirectoryBrowsing:
     def test_browse_nonexistent_path_returns_404(
         self,
         http_client: httpx.Client,
+        authenticated_client: httpx.Client,
     ) -> None:
-        """Verify browsing nonexistent path returns 404."""
-        response = http_client.get("/artifacts/nonexistent/path/that/does/not/exist/")
+        """Verify browsing nonexistent path returns 404 (after authentication)."""
+        response = authenticated_client.get("/artifacts/nonexistent/path/that/does/not/exist/")
 
         # Should get 404 for nonexistent directory
         assert response.status_code == 404

@@ -63,15 +63,19 @@ class TestUnauthenticatedAccess:
         authenticated_client: httpx.Client,
         test_artifact_content: bytes,
     ) -> None:
-        """Verify artifact listing is publicly accessible (GET operations)."""
+        """Verify artifact listing requires authentication after PR #231."""
         # First upload something with authenticated client
         authenticated_client.post(
             "/api/v1/upload/e2e-tests/public-list-test",
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
         )
 
-        # Unauthenticated GET should work
+        # Unauthenticated GET should be rejected (401)
         response = http_client.get("/api/v1/artifacts/e2e-tests/")
+        assert response.status_code == 401
+
+        # Authenticated GET should work
+        response = authenticated_client.get("/api/v1/artifacts/e2e-tests/")
         assert response.status_code == 200
 
 
