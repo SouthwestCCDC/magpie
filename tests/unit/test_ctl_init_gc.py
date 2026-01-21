@@ -1061,7 +1061,7 @@ class TestGCJsonOutput:
         This tests the intentional broad exception handler at gc.py:141-150.
         When called with --json-output by the server's GC endpoint, we must
         always output valid JSON so the server can parse the error. The broad
-        exception catch is deliberate - see issue #238 for context.
+        exception catch is deliberate - see issue #209 for context.
         """
         test_settings.storage_path.mkdir(parents=True, exist_ok=True)
         create_artifact_with_blobs(
