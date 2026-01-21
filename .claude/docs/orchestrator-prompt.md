@@ -110,17 +110,17 @@ These expand on the critical rules above with specific commands and procedures.
 # Run from the main repo directory
 git fetch origin
 
-# Use timestamp for uniqueness (allows multiple attempts at same issue)
+# Worktree naming: issue-{N}-{timestamp}, feat-{desc}-{timestamp}, or fix-{desc}-{timestamp}
 WORKTREE_NAME="issue-${ISSUE_NUMBER}-$(date +%s)"
-git worktree add "../magpie-worktrees/${WORKTREE_NAME}" -b "fix/issue-${ISSUE_NUMBER}-$(date +%s)" origin/default
+git worktree add "/home/george/swccdc/magpie-worktrees/${WORKTREE_NAME}" -b "${WORKTREE_NAME}" origin/default
 
-# Worktrees live in: ../magpie-worktrees/ (sibling to repo)
+# Worktrees live in: /home/george/swccdc/magpie-worktrees/
 ```
 
-Branch naming: `fix/issue-{N}-{timestamp}` (e.g., `fix/issue-79-1736661234`)
+Branch naming: Bare name matching worktree name (e.g., `issue-79-1736661234`)
 
 **When launching subagents**, always include:
-> **Work ONLY in the existing worktree**: `../magpie-worktrees/issue-{N}-{name}/`
+> **Work ONLY in the existing worktree**: `/home/george/swccdc/magpie-worktrees/issue-{N}-{timestamp}/`
 > Do NOT cd to the main repo. Do NOT create new worktrees unless explicitly told to.
 
 ### CI Verification (Rule 2)
@@ -183,8 +183,8 @@ Create a worktree and branch (use timestamp for uniqueness):
 # From the main repo directory
 git fetch origin
 WORKTREE="issue-{N}-$(date +%s)"
-git worktree add "../magpie-worktrees/${WORKTREE}" -b "fix/${WORKTREE}" origin/default
-cd "../magpie-worktrees/${WORKTREE}"
+git worktree add "/home/george/swccdc/magpie-worktrees/${WORKTREE}" -b "${WORKTREE}" origin/default
+cd "/home/george/swccdc/magpie-worktrees/${WORKTREE}"
 
 Then implement the feature in that worktree:
 1. Read relevant code to understand the codebase
@@ -203,7 +203,7 @@ IMPORTANT: Work ONLY in the worktree you create. Do not touch the main repo.
 ```
 Address review comments on PR #{N}.
 
-Work ONLY in: ../magpie-worktrees/issue-{M}-{name}/
+Work ONLY in: /home/george/swccdc/magpie-worktrees/issue-{M}-{timestamp}/
 Do NOT cd to the main repo or create new worktrees.
 
 1. Fetch comments: `gh api repos/SouthwestCCDC/magpie/pulls/{N}/comments`
@@ -226,7 +226,7 @@ CRITICAL: All GitHub comments MUST include AI disclosure footer.
 ```
 Fix CI failures on PR #{N}.
 
-Work ONLY in: ../magpie-worktrees/issue-{M}-{name}/
+Work ONLY in: /home/george/swccdc/magpie-worktrees/issue-{M}-{timestamp}/
 Do NOT cd to the main repo or create new worktrees.
 
 1. Check failures: `gh pr checks {N} --repo SouthwestCCDC/magpie`
