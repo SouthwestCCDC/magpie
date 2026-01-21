@@ -303,14 +303,12 @@ class TestPrivilegeDropping:
                     check=True,
                 )
 
-                # Parse output - get last 3 lines for uid, gid, username
-                lines = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
-                # UID and GID are numeric, username is 'root'
-                numeric_lines = [line for line in lines if line.isdigit()]
-                text_lines = [line for line in lines if not line.isdigit()]
+                # Parse output (entrypoint may print diagnostic messages)
+                actual_uid, actual_gid = _extract_id_output(result.stdout)
 
-                actual_uid = int(numeric_lines[-2]) if len(numeric_lines) >= 2 else int(lines[-3])
-                actual_gid = int(numeric_lines[-1]) if len(numeric_lines) >= 1 else int(lines[-2])
+                # Extract username (last non-numeric line)
+                lines = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+                text_lines = [line for line in lines if not line.isdigit()]
                 username = text_lines[-1] if text_lines else lines[-1]
 
                 assert actual_uid == 0, "Container should run as UID 0 (root)"
@@ -367,16 +365,22 @@ class TestPrivilegeDropping:
                     check=True,
                 )
 
-                # Parse output - filter for the expected format lines
+                # Parse output (entrypoint may print diagnostic messages)
                 lines = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+
                 # Find the UID:GID line (format: "3000:3001")
                 file_content = None
-                file_perms = None
                 for line in lines:
                     if ":" in line and all(part.isdigit() for part in line.split(":")):
                         file_content = line
-                    elif line.isdigit() and len(line) == 3:  # Permissions like "644"
+                        break
+
+                # Find the permissions line (3-digit number like "644")
+                file_perms = None
+                for line in lines:
+                    if line.isdigit() and len(line) == 3:
                         file_perms = line
+                        break
 
                 assert file_content == f"{test_uid}:{test_gid}", (
                     f"Expected /run/magpie-user content '{test_uid}:{test_gid}', got: {file_content}"
