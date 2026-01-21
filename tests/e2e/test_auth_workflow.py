@@ -383,7 +383,25 @@ class TestAuthenticationEnforcement:
     1. Unauthenticated access to /artifacts/* is properly rejected (except /artifacts/public/*)
     2. Path traversal attempts cannot bypass authentication
     3. Public paths remain accessible without authentication
+    4. Empty MAGPIE_ALLOWED_CIDRS (default) requires authentication
     """
+
+    def test_default_empty_cidr_requires_auth(
+        self,
+        http_client: httpx.Client,
+    ) -> None:
+        """Verify empty MAGPIE_ALLOWED_CIDRS (default) requires authentication.
+
+        SECURITY CRITICAL: This test verifies that the default deployment
+        configuration (no IP allow-list) correctly requires authentication.
+        The Caddy config uses a sentinel default (255.255.255.255/32) to ensure
+        empty CIDR list doesn't accidentally bypass authentication.
+        """
+        response = http_client.get("/artifacts/")
+        assert response.status_code == 401, (
+            "SECURITY FAILURE: Empty MAGPIE_ALLOWED_CIDRS must require authentication. "
+            "If this test fails, there may be an authentication bypass vulnerability."
+        )
 
     def test_artifacts_root_requires_auth(
         self,
