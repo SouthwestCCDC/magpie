@@ -168,7 +168,7 @@ The release workflow will:
 - Build multi-arch container images (amd64, arm64)
 - Push to `ghcr.io/southwestccdc/magpie`
 - Create a GitHub Release with auto-generated changelog
-- Attach `scripts/install.sh` as a release asset
+- Attach `scripts/magpie-deploy.sh` as a release asset
 
 ### Container Tags
 
