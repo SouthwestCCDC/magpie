@@ -111,4 +111,4 @@ jobs:
           prerelease: ${{ needs.validate.outputs.is_prerelease == 'true' }}
           generate_release_notes: true
           files: |
-            scripts/install.sh
+            scripts/magpie-deploy.sh
