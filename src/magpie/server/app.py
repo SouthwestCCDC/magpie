@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="Magpie Artifacts API",
     description="Content-addressed artifact storage with mutable tags",
-    version="0.1.0-rc4",
+    version="0.1.0-rc5",
     lifespan=lifespan,
 )
 

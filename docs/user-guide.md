@@ -61,17 +61,17 @@ Install the magpie CLI using pip or uv:
 
 ```bash
 # With uv (recommended)
-uv pip install git+https://github.com/SouthwestCCDC/magpie.git@v0.1.0-rc4
+uv pip install git+https://github.com/SouthwestCCDC/magpie.git@v0.1.0-rc5
 
 # With pip
-pip install git+https://github.com/SouthwestCCDC/magpie.git@v0.1.0-rc4
+pip install git+https://github.com/SouthwestCCDC/magpie.git@v0.1.0-rc5
 
 # For development (from local clone)
 cd magpie
 uv pip install -e .
 ```
 
-To install a specific version, replace the tag (e.g., `@v0.1.0-rc4`) with the desired
+To install a specific version, replace the tag (e.g., `@v0.1.0-rc5`) with the desired
 release tag. Check [GitHub releases](https://github.com/SouthwestCCDC/magpie/releases)
 for available versions.
 
