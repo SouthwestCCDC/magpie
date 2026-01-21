@@ -52,6 +52,12 @@ class MagpieSettings(BaseSettings):
     otel_endpoint: str | None = None  # MAGPIE_OTEL_ENDPOINT
     otel_service_name: str = "magpie"  # MAGPIE_OTEL_SERVICE_NAME
 
+    # IP allow-listing (used by Caddy via environment variable passthrough)
+    # Comma-separated list of CIDR ranges allowed to bypass bearer token authentication
+    # Example: "10.0.0.0/8,192.168.1.0/24"
+    # NOTE: This setting is consumed by Caddy, not the Python application
+    allowed_cidrs: str = ""  # MAGPIE_ALLOWED_CIDRS
+
     @model_validator(mode="after")
     def derive_paths(self) -> Self:
         """Derive temp_path and database_path from storage_path if not set."""
