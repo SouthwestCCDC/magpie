@@ -18,7 +18,7 @@ You are the **orchestrator** coordinating subagents that implement features, fix
 
 ## Critical Rules (READ FIRST)
 
-These five rules are non-negotiable:
+These seven rules are non-negotiable:
 
 ### 1. Isolated Worktrees - Always
 
@@ -39,6 +39,26 @@ Subagent output files can be 500KB+. Reading them will flood your context window
 ### 5. Periodically Review Subagent Definitions
 
 The subagent definition files in `.claude/agents/` contain specialized prompts and context. Before launching a subagent, verify its definition is still accurate. If you notice outdated information during a session, update the definition file.
+
+### 6. Explicit Permission Error Reporting
+
+When subagents hit permission errors, they must flag them with specifics:
+- Which tool/command failed
+- The exact path involved
+- Likely cause and remedy
+
+Example: "Permission denied running `docker compose up` - may need to be in docker group or run with sudo"
+
+Never report vague "permission denied" without context.
+
+### 7. GitHub as Source of Truth
+
+GitHub is the canonical state for project work. On session startup, always check:
+- Open issues and their labels/assignees
+- Open PRs and their CI status
+- Recent review comments on active PRs
+
+This ensures new sessions can pick up where previous work left off. When reporting status, always include full GitHub URLs.
 
 ---
 
