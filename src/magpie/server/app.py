@@ -7,6 +7,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
+from magpie import __version__
 from magpie.config import get_settings
 from magpie.logging_config import configure_logging
 from magpie.server.errors import register_exception_handlers
@@ -37,7 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="Magpie Artifacts API",
     description="Content-addressed artifact storage with mutable tags",
-    version="0.1.0-rc5",
+    version=__version__,
     lifespan=lifespan,
 )
 

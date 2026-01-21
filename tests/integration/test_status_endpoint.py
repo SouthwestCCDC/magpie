@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from magpie import __version__
 from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenService
 from magpie.config import MagpieSettings
@@ -72,7 +73,7 @@ class TestStatusEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert "version" in data
-        assert data["version"] == "0.1.0-rc5"
+        assert data["version"] == __version__
 
     def test_status_returns_auth_info_without_token(self, api_client: TestClient) -> None:
         """Status endpoint returns auth info showing no valid token."""
