@@ -51,7 +51,7 @@ src/magpie/
   ctl/             # Server admin CLI (magpie-ctl command)
 ```
 
-## Implementation Phases
+<!-- ## Implementation Phases
 
 ### Phase 1: Core Upload + Filesystem (complete)
 - [x] Scaffolding (pyproject.toml, Dockerfile, docker-compose, FastAPI, CLIs, tooling)
@@ -71,6 +71,8 @@ src/magpie/
 - [x] Production Caddy configuration with TLS
 
 ### Phase 4: S3 Backup (future)
+
+-->
 
 ## Key Design Decisions
 

@@ -3,7 +3,7 @@
 > **Note:** This document was developed with assistance from Claude Code based on analysis of the
 > current artifacts infrastructure and iterative design discussions.
 
-**Status:** Implementation In Progress
+**Status:** Released
 **Authors:** George (with Claude Code)
 **Date:** January 2026
 **Repository:** [SouthwestCCDC/magpie](https://github.com/SouthwestCCDC/magpie)
@@ -17,7 +17,7 @@
 3. [Requirements](#requirements)
 4. [Proposed Design](#proposed-design)
 5. [Resolved Design Questions](#resolved-design-questions)
-6. [Implementation Phases](#implementation-phases)
+<!-- 6. [Implementation Phases](#implementation-phases) -->
 7. [Future Work](#future-work)
 
 ---
@@ -782,7 +782,7 @@ for unified identity. Design allows this addition later.
 
 ---
 
-## Implementation Phases
+<!-- ## Implementation Phases
 
 ### Phase 1: Core Upload + Filesystem Structure
 
@@ -858,6 +858,8 @@ for unified identity. Design allows this addition later.
 
 2. **Systemd timer** for periodic `magpie-ctl sync --to-s3`
 3. **S3 bucket configuration** in Terraform
+
+-->
 
 ---
 
