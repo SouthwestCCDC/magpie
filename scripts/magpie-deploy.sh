@@ -473,6 +473,20 @@ EOF
             # Extract route definitions from Caddyfile.prod (skip global block and site address)
             # Start after the site block opening, end before final closing brace
             # Use awk to properly track brace nesting depth (issue #273)
+            #
+            # Depth tracking explanation:
+            # - The site block line "{$MAGPIE_DOMAIN} {" is SKIPPED with 'next', so we never count
+            #   its opening brace. This is intentional: we want the CONTENT inside the block.
+            # - We start at depth=0 (inside the site block, but before any nested blocks)
+            # - Each nested block (header {}, handle {}, etc.) increments/decrements depth
+            # - The internal content is balanced (each { has a matching }), so depth returns to 0
+            # - The final closing brace of the site block (line 398) has no matching opener
+            #   (since we skipped line 136), so it decrements depth to -1
+            # - depth==-1 signals we've found the site block's closing brace
+            #
+            # Known limitation: Braces inside quoted strings (e.g., JSON responses) would be
+            # counted. The current Caddyfile.prod has no such cases. If this becomes an issue,
+            # a more sophisticated parser would be needed.
             awk '
                 /^{\$MAGPIE_DOMAIN}/ {
                     in_site_block = 1

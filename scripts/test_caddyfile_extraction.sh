@@ -10,7 +10,8 @@ GREEN='\033[0;32m'
 NC='\033[0m' # No Color
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CADDYFILE_PROD="${SCRIPT_DIR}/Caddyfile.prod"
+REPO_ROOT="${SCRIPT_DIR}/.."
+CADDYFILE_PROD="${REPO_ROOT}/Caddyfile.prod"
 TEST_OUTPUT="/tmp/test_caddyfile_extraction_$$.txt"
 
 cleanup() {
