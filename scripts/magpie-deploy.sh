@@ -472,9 +472,32 @@ EOF
 
             # Extract route definitions from Caddyfile.prod (skip global block and site address)
             # Start after the site block opening, end before final closing brace
-            sed -n '/^{\$MAGPIE_DOMAIN}/,/^}$/p' "$source_caddyfile" | \
-                sed '1d;$d' | \
-                sed '/Strict-Transport-Security/d' >> "$dest_caddyfile"
+            # Use awk to properly track brace nesting depth (issue #273)
+            awk '
+                /^{\$MAGPIE_DOMAIN}/ {
+                    in_site_block = 1
+                    depth = 0
+                    next
+                }
+                in_site_block {
+                    # Count opening and closing braces
+                    for (i = 1; i <= length($0); i++) {
+                        c = substr($0, i, 1)
+                        if (c == "{") depth++
+                        if (c == "}") depth--
+                    }
+
+                    # If depth returns to -1, we found the final closing brace
+                    if (depth == -1) {
+                        exit
+                    }
+
+                    # Skip HSTS header (not applicable to HTTP-only mode)
+                    if ($0 !~ /Strict-Transport-Security/) {
+                        print
+                    }
+                }
+            ' "$source_caddyfile" >> "$dest_caddyfile"
 
             echo "}" >> "$dest_caddyfile"
             ;;
