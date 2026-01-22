@@ -19,6 +19,12 @@ For full context, read these documents in `deployment/docs/docs/projects/active/
 | `proposal.md` | One-pager summary with progress checklist |
 | `index.md` | Project overview |
 
+Also in the repo root:
+
+| Document | Description |
+|----------|-------------|
+| `CONTRIBUTING.md` | Labels, milestones, triage guidelines, PR workflow |
+
 ## Architecture Summary
 
 - **Caddy** serves static files directly from filesystem
