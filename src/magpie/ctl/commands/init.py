@@ -44,12 +44,6 @@ def init(ctx: CTLContext, reset_admin_token: bool, admin_token: str | None) -> N
     Use --admin-token to specify a custom token instead of generating
     a random one. The token must start with 'mgp_ADMIN_'.
 
-    Args:
-        ctx: Click context containing settings and debug flag.
-        reset_admin_token: If True, revokes existing admin token before creating new one.
-        admin_token: Optional custom token to use instead of generating random one.
-            Must start with 'mgp_ADMIN_' and have content after the prefix.
-
     Examples:
 
         magpie-ctl init
@@ -58,6 +52,11 @@ def init(ctx: CTLContext, reset_admin_token: bool, admin_token: str | None) -> N
 
         magpie-ctl init --admin-token mgp_ADMIN_custom_token_here
     """
+    # Args (for developers):
+    #   ctx: Click context containing settings and debug flag.
+    #   reset_admin_token: If True, revokes existing admin token before creating new one.
+    #   admin_token: Optional custom token to use instead of generating random one.
+    #       Must start with 'mgp_ADMIN_' and have content after the prefix.
     settings = ctx.settings
 
     # Create storage directories
