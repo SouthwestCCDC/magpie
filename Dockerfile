@@ -25,6 +25,24 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     gosu nobody true && gosu 1000:1000 true  # verify it works
 
+# Install AWS CLI v2 for S3 sync operations (multi-arch support)
+RUN set -eux; \
+    apt-get update && \
+    apt-get install -y --no-install-recommends curl unzip && \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64) aws_arch="x86_64" ;; \
+        arm64) aws_arch="aarch64" ;; \
+        *) echo "Unsupported architecture for AWS CLI: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    rm -rf awscliv2.zip aws && \
+    apt-get purge -y curl unzip && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY src/ ./src/
 COPY pyproject.toml uv.lock README.md ./
 
