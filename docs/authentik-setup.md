@@ -315,11 +315,11 @@ For fine-grained access control (e.g., restrict certain artifact paths), impleme
 
 ## Migration Path
 
-### Phase 1: Deploy Without SSO (Default)
+### Step 1: Deploy Without SSO (Default)
 
 Deploy with the forward_auth block commented (default state). Artifacts remain publicly browsable (existing behavior).
 
-### Phase 2: Enable Authentik SSO
+### Step 2: Enable Authentik SSO
 
 1. Set `AUTHENTIK_HOST` environment variable
 2. Comment out the default handler and uncomment the Authentik SSO handler in Caddyfile.prod
@@ -328,7 +328,7 @@ Deploy with the forward_auth block commented (default state). Artifacts remain p
 
 Humans must use SSO to browse. CI/CD continues with bearer tokens.
 
-### Phase 3: Monitor and Adjust
+### Step 3: Monitor and Adjust
 
 - Review Caddy access logs for authentication patterns
 - Adjust Authentik session duration if needed
