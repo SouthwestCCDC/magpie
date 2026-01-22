@@ -56,9 +56,9 @@ This checklist covers required configuration and setup steps before deploying Ma
 ## Verification
 
 - [ ] Health check returns {"status": "ok"} (server/app.py:60)
-- [ ] Token validation endpoint returns 200/401 (Caddyfile:12)
-- [ ] Upload endpoint accessible with auth (Caddyfile:23)
-- [ ] Static file serving works at `/artifacts/*` (Caddyfile:25)
+- [ ] Token validation endpoint returns 200/401 (Caddyfile:88-90)
+- [ ] Upload endpoint accessible with auth (Caddyfile:139-148)
+- [ ] Static file serving works at `/artifacts/*` (Caddyfile:125-136)
 
 ---
 
