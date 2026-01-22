@@ -12,7 +12,7 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${SCRIPT_DIR}/.."
 CADDYFILE_PROD="${REPO_ROOT}/Caddyfile.prod"
-TEST_OUTPUT="/tmp/test_caddyfile_extraction_$$.txt"
+TEST_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/test_caddyfile_extraction_XXXXXX.txt")"
 
 cleanup() {
     rm -f "$TEST_OUTPUT"
@@ -75,12 +75,12 @@ fi
 echo -n "Test 3: Checking for route handlers... "
 if grep -q "handle /health" "$TEST_OUTPUT" && \
    grep -q "handle /artifacts" "$TEST_OUTPUT" && \
-   grep -q "handle /" "$TEST_OUTPUT"; then
+   grep -qE '^[[:space:]]*handle / \{' "$TEST_OUTPUT"; then
     echo -e "${GREEN}PASS${NC}"
 else
     echo -e "${RED}FAIL${NC}"
     echo "ERROR: Route handlers not found"
-    echo "Expected: handle /health, handle /artifacts, handle /"
+    echo "Expected: handle /health, handle /artifacts, handle / {"
     exit 1
 fi
 
