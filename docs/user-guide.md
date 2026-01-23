@@ -414,7 +414,7 @@ docker compose exec magpie magpie-ctl gc --retention-days 7     # Override reten
 | 1 | Runtime error after argument parsing |
 | 2 | Usage error (from Click framework) |
 
-Exit code 1 is used for all operational failures after arguments are successfully parsed (e.g., network errors, file not found, authentication failures). Exit code 2 is returned by the Click framework for usage errors (e.g., missing required arguments, invalid option values, invalid file paths).
+Exit code 1 is used for operational failures that occur after arguments are successfully parsed (e.g., network errors, authentication failures, file-not-found conditions encountered during command execution). Exit code 2 is returned by Click for usage and validation errors during argument parsing (e.g., missing required arguments, invalid option values, or file/path checks performed by Click such as `magpie push FILE` when `FILE` does not exist).
 
 With `--format json`, successful results are written to stdout and errors to stderr as:
 
@@ -482,3 +482,7 @@ curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
 curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
   -O https://magpie.example.com/artifacts/images/ubuntu/blobs/a1b2c3d4
 ```
+
+---
+
+*This documentation was generated with AI assistance (Claude Code w/ Opus 4.5).*
