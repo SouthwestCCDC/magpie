@@ -290,27 +290,9 @@ magpie_force: false
 
 ### 401 Unauthorized / 403 Forbidden
 
-These errors should not occur for artifact downloads since downloads are public
-by default. If you encounter these errors:
+For downloads: Check if Authentik SSO is enabled.
 
-1. **For downloads**: Check if your administrator has enabled Authentik SSO for
-   browser-based artifact browsing. If so, you may need to add authentication
-   headers.
-
-2. **For write operations** (uploads, tag management): Verify your token:
-   ```yaml
-   # Verify token is being passed
-   - name: Debug token presence
-     ansible.builtin.debug:
-       msg: "Token starts with: {{ vault_magpie_token[:10] }}..."
-     no_log: false  # Temporarily enable for debugging
-   ```
-
-   Check that:
-   - The vault file is being decrypted (run with `--ask-vault-pass`)
-   - Variable name matches exactly (`vault_magpie_token`)
-   - Token has not been revoked on the server
-   - Token has appropriate scope for the operation (write scope for uploads)
+For write operations: Verify your token is decrypted, not revoked, and has appropriate scope.
 
 ### 404 Not Found
 
@@ -336,51 +318,16 @@ For large artifacts, increase the timeout:
 
 ### Checksum Mismatch
 
-If checksum verification fails:
-
-1. Verify the checksum in your variables matches the current artifact version
-2. Try re-downloading (possible network corruption)
-3. Use hash refs instead of mutable tags for guaranteed consistency
-
-For critical deployments, use hash-based blob references to guarantee content
-integrity. Hash refs are immutable--they always return the same content:
-
-```yaml
-vars:
-  # Get hash from: magpie ls app/binary
-  app_binary_hash: "a1b2c3d4"
-
-tasks:
-  - name: Download by hash ref (guaranteed immutable)
-    ansible.builtin.get_url:
-      url: "{{ magpie_server }}/artifacts/app/binary/blobs/{{ app_binary_hash }}"
-      dest: /opt/app/binary
-      mode: "0755"
-```
+If checksum verification fails, verify the checksum matches the current version, retry the download, or use hash refs for guaranteed consistency.
 
 ## Security Best Practices
 
-1. **Token usage** - Artifact downloads are public by default and do not require
-   tokens. For write operations (uploads, tag management), use tokens with the
-   minimal required scope. If your administrator has enabled authentication for
-   downloads, use read-only tokens for download operations.
-2. **Vault-encrypt tokens** - When using tokens, never store them in plaintext
-3. **Use `no_log`** - When using tokens, prevent exposure in logs:
-   ```yaml
-   - name: Upload artifact to Magpie (requires token)
-     ansible.builtin.uri:
-       url: "{{ magpie_server }}/api/v1/upload/path/to/artifact"
-       method: POST
-       headers:
-         Authorization: "Bearer {{ magpie_token }}"
-       # ... upload configuration
-     no_log: true
-   ```
-4. **Pin versions for production** - Use specific tags or hash refs instead of `latest`
-5. **Verify integrity** - For security-sensitive artifacts, use one of these approaches:
-   - **Hash refs** (recommended): Download via `/blobs/<hash>` for content-addressed immutability
-   - **Pre-defined checksums**: Store expected SHA-256 in vault-encrypted variables
-6. **Rotate tokens periodically** - If using tokens, update vault-stored tokens on a schedule
+1. **Token usage** - Downloads are public by default. For write operations, use minimal scope tokens.
+2. **Vault-encrypt tokens** - Never store tokens in plaintext.
+3. **Use `no_log`** - Prevent token exposure in logs.
+4. **Pin versions for production** - Use specific tags or hash refs instead of `latest`.
+5. **Verify integrity** - Use hash refs or pre-defined checksums for security-sensitive artifacts.
+6. **Rotate tokens periodically** - Update vault-stored tokens on a schedule.
 
 ## See Also
 
