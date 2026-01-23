@@ -71,10 +71,10 @@ mkdir -p "$BACKUP_PATH"
 rsync -av --exclude='.tmp/' "$STORAGE_PATH/" "$BACKUP_PATH/artifacts/"
 
 # SQLite online backup (safe during writes)
-docker compose exec -T magpie \
-  sqlite3 /data/artifacts/.magpie.db ".backup '/tmp/magpie.db'"
-docker compose cp magpie:/tmp/magpie.db "$BACKUP_PATH/magpie.db"
-docker compose exec -T magpie rm /tmp/magpie.db
+# Note: sqlite3 must be installed on the host (not in container)
+# Run against the mounted volume path (adjust if your compose mount differs)
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/data/artifacts}"
+sqlite3 "$MAGPIE_DATA_DIR/.magpie.db" ".backup '$BACKUP_PATH/magpie.db'"
 ```
 
 ### S3 Backup with magpie-ctl sync
@@ -100,6 +100,8 @@ Requires `MAGPIE_S3_BUCKET` environment variable. Optionally set `MAGPIE_S3_PREF
 **Important:** The sync commands only back up artifact data (manifests, blobs, metadata sidecars). They do NOT back up the token database (`.magpie.db`) or configuration files. Back these up separately using the rsync procedure above.
 
 The sync commands require either `rclone` or `aws` CLI. If `rclone` is available, it uses `--checksum` for content-based comparison. If falling back to AWS CLI, uploads use `aws s3 cp` (overwrites on each run), while restores use `aws s3 sync` (incremental).
+
+**Warning - Destructive Behavior:** When using `rclone` for `from-s3` restores, `rclone sync` will DELETE any local blobs that don't exist in S3. If you have untagged local blobs not backed up to S3, they will be removed. To avoid data loss, restore to an empty directory or use `--dry-run` first to preview what will be deleted.
 
 ---
 
@@ -137,10 +139,12 @@ docker compose exec magpie magpie-ctl gc --reconcile-only
 For restoring tokens without touching artifacts:
 
 ```bash
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/data/artifacts}"
+
 docker compose stop magpie
-cp "$BACKUP_PATH/magpie.db" /data/artifacts/.magpie.db
-sqlite3 /data/artifacts/.magpie.db "PRAGMA wal_checkpoint(TRUNCATE);"
-chown 1000:1000 /data/artifacts/.magpie.db
+cp "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/.magpie.db"
+sqlite3 "$MAGPIE_DATA_DIR/.magpie.db" "PRAGMA wal_checkpoint(TRUNCATE);"
+chown 1000:1000 "$MAGPIE_DATA_DIR/.magpie.db"
 docker compose start magpie
 docker compose exec magpie magpie-ctl token list
 ```
@@ -191,7 +195,7 @@ Restore missing blobs from backup, or re-upload from original source.
 | Task | Command |
 |------|---------|
 | Full backup | `rsync -av --exclude='.tmp/' /data/artifacts/ /backup/magpie/` |
-| Database backup | `sqlite3 /data/artifacts/.magpie.db ".backup '/tmp/backup.db'"` |
+| Database backup | `sqlite3 /data/artifacts/.magpie.db ".backup './magpie-backup.db'"` |
 | Full restore | `rsync -av /backup/magpie/artifacts/ /data/artifacts/` |
 | Reconcile symlinks | `magpie-ctl gc --reconcile-only` |
 | Reset admin token | `magpie-ctl init --reset-admin-token` |
