@@ -35,6 +35,7 @@
 #
 # PUBLIC ROUTES (no authentication required):
 #   - GET    /api/v1/auth/validate         - Auth validation endpoint
+#   - GET    /api/v1/status                - Server status, version, storage stats
 #   - GET    /health                       - Health check
 #   - GET    /artifacts/public/*           - Public static file downloads
 #
