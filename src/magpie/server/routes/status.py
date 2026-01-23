@@ -73,7 +73,7 @@ def _get_storage_stats(storage_service: StorageService) -> StorageStats:
 @router.get("/api/v1/status")
 async def get_status(
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
-    admin: Annotated[TokenInfo, Depends(require_admin_scope)] = None,
+    admin: Annotated[TokenInfo, Depends(require_admin_scope)],
 ) -> StatusResponse:
     """Get server status including health, version, and storage stats (admin only).
 

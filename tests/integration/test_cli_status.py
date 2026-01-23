@@ -5,13 +5,18 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
+
+if TYPE_CHECKING:
+    import httpx
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
 from magpie import __version__
+from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenService
 from magpie.cli import cli
 from magpie.config import MagpieSettings
@@ -58,6 +63,26 @@ def api_client(
     app.dependency_overrides[get_storage_service] = override_storage_service
     app.dependency_overrides[get_token_service] = override_token_service
     yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def api_client_no_auth_override(
+    test_storage_service: StorageService, test_token_service: TokenService
+) -> TestClient:
+    """Create test API client without auth overrides for authentication tests."""
+    # Clear any auth overrides from the autouse conftest fixture
+    app.dependency_overrides.clear()
+
+    def override_storage_service() -> StorageService:
+        return test_storage_service
+
+    def override_token_service() -> TokenService:
+        return test_token_service
+
+    app.dependency_overrides[get_storage_service] = override_storage_service
+    app.dependency_overrides[get_token_service] = override_token_service
+    yield TestClient(app, raise_server_exceptions=False)
     app.dependency_overrides.clear()
 
 
@@ -160,6 +185,51 @@ class TestStatusCommand:
 
         assert result.exit_code != 0
         assert "No server configured" in result.output
+
+    def test_status_requires_token(self, cli_runner_no_config: CliRunner) -> None:
+        """Status without token configured fails with error."""
+        result = cli_runner_no_config.invoke(cli, ["--server", "http://test", "status"])
+
+        assert result.exit_code != 0
+        assert "No token configured" in result.output
+
+    def test_status_unauthorized_shows_error(
+        self,
+        cli_runner: CliRunner,
+        api_client_no_auth_override: TestClient,
+        token_service: TokenService,
+    ) -> None:
+        """Status with non-admin token shows appropriate error."""
+        read_token = token_service.create_token("reader", TokenScope.READ)
+
+        class MockClientWithAuth:
+            def __init__(self, client: TestClient, token: str) -> None:
+                self.client = client
+                self.token = token
+
+            def get(self, url: str, **kwargs: object) -> "httpx.Response":
+                headers = kwargs.pop("headers", {})
+                headers["Authorization"] = f"Bearer {self.token}"
+                return self.client.get(url, headers=headers, **kwargs)
+
+            def __enter__(self) -> "MockClientWithAuth":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                pass
+
+        mock_client = MockClientWithAuth(api_client_no_auth_override, read_token)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "--token", read_token, "status"],
+            )
+
+        assert result.exit_code != 0
+        assert "403" in result.output or "Admin" in result.output or "Forbidden" in result.output
 
     def test_status_json_output(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Status command outputs valid JSON when --format json is used."""

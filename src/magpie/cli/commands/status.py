@@ -40,6 +40,13 @@ def status(ctx: CLIContext) -> None:
             return  # output_error never returns, but explicit for clarity
         raise click.ClickException(msg)
 
+    if not ctx.token:
+        msg = "No token configured. Use --token or set MAGPIE_TOKEN. Admin token required."
+        if is_json_output():
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
+
     with ctx.get_client() as client:
         if ctx.debug:
             click.echo(f"Checking status of {ctx.server}...", err=True)

@@ -54,6 +54,73 @@ def api_client(
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def api_client_no_auth_override(
+    test_storage_service: StorageService, test_token_service: TokenService
+) -> TestClient:
+    """Create test API client without auth overrides for authentication tests."""
+    # Clear any auth overrides from the autouse conftest fixture
+    app.dependency_overrides.clear()
+
+    def override_storage_service() -> StorageService:
+        return test_storage_service
+
+    def override_token_service() -> TokenService:
+        return test_token_service
+
+    app.dependency_overrides[get_storage_service] = override_storage_service
+    app.dependency_overrides[get_token_service] = override_token_service
+    yield TestClient(app, raise_server_exceptions=False)
+    app.dependency_overrides.clear()
+
+
+class TestStatusEndpointAuth:
+    """Tests for status endpoint authentication and authorization."""
+
+    def test_status_requires_admin_token(
+        self, api_client_no_auth_override: TestClient, admin_token: str
+    ) -> None:
+        """Status endpoint requires admin token."""
+        response = api_client_no_auth_override.get(
+            "/api/v1/status",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+
+    def test_status_with_read_token_returns_403(
+        self, api_client_no_auth_override: TestClient, read_token: str
+    ) -> None:
+        """Status with read token returns 403."""
+        response = api_client_no_auth_override.get(
+            "/api/v1/status",
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+
+        assert response.status_code == 403
+        assert "Admin scope required" in response.json()["detail"]
+
+    def test_status_with_write_token_returns_403(
+        self, api_client_no_auth_override: TestClient, write_token: str
+    ) -> None:
+        """Status with write token returns 403."""
+        response = api_client_no_auth_override.get(
+            "/api/v1/status",
+            headers={"Authorization": f"Bearer {write_token}"},
+        )
+
+        assert response.status_code == 403
+        assert "Admin scope required" in response.json()["detail"]
+
+    def test_status_without_auth_returns_401(self, api_client_no_auth_override: TestClient) -> None:
+        """Status without authorization returns 401."""
+        response = api_client_no_auth_override.get("/api/v1/status")
+
+        assert response.status_code == 401
+
+
 class TestStatusEndpoint:
     """Tests for GET /api/v1/status endpoint.
 
