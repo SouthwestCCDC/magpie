@@ -6,8 +6,9 @@ with optional secure token handling and checksum verification.
 ## Overview
 
 Magpie artifacts can be pulled from Ansible using the `ansible.builtin.get_url`
-module. Bearer token authentication is optional for downloads (public by default)
-but required for uploads and tag management. This is the recommended approach for:
+module. Bearer token authentication is required for downloading artifacts (except those
+in the `/artifacts/public/*` directory). Tokens are also required for uploads and tag
+management. This is the recommended approach for:
 
 - Deploying scripts and binaries to managed hosts
 - Distributing configuration files
@@ -22,7 +23,8 @@ but required for uploads and tag management. This is the recommended approach fo
 
 ## Basic Download Pattern
 
-Artifact downloads are public by default and do not require authentication.
+Artifact downloads require Bearer token authentication (or IP allow-list). The exception
+is files in `/artifacts/public/*`, which are publicly accessible without authentication.
 
 ### Simple Artifact Download
 
@@ -290,12 +292,11 @@ magpie_force: false
 
 ### 401 Unauthorized / 403 Forbidden
 
-These errors should not occur for artifact downloads since downloads are public
-by default. If you encounter these errors:
+These errors occur when authentication is missing or incorrect. If you encounter them:
 
-1. **For downloads**: Check if your administrator has enabled Authentik SSO for
-   browser-based artifact browsing. If so, you may need to add authentication
-   headers.
+1. **For downloads**: Verify your Bearer token is correct and not expired. Provide
+   the token via the `Authorization: Bearer <token>` header. Exception: files in
+   `/artifacts/public/*` do not require authentication.
 
 2. **For write operations** (uploads, tag management): Verify your token:
    ```yaml
@@ -360,10 +361,11 @@ tasks:
 
 ## Security Best Practices
 
-1. **Token usage** - Artifact downloads are public by default and do not require
-   tokens. For write operations (uploads, tag management), use tokens with the
-   minimal required scope. If your administrator has enabled authentication for
-   downloads, use read-only tokens for download operations.
+1. **Token usage** - Artifact downloads require Bearer tokens (or IP allow-list).
+   Use tokens with the minimal required scope: read-only tokens for downloads,
+   write tokens for uploads and tag management, and admin tokens only for
+   token/GC administration. Exception: files in `/artifacts/public/*` do not require
+   authentication.
 2. **Vault-encrypt tokens** - When using tokens, never store them in plaintext
 3. **Use `no_log`** - When using tokens, prevent exposure in logs:
    ```yaml
