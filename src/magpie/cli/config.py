@@ -217,3 +217,24 @@ def get_timeout(cli_override: float | None = None) -> float:
             pass
 
     return DEFAULT_TIMEOUT
+
+
+def get_ca_cert(cli_override: str | None = None) -> str | None:
+    """Get CA certificate path with proper precedence.
+
+    Precedence: CLI override > MAGPIE_CA_CERT env var > None.
+
+    Args:
+        cli_override: Value from --ca-cert CLI option.
+
+    Returns:
+        Path to CA certificate file or None if not configured.
+    """
+    if cli_override:
+        return cli_override
+
+    env_ca_cert = os.environ.get("MAGPIE_CA_CERT")
+    if env_ca_cert:
+        return env_ca_cert
+
+    return None

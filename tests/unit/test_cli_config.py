@@ -10,6 +10,7 @@ from magpie.cli.config import (
     DEFAULT_TIMEOUT,
     ClientConfig,
     DurationParseError,
+    get_ca_cert,
     get_server,
     get_timeout,
     get_token,
@@ -373,3 +374,48 @@ class TestParseDuration:
         """Test that negative float seconds raise DurationParseError."""
         with pytest.raises(DurationParseError, match="Negative durations are not allowed"):
             parse_duration("-45.5")
+
+
+class TestGetCACert:
+    """Tests for get_ca_cert function."""
+
+    def test_cli_override_takes_precedence(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that CLI override takes precedence over env var."""
+        monkeypatch.setenv("MAGPIE_CA_CERT", "/etc/ssl/certs/ca-bundle.crt")
+
+        result = get_ca_cert(cli_override="/custom/ca.crt")
+
+        assert result == "/custom/ca.crt"
+
+    def test_env_var_used_when_no_cli_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that env var is used when no CLI override."""
+        monkeypatch.setenv("MAGPIE_CA_CERT", "/etc/ssl/certs/ca-bundle.crt")
+
+        result = get_ca_cert(cli_override=None)
+
+        assert result == "/etc/ssl/certs/ca-bundle.crt"
+
+    def test_none_returned_when_nothing_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that None is returned when nothing configured."""
+        monkeypatch.delenv("MAGPIE_CA_CERT", raising=False)
+
+        result = get_ca_cert(cli_override=None)
+
+        assert result is None
+
+    def test_empty_string_cli_override_not_used(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that empty string CLI override is treated as None."""
+        monkeypatch.setenv("MAGPIE_CA_CERT", "/etc/ssl/certs/ca-bundle.crt")
+
+        result = get_ca_cert(cli_override="")
+
+        # Empty string is falsy, so env var should be used
+        assert result == "/etc/ssl/certs/ca-bundle.crt"
+
+    def test_empty_string_env_var_not_used(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that empty string env var is treated as None."""
+        monkeypatch.setenv("MAGPIE_CA_CERT", "")
+
+        result = get_ca_cert(cli_override=None)
+
+        assert result is None

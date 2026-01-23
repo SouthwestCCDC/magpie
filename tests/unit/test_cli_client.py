@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import ssl
+from pathlib import Path
+from unittest.mock import patch
+
 import httpx
+import pytest
 
 from magpie.cli.client import (
     DEFAULT_CONNECT_TIMEOUT,
+    _create_ssl_context,
     get_client,
 )
 from magpie.cli.config import DEFAULT_TIMEOUT
@@ -174,3 +180,67 @@ class TestGetClientIntegration:
         """Test that get_client returns a client usable as context manager."""
         with get_client("http://localhost:8000") as client:
             assert isinstance(client, httpx.Client)
+
+
+class TestSSLContext:
+    """Tests for SSL context creation."""
+
+    def test_create_ssl_context_returns_ssl_context(self) -> None:
+        """Test that _create_ssl_context returns an SSL context."""
+        ctx = _create_ssl_context()
+        assert isinstance(ctx, ssl.SSLContext)
+
+    def test_create_ssl_context_with_nonexistent_ca_cert_raises(self) -> None:
+        """Test that providing a nonexistent CA cert path raises FileNotFoundError."""
+        with pytest.raises(FileNotFoundError, match="CA certificate not found"):
+            _create_ssl_context(ca_cert_path="/nonexistent/ca.crt")
+
+    def test_create_ssl_context_with_valid_ca_cert(self, tmp_path: Path) -> None:
+        """Test that providing a valid CA cert path creates context successfully."""
+        # Create a dummy CA cert file
+        ca_cert = tmp_path / "ca.crt"
+        ca_cert.write_text("-----BEGIN CERTIFICATE-----\nfake cert\n-----END CERTIFICATE-----")
+
+        # This should not raise, even though the cert is invalid
+        # (we're just testing file loading, not actual cert validation)
+        with patch("ssl.SSLContext.load_verify_locations"):
+            ctx = _create_ssl_context(ca_cert_path=str(ca_cert))
+            assert isinstance(ctx, ssl.SSLContext)
+
+
+class TestGetClientSSL:
+    """Tests for SSL configuration in get_client."""
+
+    def test_client_uses_ssl_context(self) -> None:
+        """Test that client is created with SSL context."""
+        client = get_client("https://localhost:8000")
+        try:
+            # Verify parameter is an SSL context
+            assert isinstance(client._transport._pool._ssl_context, ssl.SSLContext)
+        finally:
+            client.close()
+
+    def test_client_with_ca_cert_parameter(self, tmp_path: Path) -> None:
+        """Test that ca_cert parameter is passed through."""
+        # Create a dummy CA cert file
+        ca_cert = tmp_path / "ca.crt"
+        ca_cert.write_text("-----BEGIN CERTIFICATE-----\nfake cert\n-----END CERTIFICATE-----")
+
+        # Mock the SSL context creation to verify ca_cert is passed
+        with patch("magpie.cli.client._create_ssl_context") as mock_create:
+            mock_create.return_value = ssl.create_default_context()
+            client = get_client("https://localhost:8000", ca_cert=str(ca_cert))
+            try:
+                mock_create.assert_called_once_with(ca_cert_path=str(ca_cert))
+            finally:
+                client.close()
+
+    def test_client_without_ca_cert_uses_system_trust_store(self) -> None:
+        """Test that client uses system trust store when ca_cert is None."""
+        with patch("magpie.cli.client._create_ssl_context") as mock_create:
+            mock_create.return_value = ssl.create_default_context()
+            client = get_client("https://localhost:8000", ca_cert=None)
+            try:
+                mock_create.assert_called_once_with(ca_cert_path=None)
+            finally:
+                client.close()

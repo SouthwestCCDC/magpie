@@ -19,6 +19,7 @@ dependencies = [
     "rich",
     "tomli_w",
     "structlog",
+    "truststore>=0.8.0",
 ]
 
 [project.scripts]
