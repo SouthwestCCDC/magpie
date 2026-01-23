@@ -411,14 +411,18 @@ docker compose exec magpie magpie-ctl gc --retention-days 7     # Override reten
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Runtime error |
-| 2 | Invalid usage (bad arguments) |
+| 1 | Runtime error after argument parsing |
+| 2 | Usage error (from Click framework) |
 
-With `--format json`, errors are written to stderr as:
+Exit code 1 is used for all operational failures after arguments are successfully parsed (e.g., network errors, file not found, authentication failures). Exit code 2 is returned by the Click framework for usage errors (e.g., missing required arguments, invalid option values, invalid file paths).
+
+With `--format json`, successful results are written to stdout and errors to stderr as:
 
 ```json
 {"status": "error", "error": {"code": "NOT_FOUND", "message": "..."}}
 ```
+
+Note that Click usage errors (exit code 2) may not produce JSON output.
 
 ## Quick Reference
 
