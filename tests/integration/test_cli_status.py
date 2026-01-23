@@ -108,7 +108,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test.example.com", "status"],
+                ["--server", "http://test.example.com", "--token", "dummy-token", "status"],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -122,7 +122,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "status"],
             )
 
         assert result.exit_code == 0
@@ -136,7 +136,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "status"],
             )
 
         assert result.exit_code == 0
@@ -152,7 +152,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "status"],
             )
 
         assert result.exit_code == 0
@@ -173,7 +173,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "status"],
             )
 
         assert result.exit_code == 0
@@ -238,7 +238,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "--format", "json", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "--format", "json", "status"],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -261,7 +261,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "--format", "json", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "--format", "json", "status"],
             )
 
         assert result.exit_code == 0
@@ -284,7 +284,7 @@ class TestStatusFormatSize:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "status"],
             )
 
         assert result.exit_code == 0
