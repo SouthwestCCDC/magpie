@@ -300,7 +300,7 @@ async def amend_metadata(
 @router.get("/api/v1/artifacts")
 async def list_artifact_paths(
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
-    _read_scope_check: Annotated[None, Depends(require_read_scope)],
+    _read_scope_check: Annotated[None, Depends(require_read_scope)] = None,
     prefix: str = "",
 ) -> ArtifactPathsResponse:
     """List artifact paths matching a prefix.
