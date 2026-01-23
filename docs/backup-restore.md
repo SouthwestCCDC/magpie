@@ -109,7 +109,6 @@ cp Caddyfile.prod "$BACKUP_PATH/" 2>/dev/null || true
 # Record backup metadata
 cat > "$BACKUP_PATH/backup-info.txt" <<EOF
 Backup Date: $(date -Iseconds)
-Magpie Version: $(docker compose exec -T "$DOCKER_CONTAINER" magpie version 2>/dev/null || echo "unknown")
 Storage Path: $STORAGE_PATH
 Backup Size: $(du -sh "$BACKUP_PATH" | cut -f1)
 EOF
@@ -186,19 +185,36 @@ rsync -av --exclude='.tmp/' \
 
 #### To S3-Compatible Storage
 
+Using the built-in sync commands (requires `MAGPIE_S3_BUCKET` environment variable):
+
+```bash
+# Sync tagged artifacts to S3 (incremental)
+magpie-ctl sync to-s3
+
+# Preview what would be synced
+magpie-ctl sync to-s3 --dry-run
+
+# Restore from S3
+magpie-ctl sync from-s3
+
+# With custom bucket and prefix
+MAGPIE_S3_BUCKET=my-backup MAGPIE_S3_PREFIX=prod magpie-ctl sync to-s3
+```
+
+The sync commands require either `rclone` or `aws` CLI to be installed. They use checksum-based comparison to avoid re-uploading unchanged files.
+
+Alternatively, use the CLI tools directly:
+
 ```bash
 # Using aws-cli
 aws s3 sync /data/artifacts/ s3://magpie-backup/artifacts/ \
   --exclude '.tmp/*' \
   --storage-class STANDARD_IA
 
-# Using rclone (supports many providers)
+# Using rclone
 rclone sync /data/artifacts/ remote:magpie-backup/artifacts/ \
   --exclude '.tmp/**'
 ```
-
-**Note:** S3 sync integration (`magpie-ctl sync --to-s3`) is planned for future work.
-See [design.md](design.md) for implementation roadmap.
 
 ---
 
