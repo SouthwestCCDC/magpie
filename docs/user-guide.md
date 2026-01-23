@@ -468,7 +468,7 @@ The Magpie API returns errors in two formats:
 | 401 | Unauthorized - missing or invalid authentication |
 | 403 | Forbidden - insufficient token permissions |
 | 404 | Not Found - artifact, tag, or blob does not exist |
-| 409 | Conflict - blob already exists with different content |
+| 409 | Conflict - request conflicts with current resource state |
 | 413 | Content Too Large - upload exceeds size limit |
 | 500 | Internal Server Error - unexpected server error |
 | 504 | Gateway Timeout - operation exceeded time limit |
