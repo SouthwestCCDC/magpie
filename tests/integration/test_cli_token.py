@@ -8,12 +8,11 @@ import pytest
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
-from magpie.auth.service import TokenService
+from magpie.auth.models import TokenScope
+from magpie.auth.service import TokenInfo, TokenService
 from magpie.cli import cli
 from magpie.server.app import app
 from magpie.server.deps import get_token_service, require_admin_scope
-from magpie.auth.models import TokenScope
-from magpie.auth.service import TokenInfo
 
 # Patch path for get_client - must match where it's imported/used in the CLI module
 PATCH_GET_CLIENT = "magpie.cli.get_client"
