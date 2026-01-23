@@ -71,11 +71,7 @@ cd magpie
 uv pip install -e .
 ```
 
-To install a specific version, replace the tag (e.g., `@v0.1.0`) with the desired
-release tag. Check [GitHub releases](https://github.com/SouthwestCCDC/magpie/releases)
-for available versions.
-
-> *This section was generated with AI assistance (Claude Code w/ Opus 4.5).*
+To install a specific version, replace the tag (e.g., `@v0.1.0`) with the desired release tag.
 
 This installs two CLI tools:
 - `magpie` - Client for interacting with the server
@@ -375,42 +371,17 @@ mgp_abc123def456...
 
 #### Using a Custom Admin Token
 
-You can specify a custom admin token during initialization instead of generating a random one:
+You can specify a custom admin token during initialization:
 
 ```bash
-# Initialize with a specific admin token
 docker compose exec magpie magpie-ctl init --admin-token mgp_ADMIN_your_token_here
 ```
 
-The token must start with `mgp_ADMIN_` and contain additional characters after the prefix. This is useful for:
-- Automation scenarios where the token needs to be pre-configured
-- Moving installations while keeping the same token
-- CI/CD pipelines that need predictable tokens
-
-!!! warning "Security Considerations for Custom Tokens"
-
-    When using custom admin tokens, follow these security best practices:
-
-    - **Generate tokens securely**: Use cryptographically secure random generation
-      (e.g., `openssl rand -base64 32` or `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
-    - **Minimum entropy**: Custom tokens should have at least 32 characters of entropy
-      after the `mgp_ADMIN_` prefix (auto-generated tokens use 43 random characters)
-    - **Avoid predictable patterns**: Never use sequential values, dictionary words,
-      or easily guessable patterns
-    - **Treat as secrets**: Store tokens in secure secret management systems,
-      never in version control or logs
-
-To regenerate a compromised admin token:
+The token must start with `mgp_ADMIN_`. Generate custom tokens securely with at least 32 characters of entropy. To regenerate a compromised admin token:
 
 ```bash
-# Revoke existing admin token and generate a new one
 docker compose exec magpie magpie-ctl init --reset-admin-token
-
-# Or revoke and set a specific new token
-docker compose exec magpie magpie-ctl init --reset-admin-token --admin-token mgp_ADMIN_new_token
 ```
-
-This revokes the existing admin token and creates a new one, which is printed to stdout.
 
 ### Creating Additional Tokens
 
@@ -459,22 +430,13 @@ Caddy automatically obtains and renews Let's Encrypt certificates.
 
 ### Tagging Strategies
 
-**Recommended patterns:**
-
-| Tag | Purpose | Example |
-|-----|---------|---------|
-| `latest` | Most recent successful build | Auto-created on upload |
-| `stable` | Production-ready version | Manually promoted |
-| `v1.0`, `v1.1` | Semantic versions | For releases |
-| `game-quals`, `game-finals` | Event-pinned | For competition |
-| `sha-abc1234` | Git commit reference | For traceability |
-
-**Best practices:**
-
-- Always tag production artifacts with semantic versions
-- Use `latest` for development/testing
-- Create event-specific tags before competitions
-- Document tag meanings in your team wiki
+| Tag | Purpose |
+|-----|---------|
+| `latest` | Most recent successful build |
+| `stable` | Production-ready version |
+| `v1.0`, `v1.1` | Semantic versions |
+| `game-quals`, `game-finals` | Event-pinned versions |
+| `sha-abc1234` | Git commit reference |
 
 ### Retention and Garbage Collection
 
