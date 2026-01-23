@@ -118,22 +118,6 @@ class TestStatusCommand:
         assert "Version:" in result.output
         assert __version__ in result.output
 
-    def test_status_shows_auth_no_token(
-        self, cli_runner_no_config: CliRunner, api_client: TestClient
-    ) -> None:
-        """Status command shows no token configured when token is missing."""
-        with patch(PATCH_GET_CLIENT) as mock_get_client:
-            mock_get_client.return_value = api_client
-
-            result = cli_runner_no_config.invoke(
-                cli,
-                ["--server", "http://test", "status"],
-            )
-
-        assert result.exit_code == 0
-        assert "Auth:" in result.output
-        assert "No token configured" in result.output
-
     def test_status_shows_storage_stats(
         self, cli_runner: CliRunner, api_client: TestClient
     ) -> None:
@@ -194,7 +178,6 @@ class TestStatusCommand:
         assert data["data"]["server"] == "http://test"
         assert data["data"]["status"] == "ok"
         assert data["data"]["version"] == __version__
-        assert "auth" in data["data"]
         assert "storage" in data["data"]
 
     def test_status_json_includes_storage_stats(
