@@ -6,15 +6,7 @@ binary assets across infrastructure.
 
 ## Overview
 
-### What Magpie Solves
-
-Magpie provides a simple, reliable way to:
-
-- Store and retrieve binary artifacts with content-based deduplication
-- Version artifacts using human-readable tags (like `latest`, `stable`, `v1.0`)
-- Track artifact provenance with optional source URI metadata
-- Automatically clean up old, untagged artifacts via garbage collection
-- Distribute artifacts across your infrastructure with minimal bandwidth
+Magpie stores binary artifacts by content hash with mutable tags for versioning. Features: deduplication, garbage collection, optional provenance tracking.
 
 ### Key Concepts
 
@@ -26,12 +18,6 @@ Magpie provides a simple, reliable way to:
 | **Artifact Path** | Logical namespace for artifacts (e.g., `images/ubuntu`, `builds/app`). |
 | **Retention** | Untagged blobs older than retention period are eligible for garbage collection. |
 
-### Use Cases
-
-- **SWCCDC image distribution**: Push VM images and retrieve them by tag
-- **Build artifacts**: Store CI/CD outputs with commit-based tags
-- **Configuration bundles**: Versioned config packages for deployment
-- **Firmware distribution**: Immutable firmware blobs with version tags
 
 ### Authentication Methods
 
@@ -71,15 +57,7 @@ cd magpie
 uv pip install -e .
 ```
 
-To install a specific version, replace the tag (e.g., `@v0.1.0`) with the desired
-release tag. Check [GitHub releases](https://github.com/SouthwestCCDC/magpie/releases)
-for available versions.
-
-> *This section was generated with AI assistance (Claude Code w/ Opus 4.5).*
-
-This installs two CLI tools:
-- `magpie` - Client for interacting with the server
-- `magpie-ctl` - Server administration tool
+This installs `magpie` (client) and `magpie-ctl` (admin) CLI tools.
 
 ### Configuration File
 
@@ -116,60 +94,21 @@ affecting network behavior. The default is 600 seconds (10 minutes).
 
 ### SSL/TLS Configuration
 
-The magpie client uses the system trust store by default for verifying HTTPS
-connections. This means it will automatically trust certificates signed by CAs
-in your operating system's certificate store.
-
-For environments with internal certificate authorities or self-signed
-certificates, you can specify an additional CA certificate:
+For internal CAs or self-signed certificates:
 
 ```bash
-# Via command-line flag
 magpie --ca-cert /etc/ssl/certs/internal-ca.crt ls images/
-
-# Via environment variable
+# or
 export MAGPIE_CA_CERT=/etc/ssl/certs/internal-ca.crt
-magpie ls images/
 ```
-
-The custom CA certificate is used in addition to the system trust store, not
-as a replacement. This allows the client to trust both internal CAs and
-standard public CAs.
-
-> *This section was generated with AI assistance (Claude Code w/ Opus 4.5).*
 
 ### Managing Configuration
 
-Use the `config` command to manage `~/.magpie/config.toml`:
-
 ```bash
-# Set server URL and token
 magpie config --server https://magpie.example.com --token mgp_abc123
-
-# Set just the server URL
-magpie config --server https://magpie.example.com
-
-# Set just the token
-magpie config --token mgp_abc123
-
-# Show current configuration
 magpie config --show
-
-# Show current configuration (default if no options given)
-magpie config
-
-# Clear all configuration (removes config file)
 magpie config --clear
 ```
-
-Options:
-
-| Option | Description |
-|--------|-------------|
-| `--server URL` | Set the Magpie server URL |
-| `--token TOKEN` | Set the authentication token |
-| `--show` | Show current configuration (mutually exclusive with other options) |
-| `--clear` | Clear all configuration (mutually exclusive with `--server` and `--token`) |
 
 ### Getting a Token
 
@@ -290,31 +229,15 @@ magpie untag images/ubuntu v1.0
 
 ### Flush a Tag Globally
 
-Remove a tag from all artifacts in the entire storage system:
+Remove a tag from all artifacts:
 
 ```bash
-# Preview what would be affected (dry run)
-magpie flush-tag old-release --dry-run
-
-# Remove tag with confirmation prompt
-magpie flush-tag deprecated
-
-# Skip confirmation prompt
-magpie flush-tag deprecated --yes
-
-# Flush protected tags (latest, stable, production, prod, release)
-magpie flush-tag latest --force --yes
+magpie flush-tag old-release --dry-run    # Preview
+magpie flush-tag deprecated               # Confirm prompt
+magpie flush-tag latest --force --yes      # Protected tags
 ```
 
-Options:
-
-| Option | Description |
-|--------|-------------|
-| `--dry-run` | Show what would be affected without actually removing tags |
-| `--yes`, `-y` | Skip confirmation prompt |
-| `--force`, `-f` | Required to flush protected tags (latest, stable, production, prod, release) |
-
-**Note**: This operation walks the entire storage filesystem and requires admin scope.
+Requires admin scope.
 
 ### Get Download URL
 
@@ -339,43 +262,16 @@ magpie amend images/ubuntu:latest --source-uri ""
 
 ## Server Setup
 
-### Docker Compose Deployment
-
-The recommended deployment uses Docker Compose with Caddy as reverse proxy:
+Deploy using Docker Compose:
 
 ```bash
-# Clone repository
-git clone https://github.com/your-org/magpie.git
-cd magpie
-
-# Start services
 docker compose up -d
 ```
 
-Services:
-- **Caddy** (port 8080 by default): Reverse proxy, TLS termination, static file serving
-- **Magpie** (internal): FastAPI backend for API operations
-
-### Port Configuration
-
-The HTTP and HTTPS ports can be customized via environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MAGPIE_HTTP_PORT` | `8080` | External HTTP port |
-| `MAGPIE_HTTPS_PORT` | `8443` | External HTTPS port |
-
-Example with custom ports:
+Customize ports via environment variables:
 
 ```bash
 MAGPIE_HTTP_PORT=80 MAGPIE_HTTPS_PORT=443 docker compose up -d
-```
-
-Or create a `.env` file in the same directory as `docker-compose.yml`:
-
-```bash
-MAGPIE_HTTP_PORT=80
-MAGPIE_HTTPS_PORT=443
 ```
 
 ### First-Time Initialization
@@ -398,44 +294,19 @@ mgp_abc123def456...
 
 **Important**: Save this token securely. It cannot be recovered.
 
-#### Using a Custom Admin Token
-
-You can specify a custom admin token during initialization instead of generating a random one:
+#### Custom Admin Token
 
 ```bash
-# Initialize with a specific admin token
 docker compose exec magpie magpie-ctl init --admin-token mgp_ADMIN_your_token_here
 ```
 
-The token must start with `mgp_ADMIN_` and contain additional characters after the prefix. This is useful for:
-- Automation scenarios where the token needs to be pre-configured
-- Moving installations while keeping the same token
-- CI/CD pipelines that need predictable tokens
+Token must start with `mgp_ADMIN_` and use cryptographically secure generation (e.g., `openssl rand -base64 32`). Never commit tokens to version control.
 
-!!! warning "Security Considerations for Custom Tokens"
-
-    When using custom admin tokens, follow these security best practices:
-
-    - **Generate tokens securely**: Use cryptographically secure random generation
-      (e.g., `openssl rand -base64 32` or `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
-    - **Minimum entropy**: Custom tokens should have at least 32 characters of entropy
-      after the `mgp_ADMIN_` prefix (auto-generated tokens use 43 random characters)
-    - **Avoid predictable patterns**: Never use sequential values, dictionary words,
-      or easily guessable patterns
-    - **Treat as secrets**: Store tokens in secure secret management systems,
-      never in version control or logs
-
-To regenerate a compromised admin token:
+To regenerate a compromised token:
 
 ```bash
-# Revoke existing admin token and generate a new one
 docker compose exec magpie magpie-ctl init --reset-admin-token
-
-# Or revoke and set a specific new token
-docker compose exec magpie magpie-ctl init --reset-admin-token --admin-token mgp_ADMIN_new_token
 ```
-
-This revokes the existing admin token and creates a new one, which is printed to stdout.
 
 ### Creating Additional Tokens
 
@@ -484,22 +355,11 @@ Caddy automatically obtains and renews Let's Encrypt certificates.
 
 ### Tagging Strategies
 
-**Recommended patterns:**
-
-| Tag | Purpose | Example |
-|-----|---------|---------|
-| `latest` | Most recent successful build | Auto-created on upload |
-| `stable` | Production-ready version | Manually promoted |
-| `v1.0`, `v1.1` | Semantic versions | For releases |
-| `game-quals`, `game-finals` | Event-pinned | For competition |
-| `sha-abc1234` | Git commit reference | For traceability |
-
-**Best practices:**
-
-- Always tag production artifacts with semantic versions
-- Use `latest` for development/testing
-- Create event-specific tags before competitions
-- Document tag meanings in your team wiki
+- `latest`: Most recent build (auto-created)
+- `stable`: Production-ready (manually promoted)
+- `v1.0`, `v1.1`: Semantic versions for releases
+- `game-quals`, `game-finals`: Event-pinned for competition
+- Always tag production with semantic versions
 
 ### Retention and Garbage Collection
 
@@ -529,161 +389,57 @@ magpie gc
 
 **Note**: GC requires an admin token.
 
-**Server-side GC (magpie-ctl)**
-
-For direct server-side garbage collection with more control:
+**Server-side GC (magpie-ctl):**
 
 ```bash
-# Preview what would be deleted
-docker compose exec magpie magpie-ctl gc --dry-run
-
-# Run garbage collection
-docker compose exec magpie magpie-ctl gc
-
-# Only reconcile symlinks without deleting blobs
-docker compose exec magpie magpie-ctl gc --reconcile-only
-
-# Override retention period (e.g., delete untagged blobs older than 7 days)
-docker compose exec magpie magpie-ctl gc --retention-days 7
-
-# Delete all untagged blobs regardless of age
-docker compose exec magpie magpie-ctl gc --retention-days 0
-
-# Suppress progress output
-docker compose exec magpie magpie-ctl gc --quiet
-
-# Output results as JSON (for scripting/automation)
-docker compose exec magpie magpie-ctl gc --json-output
+docker compose exec magpie magpie-ctl gc --dry-run              # Preview
+docker compose exec magpie magpie-ctl gc                        # Run GC
+docker compose exec magpie magpie-ctl gc --retention-days 7     # Override retention
 ```
 
-Options for `magpie-ctl gc`:
-
-| Option | Description |
-|--------|-------------|
-| `--dry-run` | Show what would be deleted without making changes |
-| `--reconcile-only` | Only reconcile symlinks, don't delete blobs |
-| `--retention-days N` | Override retention period (days); 0 = delete all untagged |
-| `-q`, `--quiet` | Suppress progress output |
-| `--json-output` | Output results as JSON for scripting/automation |
-
-### Backup and Disaster Recovery
-
-For backup procedures, restore operations, and disaster recovery scenarios, see the
-[Backup and Restore Guide](backup-restore.md). This guide covers:
-
-- What to back up (storage directory, database, configuration)
-- Automated backup scripts and systemd timers
-- Step-by-step restore procedures
-- Recovery scenarios (corrupted manifests, lost database, partial data loss)
 
 ### Troubleshooting
 
-#### "No server configured"
-
-Set the server URL:
-```bash
-export MAGPIE_SERVER=https://magpie.example.com
-# or
-magpie --server https://magpie.example.com ls images/ubuntu
-```
-
-#### "401 Unauthorized"
-
-Your token is missing or invalid:
-```bash
-export MAGPIE_TOKEN=mgp_your_token_here
-# or create ~/.magpie/config.toml with token
-```
-
-#### "403 Forbidden"
-
-Your token lacks required permissions:
-- Upload/tag operations require `write` scope
-- Token management/GC require `admin` scope
-
-Contact your administrator for a token with appropriate scope.
-
-#### "Hash mismatch" on download
-
-The downloaded file doesn't match expected hash. This could indicate:
-- Network corruption during transfer
-- Storage corruption on server
-
-Try downloading again. If it persists, contact your administrator.
-
-#### Upload shows "Duplicate"
-
-This is normal behavior. Content-addressed storage deduplicates identical files.
-The artifact was already stored; the existing hash was returned.
+- **"No server configured"**: `export MAGPIE_SERVER=https://magpie.example.com`
+- **"401 Unauthorized"**: Token missing or invalid. Check `MAGPIE_TOKEN` or config file.
+- **"403 Forbidden"**: Token lacks permissions. Contact administrator.
+- **"Hash mismatch"**: Network or storage corruption. Try downloading again.
+- **"Duplicate" on upload**: Normal. Content-addressed deduplication returned existing hash.
 
 ## Quick Reference
 
-### Command Cheatsheet
+**Commands:**
 
-| Command | Description |
-|---------|-------------|
-| `magpie push FILE --to PATH` | Upload artifact |
-| `magpie get PATH:REF` | Download artifact |
-| `magpie ls PATH` | List versions |
-| `magpie info PATH:REF` | Show metadata |
-| `magpie url PATH:REF` | Get download URL |
-| `magpie tag PATH:REF --as TAG` | Create/update tag |
-| `magpie untag PATH TAG` | Remove tag |
-| `magpie flush-tag TAG` | Remove tag from all artifacts globally |
-| `magpie amend PATH:REF --source-uri URI` | Update metadata |
-| `magpie config [--server URL] [--token TOKEN]` | Manage configuration |
-| `magpie gc [--dry-run]` | Run garbage collection |
-| `magpie version` | Show version |
+- `magpie push FILE --to PATH` - Upload
+- `magpie get PATH:REF` - Download
+- `magpie ls PATH` - List versions
+- `magpie info PATH:REF` - Metadata
+- `magpie tag PATH:REF --as TAG` - Tag
+- `magpie untag PATH TAG` - Remove tag
+- `magpie gc [--dry-run]` - Garbage collection
 
-### Reference Formats
+**Reference formats:**
 
-| Format | Example | Description |
-|--------|---------|-------------|
-| `PATH` | `images/ubuntu` | Artifact path only (uses `latest`) |
-| `PATH:TAG` | `images/ubuntu:stable` | Path with tag |
-| `PATH:@HASH` | `images/ubuntu:@a1b2c3d4` | Path with hash ref |
-
-### Environment Variables
-
-| Variable | Scope | Description |
-|----------|-------|-------------|
-| `MAGPIE_SERVER` | Client | Server URL |
-| `MAGPIE_TOKEN` | Client | Auth token |
-| `MAGPIE_TIMEOUT` | Client | Request timeout (CLI/env only, not config file) |
-| `MAGPIE_HTTP_PORT` | Deploy | External HTTP port (default: 8080) |
-| `MAGPIE_HTTPS_PORT` | Deploy | External HTTPS port (default: 8443) |
-| `MAGPIE_STORAGE_PATH` | Server | Storage directory |
-| `MAGPIE_RETENTION_DAYS` | Server | GC retention period |
-| `MAGPIE_DEBUG` | Both | Enable debug mode |
+- `images/ubuntu` - Latest version
+- `images/ubuntu:stable` - Specific tag
+- `images/ubuntu:@a1b2c3d4` - Hash ref (immutable)
 
 ### API Endpoints
 
-**Public (no auth required):**
+**Public (no auth):**
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Health check |
-| GET | `/api/v1/auth/validate` | Token validation (used by Caddy forward_auth) |
-| GET | `/artifacts/public/*` | Download from public directory |
+- `GET /health` - Health check
+- `GET /artifacts/public/*` - Public downloads
 
-**Protected (Bearer token or IP allow-list required):**
+**Protected (Bearer token required):**
 
-| Method | Endpoint | Scope | Description |
-|--------|----------|-------|-------------|
-| GET | `/api/v1/artifacts` | read | List artifact paths |
-| GET | `/api/v1/artifacts/{path}` | read | List versions |
-| GET | `/api/v1/artifacts/{path}/{ref}/info` | read | Get metadata |
-| GET | `/artifacts/{path}/{tag}` | read | Download by tag |
-| GET | `/artifacts/{path}/blobs/{hash}` | read | Download by hash |
-| POST | `/api/v1/upload/{path}` | write | Upload artifact |
-| POST | `/api/v1/artifacts/{path}/{ref}/tags` | write | Create tag |
-| DELETE | `/api/v1/artifacts/{path}/tags/{tag}` | write | Remove tag |
-| PATCH | `/api/v1/artifacts/{path}/{ref}` | write | Amend metadata |
-| GET | `/api/v1/tokens` | admin | List tokens |
-| POST | `/api/v1/tokens` | admin | Create token |
-| DELETE | `/api/v1/tokens/{name}` | admin | Revoke token |
-| POST | `/api/v1/gc` | admin | Run GC |
-| POST | `/api/v1/tags/{tag_name}/flush` | admin | Flush tag globally |
+- `GET /api/v1/artifacts` - List artifacts (read)
+- `GET /api/v1/artifacts/{path}` - List versions (read)
+- `POST /api/v1/upload/{path}` - Upload (write)
+- `POST /api/v1/artifacts/{path}/{ref}/tags` - Create tag (write)
+- `DELETE /api/v1/artifacts/{path}/tags/{tag}` - Remove tag (write)
+- `POST /api/v1/gc` - Run GC (admin)
+- `POST /api/v1/tokens` - Create token (admin)
 
 ### curl Examples
 
@@ -691,46 +447,15 @@ The artifact was already stored; the existing hash was returned.
 # Health check
 curl https://magpie.example.com/health
 
-# List versions
-curl https://magpie.example.com/api/v1/artifacts/images/ubuntu
-
-# Get metadata
-curl https://magpie.example.com/api/v1/artifacts/images/ubuntu/latest/info
-
-# Download file by tag
-curl -O https://magpie.example.com/artifacts/images/ubuntu/latest
-
-# Download file by hash
-curl -O https://magpie.example.com/artifacts/images/ubuntu/blobs/a1b2c3d4
-
 # Upload (requires token)
 curl -X POST \
-  -H "Authorization: Bearer mgp_your_token" \
+  -H "Authorization: Bearer mgp_token" \
   -F "file=@myfile.tar.gz" \
   https://magpie.example.com/api/v1/upload/images/ubuntu
 
-# Create tag (requires token)
-curl -X POST \
-  -H "Authorization: Bearer mgp_your_token" \
-  -H "Content-Type: application/json" \
-  -d '{"tag_name": "v1.0"}' \
-  https://magpie.example.com/api/v1/artifacts/images/ubuntu/@a1b2c3d4/tags
+# Download by tag
+curl -O https://magpie.example.com/artifacts/images/ubuntu/latest
 
-# Create token (requires admin token)
-curl -X POST \
-  -H "Authorization: Bearer mgp_admin_token" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "ci-bot", "scope": "write"}' \
-  https://magpie.example.com/api/v1/tokens
-
-# Flush tag globally (requires admin token)
-# Preview mode (dry run)
-curl -X POST \
-  -H "Authorization: Bearer mgp_admin_token" \
-  "https://magpie.example.com/api/v1/tags/old-release/flush?confirm_walk_filesystem=true&dry_run=true"
-
-# Actually flush the tag
-curl -X POST \
-  -H "Authorization: Bearer mgp_admin_token" \
-  "https://magpie.example.com/api/v1/tags/old-release/flush?confirm_walk_filesystem=true"
+# Download by hash
+curl -O https://magpie.example.com/artifacts/images/ubuntu/blobs/a1b2c3d4
 ```
