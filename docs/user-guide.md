@@ -541,3 +541,7 @@ curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
 curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
   -O https://magpie.example.com/artifacts/images/ubuntu/blobs/a1b2c3d4
 ```
+
+---
+
+*This documentation was generated with AI assistance (Claude Code w/ Opus 4.5).*
