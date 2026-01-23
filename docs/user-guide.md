@@ -663,15 +663,18 @@ The artifact was already stored; the existing hash was returned.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/health` | Health check |
-| GET | `/api/v1/artifacts/{path}` | List versions |
-| GET | `/api/v1/artifacts/{path}/{ref}/info` | Get metadata |
-| GET | `/artifacts/{path}/{tag}` | Download by tag |
-| GET | `/artifacts/{path}/blobs/{hash}` | Download by hash |
+| GET | `/api/v1/auth/validate` | Token validation (used by Caddy forward_auth) |
+| GET | `/artifacts/public/*` | Download from public directory |
 
-**Protected (auth required):**
+**Protected (Bearer token or IP allow-list required):**
 
 | Method | Endpoint | Scope | Description |
 |--------|----------|-------|-------------|
+| GET | `/api/v1/artifacts` | read | List artifact paths |
+| GET | `/api/v1/artifacts/{path}` | read | List versions |
+| GET | `/api/v1/artifacts/{path}/{ref}/info` | read | Get metadata |
+| GET | `/artifacts/{path}/{tag}` | read | Download by tag |
+| GET | `/artifacts/{path}/blobs/{hash}` | read | Download by hash |
 | POST | `/api/v1/upload/{path}` | write | Upload artifact |
 | POST | `/api/v1/artifacts/{path}/{ref}/tags` | write | Create tag |
 | DELETE | `/api/v1/artifacts/{path}/tags/{tag}` | write | Remove tag |
