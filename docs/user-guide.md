@@ -342,7 +342,7 @@ docker compose exec magpie magpie-ctl token revoke ci-reader
 | `MAGPIE_LOG_FORMAT` | `json` | Log format: `json` or `console` |
 | `MAGPIE_SENTRY_DSN` | (none) | Sentry DSN for error tracking |
 | `MAGPIE_OTEL_ENABLED` | `false` | Enable OpenTelemetry tracing |
-| `MAGPIE_OTEL_ENDPOINT` | (none) | OTEL collector endpoint |
+| `MAGPIE_OTEL_ENDPOINT` | (none) | OTEL collector endpoint (required when `MAGPIE_OTEL_ENABLED=true`) |
 | `MAGPIE_OTEL_SERVICE_NAME` | `magpie` | Service name for OTEL traces |
 | `MAGPIE_ALLOWED_CIDRS` | `""` | Comma-separated CIDR ranges for IP-based auth bypass (consumed by Caddy) |
 
