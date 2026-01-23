@@ -195,13 +195,16 @@ magpie-ctl sync to-s3
 magpie-ctl sync to-s3 --dry-run
 
 # Restore from S3
-magpie-ctl sync from-s3
+# Note: Requires --force flag if local artifacts already exist (will overwrite)
+magpie-ctl sync from-s3 --force
 
 # With custom bucket and prefix
 MAGPIE_S3_BUCKET=my-backup MAGPIE_S3_PREFIX=prod magpie-ctl sync to-s3
 ```
 
-The sync commands require either `rclone` or `aws` CLI to be installed. They use checksum-based comparison to avoid re-uploading unchanged files.
+**Note:** The `magpie-ctl sync` commands only backup artifact data (manifests, blobs, and metadata sidecars). They do NOT backup the token database (`.magpie.db`) or configuration files. For a complete backup, you must separately back up these critical files using the procedures described in the [Manual Backup](#manual-backup) section above.
+
+The sync commands require either `rclone` or `aws` CLI to be installed. If `rclone` is available, it uses `--checksum` for content-based comparison to avoid re-uploading unchanged files. If falling back to AWS CLI, `aws s3 cp` is used which overwrites files on each run regardless of content changes.
 
 Alternatively, use the CLI tools directly:
 
