@@ -332,8 +332,8 @@ docker compose exec magpie magpie-ctl token revoke ci-reader
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MAGPIE_STORAGE_PATH` | `/data/artifacts` | Root directory for artifact storage |
-| `MAGPIE_TEMP_PATH` | `{storage_path}/.tmp` | Temporary upload directory (derived from storage_path) |
-| `MAGPIE_DATABASE_PATH` | `{storage_path}/.magpie.db` | SQLite token database path (derived from storage_path) |
+| `MAGPIE_TEMP_PATH` | `/data/artifacts/.tmp` | Temporary upload directory (defaults under `MAGPIE_STORAGE_PATH`, derived if storage path is overridden) |
+| `MAGPIE_DATABASE_PATH` | `/data/artifacts/.magpie.db` | SQLite token database path (defaults under `MAGPIE_STORAGE_PATH`, derived if storage path is overridden) |
 | `MAGPIE_RETENTION_DAYS` | `90` | Days before untagged blobs can be GC'd |
 | `MAGPIE_DEBUG` | `false` | Enable debug logging |
 | `MAGPIE_GC_LOCK_PATH` | `/var/run/magpie-gc.lock` | Lock file for GC operations |
@@ -346,9 +346,14 @@ docker compose exec magpie magpie-ctl token revoke ci-reader
 | `MAGPIE_OTEL_ENDPOINT` | (none) | OTEL collector endpoint |
 | `MAGPIE_OTEL_SERVICE_NAME` | `magpie` | Service name for OTEL traces |
 | `MAGPIE_ALLOWED_CIDRS` | `""` | Comma-separated CIDR ranges for IP-based auth bypass (consumed by Caddy) |
-| `MAGPIE_DOMAIN` | (required) | Domain name for Caddy TLS (required in production, Caddyfile.prod only) |
 
 ### TLS Configuration
+
+**Caddy Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAGPIE_DOMAIN` | (none) | Domain name for Caddy TLS (required in production with Caddyfile.prod, consumed by Caddy not Python server) |
 
 For production, configure Caddy for automatic TLS:
 
