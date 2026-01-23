@@ -332,18 +332,33 @@ docker compose exec magpie magpie-ctl token revoke ci-reader
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MAGPIE_STORAGE_PATH` | `/data/artifacts` | Root directory for artifact storage |
+| `MAGPIE_TEMP_PATH` | `/data/artifacts/.tmp` | Temporary upload directory (defaults under `MAGPIE_STORAGE_PATH`, derived if storage path is overridden) |
+| `MAGPIE_DATABASE_PATH` | `/data/artifacts/.magpie.db` | SQLite token database path (defaults under `MAGPIE_STORAGE_PATH`, derived if storage path is overridden) |
 | `MAGPIE_RETENTION_DAYS` | `90` | Days before untagged blobs can be GC'd |
 | `MAGPIE_DEBUG` | `false` | Enable debug logging |
+| `MAGPIE_MAX_UPLOAD_SIZE` | (none) | Max upload size in bytes (none = unlimited) |
+| `MAGPIE_S3_BUCKET` | (none) | S3 bucket name for backups (required for sync commands) |
+| `MAGPIE_S3_PREFIX` | `""` | Optional prefix for S3 keys |
+| `MAGPIE_LOG_FORMAT` | `json` | Log format: `json` or `console` |
 | `MAGPIE_SENTRY_DSN` | (none) | Sentry DSN for error tracking |
 | `MAGPIE_OTEL_ENABLED` | `false` | Enable OpenTelemetry tracing |
+| `MAGPIE_OTEL_ENDPOINT` | (none) | OTEL collector endpoint (required when `MAGPIE_OTEL_ENABLED=true`) |
+| `MAGPIE_OTEL_SERVICE_NAME` | `magpie` | Service name for OTEL traces |
+| `MAGPIE_ALLOWED_CIDRS` | `""` | Comma-separated CIDR ranges for IP-based auth bypass (consumed by Caddy) |
 
 ### TLS Configuration
 
-For production, configure Caddy for automatic TLS:
+**Caddy Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAGPIE_DOMAIN` | (none) | Domain name for Caddy TLS (required in production with Caddyfile.prod, consumed by Caddy not Python server) |
+
+For production, configure Caddy for automatic TLS in `Caddyfile.prod`:
 
 ```caddyfile
-# Caddyfile
-magpie.example.com {
+# Caddyfile.prod
+{$MAGPIE_DOMAIN} {
     # Routes configured automatically
     import /etc/caddy/magpie-routes
 }
