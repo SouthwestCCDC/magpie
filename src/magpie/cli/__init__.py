@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Callable, TypeVar
 import click
 
 from magpie.cli.client import get_client
-from magpie.cli.config import get_server, get_timeout, get_token
+from magpie.cli.config import get_ca_cert, get_server, get_timeout, get_token
 from magpie.cli.formatting import OutputFormat
 from magpie.config import get_settings
 
@@ -58,16 +58,18 @@ class CLIContext:
         debug: bool = False,
         timeout: float = 600.0,
         output_format: OutputFormat = OutputFormat.HUMAN,
+        ca_cert: str | None = None,
     ) -> None:
         self.server = server
         self.token = token
         self.debug = debug
         self.timeout = timeout
         self.output_format = output_format
+        self.ca_cert = ca_cert
 
     def get_client(self) -> "httpx.Client":
         """Get configured httpx client."""
-        return get_client(self.server, self.token, self.timeout)
+        return get_client(self.server, self.token, self.timeout, ca_cert=self.ca_cert)
 
 
 pass_context = click.make_pass_decorator(CLIContext)
@@ -91,6 +93,11 @@ pass_context = click.make_pass_decorator(CLIContext)
     help="HTTP request timeout in seconds (default: 600).",
 )
 @click.option(
+    "--ca-cert",
+    envvar="MAGPIE_CA_CERT",
+    help="Path to additional CA certificate for HTTPS verification.",
+)
+@click.option(
     "--debug",
     is_flag=True,
     default=False,
@@ -109,6 +116,7 @@ def cli(
     server: str | None,
     token: str | None,
     timeout: float | None,
+    ca_cert: str | None,
     debug: bool,
     output_format: str,
 ) -> None:
@@ -116,6 +124,7 @@ def cli(
     resolved_server = get_server(cli_override=server)
     resolved_token = get_token(cli_override=token)
     resolved_timeout = get_timeout(cli_override=timeout)
+    resolved_ca_cert = get_ca_cert(cli_override=ca_cert)
     resolved_format = OutputFormat(output_format)
 
     ctx.obj = CLIContext(
@@ -124,12 +133,14 @@ def cli(
         debug=debug,
         timeout=resolved_timeout,
         output_format=resolved_format,
+        ca_cert=resolved_ca_cert,
     )
 
     if debug:
         click.echo(f"Server: {resolved_server}", err=True)
         click.echo(f"Token: {'***' if resolved_token else '(none)'}", err=True)
         click.echo(f"Timeout: {resolved_timeout}s", err=True)
+        click.echo(f"CA Cert: {resolved_ca_cert or '(system trust store)'}", err=True)
         click.echo(f"Format: {resolved_format.value}", err=True)
 
 

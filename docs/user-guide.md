@@ -100,6 +100,7 @@ Environment variables override config file values:
 | `MAGPIE_SERVER` | Server URL | `https://magpie.example.com` |
 | `MAGPIE_TOKEN` | Authentication token | `mgp_abc123...` |
 | `MAGPIE_TIMEOUT` | Request timeout (see note below) | `600`, `5m`, `1h30m` |
+| `MAGPIE_CA_CERT` | Additional CA certificate path for HTTPS | `/etc/ssl/certs/internal-ca.crt` |
 
 ### Configuration Precedence
 
@@ -112,6 +113,30 @@ Environment variables override config file values:
 CLI flag or the `MAGPIE_TIMEOUT` environment variable -- it is intentionally not read
 from the config file. This prevents long-lived global configuration from silently
 affecting network behavior. The default is 600 seconds (10 minutes).
+
+### SSL/TLS Configuration
+
+The magpie client uses the system trust store by default for verifying HTTPS
+connections. This means it will automatically trust certificates signed by CAs
+in your operating system's certificate store.
+
+For environments with internal certificate authorities or self-signed
+certificates, you can specify an additional CA certificate:
+
+```bash
+# Via command-line flag
+magpie --ca-cert /etc/ssl/certs/internal-ca.crt ls images/
+
+# Via environment variable
+export MAGPIE_CA_CERT=/etc/ssl/certs/internal-ca.crt
+magpie ls images/
+```
+
+The custom CA certificate is used in addition to the system trust store, not
+as a replacement. This allows the client to trust both internal CAs and
+standard public CAs.
+
+> *This section was generated with AI assistance (Claude Code w/ Opus 4.5).*
 
 ### Managing Configuration
 
