@@ -429,7 +429,10 @@ AWS credentials must be configured via environment variables (AWS_ACCESS_KEY_ID,
 
 **Requirements:**
 
-Install either rclone (preferred) or AWS CLI. Magpie will use rclone if available, otherwise falls back to AWS CLI.
+- Docker deployment: AWS CLI is pre-installed in the container. Optionally install rclone for better performance.
+- Standalone installation: Install either rclone (preferred) or AWS CLI.
+
+Magpie will use rclone if available, otherwise falls back to AWS CLI.
 
 **Backup to S3:**
 
