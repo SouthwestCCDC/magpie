@@ -62,7 +62,7 @@
 # PROTECTED ROUTES (require valid Bearer token):
 #   - POST   /api/v1/upload/*                            - Artifact uploads
 #   - GET    /api/v1/artifacts/*                         - List artifacts, get info
-#   - POST   /api/v1/artifacts/{path}/tags               - Add tags to artifact
+#   - POST   /api/v1/artifacts/{path}/{ref}/tags         - Add tags to artifact
 #   - DELETE /api/v1/artifacts/{path}/tags/{tag_name}    - Remove tags from artifact
 #   - POST   /api/v1/tags/{tag_name}/flush               - Flush tags globally
 #   - GET    /api/v1/tokens                              - List tokens (admin)
@@ -115,7 +115,7 @@
 # allowed IPs:
 #   - POST /api/v1/upload/*                            (uploads)
 #   - PATCH /api/v1/artifacts/*                        (metadata amendments)
-#   - POST /api/v1/artifacts/{path}/tags               (add tags)
+#   - POST /api/v1/artifacts/{path}/{ref}/tags         (add tags)
 #   - DELETE /api/v1/artifacts/{path}/tags/{tag_name}  (remove tags)
 #   - POST /api/v1/tags/{tag_name}/flush               (tag flushing)
 #   - POST/DELETE /api/v1/tokens*                      (token management)
