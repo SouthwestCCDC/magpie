@@ -25,6 +25,7 @@ def api_client(token_service: TokenService) -> TestClient:
     This fixture keeps auth mocked (via require_admin_scope override) but also
     provides the token_service dependency so token creation works.
     """
+
     # Keep the auth override to mock authentication
     def _noop_require_admin_scope() -> TokenInfo:
         """No-op override for require_admin_scope in tests."""
