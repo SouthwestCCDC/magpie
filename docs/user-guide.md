@@ -359,7 +359,7 @@ For production, configure Caddy for automatic TLS:
 
 ```caddyfile
 # Caddyfile
-magpie.example.com {
+{$MAGPIE_DOMAIN} {
     # Routes configured automatically
     import /etc/caddy/magpie-routes
 }
