@@ -355,10 +355,10 @@ docker compose exec magpie magpie-ctl token revoke ci-reader
 |----------|---------|-------------|
 | `MAGPIE_DOMAIN` | (none) | Domain name for Caddy TLS (required in production with Caddyfile.prod, consumed by Caddy not Python server) |
 
-For production, configure Caddy for automatic TLS:
+For production, configure Caddy for automatic TLS in `Caddyfile.prod`:
 
 ```caddyfile
-# Caddyfile
+# Caddyfile.prod
 {$MAGPIE_DOMAIN} {
     # Routes configured automatically
     import /etc/caddy/magpie-routes
