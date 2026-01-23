@@ -668,3 +668,7 @@ curl -X POST \
   -H "Authorization: Bearer mgp_admin_token" \
   "https://magpie.example.com/api/v1/tags/old-release/flush?confirm_walk_filesystem=true"
 ```
+
+---
+
+*This documentation was created with AI assistance (Claude Code w/ Opus 4.5).*

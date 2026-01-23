@@ -322,12 +322,12 @@ If checksum verification fails, verify the checksum matches the current version,
 
 ## Security Best Practices
 
-1. **Token usage** - Downloads are public by default. For write operations, use minimal scope tokens.
-2. **Vault-encrypt tokens** - Never store tokens in plaintext.
-3. **Use `no_log`** - Prevent token exposure in logs.
-4. **Pin versions for production** - Use specific tags or hash refs instead of `latest`.
+1. **Token usage** - Downloads require authentication (unless under `/public/`). For write operations (uploads, tag mutations), use write scope tokens rather than admin scope unless admin operations are required.
+2. **Vault-encrypt tokens** - Never store tokens in plaintext in Ansible variables.
+3. **Use `no_log`** - Prevent token exposure in Ansible task output.
+4. **Pin versions for production** - Use specific tags (not `latest`) for production deployments.
 5. **Verify integrity** - Use hash refs or pre-defined checksums for security-sensitive artifacts.
-6. **Rotate tokens periodically** - Update vault-stored tokens on a schedule.
+6. **Establish token rotation procedures** - Having a tested rotation process ensures you can quickly respond to potential token disclosure events.
 
 ## See Also
 
