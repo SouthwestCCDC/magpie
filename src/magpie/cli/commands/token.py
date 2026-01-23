@@ -53,10 +53,9 @@ def create_token(ctx: CLIContext, name: str, scope: str) -> None:
             return  # output_error never returns, but explicit for clarity
         raise click.ClickException(msg)
 
-    if ctx.debug:
-        click.echo(f"Creating token '{name}' with scope '{scope}'...", err=True)
-
     with ctx.get_client() as client:
+        if ctx.debug:
+            click.echo(f"Creating token '{name}' with scope '{scope}'...", err=True)
         response = client.post(
             "/api/v1/tokens",
             json={"name": name, "scope": scope.lower()},
