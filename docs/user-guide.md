@@ -413,16 +413,17 @@ Magpie uses standard Unix exit codes:
 | Code | Meaning                       |
 |------|-------------------------------|
 | 0    | Success                       |
-| 1    | Error (any failure condition) |
+| 1    | Runtime error (authentication, network, operation failed) |
+| 2    | Usage error (invalid arguments, missing required options) |
 
-All error conditions result in exit code 1. The specific error type is communicated through:
+Exit code 1 indicates runtime errors (authentication, network, operations). Exit code 2 indicates usage errors (invalid arguments, missing options). The specific error type is communicated through:
 
 - **Human mode** (default): Error messages printed to stderr
-- **JSON mode** (`--format json`): Structured error codes in JSON output
+- **JSON mode** (`--format json`): Structured error codes in JSON output, written to stderr
 
 #### JSON Error Codes
 
-When using `--format json`, errors include a code field for programmatic handling:
+When using `--format json`, errors include a code field for programmatic handling. All JSON errors are written to stderr to allow programmatic parsing that distinguishes successful output (stdout) from errors (stderr):
 
 | Code               | Meaning                | Common Causes                             |
 |--------------------|------------------------|-------------------------------------------|
@@ -463,7 +464,7 @@ Example JSON error output:
 
 **Network Errors:**
 
-- Connection timeouts: Increase timeout with `--timeout 30m` or `MAGPIE_TIMEOUT=30m`
+- Connection timeouts: Increase timeout with `--timeout 1800` or `MAGPIE_TIMEOUT=30m`
 - SSL/TLS errors: Verify server certificate or use `--ca-cert` for custom CAs
 
 **Operation Failures:**
