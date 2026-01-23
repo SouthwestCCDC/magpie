@@ -197,9 +197,6 @@ rclone sync /data/artifacts/ remote:magpie-backup/artifacts/ \
   --exclude '.tmp/**'
 ```
 
-**Note:** S3 sync integration (`magpie-ctl sync --to-s3`) is planned for future work.
-See [design.md](design.md) for implementation roadmap.
-
 ---
 
 ## Restore Procedures
@@ -800,68 +797,16 @@ fi
 du -sh /backup/magpie/* | tail -5
 ```
 
-### Recovery Time Objective (RTO) Testing
-
-Document and test your recovery targets:
-
-| Scenario | Target RTO | Tested RTO | Notes |
-|----------|------------|------------|-------|
-| Database-only restore | < 5 min | ___ min | Minimal downtime |
-| Single artifact restore | < 15 min | ___ min | No service restart |
-| Full restore (100 GB) | < 2 hours | ___ min | Network-dependent |
-| Full restore (1 TB) | < 12 hours | ___ min | Disk I/O bound |
-
-Run timed restore tests periodically to validate RTO assumptions.
-
 ---
 
 ## Best Practices
 
-### Backup Strategy
-
-1. **3-2-1 Rule:**
-   - **3** copies of data (production + 2 backups)
-   - **2** different media types (disk + tape/cloud)
-   - **1** copy offsite
-
-2. **Backup Frequency:**
-   - **Critical artifacts:** Continuous or hourly
-   - **General storage:** Daily full or incremental
-   - **Database:** Every 6 hours or after significant changes
-   - **Configuration:** After each change
-
-3. **Testing:**
-   - Monthly restore tests for critical artifacts
-   - Quarterly full restore drill
-   - Annual disaster recovery exercise
-
-### Security Considerations
-
-1. **Encrypt backups at rest:**
-   ```bash
-   # GPG encryption
-   tar czf - /data/artifacts | gpg --encrypt --recipient backup@example.com \
-     > magpie-backup-$(date +%F).tar.gz.gpg
-   ```
-
-2. **Secure backup storage:**
-   - Restrict access to backup location
-   - Separate credentials from production
-   - Audit backup access logs
-
-3. **Token security:**
-   - Never commit `.magpie.db` to version control
-   - Rotate tokens after restore if security compromised
-   - Document which systems have which tokens
-
-### Documentation
-
-Maintain an operations runbook with:
-
-- Backup locations and access procedures
-- Restore procedure tested execution time
-- Contact information for backup system access
-- Token regeneration procedures and stakeholder notification list
+1. **3-2-1 Rule:** 3 copies of data, 2 different media types, 1 copy offsite
+2. **Backup Frequency:** Daily for general storage, more frequent for critical artifacts
+3. **Testing:** Monthly restore tests, quarterly full restore drills
+4. **Encrypt backups:** Use GPG or equivalent for backups at rest
+5. **Secure storage:** Restrict access, separate credentials, audit logs
+6. **Token security:** Never commit `.magpie.db` to version control, rotate after restore if compromised
 
 ---
 
@@ -964,17 +909,7 @@ sqlite3 /data/artifacts/.magpie.db "PRAGMA integrity_check;"
 
 ---
 
-## Summary
-
-**Key Takeaways:**
-
-1. **Back up three things:** Storage directory, SQLite database, configuration
-2. **Automate backups:** Use systemd timers or cron for daily backups
-3. **Test restores:** Monthly tests ensure backups are usable
-4. **Document procedures:** Keep runbook with tested restore times
-5. **Secure backups:** Encrypt sensitive data, restrict access
-
-**Quick Reference:**
+## Quick Reference
 
 | Task | Command |
 |------|---------|
@@ -982,10 +917,6 @@ sqlite3 /data/artifacts/.magpie.db "PRAGMA integrity_check;"
 | Database backup | `docker compose exec magpie sqlite3 /data/artifacts/.magpie.db ".backup '/tmp/backup.db'"` |
 | Full restore | `rsync -av /backup/magpie/artifacts/ /data/artifacts/` |
 | Reconcile symlinks | `docker compose exec magpie magpie-ctl gc --reconcile-only` |
-| Verify backup | Check manifests with `jq`, count blobs, test JSON syntax |
-
-For production deployments, combine automated daily backups with periodic restore testing
-to ensure business continuity.
 
 ---
 
