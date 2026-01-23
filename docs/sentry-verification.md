@@ -199,26 +199,6 @@ The environment tag helps separate issues:
 
 Set appropriate filters in Sentry dashboard to focus on production issues.
 
-### Release Tracking
-
-**Note: Release tracking is not yet implemented.**
-
-For better error tracking in the future, release versions could be configured:
-
-```bash
-export SENTRY_RELEASE=magpie@0.1.0
-```
-
-This would require adding release tracking to `observability.py`:
-```python
-sentry_sdk.init(
-    # ... existing config ...
-    release=os.getenv("SENTRY_RELEASE", "unknown"),
-)
-```
-
-This is a future enhancement. See design.md for planned release tracking implementation.
-
 ## References
 
 - [Sentry FastAPI Documentation](https://docs.sentry.io/platforms/python/integrations/fastapi/)
