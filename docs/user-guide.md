@@ -406,72 +406,19 @@ docker compose exec magpie magpie-ctl gc --retention-days 7     # Override reten
 - **"Hash mismatch"**: Network or storage corruption. Try downloading again.
 - **"Duplicate" on upload**: Normal. Content-addressed deduplication returned existing hash.
 
-### Exit Codes and Error Handling
+### Exit Codes
 
-Magpie uses standard Unix exit codes:
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Runtime error |
+| 2 | Invalid usage (bad arguments) |
 
-| Code | Meaning                       |
-|------|-------------------------------|
-| 0    | Success                       |
-| 1    | Runtime error (authentication, network, operation failed) |
-| 2    | Usage error (invalid arguments, missing required options) |
-
-Exit code 1 indicates runtime errors (authentication, network, operations). Exit code 2 indicates usage errors (invalid arguments, missing options). The specific error type is communicated through:
-
-- **Human mode** (default): Error messages printed to stderr
-- **JSON mode** (`--format json`): Structured error codes in JSON output, written to stderr
-
-#### JSON Error Codes
-
-When using `--format json`, errors include a code field for programmatic handling. All JSON errors are written to stderr to allow programmatic parsing that distinguishes successful output (stdout) from errors (stderr):
-
-| Code               | Meaning                | Common Causes                             |
-|--------------------|------------------------|-------------------------------------------|
-| `NOT_FOUND`        | Resource not found     | Tag or artifact doesn't exist             |
-| `UNAUTHORIZED`     | Authentication failed  | Missing or invalid token                  |
-| `FORBIDDEN`        | Permission denied      | Token lacks required scope                |
-| `CONFLICT`         | Resource conflict      | Tag already exists, version mismatch      |
-| `VALIDATION_ERROR` | Invalid input          | Malformed paths, invalid parameters       |
-| `SERVER_ERROR`     | Server-side error      | Internal server issues                    |
-| `NETWORK_ERROR`    | Network issues         | Connection failures, timeouts             |
-| `IO_ERROR`         | File system error      | Missing storage paths, permission issues  |
-| `CONFIG_ERROR`     | Configuration error    | Invalid or missing config file            |
-
-Example JSON error output:
+With `--format json`, errors are written to stderr as:
 
 ```json
-{
-  "status": "error",
-  "error": {
-    "code": "NOT_FOUND",
-    "message": "Tag 'v1.0' not found for artifact 'images/ubuntu'"
-  }
-}
+{"status": "error", "error": {"code": "NOT_FOUND", "message": "..."}}
 ```
-
-#### Common Error Scenarios
-
-**Configuration Errors:**
-
-- Missing server URL: Configure with `magpie config --server <url>`
-- Missing token: Configure with `magpie config --token <token>`
-- Invalid config file: Check `~/.magpie/config.toml` syntax
-
-**Authentication Errors:**
-
-- 401 Unauthorized: Token is missing, invalid, or expired
-- 403 Forbidden: Token lacks the required scope for the operation
-
-**Network Errors:**
-
-- Connection timeouts: Increase timeout with `--timeout 1800` or `MAGPIE_TIMEOUT=30m`
-- SSL/TLS errors: Verify server certificate or use `--ca-cert` for custom CAs
-
-**Operation Failures:**
-
-- Hash mismatch on download: File corruption, retry download
-- Tag not found: Verify tag exists with `magpie ls <path>`
-- Upload failures: Check file exists and token has write scope
 
 ## Quick Reference
 
