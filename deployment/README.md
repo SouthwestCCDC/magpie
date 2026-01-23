@@ -240,24 +240,7 @@ docker compose exec magpie magpie-ctl gc --dry-run
 
 ### Lock File Issues
 
-With `flock`-based locking (used in both systemd and cron), stale locks from
-crashed processes are automatically handled. However, if you need to manually
-verify or clean up:
-
-```bash
-# Check if GC is actually running
-pgrep -f "magpie-ctl gc"
-
-# View lock file (if curious - no cleanup needed with flock)
-ls -la /var/run/magpie-gc.lock
-
-# Force-stop a stuck GC process (only if truly stuck)
-pkill -f "magpie-ctl gc"
-```
-
-Note: Unlike the old `ConditionPathExists` approach, `flock` automatically
-releases locks when processes exit (even on crash), so manual lock file cleanup
-is not needed.
+With `flock`-based locking, stale locks are automatically released when processes exit. If needed, verify GC is running with `pgrep -f "magpie-ctl gc"` or force-stop with `pkill -f "magpie-ctl gc"`.
 
 ### Permission Errors
 
@@ -274,26 +257,9 @@ non-root user:
 2. Uncomment and set `User=<username>` in the systemd service file
 3. Ensure the lock file directory is writable by that user
 
-**Security Hardening Limitations**
+### Security Hardening
 
-The systemd service includes security hardening (`ProtectHome=true`,
-`ProtectSystem=strict`) which may prevent access to `MAGPIE_DATA_DIR` if
-configured to paths in `/home` or other protected locations.
-
-If you encounter permission errors with a custom data directory:
-
-1. **Recommended:** Use a non-protected path like `/opt/magpie/data` or `/var/lib/magpie`
-2. **Alternative:** Adjust security settings in the systemd service:
-   - Set `ProtectHome=false` if DATA_DIR is in `/home`
-   - Add `ReadWritePaths=/path/to/your/data` for other protected paths
-3. **Alternative:** For non-Docker deployments, explicitly add your data path:
-   ```ini
-   ReadWritePaths=/var/run /custom/path/to/data
-   ```
-
-Note: For Docker deployments, the container already has access to the mounted
-data directory, so this limitation typically only affects direct (non-Docker)
-execution.
+The systemd service includes hardening (`ProtectHome=true`, `ProtectSystem=strict`). If you encounter permission errors with custom data directories, either use `/opt` or `/var/lib` paths, or adjust `ReadWritePaths` in the service file.
 
 ---
 
