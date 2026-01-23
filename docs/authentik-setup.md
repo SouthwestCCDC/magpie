@@ -105,8 +105,12 @@ services:
 The forward_auth block is commented out by default in `Caddyfile.prod`. To enable Authentik SSO:
 
 1. Locate the `/artifacts/*` handler section in `Caddyfile.prod`
-2. Comment out the default handler (without SSO)
-3. Uncomment the Authentik SSO handler block:
+2. In Caddyfile.prod, replace the current Bearer token forward_auth block (lines 276-279)
+   with the Authentik forward_auth block (commented at lines 268-271) and uncomment the
+   `request_header` directives at lines 263-266
+3. Restart the Caddy container:
+
+Example configuration:
 
 ```Caddy
 handle /artifacts/* {
@@ -125,7 +129,7 @@ handle /artifacts/* {
 }
 ```
 
-4. Restart the Caddy container (run from the directory containing docker-compose.prod.yml):
+Run from the directory containing docker-compose.prod.yml:
 
 ```bash
 docker compose -f docker-compose.prod.yml restart caddy
@@ -136,9 +140,9 @@ docker compose -f docker-compose.prod.yml restart caddy
 
 ## Testing
 
-**Unauthenticated access**: Open incognito browser to `https://magpie.example.com/artifacts/` - should redirect to Authentik login.
+**Before enabling Authentik SSO**: By default, `/artifacts/*` is protected by Bearer token authentication. Unauthenticated browser access should result in 401 Unauthorized.
 
-**Authenticated access**: Log in with Authentik credentials - should show directory listing.
+**After enabling Authentik SSO**: Open incognito browser to `https://magpie.example.com/artifacts/` - should redirect to Authentik login. After logging in with Authentik credentials, should show directory listing.
 
 **Bearer tokens still work**: API access via bearer tokens is unaffected by Authentik SSO.
 
@@ -160,11 +164,13 @@ docker compose -f docker-compose.prod.yml restart caddy
 
 ## Authentication Methods
 
-| Method | Endpoint | Use Case |
-| --- | --- | --- |
-| Authentik SSO | `/artifacts/*` | Humans browsing artifacts |
-| Bearer tokens | `/api/v1/*` | CI/CD, scripts, automation |
-| Public (no auth) | `/artifacts/public/*` | Public artifacts |
+By default, `/artifacts/*` uses Bearer token authentication. Authentik SSO is an optional replacement for human browser access:
+
+| Method | Endpoint | Use Case | Default? |
+| --- | --- | --- | --- |
+| Bearer tokens | `/artifacts/*`, `/api/v1/*` | All programmatic access (CLI, API, automation) | Yes (production default) |
+| Authentik SSO | `/artifacts/*` | Human browser access (replaces Bearer auth when enabled) | No (optional) |
+| Public (no auth) | `/artifacts/public/*` | Public artifacts (no token required) | Yes |
 
 ## See Also
 

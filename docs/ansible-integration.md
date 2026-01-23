@@ -5,7 +5,7 @@ Download Magpie artifacts in Ansible playbooks using `ansible.builtin.get_url` w
 ## Prerequisites
 
 - Magpie server accessible from Ansible control node
-- Bearer token (required for downloads; optional if using `/artifacts/public/*`)
+- Bearer token (required for artifact operations; `/artifacts/public/*` needs no token)
 - Ansible Vault for token storage (recommended)
 
 ## Download Examples
@@ -18,6 +18,8 @@ Download Magpie artifacts in Ansible playbooks using `ansible.builtin.get_url` w
     url: "https://magpie.example.com/artifacts/scoring/engine/latest"
     dest: /opt/scoring/engine
     mode: "0755"
+    headers:
+      Authorization: "Bearer {{ magpie_token }}"
 ```
 
 **Specific tag:**
@@ -26,6 +28,8 @@ Download Magpie artifacts in Ansible playbooks using `ansible.builtin.get_url` w
 - ansible.builtin.get_url:
     url: "https://magpie.example.com/artifacts/configs/app/v2.1"
     dest: /etc/app/config.tar.gz
+    headers:
+      Authorization: "Bearer {{ magpie_token }}"
 ```
 
 **Hash reference (immutable):**
@@ -35,11 +39,13 @@ Download Magpie artifacts in Ansible playbooks using `ansible.builtin.get_url` w
     url: "https://magpie.example.com/artifacts/tools/validator/blobs/a1b2c3d4"
     dest: /usr/local/bin/validator
     mode: "0755"
+    headers:
+      Authorization: "Bearer {{ magpie_token }}"
 ```
 
-## Token Storage (Write Operations Only)
+## Token Storage
 
-Tokens required only for uploads and tag management. Download-only operations don't need tokens (or use public artifacts).
+Tokens are required for artifact downloads (except from `/artifacts/public/*`), uploads, and tag management.
 
 **Never store tokens in plaintext.** Use Ansible Vault:
 
@@ -62,6 +68,8 @@ Use hash references for immutable downloads:
     url: "https://magpie.example.com/artifacts/scoring/engine/blobs/a1b2c3d4"
     dest: /opt/scoring/engine
     mode: "0755"
+    headers:
+      Authorization: "Bearer {{ magpie_token }}"
 ```
 
 Or verify with pre-defined checksums:
@@ -71,6 +79,8 @@ Or verify with pre-defined checksums:
     url: "https://magpie.example.com/artifacts/scoring/engine/stable"
     dest: /opt/scoring/engine
     checksum: "sha256:abc123def456..."
+    headers:
+      Authorization: "Bearer {{ magpie_token }}"
 ```
 
 ## Common Patterns
@@ -82,6 +92,8 @@ Or verify with pre-defined checksums:
     url: "https://magpie.example.com/artifacts/scripts/setup-network/latest"
     dest: /usr/local/bin/setup-network
     mode: "0755"
+    headers:
+      Authorization: "Bearer {{ magpie_token }}"
 ```
 
 **Deploy and extract archives:**
@@ -90,6 +102,8 @@ Or verify with pre-defined checksums:
 - ansible.builtin.get_url:
     url: "https://magpie.example.com/artifacts/configs/nginx/latest"
     dest: /tmp/nginx-config.tar.gz
+    headers:
+      Authorization: "Bearer {{ magpie_token }}"
 
 - ansible.builtin.unarchive:
     src: /tmp/nginx-config.tar.gz
@@ -105,6 +119,8 @@ Or verify with pre-defined checksums:
     dest: /opt/myapp/bin/myapp
     mode: "0755"
     force: true
+    headers:
+      Authorization: "Bearer {{ magpie_token }}"
   register: download_result
 
 - ansible.builtin.systemd:
@@ -119,6 +135,7 @@ Or verify with pre-defined checksums:
 
 ```yaml
 magpie_server: "https://magpie.example.com"
+magpie_token: ""  # Set via vault_magpie_token
 magpie_artifact_path: ""
 magpie_artifact_tag: "latest"
 magpie_dest: ""
@@ -137,6 +154,8 @@ magpie_mode: "0644"
     url: "{{ magpie_server }}/artifacts/{{ magpie_artifact_path }}/{{ magpie_artifact_tag }}"
     dest: "{{ magpie_dest }}"
     mode: "{{ magpie_mode }}"
+    headers:
+      Authorization: "Bearer {{ magpie_token }}"
 ```
 
 **Use in playbook:**
@@ -165,13 +184,15 @@ magpie_mode: "0644"
     url: "https://magpie.example.com/artifacts/images/large-vm/latest"
     dest: /var/lib/images/vm.qcow2
     timeout: 600
+    headers:
+      Authorization: "Bearer {{ magpie_token }}"
 ```
 
 **Checksum Mismatch**: Use hash refs instead of mutable tags for guaranteed consistency.
 
 ## Security Best Practices
 
-- **Use minimal token scope**: read-only for downloads, write for uploads, admin only for administration
+- **Use minimal token scope**: use `read` scope for artifact downloads (or `admin`/`write` when required); `/artifacts/public/*` needs no token; use `write` for uploads and `admin` only for administration
 - **Vault-encrypt tokens**: never store plaintext
 - **Prevent log exposure**: Use `no_log: true` in tasks with tokens
 - **Pin versions**: Use specific tags or hash refs instead of `latest`

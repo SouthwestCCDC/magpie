@@ -32,7 +32,10 @@ curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
 
 ## Test 2: Browser Access (Unauthenticated)
 
-Open incognito browser to `https://magpie.example.com/artifacts/`. If Authentik SSO enabled, redirects to login page. Otherwise, shows directory listing.
+Open incognito browser to `https://magpie.example.com/artifacts/`.
+
+- **Without Authentik SSO** (default): Returns 401 Unauthorized (Bearer token authentication required by default)
+- **With Authentik SSO enabled**: Redirects to Authentik login page
 
 ## Test 3: Browser Access (Authenticated)
 
@@ -77,4 +80,4 @@ curl -H "Authorization: Bearer invalid" \
 
 **Bearer tokens broken**: Test `/api/v1/auth/validate`. Ensure API endpoints use Magpie's forward_auth, not Authentik's. Check Caddyfile route order.
 
-**Artifacts require auth**: Verify forward_auth block in `/artifacts/*` is commented out or AUTHENTIK_HOST is unset. Restart Caddy after changes.
+**Artifacts require auth**: This is expected in production: `/artifacts/*` is protected by Caddy `forward_auth` using Bearer tokens by default. If access fails unexpectedly, verify you are sending a valid token (e.g., test it with `/api/v1/auth/validate`) and that Caddy forwards the `Authorization` header correctly. Do not comment out the `forward_auth` block on `/artifacts/*` in production, as that would make artifacts publicly accessible.

@@ -429,12 +429,15 @@ docker compose exec magpie magpie-ctl gc --retention-days 7     # Override reten
 **Public (no auth):**
 
 - `GET /health` - Health check
+- `GET /api/v1/auth/validate` - Token validation (forward auth)
 - `GET /artifacts/public/*` - Public downloads
 
 **Protected (Bearer token required):**
 
 - `GET /api/v1/artifacts` - List artifacts (read)
 - `GET /api/v1/artifacts/{path}` - List versions (read)
+- `GET /artifacts/{path}/{tag}` - Download by tag (read)
+- `GET /artifacts/{path}/blobs/{hash}` - Download by hash (read)
 - `POST /api/v1/upload/{path}` - Upload (write)
 - `POST /api/v1/artifacts/{path}/{ref}/tags` - Create tag (write)
 - `DELETE /api/v1/artifacts/{path}/tags/{tag}` - Remove tag (write)
@@ -453,9 +456,11 @@ curl -X POST \
   -F "file=@myfile.tar.gz" \
   https://magpie.example.com/api/v1/upload/images/ubuntu
 
-# Download by tag
-curl -O https://magpie.example.com/artifacts/images/ubuntu/latest
+# Download by tag (requires Bearer token)
+curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
+  -O https://magpie.example.com/artifacts/images/ubuntu/latest
 
-# Download by hash
-curl -O https://magpie.example.com/artifacts/images/ubuntu/blobs/a1b2c3d4
+# Download by hash (requires Bearer token)
+curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
+  -O https://magpie.example.com/artifacts/images/ubuntu/blobs/a1b2c3d4
 ```
