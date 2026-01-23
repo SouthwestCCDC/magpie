@@ -424,6 +424,55 @@ With `--format json`, successful results are written to stdout and errors to std
 
 Note that Click usage errors (exit code 2) may not produce JSON output.
 
+#### CLI JSON Error Codes
+
+When using `--format json`, the CLI translates HTTP status codes to these error codes:
+
+| Error Code | Description | HTTP Status |
+|------------|-------------|-------------|
+| `NOT_FOUND` | Artifact, tag, or resource not found | 404 |
+| `UNAUTHORIZED` | Missing or invalid authentication token | 401 |
+| `FORBIDDEN` | Token lacks required permissions | 403 |
+| `CONFLICT` | Resource conflict (e.g., blob already exists) | 409 |
+| `VALIDATION_ERROR` | Invalid request parameters or data | 400, 413 |
+| `SERVER_ERROR` | Internal server error | 500+ |
+| `NETWORK_ERROR` | Network connectivity or timeout issues | N/A |
+| `IO_ERROR` | Local file I/O error | N/A |
+| `CONFIG_ERROR` | Configuration or setup error | N/A |
+
+#### API Error Responses
+
+The Magpie API returns errors in two formats:
+
+**Standard FastAPI errors** (from `HTTPException`):
+
+```json
+{"detail": "Error message"}
+```
+
+**Structured errors** (from custom exception handlers):
+
+```json
+{
+  "error": "ArtifactNotFoundError",
+  "message": "Artifact 'images/ubuntu' not found",
+  "detail": null
+}
+```
+
+**Common HTTP status codes:**
+
+| Status | Meaning |
+|--------|---------|
+| 400 | Bad Request - invalid path, parameters, or request body |
+| 401 | Unauthorized - missing or invalid authentication |
+| 403 | Forbidden - insufficient token permissions |
+| 404 | Not Found - artifact, tag, or blob does not exist |
+| 409 | Conflict - blob already exists with different content |
+| 413 | Content Too Large - upload exceeds size limit |
+| 500 | Internal Server Error - unexpected server error |
+| 504 | Gateway Timeout - operation exceeded time limit |
+
 ## Quick Reference
 
 **Commands:**
