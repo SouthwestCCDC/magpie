@@ -209,20 +209,6 @@ except Exception as e:
     )
 ```
 
-## Testing
-
-Run the demonstration script to see structured logging in action:
-
-```bash
-# From project root, with package installed (pip install -e .)
-python3 scripts/test_structured_logging.py
-
-# Or using PYTHONPATH
-PYTHONPATH=src python3 scripts/test_structured_logging.py
-```
-
-This will show examples of JSON and console output formats with various log events.
-
 ## Log Aggregation
 
 JSON logs are designed for consumption by log aggregators:
@@ -232,6 +218,7 @@ JSON logs are designed for consumption by log aggregators:
 - **Datadog/New Relic**: Forward logs via agent, filter by structured fields
 
 Example Loki query:
+
 ```logql
 {service="magpie"} | json | event="upload_complete" | duration_ms > 5000
 ```
