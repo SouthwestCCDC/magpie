@@ -336,7 +336,6 @@ docker compose exec magpie magpie-ctl token revoke ci-reader
 | `MAGPIE_DATABASE_PATH` | `/data/artifacts/.magpie.db` | SQLite token database path (defaults under `MAGPIE_STORAGE_PATH`, derived if storage path is overridden) |
 | `MAGPIE_RETENTION_DAYS` | `90` | Days before untagged blobs can be GC'd |
 | `MAGPIE_DEBUG` | `false` | Enable debug logging |
-| `MAGPIE_GC_LOCK_PATH` | `/var/run/magpie-gc.lock` | Lock file for GC operations |
 | `MAGPIE_MAX_UPLOAD_SIZE` | (none) | Max upload size in bytes (none = unlimited) |
 | `MAGPIE_S3_BUCKET` | (none) | S3 bucket name for backups (required for sync commands) |
 | `MAGPIE_S3_PREFIX` | `""` | Optional prefix for S3 keys |
