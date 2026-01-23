@@ -29,6 +29,7 @@ from magpie.server.deps import (
     get_storage_service,
     require_admin_scope,
     require_admin_scope_header,
+    require_read_scope,
     require_write_scope,
 )
 from magpie.storage.service import StorageService
@@ -348,6 +349,15 @@ def _noop_require_admin_scope_header() -> None:
     return None
 
 
+def _noop_require_read_scope() -> None:
+    """No-op override for require_read_scope in tests.
+
+    Returns None as this dependency only validates scope but does not
+    return token info.
+    """
+    return None
+
+
 @pytest.fixture(autouse=True)
 def override_auth_dependencies(request):
     """Override auth dependencies for integration tests.
@@ -362,10 +372,12 @@ def override_auth_dependencies(request):
     app.dependency_overrides[require_admin_scope] = _noop_require_admin_scope
     app.dependency_overrides[require_admin_scope_header] = _noop_require_admin_scope_header
     app.dependency_overrides[require_write_scope] = _noop_require_write_scope
+    app.dependency_overrides[require_read_scope] = _noop_require_read_scope
     yield
     app.dependency_overrides.pop(require_admin_scope, None)
     app.dependency_overrides.pop(require_admin_scope_header, None)
     app.dependency_overrides.pop(require_write_scope, None)
+    app.dependency_overrides.pop(require_read_scope, None)
 
 
 # =============================================================================

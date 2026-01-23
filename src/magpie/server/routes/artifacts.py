@@ -9,7 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
 from pydantic import BaseModel, Field, field_validator
 
-from magpie.server.deps import get_storage_service, require_write_scope
+from magpie.server.deps import get_storage_service, require_read_scope, require_write_scope
 from magpie.storage.exceptions import ArtifactNotFoundError, InvalidArtifactPathError
 from magpie.storage.paths import normalize_artifact_path
 from magpie.storage.service import StorageService
@@ -123,8 +123,12 @@ async def get_artifact_info(
     path: str,
     ref: str,
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
+    _read_scope_check: Annotated[None, Depends(require_read_scope)] = None,
 ) -> ArtifactInfoResponse:
     """Get metadata for a specific artifact version.
+
+    Requires authentication (read, write, or admin scope). Unauthenticated
+    requests will receive 401 before any path resolution occurs.
 
     Resolves the ref parameter as either a tag name (e.g., "latest") or a
     hash reference (e.g., "@abc12345") and returns the artifact's metadata.
@@ -137,6 +141,7 @@ async def get_artifact_info(
         ArtifactInfoResponse with full metadata for the resolved version.
 
     Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
         ArtifactNotFoundError: If path doesn't exist or ref doesn't resolve.
             Automatically converted to HTTP 404 by error handlers.
     """
@@ -295,9 +300,13 @@ async def amend_metadata(
 @router.get("/api/v1/artifacts")
 async def list_artifact_paths(
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
+    _read_scope_check: Annotated[None, Depends(require_read_scope)],
     prefix: str = "",
 ) -> ArtifactPathsResponse:
     """List artifact paths matching a prefix.
+
+    Requires authentication (read, write, or admin scope). Unauthenticated
+    requests will receive 401 before any path resolution occurs.
 
     Returns all artifact paths (directories with .magpie manifests) under
     the storage root. Useful for discovery and tab-completion.
@@ -308,6 +317,9 @@ async def list_artifact_paths(
 
     Returns:
         ArtifactPathsResponse with list of matching artifact paths.
+
+    Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
     """
     # Normalize prefix if provided (empty string is valid for listing all)
     if prefix:
@@ -324,8 +336,12 @@ async def list_artifact_paths(
 async def list_artifacts(
     path: str,
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
+    _read_scope_check: Annotated[None, Depends(require_read_scope)] = None,
 ) -> ArtifactListResponse:
     """List all versions of an artifact at the specified path.
+
+    Requires authentication (read, write, or admin scope). Unauthenticated
+    requests will receive 401 before any path resolution occurs.
 
     Returns all stored versions with their tags and metadata. If the artifact
     path doesn't exist or has no uploads, returns an empty versions list.
@@ -336,6 +352,9 @@ async def list_artifacts(
     Returns:
         ArtifactListResponse with artifact path and list of versions.
         Empty versions list if path doesn't exist.
+
+    Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
     """
     path = _normalize_path(path)
     artifact_infos = storage_service.list_artifacts(path)

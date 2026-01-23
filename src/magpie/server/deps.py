@@ -122,6 +122,49 @@ def require_admin_scope_header(
         )
 
 
+def require_authentication() -> None:
+    """Dependency that requires authentication via Caddy forward_auth.
+
+    Checks for the presence of the X-Magpie-Scope header, which is set by
+    Caddy's forward_auth middleware after successful token validation. If
+    the header is missing, it means the request bypassed authentication
+    (e.g., from an IP not in MAGPIE_ALLOWED_CIDRS when forward_auth is
+    conditionally applied, or the auth failed).
+
+    This dependency should be used on endpoints that need to ensure
+    authentication happens BEFORE any path resolution or business logic,
+    preventing information disclosure through different response codes
+    (401 vs 404).
+
+    Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
+    """
+    # This function intentionally does NOT take x_magpie_scope as a parameter
+    # because we want to enforce that it must be present. FastAPI will
+    # handle extracting it via the _validate_scope_header call below.
+    # We use a private helper that will raise 401 if the header is missing.
+
+
+def require_read_scope(
+    x_magpie_scope: Annotated[str | None, Header(alias="X-Magpie-Scope")] = None,
+) -> None:
+    """Dependency that requires read, write, or admin scope from Caddy forward_auth.
+
+    Checks the X-Magpie-Scope header set by Caddy's forward_auth middleware
+    and ensures the token has at least read scope. This enforces authentication
+    BEFORE any path resolution or business logic.
+
+    Args:
+        x_magpie_scope: Scope header value from Caddy forward_auth.
+
+    Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
+        HTTPException 403: If scope value is not a valid TokenScope enum value.
+    """
+    # Validate scope header (raises 401 if missing, 403 if invalid)
+    _validate_scope_header(x_magpie_scope)
+
+
 def require_admin_scope(
     authorization: Annotated[str | None, Header()] = None,
     token_service: Annotated[TokenService, Depends(get_token_service)] = None,
