@@ -12,9 +12,10 @@
 # Environment variable configuration:
 #   MAGPIE_DOMAIN - The domain name for the service (REQUIRED - no default)
 #   MAGPIE_ALLOWED_CIDRS - Comma-separated list of CIDR ranges allowed to bypass
-#                          bearer token authentication (OPTIONAL)
+#                          bearer token authentication for READ-ONLY operations (OPTIONAL)
 #     Example: 10.0.0.0/8,192.168.1.0/24
-#     When set, requests from these IP ranges can access protected routes without auth
+#     When set, requests from these IP ranges can access read operations without auth
+#     (GET /api/v1/artifacts*, GET /artifacts/*). Write and admin operations still require auth.
 #   AUTHENTIK_HOST - Authentik server hostname (OPTIONAL)
 #     Example: authentik.example.com
 #     When set (and SSO block uncommented), enables Authentik SSO for /artifacts/* browsing
@@ -93,22 +94,36 @@
 # The FastAPI backend can use these headers for authorization decisions and logging.
 #
 # =============================================================================
-# IP ALLOW-LISTING
+# IP ALLOW-LISTING (READ-ONLY ACCESS)
 # =============================================================================
 #
 # Environment variable configuration:
 #   MAGPIE_ALLOWED_CIDRS - Comma-separated list of CIDR ranges allowed to bypass
-#                          bearer token authentication (e.g., "10.0.0.0/8,192.168.1.0/24")
+#                          bearer token authentication for READ-ONLY operations
+#                          (e.g., "10.0.0.0/8,192.168.1.0/24")
 #                          Default: empty (no IP exemptions)
 #
 # When MAGPIE_ALLOWED_CIDRS is set, requests from these IP ranges can access
-# protected routes without a bearer token. This is useful for:
-#   - Internal infrastructure tools
-#   - Monitoring systems
-#   - CI/CD pipelines on trusted networks
+# READ operations without a bearer token:
+#   - GET /api/v1/artifacts*  (list artifacts, get metadata)
+#   - GET /artifacts/*        (download artifact files)
 #
-# SECURITY NOTE: Only add trusted network ranges. Any IP in the allowed list
-# can access all protected endpoints without authentication.
+# WRITE and ADMIN operations ALWAYS require a valid bearer token, even from
+# allowed IPs:
+#   - POST /api/v1/upload/*              (uploads)
+#   - PATCH /api/v1/artifacts/*          (metadata amendments)
+#   - POST/DELETE /api/v1/artifacts/*/tags (tag management)
+#   - POST /api/v1/tags/*/flush          (tag flushing)
+#   - POST/DELETE /api/v1/tokens*        (token management)
+#   - POST /api/v1/gc                    (garbage collection)
+#
+# This is useful for:
+#   - Internal monitoring and alerting systems
+#   - CI/CD pipelines downloading artifacts on trusted networks
+#   - Read-only infrastructure tools
+#
+# SECURITY NOTE: Only add trusted network ranges. IPs in the allowed list
+# can read all artifacts without authentication.
 #
 # =============================================================================
 
@@ -281,19 +296,16 @@
 		file_server browse
 	}
 
-	# Upload endpoint - requires write or admin scope OR allowed IP
+	# Upload endpoint - requires write or admin scope
 	handle /api/v1/upload/* {
-		@require_auth {
-			not remote_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
-		}
-		forward_auth @require_auth magpie:8000 {
+		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
 		}
 		reverse_proxy magpie:8000
 	}
 
-	# Artifact metadata amendment - requires write or admin scope OR allowed IP
+	# Artifact metadata amendment - requires write or admin scope
 	# Matches: PATCH /api/v1/artifacts/{path}/{ref}
 	# Note: Uses path_regexp because artifact paths can have multiple segments
 	@artifacts_amend {
@@ -301,17 +313,14 @@
 		path_regexp ^/api/v1/artifacts/.+
 	}
 	handle @artifacts_amend {
-		@require_auth {
-			not remote_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
-		}
-		forward_auth @require_auth magpie:8000 {
+		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
 		}
 		reverse_proxy magpie:8000
 	}
 
-	# Tag mutation endpoints - requires write or admin scope OR allowed IP
+	# Tag mutation endpoints - requires write or admin scope
 	# Matches: POST /api/v1/artifacts/{path}/{ref}/tags
 	#          DELETE /api/v1/artifacts/{path}/tags/{tag_name}
 	# Note: Uses path_regexp because artifact paths can have multiple segments
@@ -321,17 +330,14 @@
 		path_regexp ^/api/v1/artifacts/.+/tags
 	}
 	handle @artifacts_tags {
-		@require_auth {
-			not remote_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
-		}
-		forward_auth @require_auth magpie:8000 {
+		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
 		}
 		reverse_proxy magpie:8000
 	}
 
-	# Flush tag endpoint - requires admin scope OR allowed IP
+	# Flush tag endpoint - requires admin scope
 	# Matches: POST /api/v1/tags/{tag_name}/flush
 	#
 	# NOTE: This route is more specific than the dev Caddyfile which uses
@@ -344,34 +350,25 @@
 		path /api/v1/tags/*/flush
 	}
 	handle @tags_flush {
-		@require_auth {
-			not remote_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
-		}
-		forward_auth @require_auth magpie:8000 {
+		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
 		}
 		reverse_proxy magpie:8000
 	}
 
-	# Token management endpoints - requires admin scope OR allowed IP
+	# Token management endpoints - requires admin scope
 	handle /api/v1/tokens* {
-		@require_auth {
-			not remote_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
-		}
-		forward_auth @require_auth magpie:8000 {
+		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
 		}
 		reverse_proxy magpie:8000
 	}
 
-	# GC endpoint - requires admin scope OR allowed IP
+	# GC endpoint - requires admin scope
 	handle /api/v1/gc {
-		@require_auth {
-			not remote_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
-		}
-		forward_auth @require_auth magpie:8000 {
+		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
 		}
