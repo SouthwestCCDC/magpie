@@ -260,6 +260,26 @@ magpie amend images/ubuntu:latest --source-uri https://github.com/example/repo
 magpie amend images/ubuntu:latest --source-uri ""
 ```
 
+### Check Server Status
+
+```bash
+# Check server connectivity and health
+magpie status
+```
+
+Output:
+```
+Server:    https://magpie.example.com
+Status:    OK
+Version:   0.1.0
+Auth:      Token valid (admin scope, name: ci-bot)
+Storage:   1.2 GB used
+Artifacts: 42 total
+Blobs:     156 total
+```
+
+Use this to verify server connectivity and authentication before operations.
+
 ## Server Setup
 
 Deploy using Docker Compose:
@@ -410,6 +430,7 @@ docker compose exec magpie magpie-ctl gc --retention-days 7     # Override reten
 
 **Commands:**
 
+- `magpie status` - Check server connectivity and health
 - `magpie push FILE --to PATH` - Upload
 - `magpie get PATH:REF` - Download
 - `magpie ls PATH` - List versions
