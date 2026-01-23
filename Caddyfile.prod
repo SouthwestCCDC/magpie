@@ -226,6 +226,11 @@
 		reverse_proxy magpie:8000
 	}
 
+	# Status endpoint - server health, version, storage stats
+	handle /api/v1/status {
+		reverse_proxy magpie:8000
+	}
+
 	# Auth validation endpoint - must be public (used by forward_auth itself)
 	handle /api/v1/auth/validate {
 		reverse_proxy magpie:8000
