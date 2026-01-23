@@ -60,16 +60,19 @@
 # =============================================================================
 #
 # PROTECTED ROUTES (require valid Bearer token):
-#   - POST   /api/v1/upload/*              - Artifact uploads
-#   - GET    /api/v1/artifacts/*           - List artifacts, get info
-#   - POST   /api/v1/artifacts/*/tags      - Create/update tags
-#   - DELETE /api/v1/artifacts/*/tags/*    - Remove tags
-#   - POST   /api/v1/tags/*/flush          - Flush tags globally
-#   - GET    /api/v1/tokens                - List tokens (admin)
-#   - POST   /api/v1/tokens                - Create tokens (admin)
-#   - DELETE /api/v1/tokens/*              - Revoke tokens (admin)
-#   - POST   /api/v1/gc                    - Garbage collection (admin)
-#   - GET    /artifacts/*                  - Static file downloads (except /artifacts/public/*)
+#   - POST   /api/v1/upload/*                            - Artifact uploads
+#   - GET    /api/v1/artifacts/*                         - List artifacts, get info
+#   - POST   /api/v1/artifacts/{path}/tags               - Add tags to artifact
+#   - DELETE /api/v1/artifacts/{path}/tags/{tag_name}    - Remove tags from artifact
+#   - POST   /api/v1/tags/{tag_name}/flush               - Flush tags globally
+#   - GET    /api/v1/tokens                              - List tokens (admin)
+#   - POST   /api/v1/tokens                              - Create tokens (admin)
+#   - DELETE /api/v1/tokens/*                            - Revoke tokens (admin)
+#   - POST   /api/v1/gc                                  - Garbage collection (admin)
+#   - GET    /artifacts/*                                - Static file downloads (except /artifacts/public/*)
+#
+# Note: GET routes may bypass authentication for IPs in MAGPIE_ALLOWED_CIDRS
+# (see IP ALLOW-LISTING section below)
 #
 # PUBLIC ROUTES (no authentication required):
 #   - GET    /api/v1/auth/validate         - Auth validation endpoint
@@ -110,12 +113,13 @@
 #
 # WRITE and ADMIN operations ALWAYS require a valid bearer token, even from
 # allowed IPs:
-#   - POST /api/v1/upload/*              (uploads)
-#   - PATCH /api/v1/artifacts/*          (metadata amendments)
-#   - POST/DELETE /api/v1/artifacts/*/tags (tag management)
-#   - POST /api/v1/tags/*/flush          (tag flushing)
-#   - POST/DELETE /api/v1/tokens*        (token management)
-#   - POST /api/v1/gc                    (garbage collection)
+#   - POST /api/v1/upload/*                            (uploads)
+#   - PATCH /api/v1/artifacts/*                        (metadata amendments)
+#   - POST /api/v1/artifacts/{path}/tags               (add tags)
+#   - DELETE /api/v1/artifacts/{path}/tags/{tag_name}  (remove tags)
+#   - POST /api/v1/tags/{tag_name}/flush               (tag flushing)
+#   - POST/DELETE /api/v1/tokens*                      (token management)
+#   - POST /api/v1/gc                                  (garbage collection)
 #
 # This is useful for:
 #   - Internal monitoring and alerting systems
