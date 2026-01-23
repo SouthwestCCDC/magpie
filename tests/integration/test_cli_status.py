@@ -229,7 +229,7 @@ class TestStatusCommand:
             )
 
         assert result.exit_code != 0
-        assert "403" in result.output or "Admin" in result.output or "Forbidden" in result.output
+        assert "Admin scope required" in result.output
 
     def test_status_json_output(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Status command outputs valid JSON when --format json is used."""
