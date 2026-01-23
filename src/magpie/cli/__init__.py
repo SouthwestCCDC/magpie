@@ -164,6 +164,7 @@ from magpie.cli.commands import (  # noqa: E402
     push,
     status,
     tag,
+    token,
     untag,
     url,
 )
@@ -174,6 +175,7 @@ cli.add_command(ls)
 cli.add_command(info)
 cli.add_command(url)
 cli.add_command(tag)
+cli.add_command(token)
 cli.add_command(untag)
 cli.add_command(flush_tag)
 cli.add_command(amend)
