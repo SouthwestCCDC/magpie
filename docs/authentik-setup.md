@@ -315,18 +315,24 @@ For fine-grained access control (e.g., restrict certain artifact paths), impleme
 
 ## Migration Path
 
-### Step 1: Deploy Without SSO (Default)
+### Step 1: Production Default (Bearer Token Authentication)
 
-Deploy with the forward_auth block commented (default state). Artifacts remain publicly browsable (existing behavior).
+The default Caddyfile.prod configuration protects artifact downloads with Bearer token
+authentication. Users must provide a valid token to download artifacts (except files in
+`/artifacts/public/*`).
 
-### Step 2: Enable Authentik SSO
+### Step 2: Enable Authentik SSO (Replaces Bearer Tokens for Browser Access)
+
+To replace Bearer token authentication with Authentik SSO for browser access:
 
 1. Set `AUTHENTIK_HOST` environment variable
-2. Comment out the default handler and uncomment the Authentik SSO handler in Caddyfile.prod
+2. In Caddyfile.prod, replace the current Bearer token forward_auth block (lines 276-278)
+   with the Authentik forward_auth block (commented at lines 267-274)
 3. Restart Caddy container
-4. Test with manual testing guide
+4. Test using the [Authentik Testing Guide](authentik-testing-guide.md)
 
-Humans must use SSO to browse. CI/CD continues with bearer tokens.
+**Result**: Humans browsing `/artifacts/*` will authenticate via Authentik SSO.
+API clients and CI/CD will continue using Bearer tokens.
 
 ### Step 3: Monitor and Adjust
 

@@ -43,7 +43,7 @@ curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
 
 # Expected: 201 Created with JSON response containing hash
 
-# Test list artifacts (public endpoint, but token should still work)
+# Test list artifacts (protected endpoint, requires token)
 curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
   https://magpie.example.com/api/v1/artifacts
 
