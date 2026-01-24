@@ -193,3 +193,7 @@ Suggested thresholds (adjust based on deployment):
 - Request latency p95 > 5 seconds (baseline depends on artifact sizes)
 
 Note: These thresholds are recommendations and have not been tested in production. Adjust based on observed behavior.
+
+---
+
+*This documentation was generated with AI assistance (Claude Code w/ Sonnet 4.5).*
