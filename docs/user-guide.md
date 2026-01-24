@@ -516,8 +516,14 @@ This command is safe by default and only previews deletions unless --execute is 
 
 Exit code 1 is used for operational failures that occur after arguments are successfully parsed (e.g., network errors, authentication failures, file-not-found conditions encountered during command execution). Exit code 2 is returned by Click for usage and validation errors during argument parsing (e.g., missing required arguments, invalid option values, or file/path checks performed by Click such as `magpie push FILE` when `FILE` does not exist).
 
-With `--format json`, successful results are written to stdout and errors to stderr as:
+With `--format json`, output uses standardized envelopes:
 
+**Success** (to stdout):
+```json
+{"status": "ok", "data": {...}}
+```
+
+**Error** (to stderr):
 ```json
 {"status": "error", "error": {"code": "NOT_FOUND", "message": "..."}}
 ```
@@ -533,7 +539,7 @@ When using `--format json`, the CLI uses these error codes (some mapped from HTT
 | `NOT_FOUND` | Artifact, tag, or resource not found | 404 |
 | `UNAUTHORIZED` | Missing or invalid authentication token | 401 |
 | `FORBIDDEN` | Token lacks required permissions | 403 |
-| `CONFLICT` | Resource conflict (e.g., blob already exists) | 409 |
+| `CONFLICT` | Resource conflict (e.g., duplicate token name) | 409 |
 | `VALIDATION_ERROR` | Invalid request parameters or data | 400, 413, 422 |
 | `SERVER_ERROR` | Internal server error | 500+ |
 | `NETWORK_ERROR` | Network connectivity or timeout issues | N/A |
