@@ -6,7 +6,7 @@ applyTo: "**/*.py"
 
 ## Type Hints
 - All public functions must have type hints
-- Use `typing` module types (Optional, List, Dict, etc.)
+- Use Python 3.13+ built-in types: `list[str]`, `dict[str, Any]`, `str | None` (not `List`, `Dict`, `Optional`)
 - Pydantic models for request/response validation
 
 ## Error Handling
