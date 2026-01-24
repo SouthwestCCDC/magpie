@@ -528,7 +528,7 @@ With `--format json`, output uses standardized envelopes:
 {"status": "error", "error": {"code": "NOT_FOUND", "message": "..."}}
 ```
 
-The `error.message` field is extracted from the HTTP response's `detail` field for standard errors, or falls back to the response body text if `detail` is not present (as with structured errors that use `message` instead of `detail`).
+The `error.message` field is extracted from the HTTP response's `detail` field, or falls back to the response body text if `detail` is not present. Note that for structured errors where `detail` is present but null, `error.message` will be null even if a separate `message` field exists in the response.
 
 Note that Click usage errors (exit code 2) may not produce JSON output.
 
@@ -541,7 +541,7 @@ When using `--format json`, the CLI uses these error codes (some mapped from HTT
 | `NOT_FOUND` | Artifact, tag, or resource not found | 404 |
 | `UNAUTHORIZED` | Missing or invalid authentication token | 401 |
 | `FORBIDDEN` | Token lacks required permissions | 403 |
-| `CONFLICT` | Resource conflict (reserved for future use) | 409 |
+| `CONFLICT` | Resource conflict (e.g., duplicate token name, file already exists, storage path not empty) | 409 |
 | `VALIDATION_ERROR` | Invalid request parameters or data | 400, 413, 422 |
 | `SERVER_ERROR` | Internal server error | 500+ |
 | `NETWORK_ERROR` | Network connectivity or timeout issues | N/A |
