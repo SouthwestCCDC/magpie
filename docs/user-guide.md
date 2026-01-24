@@ -526,7 +526,7 @@ Note that Click usage errors (exit code 2) may not produce JSON output.
 
 #### CLI JSON Error Codes
 
-When using `--format json`, the CLI translates HTTP status codes to these error codes:
+When using `--format json`, the CLI uses these error codes (some mapped from HTTP responses, others from local conditions):
 
 | Error Code | Description | HTTP Status |
 |------------|-------------|-------------|
