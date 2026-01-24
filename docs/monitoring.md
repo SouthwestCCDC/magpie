@@ -12,7 +12,7 @@ Public health check endpoint (no authentication required). Returns HTTP 200 with
 {"status": "ok"}
 ```
 
-Implementation: `src/magpie/server/app.py` line 57-60.
+Implementation: `src/magpie/server/app.py` lines 57-60.
 
 Used by Docker health checks (`docker-compose.yml`, `docker-compose.prod.yml`) and container orchestration.
 
@@ -78,7 +78,7 @@ Implementation: `src/magpie/logging_config.py` line 74.
 
 Logs are written to stderr (stdout is reserved for program output like JSON responses).
 
-Implementation: `src/magpie/logging_config.py` line 69-76.
+Implementation: `src/magpie/logging_config.py` lines 69-76.
 
 ### Request Correlation
 
