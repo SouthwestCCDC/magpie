@@ -196,9 +196,9 @@ def token_service(test_config: MagpieSettings) -> TokenService:
 
 
 @pytest.fixture
-def test_token_service(test_config: MagpieSettings) -> TokenService:
+def test_token_service(token_service: TokenService) -> TokenService:
     """Alias for token_service for tests using this naming convention."""
-    return TokenService(test_config)
+    return token_service
 
 
 # =============================================================================
@@ -390,9 +390,6 @@ def override_auth_dependencies(request):
     Integration tests run against the FastAPI app directly without Caddy,
     so there are no Authorization headers. This fixture disables auth
     checking for all integration tests.
-
-    Test modules that define their own token fixtures (admin_token, read_token,
-    write_token) are testing authentication behavior and are skipped.
 
     If a test uses api_client_no_auth_override, this fixture skips applying
     overrides to avoid fixture ordering conflicts.
