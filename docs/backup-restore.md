@@ -100,7 +100,7 @@ docker compose exec magpie magpie-ctl sync from-s3 --force
 
 Requires `MAGPIE_S3_BUCKET` environment variable. Optionally set `MAGPIE_S3_PREFIX` for key prefixes.
 
-**Important:** The sync commands only back up artifact data (manifests, blobs, metadata sidecars). They do NOT back up the token database (`.magpie.db`) or configuration files. Back these up separately using the rsync procedure above.
+**Important:** The sync commands only back up artifact data (manifests, blobs, metadata sidecars). They do NOT back up the token database (`.magpie.db`) or configuration files. Back up the database using the rsync/SQLite procedure above. Configuration files (`.env`, `docker-compose.yml`, `Caddyfile`) require separate manual backup (e.g., `cp .env docker-compose.yml Caddyfile "$BACKUP_PATH/"`).
 
 The sync commands require either `rclone` or `aws` CLI. If `rclone` is available, it uses `--checksum` for content-based comparison. If falling back to AWS CLI, uploads use `aws s3 cp` (overwrites on each run), while restores use `aws s3 sync` (incremental).
 
@@ -148,6 +148,7 @@ docker compose exec magpie magpie-ctl gc --reconcile-only
 For restoring tokens without touching artifacts:
 
 ```bash
+BACKUP_PATH="/backup/magpie/20260115-103000"
 MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data/artifacts}"
 
 docker compose stop magpie
@@ -205,6 +206,8 @@ Restore missing blobs from backup, or re-upload from original source.
 ---
 
 ## Quick Reference
+
+Note: Set `BACKUP_PATH` (e.g., `BACKUP_PATH="/backup/magpie/$(date +%Y%m%d-%H%M%S)"`) before using backup/restore commands.
 
 | Task | Command |
 |------|---------|
