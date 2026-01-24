@@ -10,9 +10,9 @@ Magpie stores data in these locations:
 
 | Component | Default Location | Description |
 |-----------|-----------------|-------------|
-| **Blob files** | `{storage}/*/blobs/` | Actual artifact content |
-| **Manifests** | `{storage}/*/.magpie` | Tag-to-hash mappings (JSON) |
-| **Metadata** | `{storage}/*/metadata/` | Upload provenance (uploader, timestamps) |
+| **Blob files** | `{storage}/**/blobs/` | Actual artifact content |
+| **Manifests** | `{storage}/**/.magpie` | Tag-to-hash mappings (JSON) |
+| **Metadata** | `{storage}/**/metadata/` | Upload provenance (uploader, timestamps) |
 | **SQLite database** | `{storage}/.magpie.db` | Authentication tokens |
 
 Default storage path: `/data/artifacts` (configurable via `MAGPIE_STORAGE_PATH`).
@@ -108,7 +108,14 @@ Requires `MAGPIE_S3_BUCKET` environment variable. Optionally set `MAGPIE_S3_PREF
 
 The sync commands require either `rclone` or `aws` CLI. If `rclone` is available, it uses `--checksum` for content-based comparison. If falling back to AWS CLI, uploads use `aws s3 cp` (overwrites on each run), while restores use `aws s3 sync` (incremental).
 
-**Warning - Destructive Behavior:** When using `rclone` for `from-s3` restores, `rclone sync` will DELETE any local blobs that don't exist in S3. If you have untagged local blobs not backed up to S3, they will be removed. To avoid data loss, restore to an empty directory or use `--dry-run` first to preview what will be deleted.
+**Warning - Destructive Behavior:** When using `rclone` for `from-s3` restores, `rclone sync` will DELETE any local files that don't exist in S3. This includes:
+- **Untagged blobs** not backed up to S3 (only tagged artifacts are synced)
+- **The token database** (`.magpie.db`) since `to-s3` does not upload it
+
+**Critical:** If you restore from S3 to a directory containing `.magpie.db`, rclone will delete the database file, requiring token regeneration. To avoid data loss:
+- Restore to an empty directory, OR
+- Back up `.magpie.db` separately before restoring (see Database-Only Restore section), OR
+- Use `--dry-run` first to preview what will be deleted
 
 ---
 
