@@ -534,7 +534,7 @@ When using `--format json`, the CLI translates HTTP status codes to these error 
 | `UNAUTHORIZED` | Missing or invalid authentication token | 401 |
 | `FORBIDDEN` | Token lacks required permissions | 403 |
 | `CONFLICT` | Resource conflict (e.g., blob already exists) | 409 |
-| `VALIDATION_ERROR` | Invalid request parameters or data | 400, 413 |
+| `VALIDATION_ERROR` | Invalid request parameters or data | 400, 413, 422 |
 | `SERVER_ERROR` | Internal server error | 500+ |
 | `NETWORK_ERROR` | Network connectivity or timeout issues | N/A |
 | `IO_ERROR` | Local file I/O error | N/A |
@@ -542,7 +542,7 @@ When using `--format json`, the CLI translates HTTP status codes to these error 
 
 #### API Error Responses
 
-The Magpie API returns errors in two formats:
+The Magpie API returns errors in three formats:
 
 **Standard FastAPI errors** (from `HTTPException`):
 
@@ -559,6 +559,27 @@ The Magpie API returns errors in two formats:
   "detail": null
 }
 ```
+
+**Pydantic validation errors** (HTTP 422 from request validation):
+
+```json
+{
+  "detail": [
+    {
+      "type": "string_type",
+      "loc": ["body", "field_name"],
+      "msg": "Input should be a valid string",
+      "input": 123
+    }
+  ]
+}
+```
+
+The `detail` field is a list of validation error objects, each containing:
+- `type`: The validation error type
+- `loc`: Path to the invalid field (e.g., `["body", "field_name"]`)
+- `msg`: Human-readable error message
+- `input`: The invalid value that was provided
 
 **Common HTTP status codes:**
 
