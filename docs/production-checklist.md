@@ -14,7 +14,7 @@ Quick reference for deploying Magpie to production. See also: [backup-restore.md
 Set in `.env` or environment:
 
 - [ ] `MAGPIE_DOMAIN` - Domain name for TLS (required by `docker-compose.prod.yml`)
-- [ ] `MAGPIE_DATA_DIR` - Host path for artifact storage (default: `./data/artifacts`)
+- [ ] `MAGPIE_DATA_DIR` - Host path for artifact storage (recommended; defaults to `./data/artifacts` if not set)
 
 ## Security Hardening
 
@@ -45,13 +45,23 @@ docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml ps
 
 # Create initial admin token (store output securely)
+docker compose -f docker-compose.prod.yml exec magpie magpie-ctl init
+```
+
+### Token Rotation / Recovery
+
+To rotate or recover admin tokens (this will revoke existing admin tokens):
+
+```bash
 docker compose -f docker-compose.prod.yml exec magpie magpie-ctl init --reset-admin-token
 ```
+
+**Warning:** Using `--reset-admin-token` will invalidate all existing admin tokens. Only use during initial setup mistakes, security incidents, or planned rotation.
 
 ## Post-Deployment Validation
 
 - [ ] Health endpoint responding: `curl https://$MAGPIE_DOMAIN/health`
-- [ ] Status endpoint shows storage stats: `curl https://$MAGPIE_DOMAIN/api/v1/status`
+- [ ] Status endpoint shows storage stats: `curl -H "Authorization: Bearer $MAGPIE_ADMIN_TOKEN" https://$MAGPIE_DOMAIN/api/v1/status`
 - [ ] HTTPS enforced (HTTP redirects to HTTPS)
 - [ ] Upload works: `magpie push test.txt --to test/artifact`
 - [ ] Download works: `magpie get test/artifact:latest`
