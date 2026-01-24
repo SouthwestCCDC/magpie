@@ -260,6 +260,26 @@ magpie amend images/ubuntu:latest --source-uri https://github.com/example/repo
 magpie amend images/ubuntu:latest --source-uri ""
 ```
 
+### Check Server Status
+
+```bash
+# Check server connectivity and health
+magpie status
+```
+
+Output:
+```
+Server:    https://magpie.example.com
+Status:    OK
+Version:   0.1.0
+Auth:      Token valid (admin scope, name: ci-bot)
+Storage:   1.2 GB used
+Artifacts: 42 total
+Blobs:     156 total
+```
+
+Use this to verify server connectivity and authentication before operations.
+
 ## Server Setup
 
 Deploy using Docker Compose:
@@ -412,6 +432,71 @@ docker compose exec magpie magpie-ctl gc                        # Run GC
 docker compose exec magpie magpie-ctl gc --retention-days 7     # Override retention
 ```
 
+### S3 Backup and Restore
+
+Magpie can sync tagged artifacts to S3 for disaster recovery.
+
+**Configuration:**
+
+Set the S3 bucket via environment variable:
+
+```bash
+export MAGPIE_S3_BUCKET=my-backup-bucket
+export MAGPIE_S3_PREFIX=magpie/backups  # Optional prefix
+```
+
+AWS credentials must be configured via environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) or IAM role.
+
+**Requirements:**
+
+- Docker deployment: AWS CLI is pre-installed in the container. Optionally install rclone for better performance.
+- Standalone installation: Install either rclone (preferred) or AWS CLI.
+
+Magpie will use rclone if available, otherwise falls back to AWS CLI.
+
+**Backup to S3:**
+
+```bash
+# Preview what would be synced
+docker compose exec magpie magpie-ctl sync to-s3 --dry-run
+
+# Sync tagged artifacts to S3 (incremental)
+docker compose exec magpie magpie-ctl sync to-s3
+```
+
+Only artifacts with at least one tag are backed up. Untagged blobs are not synced.
+
+**Restore from S3:**
+
+```bash
+# Preview what would be restored
+docker compose exec magpie magpie-ctl sync from-s3 --dry-run
+
+# Restore from S3
+docker compose exec magpie magpie-ctl sync from-s3
+
+# Force restore even if data exists (may overwrite)
+docker compose exec magpie magpie-ctl sync from-s3 --force
+
+# Skip integrity verification after restore
+docker compose exec magpie magpie-ctl sync from-s3 --skip-verify
+```
+
+By default, restore refuses to run if data already exists to prevent accidental overwrites. Use --force to override.
+
+**S3 Garbage Collection:**
+
+Remove orphaned blobs from S3 that are not referenced by any manifest:
+
+```bash
+# Preview what would be deleted (default behavior)
+docker compose exec magpie magpie-ctl sync gc-s3
+
+# Actually delete orphaned blobs
+docker compose exec magpie magpie-ctl sync gc-s3 --execute
+```
+
+This command is safe by default and only previews deletions unless --execute is provided. It uses S3's own manifests as the source of truth, so it can run independently of local storage state.
 
 ### Troubleshooting
 
@@ -425,6 +510,7 @@ docker compose exec magpie magpie-ctl gc --retention-days 7     # Override reten
 
 **Commands:**
 
+- `magpie status` - Check server connectivity and health
 - `magpie push FILE --to PATH` - Upload
 - `magpie get PATH:REF` - Download
 - `magpie ls PATH` - List versions
@@ -479,3 +565,7 @@ curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
 curl -H "Authorization: Bearer $MAGPIE_TOKEN" \
   -O https://magpie.example.com/artifacts/images/ubuntu/blobs/a1b2c3d4
 ```
+
+---
+
+*This documentation was generated with AI assistance (Claude Code w/ Opus 4.5).*

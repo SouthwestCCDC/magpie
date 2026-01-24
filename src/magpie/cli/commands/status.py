@@ -22,10 +22,10 @@ from magpie.utils.formatting import format_size
 @click.command()
 @click.pass_obj
 def status(ctx: CLIContext) -> None:
-    """Check server health, connectivity, and status.
+    """Check server health, connectivity, and status (admin only).
 
-    Displays server connection information, authentication status,
-    and storage statistics.
+    Displays server connection information and storage statistics.
+    Requires an admin token.
 
     Examples:
 
@@ -35,6 +35,13 @@ def status(ctx: CLIContext) -> None:
     """
     if not ctx.server:
         msg = "No server configured. Use --server or set MAGPIE_SERVER."
+        if is_json_output():
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
+
+    if not ctx.token:
+        msg = "No token configured. Use --token or set MAGPIE_TOKEN. Admin token required."
         if is_json_output():
             output_error(ErrorCode.CONFIG_ERROR, msg)
             return  # output_error never returns, but explicit for clarity
@@ -73,7 +80,6 @@ def status(ctx: CLIContext) -> None:
                     "server": ctx.server,
                     "status": data["status"],
                     "version": data["version"],
-                    "auth": data["auth"],
                     "storage": data["storage"],
                 },
                 human_output="",
@@ -85,18 +91,6 @@ def status(ctx: CLIContext) -> None:
     click.echo(f"Server:    {ctx.server}")
     click.echo(f"Status:    {data['status'].upper()}")
     click.echo(f"Version:   {data['version']}")
-
-    # Auth status
-    auth = data["auth"]
-    if auth["valid"]:
-        scope = auth.get("scope", "unknown")
-        name = auth.get("name", "unknown")
-        click.echo(f"Auth:      Token valid ({scope} scope, name: {name})")
-    else:
-        if ctx.token:
-            click.echo("Auth:      Token invalid or expired")
-        else:
-            click.echo("Auth:      No token configured")
 
     # Storage stats
     storage = data["storage"]

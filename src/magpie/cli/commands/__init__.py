@@ -11,6 +11,7 @@ from magpie.cli.commands.parse import ParseError, parse_artifact_path, parse_art
 from magpie.cli.commands.push import push
 from magpie.cli.commands.status import status
 from magpie.cli.commands.tag import tag
+from magpie.cli.commands.token import token
 from magpie.cli.commands.untag import untag
 from magpie.cli.commands.url import url
 
@@ -28,6 +29,7 @@ __all__ = [
     "push",
     "status",
     "tag",
+    "token",
     "untag",
     "url",
 ]
