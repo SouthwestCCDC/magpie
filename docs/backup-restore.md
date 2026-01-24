@@ -62,38 +62,41 @@ Default storage path: `/data/artifacts` (configurable via `MAGPIE_STORAGE_PATH`)
 ### Full Backup with rsync
 
 ```bash
-STORAGE_PATH="/data/artifacts"
+# Use the same data directory as your docker-compose deployment (host path, not container path)
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data/artifacts}"
 BACKUP_PATH="/backup/magpie/$(date +%Y%m%d-%H%M%S)"
 
 mkdir -p "$BACKUP_PATH"
 
 # Backup storage (exclude temp directory)
-rsync -av --exclude='.tmp/' "$STORAGE_PATH/" "$BACKUP_PATH/artifacts/"
+rsync -av --exclude='.tmp/' "$MAGPIE_DATA_DIR/" "$BACKUP_PATH/artifacts/"
 
 # SQLite online backup (safe during writes)
 # Note: sqlite3 must be installed on the host (not in container)
-# Run against the mounted volume path (adjust if your compose mount differs)
-MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/data/artifacts}"
 sqlite3 "$MAGPIE_DATA_DIR/.magpie.db" ".backup '$BACKUP_PATH/magpie.db'"
 ```
 
 ### S3 Backup with magpie-ctl sync
 
-The built-in sync commands back up tagged artifacts to S3:
+The built-in sync commands back up tagged artifacts to S3.
+
+**For container deployments**, run these commands inside the container:
 
 ```bash
 # Sync tagged artifacts to S3
-magpie-ctl sync to-s3
+docker compose exec magpie magpie-ctl sync to-s3
 
 # Preview what would be synced
-magpie-ctl sync to-s3 --dry-run
+docker compose exec magpie magpie-ctl sync to-s3 --dry-run
 
 # Preview restore from S3 (safe, no --force needed)
-magpie-ctl sync from-s3 --dry-run
+docker compose exec magpie magpie-ctl sync from-s3 --dry-run
 
 # Restore from S3 (requires --force if local artifacts exist; will overwrite)
-magpie-ctl sync from-s3 --force
+docker compose exec magpie magpie-ctl sync from-s3 --force
 ```
+
+**For host installations**, run `magpie-ctl` directly (ensure it points to the same data directory).
 
 Requires `MAGPIE_S3_BUCKET` environment variable. Optionally set `MAGPIE_S3_PREFIX` for key prefixes.
 
@@ -111,22 +114,28 @@ The sync commands require either `rclone` or `aws` CLI. If `rclone` is available
 
 ```bash
 BACKUP_PATH="/backup/magpie/20260115-103000"
-STORAGE_PATH="/data/artifacts"
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data/artifacts}"
 
 # Stop services
 docker compose down
 
-# Restore storage
-mkdir -p "$STORAGE_PATH"
-rsync -av "$BACKUP_PATH/artifacts/" "$STORAGE_PATH/"
+# Restore storage to empty directory to avoid stale data
+# If directory exists, use rsync --delete or manually clear it first
+mkdir -p "$MAGPIE_DATA_DIR"
+rsync -av --delete "$BACKUP_PATH/artifacts/" "$MAGPIE_DATA_DIR/"
 
 # Restore database
-cp "$BACKUP_PATH/magpie.db" "$STORAGE_PATH/.magpie.db"
-chown 1000:1000 "$STORAGE_PATH/.magpie.db"
+cp "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/.magpie.db"
+
+# Set ownership to match MAGPIE_UID/MAGPIE_GID or the data directory owner
+# The entrypoint will auto-detect from directory ownership
+OWNER_UID=$(stat -c %u "$MAGPIE_DATA_DIR")
+OWNER_GID=$(stat -c %g "$MAGPIE_DATA_DIR")
+chown "$OWNER_UID:$OWNER_GID" "$MAGPIE_DATA_DIR/.magpie.db"
 
 # Ensure temp directory exists
-mkdir -p "$STORAGE_PATH/.tmp"
-chown -R 1000:1000 "$STORAGE_PATH"
+mkdir -p "$MAGPIE_DATA_DIR/.tmp"
+chown -R "$OWNER_UID:$OWNER_GID" "$MAGPIE_DATA_DIR"
 
 # Start services and reconcile symlinks
 docker compose up -d
@@ -139,12 +148,17 @@ docker compose exec magpie magpie-ctl gc --reconcile-only
 For restoring tokens without touching artifacts:
 
 ```bash
-MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/data/artifacts}"
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data/artifacts}"
 
 docker compose stop magpie
 cp "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/.magpie.db"
 sqlite3 "$MAGPIE_DATA_DIR/.magpie.db" "PRAGMA wal_checkpoint(TRUNCATE);"
-chown 1000:1000 "$MAGPIE_DATA_DIR/.magpie.db"
+
+# Set ownership to match data directory owner
+OWNER_UID=$(stat -c %u "$MAGPIE_DATA_DIR")
+OWNER_GID=$(stat -c %g "$MAGPIE_DATA_DIR")
+chown "$OWNER_UID:$OWNER_GID" "$MAGPIE_DATA_DIR/.magpie.db"
+
 docker compose start magpie
 docker compose exec magpie magpie-ctl token list
 ```
@@ -183,7 +197,7 @@ This reads all `.magpie` manifests and recreates symlinks to match. Safe and ide
 To identify broken symlinks (pointing to missing blobs):
 
 ```bash
-find /data/artifacts -type l ! -exec test -e {} \; -print
+find "${MAGPIE_DATA_DIR:-./data/artifacts}" -type l ! -exec test -e {} \; -print
 ```
 
 Restore missing blobs from backup, or re-upload from original source.
@@ -194,12 +208,12 @@ Restore missing blobs from backup, or re-upload from original source.
 
 | Task | Command |
 |------|---------|
-| Full backup | `rsync -av --exclude='.tmp/' /data/artifacts/ /backup/magpie/` |
-| Database backup | `sqlite3 /data/artifacts/.magpie.db ".backup './magpie-backup.db'"` |
-| Full restore | `rsync -av /backup/magpie/artifacts/ /data/artifacts/` |
-| Reconcile symlinks | `magpie-ctl gc --reconcile-only` |
-| Reset admin token | `magpie-ctl init --reset-admin-token` |
-| GC untagged blobs | `magpie-ctl gc --retention-days 90` |
+| Full backup | `rsync -av --exclude='.tmp/' ${MAGPIE_DATA_DIR:-./data/artifacts}/ /backup/magpie/` |
+| Database backup | `sqlite3 ${MAGPIE_DATA_DIR:-./data/artifacts}/.magpie.db ".backup './magpie-backup.db'"` |
+| Full restore | `rsync -av --delete /backup/magpie/artifacts/ ${MAGPIE_DATA_DIR:-./data/artifacts}/` |
+| Reconcile symlinks | `docker compose exec magpie magpie-ctl gc --reconcile-only` |
+| Reset admin token | `docker compose exec magpie magpie-ctl init --reset-admin-token` |
+| GC untagged blobs | `docker compose exec magpie magpie-ctl gc --retention-days 90` |
 
 ---
 
