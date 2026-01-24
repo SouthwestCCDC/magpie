@@ -122,6 +122,26 @@ def require_admin_scope_header(
         )
 
 
+def require_read_scope(
+    x_magpie_scope: Annotated[str | None, Header(alias="X-Magpie-Scope")] = None,
+) -> None:
+    """Dependency that requires read, write, or admin scope from Caddy forward_auth.
+
+    Checks the X-Magpie-Scope header set by Caddy's forward_auth middleware
+    and ensures the token has at least read scope. This enforces authentication
+    BEFORE any path resolution or business logic.
+
+    Args:
+        x_magpie_scope: Scope header value from Caddy forward_auth.
+
+    Raises:
+        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
+        HTTPException 403: If scope value is not a valid TokenScope enum value.
+    """
+    # Validate scope header (raises 401 if missing, 403 if invalid)
+    _validate_scope_header(x_magpie_scope)
+
+
 def require_admin_scope(
     authorization: Annotated[str | None, Header()] = None,
     token_service: Annotated[TokenService, Depends(get_token_service)] = None,
