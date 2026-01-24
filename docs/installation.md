@@ -53,17 +53,33 @@ Production setup automatically provisions TLS certificates via Let's Encrypt. Th
 
 ## Server Initialization
 
-After starting the containers, initialize storage and create an admin token:
+The container automatically runs `magpie-ctl init` on first startup (see [entrypoint.sh](../entrypoint.sh#L93-L110)). This creates storage directories, initializes the database, and generates a break-glass admin token.
+
+**For Docker Compose deployments**, the admin token is printed to container logs on first startup. Retrieve it with:
 
 ```bash
-# Initialize storage (creates directories and database)
-docker compose exec magpie magpie-ctl init
-
-# Create admin token for API access
-docker compose exec magpie magpie-ctl token create --role admin
+# View container logs to find the admin token (only shown once)
+docker compose logs magpie | grep "ADMIN TOKEN"
 ```
 
-Save the generated token (format: `mgp_...`). This is required for CLI authentication.
+**For manual initialization** (if needed outside Docker):
+
+```bash
+# Initialize storage and generate admin token
+magpie-ctl init
+```
+
+The admin token (format: `mgp_ADMIN_...`) is displayed only once. Save it securely - it's required for CLI authentication and creating additional tokens.
+
+**Creating additional tokens:**
+
+```bash
+# Create a write-scoped token for CI/CD
+docker compose exec magpie magpie-ctl token create --name ci-deployer --scope write
+
+# Create another admin token
+docker compose exec magpie magpie-ctl token create --name ops-admin --scope admin
+```
 
 ## Client Configuration
 
