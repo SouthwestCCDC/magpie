@@ -28,7 +28,7 @@ Default storage path: `/data/artifacts` (configurable via `MAGPIE_STORAGE_PATH`)
 │   ├── blobs/              # Content-addressed storage
 │   │   └── {hash}          # Blob files (8-char SHA-256 prefix)
 │   ├── metadata/           # Provenance sidecars
-│   │   └── {hash}.json     # uploader, timestamp, source_uri
+│   │   └── {hash}.json     # uploaded_by, uploaded_at, source_uri
 │   └── latest -> blobs/{hash}  # Tag symlinks
 ```
 
@@ -99,6 +99,10 @@ docker compose exec magpie magpie-ctl sync from-s3 --force
 **For host installations**, run `magpie-ctl` directly (ensure it points to the same data directory).
 
 Requires `MAGPIE_S3_BUCKET` environment variable. Optionally set `MAGPIE_S3_PREFIX` for key prefixes.
+
+**Note:** When using `docker compose exec`, the S3 environment variables (`MAGPIE_S3_BUCKET` and `MAGPIE_S3_PREFIX`) are not set in the container by default. You must either:
+- Add them to the `environment` section in `docker-compose.yml`, or
+- Pass them inline with `-e` flags: `docker compose exec -e MAGPIE_S3_BUCKET=my-bucket -e MAGPIE_S3_PREFIX=backup magpie magpie-ctl sync to-s3`
 
 **Important:** The sync commands only back up artifact data (manifests, blobs, metadata sidecars). They do NOT back up the token database (`.magpie.db`) or configuration files. Back up the database using the rsync/SQLite procedure above. Configuration files (`.env`, `docker-compose.yml`, `Caddyfile`) require separate manual backup (e.g., `cp .env docker-compose.yml Caddyfile "$BACKUP_PATH/"`).
 
