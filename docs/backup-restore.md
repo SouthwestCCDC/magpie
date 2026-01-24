@@ -12,7 +12,7 @@ Magpie stores data in these locations:
 |-----------|-----------------|-------------|
 | **Blob files** | `{storage}/**/blobs/` | Actual artifact content |
 | **Manifests** | `{storage}/**/.magpie` | Tag-to-hash mappings (JSON) |
-| **Metadata** | `{storage}/**/metadata/` | Upload provenance (uploader, timestamps) |
+| **Metadata** | `{storage}/**/metadata/` | Upload provenance (uploaded_by, uploaded_at, source_uri) |
 | **SQLite database** | `{storage}/.magpie.db` | Authentication tokens |
 
 Default storage path: `/data/artifacts` (configurable via `MAGPIE_STORAGE_PATH`).
@@ -34,21 +34,25 @@ Default storage path: `/data/artifacts` (configurable via `MAGPIE_STORAGE_PATH`)
 
 ### Manifest Format
 
+The manifest file (`.magpie`) stores tag-to-hash mappings. Hash references use the `@xxxxxxxx` format (8-character SHA-256 prefix) for internal symlink references. The server writes full SHA-256 hashes to metadata sidecars (see below).
+
 ```json
 {
   "version": 1,
   "tags": {
-    "latest": "@abc12345",
-    "v2.0": "@abc12345"
+    "latest": "@abc12345678",
+    "v2.0": "@def67890ab"
   }
 }
 ```
 
 ### Metadata Sidecar Format
 
+Metadata files (`metadata/{hash}.json`) store the full SHA-256 hash and upload provenance:
+
 ```json
 {
-  "hash": "abc12345...",
+  "hash": "abc123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "uploaded_by": "ci-bot",
   "uploaded_at": "2026-01-15T10:30:00Z",
   "source_uri": null
@@ -92,7 +96,7 @@ docker compose exec magpie magpie-ctl sync to-s3 --dry-run
 # Preview restore from S3 (safe, no --force needed)
 docker compose exec magpie magpie-ctl sync from-s3 --dry-run
 
-# Restore from S3 (requires --force if local artifacts exist; will overwrite)
+# Restore from S3 (requires --force if existing Magpie manifests are present; will overwrite)
 docker compose exec magpie magpie-ctl sync from-s3 --force
 ```
 
@@ -227,7 +231,7 @@ Note: Set `BACKUP_PATH` (e.g., `BACKUP_PATH="/backup/magpie/$(date +%Y%m%d-%H%M%
 | Full restore | `rsync -av --delete $BACKUP_PATH/artifacts/ ${MAGPIE_DATA_DIR:-./data/artifacts}/` |
 | Reconcile symlinks | `docker compose exec magpie magpie-ctl gc --reconcile-only` |
 | Reset admin token | `docker compose exec magpie magpie-ctl init --reset-admin-token` |
-| GC untagged blobs | `docker compose exec magpie magpie-ctl gc --retention-days 90` |
+| GC untagged blobs older than 90 days | `docker compose exec magpie magpie-ctl gc --retention-days 90` |
 
 ---
 
