@@ -121,6 +121,47 @@ uv run ruff format .                       # Format
 - No emojis in code/docs unless requested
 - Align with `scoring/` repo conventions
 
+## Code Review Guidelines
+
+When reviewing pull requests, follow these guidelines to provide consistent, actionable feedback.
+
+### Priority System
+
+Categorize findings by severity:
+
+- **CRITICAL** (blocks merge): Security vulnerabilities (auth bypass, token exposure, path traversal), data loss risks, breaking API changes
+- **IMPORTANT** (should fix before merge): Missing error handling, inadequate test coverage, violation of project conventions
+- **SUGGESTION** (non-blocking): Code style improvements, refactoring opportunities, documentation enhancements
+
+### Confidence Threshold
+
+Only comment when HIGH CONFIDENCE (>80%) an issue exists. Avoid speculative concerns without concrete evidence.
+
+### What CI Already Checks
+
+Our CI pipeline handles:
+- Code formatting (`ruff format`)
+- Linting (`ruff check`)
+- Security scanning (`bandit`)
+- Unit, integration, and E2E tests
+
+**Do not duplicate feedback** on issues these tools catch. Focus on logic, architecture, and security concerns that require human judgment.
+
+### Security Focus
+
+Flag these with **CRITICAL** priority:
+- Token handling vulnerabilities (exposure, weak generation)
+- Path traversal in file operations (artifacts stored by hash)
+- Authentication bypass in `forward_auth` flow
+- Missing input validation on upload endpoints
+
+### Project-Specific Review Points
+
+- **Filesystem is source of truth**: No database for artifacts - verify file operations are correct
+- **CLI vs server separation**: Client CLI should not import server internals
+- **Config hierarchy**: file < env < CLI arg - verify precedence is respected
+- **Hash-based storage**: Artifacts identified by SHA-256 hash prefix (8 chars)
+
 ## MANDATORY: Be transparent about AI use
 
 Disclose when AI generates content that humans will read and might attribute to a specific person.
