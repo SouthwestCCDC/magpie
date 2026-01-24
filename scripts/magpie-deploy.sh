@@ -30,7 +30,7 @@ DEFAULT_INSTALL_DIR="/opt/magpie"
 DEFAULT_TLS_MODE="off"
 DEFAULT_HTTP_PORT="8080"
 DEFAULT_HTTPS_PORT="8443"
-DEFAULT_TRUSTED_PROXIES="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+DEFAULT_TRUSTED_PROXIES="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 
 # =============================================================================
 # Global variables (populated during config)

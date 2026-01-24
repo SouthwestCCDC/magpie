@@ -13,6 +13,7 @@ from magpie.server.app import app
 from magpie.server.deps import (
     require_admin_scope,
     require_admin_scope_header,
+    require_read_scope,
     require_write_scope,
 )
 
@@ -35,6 +36,11 @@ def _noop_require_admin_scope_header() -> None:
     return None
 
 
+def _noop_require_read_scope() -> None:
+    """No-op override for require_read_scope in tests."""
+    return None
+
+
 @pytest.fixture(autouse=True)
 def override_auth_dependencies():
     """Override auth dependencies for concurrency tests.
@@ -53,11 +59,13 @@ def override_auth_dependencies():
         require_admin_scope: app.dependency_overrides.get(require_admin_scope),
         require_admin_scope_header: app.dependency_overrides.get(require_admin_scope_header),
         require_write_scope: app.dependency_overrides.get(require_write_scope),
+        require_read_scope: app.dependency_overrides.get(require_read_scope),
     }
     try:
         app.dependency_overrides[require_admin_scope] = _noop_require_admin_scope
         app.dependency_overrides[require_admin_scope_header] = _noop_require_admin_scope_header
         app.dependency_overrides[require_write_scope] = _noop_require_write_scope
+        app.dependency_overrides[require_read_scope] = _noop_require_read_scope
         yield
     finally:
         # Restore original state (remove overrides we added)

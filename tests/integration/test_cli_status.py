@@ -4,61 +4,21 @@ from __future__ import annotations
 
 import io
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
-import pytest
+if TYPE_CHECKING:
+    import httpx
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
 from magpie import __version__
+from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenService
 from magpie.cli import cli
-from magpie.config import MagpieSettings
-from magpie.server.app import app
-from magpie.server.deps import get_storage_service, get_token_service
-from magpie.storage.service import StorageService
 
 # Patch path for get_client - must match where it's imported/used in the CLI module
 PATCH_GET_CLIENT = "magpie.cli.get_client"
-
-
-@pytest.fixture
-def test_config(tmp_path: Path) -> MagpieSettings:
-    """Create test configuration with temporary paths."""
-    config = MagpieSettings(storage_path=tmp_path)
-    config.temp_path.mkdir(parents=True, exist_ok=True)
-    return config
-
-
-@pytest.fixture
-def test_storage_service(test_config: MagpieSettings) -> StorageService:
-    """Create a StorageService instance for testing."""
-    return StorageService(test_config)
-
-
-@pytest.fixture
-def test_token_service(test_config: MagpieSettings) -> TokenService:
-    """Create a TokenService instance for testing."""
-    return TokenService(test_config)
-
-
-@pytest.fixture
-def api_client(
-    test_storage_service: StorageService, test_token_service: TokenService
-) -> TestClient:
-    """Create test API client with overridden dependencies."""
-
-    def override_storage_service() -> StorageService:
-        return test_storage_service
-
-    def override_token_service() -> TokenService:
-        return test_token_service
-
-    app.dependency_overrides[get_storage_service] = override_storage_service
-    app.dependency_overrides[get_token_service] = override_token_service
-    yield TestClient(app)
-    app.dependency_overrides.clear()
 
 
 def upload_test_artifact(
@@ -83,7 +43,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test.example.com", "status"],
+                ["--server", "http://test.example.com", "--token", "dummy-token", "status"],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -97,7 +57,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "status"],
             )
 
         assert result.exit_code == 0
@@ -111,28 +71,12 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "status"],
             )
 
         assert result.exit_code == 0
         assert "Version:" in result.output
         assert __version__ in result.output
-
-    def test_status_shows_auth_no_token(
-        self, cli_runner_no_config: CliRunner, api_client: TestClient
-    ) -> None:
-        """Status command shows no token configured when token is missing."""
-        with patch(PATCH_GET_CLIENT) as mock_get_client:
-            mock_get_client.return_value = api_client
-
-            result = cli_runner_no_config.invoke(
-                cli,
-                ["--server", "http://test", "status"],
-            )
-
-        assert result.exit_code == 0
-        assert "Auth:" in result.output
-        assert "No token configured" in result.output
 
     def test_status_shows_storage_stats(
         self, cli_runner: CliRunner, api_client: TestClient
@@ -143,7 +87,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "status"],
             )
 
         assert result.exit_code == 0
@@ -164,7 +108,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "status"],
             )
 
         assert result.exit_code == 0
@@ -177,6 +121,51 @@ class TestStatusCommand:
         assert result.exit_code != 0
         assert "No server configured" in result.output
 
+    def test_status_requires_token(self, cli_runner_no_config: CliRunner) -> None:
+        """Status without token configured fails with error."""
+        result = cli_runner_no_config.invoke(cli, ["--server", "http://test", "status"])
+
+        assert result.exit_code != 0
+        assert "No token configured" in result.output
+
+    def test_status_unauthorized_shows_error(
+        self,
+        cli_runner: CliRunner,
+        api_client_no_auth_override: TestClient,
+        token_service: TokenService,
+    ) -> None:
+        """Status with non-admin token shows appropriate error."""
+        read_token = token_service.create_token("reader", TokenScope.READ)
+
+        class MockClientWithAuth:
+            def __init__(self, client: TestClient, token: str) -> None:
+                self.client = client
+                self.token = token
+
+            def get(self, url: str, **kwargs: object) -> "httpx.Response":
+                headers = kwargs.pop("headers", {})
+                headers["Authorization"] = f"Bearer {self.token}"
+                return self.client.get(url, headers=headers, **kwargs)
+
+            def __enter__(self) -> "MockClientWithAuth":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                pass
+
+        mock_client = MockClientWithAuth(api_client_no_auth_override, read_token)
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "--token", read_token, "status"],
+            )
+
+        assert result.exit_code != 0
+        assert "Admin scope required" in result.output
+
     def test_status_json_output(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Status command outputs valid JSON when --format json is used."""
         with patch(PATCH_GET_CLIENT) as mock_get_client:
@@ -184,7 +173,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "--format", "json", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "--format", "json", "status"],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -194,7 +183,6 @@ class TestStatusCommand:
         assert data["data"]["server"] == "http://test"
         assert data["data"]["status"] == "ok"
         assert data["data"]["version"] == __version__
-        assert "auth" in data["data"]
         assert "storage" in data["data"]
 
     def test_status_json_includes_storage_stats(
@@ -208,7 +196,7 @@ class TestStatusCommand:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "--format", "json", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "--format", "json", "status"],
             )
 
         assert result.exit_code == 0
@@ -231,7 +219,7 @@ class TestStatusFormatSize:
 
             result = cli_runner.invoke(
                 cli,
-                ["--server", "http://test", "status"],
+                ["--server", "http://test", "--token", "dummy-token", "status"],
             )
 
         assert result.exit_code == 0
