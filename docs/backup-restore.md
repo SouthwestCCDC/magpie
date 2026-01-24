@@ -208,9 +208,9 @@ Restore missing blobs from backup, or re-upload from original source.
 
 | Task | Command |
 |------|---------|
-| Full backup | `rsync -av --exclude='.tmp/' ${MAGPIE_DATA_DIR:-./data/artifacts}/ /backup/magpie/` |
-| Database backup | `sqlite3 ${MAGPIE_DATA_DIR:-./data/artifacts}/.magpie.db ".backup './magpie-backup.db'"` |
-| Full restore | `rsync -av --delete /backup/magpie/artifacts/ ${MAGPIE_DATA_DIR:-./data/artifacts}/` |
+| Full backup | `rsync -av --exclude='.tmp/' ${MAGPIE_DATA_DIR:-./data/artifacts}/ $BACKUP_PATH/artifacts/` |
+| Database backup | `sqlite3 ${MAGPIE_DATA_DIR:-./data/artifacts}/.magpie.db ".backup '$BACKUP_PATH/magpie.db'"` |
+| Full restore | `rsync -av --delete $BACKUP_PATH/artifacts/ ${MAGPIE_DATA_DIR:-./data/artifacts}/` |
 | Reconcile symlinks | `docker compose exec magpie magpie-ctl gc --reconcile-only` |
 | Reset admin token | `docker compose exec magpie magpie-ctl init --reset-admin-token` |
 | GC untagged blobs | `docker compose exec magpie magpie-ctl gc --retention-days 90` |
