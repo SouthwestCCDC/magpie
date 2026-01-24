@@ -283,12 +283,13 @@ def api_client_no_auth_override(
 ) -> TestClient:
     """Create test API client without auth overrides for authentication tests.
 
-    This fixture explicitly clears all dependency overrides and only sets up
-    storage and token services, without the autouse auth bypass. Use this for
-    tests that need to verify actual authentication and authorization behavior.
+    This fixture sets up storage and token services without the autouse auth
+    bypass. Use this for tests that need to verify actual authentication and
+    authorization behavior.
+
+    The autouse override_auth_dependencies fixture will detect this fixture
+    in request.fixturenames and skip applying auth overrides.
     """
-    # Clear any auth overrides from the autouse conftest fixture
-    app.dependency_overrides.clear()
 
     def override_storage_service() -> StorageService:
         return test_storage_service
@@ -299,7 +300,9 @@ def api_client_no_auth_override(
     app.dependency_overrides[get_storage_service] = override_storage_service
     app.dependency_overrides[get_token_service] = override_token_service
     yield TestClient(app, raise_server_exceptions=False)
-    app.dependency_overrides.clear()
+    # Clean up only the overrides we added
+    app.dependency_overrides.pop(get_storage_service, None)
+    app.dependency_overrides.pop(get_token_service, None)
 
 
 # =============================================================================
@@ -390,7 +393,15 @@ def override_auth_dependencies(request):
 
     Test modules that define their own token fixtures (admin_token, read_token,
     write_token) are testing authentication behavior and are skipped.
+
+    If a test uses api_client_no_auth_override, this fixture skips applying
+    overrides to avoid fixture ordering conflicts.
     """
+    # Skip auth overrides if test is using no-auth-override fixture
+    if "api_client_no_auth_override" in request.fixturenames:
+        yield
+        return
+
     app.dependency_overrides[require_admin_scope] = _noop_require_admin_scope
     app.dependency_overrides[require_admin_scope_header] = _noop_require_admin_scope_header
     app.dependency_overrides[require_write_scope] = _noop_require_write_scope
