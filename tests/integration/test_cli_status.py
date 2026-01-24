@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import io
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import patch
-
-import pytest
 
 if TYPE_CHECKING:
     import httpx
@@ -19,71 +16,9 @@ from magpie import __version__
 from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenService
 from magpie.cli import cli
-from magpie.config import MagpieSettings
-from magpie.server.app import app
-from magpie.server.deps import get_storage_service, get_token_service
-from magpie.storage.service import StorageService
 
 # Patch path for get_client - must match where it's imported/used in the CLI module
 PATCH_GET_CLIENT = "magpie.cli.get_client"
-
-
-@pytest.fixture
-def test_config(tmp_path: Path) -> MagpieSettings:
-    """Create test configuration with temporary paths."""
-    config = MagpieSettings(storage_path=tmp_path)
-    config.temp_path.mkdir(parents=True, exist_ok=True)
-    return config
-
-
-@pytest.fixture
-def test_storage_service(test_config: MagpieSettings) -> StorageService:
-    """Create a StorageService instance for testing."""
-    return StorageService(test_config)
-
-
-@pytest.fixture
-def test_token_service(test_config: MagpieSettings) -> TokenService:
-    """Create a TokenService instance for testing."""
-    return TokenService(test_config)
-
-
-@pytest.fixture
-def api_client(
-    test_storage_service: StorageService, test_token_service: TokenService
-) -> TestClient:
-    """Create test API client with overridden dependencies."""
-
-    def override_storage_service() -> StorageService:
-        return test_storage_service
-
-    def override_token_service() -> TokenService:
-        return test_token_service
-
-    app.dependency_overrides[get_storage_service] = override_storage_service
-    app.dependency_overrides[get_token_service] = override_token_service
-    yield TestClient(app)
-    app.dependency_overrides.clear()
-
-
-@pytest.fixture
-def api_client_no_auth_override(
-    test_storage_service: StorageService, test_token_service: TokenService
-) -> TestClient:
-    """Create test API client without auth overrides for authentication tests."""
-    # Clear any auth overrides from the autouse conftest fixture
-    app.dependency_overrides.clear()
-
-    def override_storage_service() -> StorageService:
-        return test_storage_service
-
-    def override_token_service() -> TokenService:
-        return test_token_service
-
-    app.dependency_overrides[get_storage_service] = override_storage_service
-    app.dependency_overrides[get_token_service] = override_token_service
-    yield TestClient(app, raise_server_exceptions=False)
-    app.dependency_overrides.clear()
 
 
 def upload_test_artifact(

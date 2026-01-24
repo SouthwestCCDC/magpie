@@ -27,6 +27,7 @@ from magpie.config import MagpieSettings
 from magpie.server.app import app
 from magpie.server.deps import (
     get_storage_service,
+    get_token_service,
     require_admin_scope,
     require_admin_scope_header,
     require_write_scope,
@@ -194,6 +195,12 @@ def token_service(test_config: MagpieSettings) -> TokenService:
     return TokenService(test_config)
 
 
+@pytest.fixture
+def test_token_service(test_config: MagpieSettings) -> TokenService:
+    """Alias for token_service for tests using this naming convention."""
+    return TokenService(test_config)
+
+
 # =============================================================================
 # Token Fixtures
 # =============================================================================
@@ -267,6 +274,31 @@ def api_client(test_storage_service: StorageService) -> TestClient:
 
     app.dependency_overrides[get_storage_service] = override_storage_service
     yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def api_client_no_auth_override(
+    test_storage_service: StorageService, test_token_service: TokenService
+) -> TestClient:
+    """Create test API client without auth overrides for authentication tests.
+
+    This fixture explicitly clears all dependency overrides and only sets up
+    storage and token services, without the autouse auth bypass. Use this for
+    tests that need to verify actual authentication and authorization behavior.
+    """
+    # Clear any auth overrides from the autouse conftest fixture
+    app.dependency_overrides.clear()
+
+    def override_storage_service() -> StorageService:
+        return test_storage_service
+
+    def override_token_service() -> TokenService:
+        return test_token_service
+
+    app.dependency_overrides[get_storage_service] = override_storage_service
+    app.dependency_overrides[get_token_service] = override_token_service
+    yield TestClient(app, raise_server_exceptions=False)
     app.dependency_overrides.clear()
 
 
