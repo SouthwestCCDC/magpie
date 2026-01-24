@@ -3,60 +3,65 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from magpie import __version__
-from magpie.auth.models import TokenScope
-from magpie.auth.service import TokenService
-from magpie.config import MagpieSettings
-from magpie.server.app import app
-from magpie.server.deps import get_storage_service, get_token_service
-from magpie.storage.service import StorageService
 
 
-@pytest.fixture
-def test_config(tmp_path: Path) -> MagpieSettings:
-    """Create test configuration with temporary paths."""
-    config = MagpieSettings(storage_path=tmp_path)
-    config.temp_path.mkdir(parents=True, exist_ok=True)
-    return config
+class TestStatusEndpointAuth:
+    """Tests for status endpoint authentication and authorization."""
 
+    def test_status_requires_admin_token(
+        self, api_client_no_auth_override: TestClient, admin_token: str
+    ) -> None:
+        """Status endpoint requires admin token."""
+        response = api_client_no_auth_override.get(
+            "/api/v1/status",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
 
-@pytest.fixture
-def test_storage_service(test_config: MagpieSettings) -> StorageService:
-    """Create a StorageService instance for testing."""
-    return StorageService(test_config)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
 
+    def test_status_with_read_token_returns_403(
+        self, api_client_no_auth_override: TestClient, read_token: str
+    ) -> None:
+        """Status with read token returns 403."""
+        response = api_client_no_auth_override.get(
+            "/api/v1/status",
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
 
-@pytest.fixture
-def test_token_service(test_config: MagpieSettings) -> TokenService:
-    """Create a TokenService instance for testing."""
-    return TokenService(test_config)
+        assert response.status_code == 403
+        assert "Admin scope required" in response.json()["detail"]
 
+    def test_status_with_write_token_returns_403(
+        self, api_client_no_auth_override: TestClient, write_token: str
+    ) -> None:
+        """Status with write token returns 403."""
+        response = api_client_no_auth_override.get(
+            "/api/v1/status",
+            headers={"Authorization": f"Bearer {write_token}"},
+        )
 
-@pytest.fixture
-def api_client(
-    test_storage_service: StorageService, test_token_service: TokenService
-) -> TestClient:
-    """Create test API client with overridden dependencies."""
+        assert response.status_code == 403
+        assert "Admin scope required" in response.json()["detail"]
 
-    def override_storage_service() -> StorageService:
-        return test_storage_service
+    def test_status_without_auth_returns_401(self, api_client_no_auth_override: TestClient) -> None:
+        """Status without authorization returns 401."""
+        response = api_client_no_auth_override.get("/api/v1/status")
 
-    def override_token_service() -> TokenService:
-        return test_token_service
-
-    app.dependency_overrides[get_storage_service] = override_storage_service
-    app.dependency_overrides[get_token_service] = override_token_service
-    yield TestClient(app)
-    app.dependency_overrides.clear()
+        assert response.status_code == 401
 
 
 class TestStatusEndpoint:
-    """Tests for GET /api/v1/status endpoint."""
+    """Tests for GET /api/v1/status endpoint.
+
+    Note: Authentication is mocked via autouse fixture in conftest.py.
+    These tests verify endpoint logic, not authentication behavior.
+    """
 
     def test_status_returns_ok(self, api_client: TestClient) -> None:
         """Status endpoint returns ok status."""
@@ -74,60 +79,6 @@ class TestStatusEndpoint:
         data = response.json()
         assert "version" in data
         assert data["version"] == __version__
-
-    def test_status_returns_auth_info_without_token(self, api_client: TestClient) -> None:
-        """Status endpoint returns auth info showing no valid token."""
-        response = api_client.get("/api/v1/status")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert "auth" in data
-        assert data["auth"]["valid"] is False
-
-    def test_status_returns_auth_info_with_valid_token(
-        self, api_client: TestClient, test_token_service: TokenService
-    ) -> None:
-        """Status endpoint validates token and returns scope and name when valid."""
-        token = test_token_service.create_token("test-status-token", TokenScope.READ)
-
-        response = api_client.get(
-            "/api/v1/status",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["auth"]["valid"] is True
-        assert data["auth"]["scope"] == "read"
-        assert data["auth"]["name"] == "test-status-token"
-
-    def test_status_returns_auth_info_with_admin_token(
-        self, api_client: TestClient, test_token_service: TokenService
-    ) -> None:
-        """Status endpoint correctly identifies admin scope tokens."""
-        token = test_token_service.create_token("admin-token", TokenScope.ADMIN)
-
-        response = api_client.get(
-            "/api/v1/status",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["auth"]["valid"] is True
-        assert data["auth"]["scope"] == "admin"
-        assert data["auth"]["name"] == "admin-token"
-
-    def test_status_returns_invalid_for_bad_token(self, api_client: TestClient) -> None:
-        """Status endpoint returns invalid for malformed or unknown tokens."""
-        response = api_client.get(
-            "/api/v1/status",
-            headers={"Authorization": "Bearer invalid_token_12345"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["auth"]["valid"] is False
 
     def test_status_returns_storage_stats(self, api_client: TestClient) -> None:
         """Status endpoint returns storage statistics."""

@@ -27,6 +27,7 @@ from magpie.config import MagpieSettings
 from magpie.server.app import app
 from magpie.server.deps import (
     get_storage_service,
+    get_token_service,
     require_admin_scope,
     require_admin_scope_header,
     require_write_scope,
@@ -194,6 +195,12 @@ def token_service(test_config: MagpieSettings) -> TokenService:
     return TokenService(test_config)
 
 
+@pytest.fixture
+def test_token_service(token_service: TokenService) -> TokenService:
+    """Alias for token_service for tests using this naming convention."""
+    return token_service
+
+
 # =============================================================================
 # Token Fixtures
 # =============================================================================
@@ -268,6 +275,34 @@ def api_client(test_storage_service: StorageService) -> TestClient:
     app.dependency_overrides[get_storage_service] = override_storage_service
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def api_client_no_auth_override(
+    test_storage_service: StorageService, test_token_service: TokenService
+) -> TestClient:
+    """Create test API client without auth overrides for authentication tests.
+
+    This fixture sets up storage and token services without the autouse auth
+    bypass. Use this for tests that need to verify actual authentication and
+    authorization behavior.
+
+    The autouse override_auth_dependencies fixture will detect this fixture
+    in request.fixturenames and skip applying auth overrides.
+    """
+
+    def override_storage_service() -> StorageService:
+        return test_storage_service
+
+    def override_token_service() -> TokenService:
+        return test_token_service
+
+    app.dependency_overrides[get_storage_service] = override_storage_service
+    app.dependency_overrides[get_token_service] = override_token_service
+    yield TestClient(app, raise_server_exceptions=False)
+    # Clean up only the overrides we added
+    app.dependency_overrides.pop(get_storage_service, None)
+    app.dependency_overrides.pop(get_token_service, None)
 
 
 # =============================================================================
@@ -356,9 +391,14 @@ def override_auth_dependencies(request):
     so there are no Authorization headers. This fixture disables auth
     checking for all integration tests.
 
-    Test modules that define their own token fixtures (admin_token, read_token,
-    write_token) are testing authentication behavior and are skipped.
+    If a test uses api_client_no_auth_override, this fixture skips applying
+    overrides to avoid fixture ordering conflicts.
     """
+    # Skip auth overrides if test is using no-auth-override fixture
+    if "api_client_no_auth_override" in request.fixturenames:
+        yield
+        return
+
     app.dependency_overrides[require_admin_scope] = _noop_require_admin_scope
     app.dependency_overrides[require_admin_scope_header] = _noop_require_admin_scope_header
     app.dependency_overrides[require_write_scope] = _noop_require_write_scope

@@ -4,23 +4,15 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from magpie import __version__
-from magpie.auth.service import TokenService
-from magpie.server.deps import get_storage_service, get_token_service
+from magpie.auth.service import TokenInfo
+from magpie.server.deps import get_storage_service, require_admin_scope
 from magpie.storage.service import StorageService
 
 router = APIRouter()
-
-
-class AuthStatus(BaseModel):
-    """Token authentication status."""
-
-    valid: bool
-    scope: str | None = None
-    name: str | None = None
 
 
 class StorageStats(BaseModel):
@@ -36,40 +28,7 @@ class StatusResponse(BaseModel):
 
     status: str
     version: str
-    auth: AuthStatus
     storage: StorageStats
-
-
-def _get_auth_status(
-    authorization: str | None,
-    token_service: TokenService,
-) -> AuthStatus:
-    """Validate token and return auth status.
-
-    Args:
-        authorization: Authorization header value (Bearer <token>).
-        token_service: TokenService instance.
-
-    Returns:
-        AuthStatus with validation result.
-    """
-    if authorization is None:
-        return AuthStatus(valid=False)
-
-    if not authorization.startswith("Bearer "):
-        return AuthStatus(valid=False)
-
-    token = authorization[7:]  # Remove "Bearer " prefix
-    token_info = token_service.validate_token(token)
-
-    if token_info is None:
-        return AuthStatus(valid=False)
-
-    return AuthStatus(
-        valid=True,
-        scope=token_info.scope.value,
-        name=token_info.name,
-    )
 
 
 def _get_storage_stats(storage_service: StorageService) -> StorageStats:
@@ -114,34 +73,32 @@ def _get_storage_stats(storage_service: StorageService) -> StorageStats:
 @router.get("/api/v1/status")
 async def get_status(
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
-    token_service: Annotated[TokenService, Depends(get_token_service)],
-    authorization: Annotated[str | None, Header()] = None,
+    _admin: Annotated[TokenInfo, Depends(require_admin_scope)],
 ) -> StatusResponse:
-    """Get server status including health, version, auth status, and storage stats.
+    """Get server status including health, version, and storage stats (admin only).
 
     This endpoint provides a comprehensive view of the server state:
     - Server health status (always "ok" if responding)
     - Server version
-    - Token authentication status (if Authorization header provided)
     - Storage usage statistics
 
-    The token validation is optional - if no Authorization header is provided,
-    auth status will show valid=False.
+    Requires admin authentication via Bearer token in Authorization header.
 
     Args:
         storage_service: StorageService instance.
-        token_service: TokenService instance.
-        authorization: Optional Authorization header for token validation.
+        _admin: Validated admin token (injected by dependency, unused in body).
 
     Returns:
         StatusResponse with server status information.
+
+    Raises:
+        HTTPException 401: If token is missing, malformed, invalid, or disabled.
+        HTTPException 403: If token doesn't have admin scope.
     """
-    auth_status = _get_auth_status(authorization, token_service)
     storage_stats = _get_storage_stats(storage_service)
 
     return StatusResponse(
         status="ok",
         version=__version__,
-        auth=auth_status,
         storage=storage_stats,
     )
