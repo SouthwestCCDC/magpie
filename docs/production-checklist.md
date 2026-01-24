@@ -29,34 +29,34 @@ Verify in `docker-compose.prod.yml` and `Caddyfile.prod`:
 
 If needed, configure in `.env`:
 
-- [ ] `MAGPIE_ALLOWED_CIDRS` - IP allowlist for read-only access (see `.env.example`)
 - [ ] `AUTHENTIK_HOST` - SSO integration (see [authentik-setup.md](authentik-setup.md))
-- [ ] `MAGPIE_RETENTION_DAYS` - GC retention (default: 90 days)
-- [ ] `MAGPIE_SENTRY_DSN` - Error tracking
-- [ ] `MAGPIE_OTEL_*` - Distributed tracing configuration
+
+**Note:** Additional environment variables (e.g., `MAGPIE_ALLOWED_CIDRS`, `MAGPIE_RETENTION_DAYS`, `MAGPIE_LOG_FORMAT`, `MAGPIE_SENTRY_DSN`, `MAGPIE_OTEL_*`) are supported by Magpie but require manual modification of `docker-compose.prod.yml` to pass them to the `magpie` service. By default, only `MAGPIE_STORAGE_PATH` and `MAGPIE_DEBUG` are configured in the production compose file. See `.env.example` and `config.py` for the full list of available settings.
 
 ## Deployment
 
 ```bash
-# Start services
+# Start services (creates admin token on first start)
 docker compose -f docker-compose.prod.yml up -d
+
+# Capture the admin token from first-start logs (store securely)
+docker compose -f docker-compose.prod.yml logs magpie | grep "ADMIN TOKEN"
 
 # Wait for health check
 docker compose -f docker-compose.prod.yml ps
-
-# Create initial admin token (store output securely)
-docker compose -f docker-compose.prod.yml exec magpie magpie-ctl init
 ```
+
+**Note:** The `entrypoint.sh` script automatically runs `magpie-ctl init` on first start when the database doesn't exist. The admin token is printed in the container logs and is only visible once. If you miss capturing it, use the token rotation procedure below to generate a new one.
 
 ### Token Rotation / Recovery
 
-To rotate or recover admin tokens (this will revoke existing admin tokens):
+To rotate or recover the break-glass admin token:
 
 ```bash
 docker compose -f docker-compose.prod.yml exec magpie magpie-ctl init --reset-admin-token
 ```
 
-**Warning:** Using `--reset-admin-token` will invalidate all existing admin tokens. Only use during initial setup mistakes, security incidents, or planned rotation.
+**Warning:** Using `--reset-admin-token` will revoke the existing break-glass admin token (named "admin"). Other admin-scoped tokens with different names will remain valid. Only use this during initial setup mistakes, security incidents, or planned token rotation.
 
 ## Post-Deployment Validation
 
