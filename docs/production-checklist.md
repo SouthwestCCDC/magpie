@@ -9,7 +9,7 @@ Quick reference for deploying Magpie to production. See also: [backup-restore.md
 - [ ] Backup storage provisioned (see [backup-restore.md](backup-restore.md))
 - [ ] Hardware meets minimum requirements (Docker host with persistent storage)
 
-## Required Configuration
+## Required / Recommended Configuration
 
 Set in `.env` or environment:
 
