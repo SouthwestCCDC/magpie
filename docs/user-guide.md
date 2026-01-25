@@ -528,7 +528,7 @@ With `--format json`, output uses standardized envelopes:
 {"status": "error", "error": {"code": "NOT_FOUND", "message": "..."}}
 ```
 
-The `error.message` field is extracted from the HTTP response's `detail` field, or falls back to the response body text if `detail` is not present. Note that for structured errors where `detail` is present but null, `error.message` will be null even if a separate `message` field exists in the response.
+The `error.message` field is extracted from the HTTP response's `detail` field, or falls back to the response body text if `detail` is not present or fails to parse.
 
 Note that Click usage errors (exit code 2) may not produce JSON output.
 
