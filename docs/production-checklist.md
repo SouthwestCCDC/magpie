@@ -40,7 +40,7 @@ If needed, configure in `.env`:
 docker compose -f docker-compose.prod.yml up -d
 
 # Capture the admin token from first-start logs (store securely)
-docker compose -f docker-compose.prod.yml logs magpie | grep "ADMIN TOKEN"
+docker compose -f docker-compose.prod.yml logs magpie | grep -A1 "ADMIN TOKEN" | tail -n1
 
 # Wait for health check
 docker compose -f docker-compose.prod.yml ps
