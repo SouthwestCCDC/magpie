@@ -105,9 +105,9 @@ services:
 The forward_auth block is commented out by default in `Caddyfile.prod`. To enable Authentik SSO:
 
 1. Locate the `/artifacts/*` handler section in `Caddyfile.prod`
-2. In Caddyfile.prod, replace the current Bearer token forward_auth block (lines 276-279)
-   with the Authentik forward_auth block (commented at lines 268-271) and uncomment the
-   `request_header` directives at lines 263-266
+2. In Caddyfile.prod, replace the current Bearer token forward_auth block with the
+   Authentik forward_auth block (commented out by default) and uncomment the
+   `request_header` directives that strip client-provided auth headers
 3. Restart the Caddy container:
 
 Example configuration:

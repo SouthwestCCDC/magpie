@@ -12,7 +12,7 @@ Public health check endpoint (no authentication required). Returns HTTP 200 with
 {"status": "ok"}
 ```
 
-Implementation: `src/magpie/server/app.py` lines 57-60.
+Implementation: `src/magpie/server/app.py`.
 
 Used by Docker health checks (`docker-compose.yml`, `docker-compose.prod.yml`) and container orchestration.
 
@@ -72,13 +72,13 @@ Controlled by `MAGPIE_DEBUG`:
 - `MAGPIE_DEBUG=true`: DEBUG level (verbose)
 - `MAGPIE_DEBUG=false` (default): INFO level
 
-Implementation: `src/magpie/logging_config.py` line 74.
+Implementation: `src/magpie/logging_config.py`.
 
 ### Log Output
 
 Logs are written to stderr (stdout is reserved for program output like JSON responses).
 
-Implementation: `src/magpie/logging_config.py` lines 69-76.
+Implementation: `src/magpie/logging_config.py`.
 
 ### Request Correlation
 
@@ -110,7 +110,7 @@ The middleware logs these events for all requests:
 - `request_complete`: Request succeeded (method, path, status_code, duration_ms)
 - `request_failed`: Request failed with exception (method, path, duration_ms, error)
 
-Implementation: `src/magpie/server/middleware.py` lines 49-54, 64-70, 82-89.
+Implementation: `src/magpie/server/middleware.py`.
 
 See `docs/structured-logging.md` for full details on log format and fields.
 
@@ -142,7 +142,7 @@ GC uses flock-based locking to prevent concurrent runs:
 - Lock file: `/var/run/magpie-gc.lock` (configurable via `MAGPIE_GC_LOCK_PATH`)
 - Lock is automatically released when GC completes or crashes (flock handles stale locks)
 
-Implementation: `deployment/systemd/magpie-gc.service` line 33, `src/magpie/config.py` line 35.
+Implementation: `deployment/systemd/magpie-gc.service`, `src/magpie/config.py`.
 
 ## Observability Integrations
 
@@ -151,7 +151,7 @@ Implementation: `deployment/systemd/magpie-gc.service` line 33, `src/magpie/conf
 Error tracking via Sentry (optional):
 
 - Enable: Set `MAGPIE_SENTRY_DSN` to your Sentry DSN
-- Configuration: `src/magpie/server/observability.py` lines 13-36
+- Configuration: `src/magpie/server/observability.py`
 - Environment: Automatically set to "development" (debug=true) or "production" (debug=false)
 - Trace sampling: 100% in development, 10% in production
 
@@ -162,11 +162,11 @@ Distributed tracing via OpenTelemetry (optional):
 - Enable: Set `MAGPIE_OTEL_ENABLED=true`
 - Endpoint: Set `MAGPIE_OTEL_ENDPOINT` (e.g., `http://localhost:4317` for OTLP gRPC)
 - Service name: Configure via `MAGPIE_OTEL_SERVICE_NAME` (default: "magpie")
-- Configuration: `src/magpie/server/observability.py` lines 39-72
+- Configuration: `src/magpie/server/observability.py`
 
 When OTEL is enabled, log entries include `trace_id` and `span_id` fields for correlation.
 
-Implementation: `src/magpie/logging_config.py` lines 79-104.
+Implementation: `src/magpie/logging_config.py`.
 
 ## Monitoring Recommendations
 
