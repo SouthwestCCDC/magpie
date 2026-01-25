@@ -597,6 +597,28 @@ Each validation error object contains `type`, `loc` (path to invalid field), `ms
 | 500 | Internal Server Error - unexpected server error |
 | 504 | Gateway Timeout - operation exceeded time limit |
 
+## Security Limitations
+
+Magpie provides basic token-based authentication and optional IP allow-listing. Admins should understand these limitations when planning deployments.
+
+### Token Scopes Are Global
+
+Token scopes (read, write, admin) apply to all artifacts. You cannot restrict a CI/CD token to only access `/builds/` -- a read token can read any artifact path. Use separate Magpie instances if you need strict path isolation.
+
+### IP Allow-List Bypasses Authentication
+
+When `MAGPIE_ALLOWED_CIDRS` is set, requests from those IPs can read any artifact without a token. This is not per-path access control. Configure carefully to avoid unintended exposure.
+
+If Magpie is behind a load balancer or reverse proxy, configure `trusted_proxies` in Caddyfile to ensure client IPs are correctly identified for CIDR matching.
+
+### No Built-in Rate Limiting
+
+Magpie has no built-in rate limiting. Deploy behind Cloudflare, use Caddy's rate_limit plugin, or implement at the network layer.
+
+### Token Rotation
+
+Bearer tokens do not expire. Rotate tokens quarterly or after personnel changes using `magpie-ctl token revoke` followed by `token create`.
+
 ## Quick Reference
 
 **Commands:**
