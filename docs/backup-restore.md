@@ -34,14 +34,14 @@ Default storage path: `/data/artifacts` (configurable via `MAGPIE_STORAGE_PATH`)
 
 ### Manifest Format
 
-The manifest file (`.magpie`) stores tag-to-hash mappings. Hash references use the `@xxxxxxxx` format (8-character SHA-256 prefix) for internal symlink references. The server writes full SHA-256 hashes to metadata sidecars (see below).
+The manifest file (`.magpie`) stores tag-to-hash mappings using full SHA-256 hashes (64 hex characters). Blobs and symlinks use only the first 8 characters of the hash for filenames, but the manifest stores the complete hash for verification.
 
 ```json
 {
   "version": 1,
   "tags": {
-    "latest": "@abc12345678",
-    "v2.0": "@def67890ab"
+    "latest": "abc123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "v2.0": "def67890ab123456789abcdef0123456789abcdef0123456789abcdef012345678"
   }
 }
 ```
