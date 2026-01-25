@@ -18,7 +18,7 @@
 
 ## Executive Summary
 
-**Result**: **ONE CRITICAL INACCURACY FOUND** - Requires immediate correction before v0.1.0 release.
+**Result**: **ONE CRITICAL INACCURACY FOUND AND FIXED** - The inaccuracy was identified during this audit and corrected in this PR.
 
 - **Documents audited**: 8
 - **Claims verified**: 150+
@@ -219,7 +219,7 @@ For each documented claim, I:
 
 ## Recommendation
 
-**BLOCK v0.1.0 RELEASE** until the critical inaccuracy in `user-guide.md:531` is resolved.
+The critical inaccuracy in `user-guide.md:531` was identified during this audit and **RESOLVED IN THIS PR**. No release blocker remains.
 
 **Suggested fix** (update documentation to match current behavior):
 
