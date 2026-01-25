@@ -193,7 +193,7 @@ Disclose when AI generates content that humans will read and might attribute to 
 **How to disclose:**
 
 - Match the format to the context:
-  - Commits: `Co-Authored-By:` line with AI identity
+  - Commits: `Co-authored-by:` line with AI identity
   - Documentation: admonition block or footer note
   - Comments/issues: brief closing sentence
 - Include tool and model when known (e.g., "Copilot w/ GPT-4.5", "Claude Code w/ Opus 4.5")
