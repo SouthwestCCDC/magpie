@@ -162,6 +162,21 @@ Flag these with **CRITICAL** priority:
 - **Config hierarchy**: file < env < CLI arg - verify precedence is respected
 - **Hash-based storage**: Artifacts identified by SHA-256 hash prefix (8 chars)
 
+### Review Self-Assessment
+
+At the end of your review, include a brief summary comment with:
+
+1. **Scope note**: If this PR has >10 changed files or >400 lines changed, note: "This is a large PR. Consider requesting a second review pass after addressing these comments."
+
+2. **Tooling gaps**: If you flag issues that a linter could catch automatically (formatting, import order, type errors), note which tool would help rather than commenting on each instance. Examples:
+   - Formatting issues → "Run `ruff format`"
+   - Type errors → "Consider adding stricter `mypy` rules"
+   - Security patterns → "Covered by `bandit` in CI"
+
+3. **Files skipped**: If you skipped any files as "low risk" or due to size limits, list them so the author knows to check them manually.
+
+4. **Categories reviewed**: Briefly note which categories you checked (security, API design, tests, storage logic) so authors know what wasn't covered if you focused narrowly.
+
 ## MANDATORY: Be transparent about AI use
 
 Disclose when AI generates content that humans will read and might attribute to a specific person.
