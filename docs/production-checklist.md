@@ -63,8 +63,8 @@ docker compose -f docker-compose.prod.yml exec magpie magpie-ctl init --reset-ad
 - [ ] Health endpoint responding: `curl https://$MAGPIE_DOMAIN/health`
 - [ ] Status endpoint shows storage stats: `curl -H "Authorization: Bearer $MAGPIE_ADMIN_TOKEN" https://$MAGPIE_DOMAIN/api/v1/status`
 - [ ] HTTPS enforced (HTTP redirects to HTTPS)
-- [ ] Upload works: `magpie push test.txt --to test/artifact`
-- [ ] Download works: `magpie get test/artifact:latest`
+- [ ] Upload works: `magpie push test.txt --to test/artifact --server https://$MAGPIE_DOMAIN --token $MAGPIE_ADMIN_TOKEN`
+- [ ] Download works: `magpie get test/artifact:latest --server https://$MAGPIE_DOMAIN --token $MAGPIE_ADMIN_TOKEN`
 - [ ] Authentication working (401 without token, 200 with valid token)
 
 ## Backup Configuration
