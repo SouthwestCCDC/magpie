@@ -121,6 +121,62 @@ uv run ruff format .                       # Format
 - No emojis in code/docs unless requested
 - Align with `scoring/` repo conventions
 
+## Code Review Guidelines
+
+When reviewing pull requests, follow these guidelines to provide consistent, actionable feedback.
+
+### Priority System
+
+Categorize findings by severity:
+
+- **CRITICAL** (blocks merge): Security vulnerabilities (auth bypass, token exposure, path traversal), data loss risks, breaking API changes
+- **IMPORTANT** (should fix before merge): Missing error handling, inadequate test coverage, violation of project conventions
+- **SUGGESTION** (non-blocking): Code style improvements, refactoring opportunities, documentation enhancements
+
+### Confidence Threshold
+
+Only comment when HIGH CONFIDENCE (>80%) an issue exists. Avoid speculative concerns without concrete evidence.
+
+### What CI Already Checks
+
+Our CI pipeline handles:
+- Code formatting (`ruff format`)
+- Linting (`ruff check`)
+- Security scanning (`bandit`)
+- Unit, integration, and E2E tests
+
+**Do not duplicate feedback** on issues these tools catch. Focus on logic, architecture, and security concerns that require human judgment.
+
+### Security Focus
+
+Flag these with **CRITICAL** priority:
+- Token handling vulnerabilities (exposure, weak generation)
+- Path traversal in file operations (artifacts stored by hash)
+- Authentication bypass in `forward_auth` flow
+- Missing input validation on upload endpoints
+
+### Project-Specific Review Points
+
+- **Filesystem is source of truth**: No database for artifacts - verify file operations are correct
+- **CLI vs server separation**: Client CLI should not import server internals
+- **Config hierarchy**: file < env < CLI arg - verify precedence is respected
+- **Hash-based storage**: Artifacts identified by SHA-256 hash prefix (8 chars)
+
+### Review Self-Assessment
+
+At the end of your review, include a brief summary comment with:
+
+1. **Scope note**: If this PR has >10 changed files or >400 lines changed, note: "This is a large PR. Consider requesting a second review pass after addressing these comments."
+
+2. **Tooling gaps**: If you flag issues that a linter could catch automatically (formatting, import order, type errors), note which tool would help rather than commenting on each instance. Examples:
+   - Formatting issues → "Run `ruff format`"
+   - Type errors → "Consider adding stricter `mypy` rules"
+   - Security patterns → "Covered by `bandit` in CI"
+
+3. **Files skipped**: If you skipped any files as "low risk" or due to size limits, list them so the author knows to check them manually.
+
+4. **Categories reviewed**: Briefly note which categories you checked (security, API design, tests, storage logic) so authors know what wasn't covered if you focused narrowly.
+
 ## MANDATORY: Be transparent about AI use
 
 Disclose when AI generates content that humans will read and might attribute to a specific person.
@@ -137,7 +193,7 @@ Disclose when AI generates content that humans will read and might attribute to 
 **How to disclose:**
 
 - Match the format to the context:
-  - Commits: `Co-Authored-By:` line with AI identity
+  - Commits: `Co-authored-by:` line with AI identity
   - Documentation: admonition block or footer note
   - Comments/issues: brief closing sentence
 - Include tool and model when known (e.g., "Copilot w/ GPT-4.5", "Claude Code w/ Opus 4.5")
