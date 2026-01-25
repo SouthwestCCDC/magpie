@@ -34,10 +34,10 @@ magpie tag images/ubuntu:latest --as stable
 
 ## Documentation
 
+- [Documentation Index](docs/index.md) - Complete documentation overview
 - [Installation Guide](docs/installation.md) - Server deployment and client setup
 - [User Guide](docs/user-guide.md) - Complete CLI and API reference
 - [Backup and Restore Guide](docs/backup-restore.md) - Backup procedures and disaster recovery
-- [Design Document](docs/design.md) - Architecture and implementation details
 
 ## Development
 
