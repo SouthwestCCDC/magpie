@@ -87,10 +87,8 @@ Environment variables override config file values:
 3. Config file (`~/.magpie/config.toml`)
 4. Defaults - lowest priority
 
-**Note:** The `--timeout` setting has a different precedence. It can only be set via
-CLI flag or the `MAGPIE_TIMEOUT` environment variable -- it is intentionally not read
-from the config file. This prevents long-lived global configuration from silently
-affecting network behavior. The default is 600 seconds (10 minutes).
+**Note:** The `--timeout` setting can only be set via CLI flag or the `MAGPIE_TIMEOUT`
+environment variable (not in the config file). Default: 600 seconds (10 minutes).
 
 ### SSL/TLS Configuration
 
@@ -312,7 +310,7 @@ mgp_abc123def456...
 ============================================================
 ```
 
-**Important**: Save this token securely. It cannot be recovered.
+**Important**: Save this token securely.
 
 #### Custom Admin Token
 
@@ -352,8 +350,8 @@ docker compose exec magpie magpie-ctl token revoke ci-reader
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MAGPIE_STORAGE_PATH` | `/data/artifacts` | Root directory for artifact storage |
-| `MAGPIE_TEMP_PATH` | `/data/artifacts/.tmp` | Temporary upload directory (defaults under `MAGPIE_STORAGE_PATH`, derived if storage path is overridden) |
-| `MAGPIE_DATABASE_PATH` | `/data/artifacts/.magpie.db` | SQLite token database path (defaults under `MAGPIE_STORAGE_PATH`, derived if storage path is overridden) |
+| `MAGPIE_TEMP_PATH` | `/data/artifacts/.tmp` | Temporary upload directory (defaults under `MAGPIE_STORAGE_PATH`) |
+| `MAGPIE_DATABASE_PATH` | `/data/artifacts/.magpie.db` | SQLite token database path (defaults under `MAGPIE_STORAGE_PATH`) |
 | `MAGPIE_RETENTION_DAYS` | `90` | Days before untagged blobs can be GC'd |
 | `MAGPIE_DEBUG` | `false` | Enable debug logging |
 | `MAGPIE_MAX_UPLOAD_SIZE` | (none) | Max upload size in bytes (none = unlimited) |
@@ -445,7 +443,7 @@ export MAGPIE_S3_BUCKET=my-backup-bucket
 export MAGPIE_S3_PREFIX=magpie/backups  # Optional prefix
 ```
 
-AWS credentials must be configured via environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) or IAM role.
+Configure AWS credentials via environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) or IAM role.
 
 **Requirements:**
 
@@ -583,11 +581,7 @@ The Magpie API returns errors in three formats:
 }
 ```
 
-The `detail` field is a list of validation error objects, each containing:
-- `type`: The validation error type
-- `loc`: Path to the invalid field (e.g., `["body", "field_name"]`)
-- `msg`: Human-readable error message
-- `input`: The invalid value that was provided
+Each validation error object contains `type`, `loc` (path to invalid field), `msg`, and `input` (the invalid value).
 
 **Common HTTP status codes:**
 

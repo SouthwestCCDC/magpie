@@ -34,7 +34,7 @@ Server status endpoint with storage statistics (requires admin token). Returns H
 
 Implementation: `src/magpie/server/routes/status.py`.
 
-Note: This endpoint walks the entire storage tree using `rglob`, which can be slow for large deployments. Call sparingly in production.
+**Performance note:** This endpoint may be slow for large deployments. Call sparingly in production.
 
 ### CLI Status Command
 
