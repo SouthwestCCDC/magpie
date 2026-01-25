@@ -506,6 +506,103 @@ This command is safe by default and only previews deletions unless --execute is 
 - **"Hash mismatch"**: Network or storage corruption. Try downloading again.
 - **"Duplicate" on upload**: Normal. Content-addressed deduplication returned existing hash.
 
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Runtime error after argument parsing |
+| 2 | Usage error (from Click framework) |
+
+Exit code 1 is used for operational failures that occur after arguments are successfully parsed (e.g., network errors, authentication failures, file-not-found conditions encountered during command execution). Exit code 2 is returned by Click for usage and validation errors during argument parsing (e.g., missing required arguments, invalid option values, or file/path checks performed by Click such as `magpie push FILE` when `FILE` does not exist).
+
+With `--format json`, output uses standardized envelopes:
+
+**Success** (to stdout):
+```json
+{"status": "ok", "data": {...}}
+```
+
+**Error** (to stderr):
+```json
+{"status": "error", "error": {"code": "NOT_FOUND", "message": "..."}}
+```
+
+The `error.message` field is extracted from the HTTP response's `detail` field, or falls back to the response body text if `detail` is not present. Note that for structured errors where `detail` is present but null, `error.message` will be null even if a separate `message` field exists in the response.
+
+Note that Click usage errors (exit code 2) may not produce JSON output.
+
+#### CLI JSON Error Codes
+
+When using `--format json`, the CLI uses these error codes (some mapped from HTTP responses, others from local conditions):
+
+| Error Code | Description | HTTP Status |
+|------------|-------------|-------------|
+| `NOT_FOUND` | Artifact, tag, or resource not found | 404 |
+| `UNAUTHORIZED` | Missing or invalid authentication token | 401 |
+| `FORBIDDEN` | Token lacks required permissions | 403 |
+| `CONFLICT` | Resource conflict (e.g., duplicate token name, file already exists, storage path not empty) | 409 |
+| `VALIDATION_ERROR` | Invalid request parameters or data | 400, 413, 422 |
+| `SERVER_ERROR` | Internal server error | 500+ |
+| `NETWORK_ERROR` | Network connectivity or timeout issues | N/A |
+| `IO_ERROR` | Local file I/O error | N/A |
+| `CONFIG_ERROR` | Configuration or setup error | N/A |
+
+#### API Error Responses
+
+The Magpie API returns errors in three formats:
+
+**Standard FastAPI errors** (from `HTTPException`):
+
+```json
+{"detail": "Error message"}
+```
+
+**Structured errors** (from custom exception handlers):
+
+```json
+{
+  "error": "ArtifactNotFoundError",
+  "message": "Artifact 'images/ubuntu' not found",
+  "detail": null
+}
+```
+
+**Pydantic validation errors** (HTTP 422 from request validation):
+
+```json
+{
+  "detail": [
+    {
+      "type": "string_type",
+      "loc": ["body", "field_name"],
+      "msg": "Input should be a valid string",
+      "input": 123
+    }
+  ]
+}
+```
+
+The `detail` field is a list of validation error objects, each containing:
+- `type`: The validation error type
+- `loc`: Path to the invalid field (e.g., `["body", "field_name"]`)
+- `msg`: Human-readable error message
+- `input`: The invalid value that was provided
+
+**Common HTTP status codes:**
+
+| Status | Meaning |
+|--------|---------|
+| 400 | Bad Request - invalid path, parameters, or request body |
+| 401 | Unauthorized - missing or invalid authentication |
+| 403 | Forbidden - insufficient token permissions |
+| 404 | Not Found - artifact, tag, or blob does not exist |
+| 409 | Conflict - request conflicts with current resource state |
+| 413 | Content Too Large - upload exceeds size limit |
+| 422 | Unprocessable Entity - request is well-formed but fails validation (e.g., Pydantic error) |
+| 500 | Internal Server Error - unexpected server error |
+| 504 | Gateway Timeout - operation exceeded time limit |
+
 ## Quick Reference
 
 **Commands:**
