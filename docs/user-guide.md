@@ -599,6 +599,7 @@ The `detail` field is a list of validation error objects, each containing:
 | 404 | Not Found - artifact, tag, or blob does not exist |
 | 409 | Conflict - request conflicts with current resource state |
 | 413 | Content Too Large - upload exceeds size limit |
+| 422 | Unprocessable Entity - request is well-formed but fails validation (e.g., Pydantic error) |
 | 500 | Internal Server Error - unexpected server error |
 | 504 | Gateway Timeout - operation exceeded time limit |
 
