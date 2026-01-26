@@ -22,7 +22,9 @@ from magpie.storage.metadata import (
 from magpie.storage.paths import (
     artifact_dir_path,
     check_artifact_nesting,
+    normalize_artifact_path,
     validate_artifact_path,
+    verify_path_is_descendant,
 )
 from magpie.storage.symlinks import reconcile_symlinks
 from magpie.validation import validate_tag_name
@@ -480,9 +482,17 @@ class StorageService:
 
         Args:
             prefix: Path prefix to filter by (empty string lists all).
-                   Leading slashes are stripped for normalization.
+                   Leading slashes and path traversal sequences are normalized.
             recursive: If True, list all artifacts recursively. If False (default),
-                      list only artifacts at the immediate next level.
+                      list only artifacts at the current level relative to the prefix.
+
+                      For empty prefix (""), "current level" means artifacts that are
+                      either 1 or 2 segments deep (e.g., "artifact" and "ns/artifact").
+                      This handles the common case where the storage root contains both
+                      single-segment artifacts and namespace directories.
+
+                      For non-empty prefix, "current level" means the prefix itself
+                      (if it's an artifact) plus its immediate children.
 
         Returns:
             Sorted list of artifact paths matching the prefix.
@@ -501,8 +511,13 @@ class StorageService:
             list_artifact_paths("test", True) -> ["test/artifact1", "test/artifact2",
                                                    "test/sub/deep"]
         """
-        # Normalize prefix by stripping leading slash
-        normalized_prefix = prefix.lstrip("/")
+        # Normalize and validate prefix to prevent path traversal
+        if prefix:
+            normalized_prefix = normalize_artifact_path(prefix)
+            # Verify the prefix path is safe (no symlink escapes)
+            verify_path_is_descendant(self.config.storage_path, normalized_prefix)
+        else:
+            normalized_prefix = ""
 
         artifact_paths: list[str] = []
 

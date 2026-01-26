@@ -126,10 +126,11 @@ def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str, recursive:
         recursive: If True, list all artifacts recursively. If False, list only current level.
     """
     if ctx.debug:
+        mode = "recursive" if recursive else "top-level only"
         if prefix:
-            click.echo(f"Listing paths with prefix: {prefix}...", err=True)
+            click.echo(f"Listing paths with prefix: {prefix} ({mode})...", err=True)
         else:
-            click.echo("Listing all artifact paths...", err=True)
+            click.echo(f"Listing artifact paths ({mode})...", err=True)
 
     response = client.get("/api/v1/artifacts", params={"prefix": prefix, "recursive": recursive})
 

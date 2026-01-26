@@ -488,6 +488,31 @@ class TestPathTraversal:
         # The path was normalized to just 'otherpath'
         assert response.json()["artifact_path"] == "otherpath"
 
+    def test_path_traversal_in_list_prefix_rejected(self, client: TestClient) -> None:
+        """Path traversal in list prefix query parameter should be rejected.
+
+        The list endpoint accepts a prefix query parameter which is used to
+        construct filesystem paths. This test verifies that path traversal
+        attempts in the prefix are properly rejected by normalize_artifact_path.
+        """
+        # Path traversal payloads that should be rejected
+        traversal_payloads = [
+            "../etc",
+            "test/../../../etc/passwd",
+            "..",
+            "valid/../../escape",
+        ]
+
+        for payload in traversal_payloads:
+            response = client.get("/api/v1/artifacts", params={"prefix": payload})
+
+            # Should be rejected with 400 (InvalidArtifactPathError)
+            assert response.status_code == 400, (
+                f"Path traversal in prefix not rejected: {payload}, "
+                f"got status {response.status_code}: {response.text}"
+            )
+            assert "traversal" in response.text.lower() or "not allowed" in response.text.lower()
+
 
 # =============================================================================
 # Null Byte Injection Tests
