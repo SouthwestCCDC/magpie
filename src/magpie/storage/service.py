@@ -126,9 +126,6 @@ class StorageService:
             manifest = update_tag(artifact_dir, "latest", full_hash)
             # Reconcile symlinks to match manifest
             reconcile_symlinks(artifact_dir, manifest)
-        else:
-            # Still read manifest to get tags (even without adding "latest")
-            manifest = read_manifest(artifact_dir)
 
         # Build artifact info
         tags = self._get_tags_for_hash(artifact_dir, full_hash)
