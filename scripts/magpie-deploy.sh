@@ -420,9 +420,9 @@ MAGPIE_RETENTION_DAYS=90
 
 # TLS configuration (persisted for Caddyfile regeneration during updates)
 # See issue #344
-TLS_MODE=${TLS_MODE}
+TLS_MODE=${TLS_MODE:-}
 DOMAIN=${DOMAIN:-}
-TRUSTED_PROXIES=${TRUSTED_PROXIES}
+TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
 EOF
 }
 
