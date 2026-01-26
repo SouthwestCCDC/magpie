@@ -656,15 +656,27 @@ detect_version() {
         die "Cannot detect version: pyproject.toml not found at $pyproject"
     fi
 
-    # Extract version using grep and sed
+    # Extract version using robust sed with extended regex
     # Format: version = "0.1.0-rc8"
-    MAGPIE_VERSION=$(grep '^version = ' "$pyproject" | sed 's/version = "\(.*\)"/\1/')
+    # Handles flexible whitespace around = and ensures only first match
+    MAGPIE_VERSION=$(sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$pyproject" | head -n1)
 
     if [[ -z "$MAGPIE_VERSION" ]]; then
         die "Failed to extract version from $pyproject"
     fi
 
     log "Detected magpie version: ${MAGPIE_VERSION}"
+}
+
+update_repo_to_latest() {
+    # Update repository to latest code from remote branch
+    # Expects repo to already exist at ${INSTALL_DIR}/repo
+    if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "$GITHUB_BRANCH"; then
+        die "Failed to fetch latest repository code"
+    fi
+    if ! git -C "${INSTALL_DIR}/repo" reset --hard "origin/$GITHUB_BRANCH"; then
+        die "Failed to reset repository to latest code"
+    fi
 }
 
 clone_repo() {
@@ -957,12 +969,7 @@ cmd_update() {
 
     if [[ "$FROM_SOURCE" == "true" ]]; then
         log "Pulling latest repository code..."
-        if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "$GITHUB_BRANCH"; then
-            die "Failed to fetch latest repository code"
-        fi
-        if ! git -C "${INSTALL_DIR}/repo" reset --hard "origin/$GITHUB_BRANCH"; then
-            die "Failed to reset repository to latest code"
-        fi
+        update_repo_to_latest
 
         # Detect version from updated repo
         detect_version
@@ -974,12 +981,7 @@ cmd_update() {
     else
         # Pull latest repo code to detect current version
         log "Pulling latest repository code to detect version..."
-        if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "$GITHUB_BRANCH"; then
-            die "Failed to fetch latest repository code"
-        fi
-        if ! git -C "${INSTALL_DIR}/repo" reset --hard "origin/$GITHUB_BRANCH"; then
-            die "Failed to reset repository to latest code"
-        fi
+        update_repo_to_latest
 
         # Detect version from updated repo
         detect_version
