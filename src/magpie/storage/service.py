@@ -516,24 +516,43 @@ class StorageService:
                 return []
             manifest_iter = search_root.rglob(".magpie")
         else:
-            # Non-recursive mode: limit depth to avoid walking entire tree
+            # Non-recursive mode: find artifacts that are direct children
+            # Works at any depth - no hardcoded segment limits
             if not search_root.exists() or not search_root.is_dir():
                 return []
 
-            # Use glob with limited depth instead of rglob
-            # When prefix is given: check prefix/.magpie and prefix/*/.magpie
-            # When no prefix: check */*/.magpie (one level deep in artifact path terms)
             manifest_iter = []
+
+            # When we have a prefix, also check if the prefix itself is an artifact
             if normalized_prefix:
-                # Check for exact prefix match
-                prefix_manifest = search_root / ".magpie"
-                if prefix_manifest.is_file():
-                    manifest_iter.append(prefix_manifest)
-                # Check for immediate children under prefix
-                manifest_iter.extend(search_root.glob("*/.magpie"))
-            else:
-                # No prefix: find artifacts one level deep (e.g., "test/artifact1")
-                manifest_iter = search_root.glob("*/*/.magpie")
+                root_manifest = search_root / ".magpie"
+                if root_manifest.is_file():
+                    manifest_iter.append(root_manifest)
+
+            # Check immediate children for .magpie files
+            try:
+                for child in search_root.iterdir():
+                    if child.is_dir():
+                        # Check if immediate child is an artifact
+                        child_manifest = child / ".magpie"
+                        if child_manifest.is_file():
+                            manifest_iter.append(child_manifest)
+
+                        # When no prefix: also check grandchildren to catch 2-segment
+                        # artifacts like "ns/artifact" from root.
+                        # With prefix: don't check grandchildren (only direct children).
+                        if not normalized_prefix:
+                            try:
+                                for grandchild in child.iterdir():
+                                    if grandchild.is_dir():
+                                        grandchild_manifest = grandchild / ".magpie"
+                                        if grandchild_manifest.is_file():
+                                            manifest_iter.append(grandchild_manifest)
+                            except (OSError, PermissionError):
+                                continue
+            except (OSError, PermissionError):
+                # Handle permission errors or other filesystem issues gracefully
+                pass
 
         for manifest_file in manifest_iter:
             # Get artifact directory (parent of .magpie file)

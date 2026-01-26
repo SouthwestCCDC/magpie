@@ -539,3 +539,102 @@ class TestListArtifactPaths:
         assert "test/artifact" in paths
         assert "test/sub/deep" in paths
         assert "test2/artifact" not in paths
+
+    def test_list_paths_non_recursive_single_segment(self, storage_service: StorageService) -> None:
+        """Non-recursive list should find single-segment artifacts.
+
+        Regression test for issue #329: glob("*/*/.magpie") silently hid
+        single-segment artifacts like "simple".
+        """
+        # Store single-segment artifact
+        storage_service.store_artifact(
+            artifact_path="simple",
+            file_stream=io.BytesIO(b"content1"),
+            uploaded_by="user",
+        )
+        # Store multi-segment for comparison
+        storage_service.store_artifact(
+            artifact_path="ns/artifact",
+            file_stream=io.BytesIO(b"content2"),
+            uploaded_by="user",
+        )
+
+        # Non-recursive list with no prefix should find both
+        paths = storage_service.list_artifact_paths(recursive=False)
+        assert len(paths) == 2
+        assert "simple" in paths
+        assert "ns/artifact" in paths
+
+    def test_list_paths_non_recursive_deeply_nested(self, storage_service: StorageService) -> None:
+        """Non-recursive list should work at arbitrary depths.
+
+        Tests that non-recursive listing correctly interprets "direct children"
+        at various prefix depths.
+        """
+        # Create deeply nested artifacts
+        storage_service.store_artifact(
+            artifact_path="a/b/c/d",
+            file_stream=io.BytesIO(b"deep"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="a/b/c/e",
+            file_stream=io.BytesIO(b"deep2"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="a/b/c/sub/deeper",
+            file_stream=io.BytesIO(b"deeper"),
+            uploaded_by="user",
+        )
+
+        # Non-recursive at "a/b/c" should find d, e but not sub/deeper
+        paths = storage_service.list_artifact_paths(prefix="a/b/c", recursive=False)
+        assert len(paths) == 2
+        assert "a/b/c/d" in paths
+        assert "a/b/c/e" in paths
+        assert "a/b/c/sub/deeper" not in paths
+
+    def test_list_paths_non_recursive_various_depths(self, storage_service: StorageService) -> None:
+        """Non-recursive mode should correctly list direct children at each prefix depth."""
+        # Create artifacts at various depths
+        storage_service.store_artifact(
+            artifact_path="root",
+            file_stream=io.BytesIO(b"r"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test/one",
+            file_stream=io.BytesIO(b"t1"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test/two",
+            file_stream=io.BytesIO(b"t2"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test/sub/deep",
+            file_stream=io.BytesIO(b"td"),
+            uploaded_by="user",
+        )
+
+        # No prefix: list immediate children (root and test/one, test/two)
+        paths = storage_service.list_artifact_paths(recursive=False)
+        assert len(paths) == 3
+        assert "root" in paths
+        assert "test/one" in paths
+        assert "test/two" in paths
+        assert "test/sub/deep" not in paths
+
+        # Prefix "test": list direct children of test/ (one, two, not sub/deep)
+        paths = storage_service.list_artifact_paths(prefix="test", recursive=False)
+        assert len(paths) == 2
+        assert "test/one" in paths
+        assert "test/two" in paths
+        assert "test/sub/deep" not in paths
+
+        # Prefix "test/sub": list direct children of test/sub/ (deep)
+        paths = storage_service.list_artifact_paths(prefix="test/sub", recursive=False)
+        assert len(paths) == 1
+        assert "test/sub/deep" in paths
