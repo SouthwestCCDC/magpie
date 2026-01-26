@@ -53,7 +53,7 @@ Production setup automatically provisions TLS certificates via Let's Encrypt. Th
 
 ## Server Initialization
 
-The container automatically runs `magpie-ctl init` on first startup (see [entrypoint.sh](../entrypoint.sh#L93-L110)). This creates storage directories, initializes the database, and generates a break-glass admin token.
+The container automatically runs `magpie-ctl init` on first startup (see [entrypoint.sh](../entrypoint.sh)). This creates storage directories, initializes the database, and generates a break-glass admin token.
 
 **For Docker Compose deployments**, the admin token is printed to container logs on first startup. Retrieve it with:
 

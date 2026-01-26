@@ -87,10 +87,8 @@ Environment variables override config file values:
 3. Config file (`~/.magpie/config.toml`)
 4. Defaults - lowest priority
 
-**Note:** The `--timeout` setting has a different precedence. It can only be set via
-CLI flag or the `MAGPIE_TIMEOUT` environment variable -- it is intentionally not read
-from the config file. This prevents long-lived global configuration from silently
-affecting network behavior. The default is 600 seconds (10 minutes).
+**Note:** The `--timeout` setting can only be set via CLI flag or the `MAGPIE_TIMEOUT`
+environment variable (not in the config file). Default: 600 seconds (10 minutes).
 
 ### SSL/TLS Configuration
 
@@ -312,7 +310,7 @@ mgp_abc123def456...
 ============================================================
 ```
 
-**Important**: Save this token securely. It cannot be recovered.
+**Important**: Save this token securely.
 
 #### Custom Admin Token
 
@@ -352,8 +350,8 @@ docker compose exec magpie magpie-ctl token revoke ci-reader
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MAGPIE_STORAGE_PATH` | `/data/artifacts` | Root directory for artifact storage |
-| `MAGPIE_TEMP_PATH` | `/data/artifacts/.tmp` | Temporary upload directory (defaults under `MAGPIE_STORAGE_PATH`, derived if storage path is overridden) |
-| `MAGPIE_DATABASE_PATH` | `/data/artifacts/.magpie.db` | SQLite token database path (defaults under `MAGPIE_STORAGE_PATH`, derived if storage path is overridden) |
+| `MAGPIE_TEMP_PATH` | `/data/artifacts/.tmp` | Temporary upload directory (defaults under `MAGPIE_STORAGE_PATH`) |
+| `MAGPIE_DATABASE_PATH` | `/data/artifacts/.magpie.db` | SQLite token database path (defaults under `MAGPIE_STORAGE_PATH`) |
 | `MAGPIE_RETENTION_DAYS` | `90` | Days before untagged blobs can be GC'd |
 | `MAGPIE_DEBUG` | `false` | Enable debug logging |
 | `MAGPIE_MAX_UPLOAD_SIZE` | (none) | Max upload size in bytes (none = unlimited) |
@@ -445,7 +443,7 @@ export MAGPIE_S3_BUCKET=my-backup-bucket
 export MAGPIE_S3_PREFIX=magpie/backups  # Optional prefix
 ```
 
-AWS credentials must be configured via environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) or IAM role.
+Configure AWS credentials via environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) or IAM role.
 
 **Requirements:**
 
@@ -528,7 +526,7 @@ With `--format json`, output uses standardized envelopes:
 {"status": "error", "error": {"code": "NOT_FOUND", "message": "..."}}
 ```
 
-The `error.message` field is extracted from the HTTP response's `detail` field, or falls back to the response body text if `detail` is not present. Note that for structured errors where `detail` is present but null, `error.message` will be null even if a separate `message` field exists in the response.
+The `error.message` field is derived from the HTTP response body by first attempting to parse it as JSON and read a `detail` field; if the response body is not valid JSON or does not include `detail`, the raw response body text is used instead.
 
 Note that Click usage errors (exit code 2) may not produce JSON output.
 
@@ -583,11 +581,7 @@ The Magpie API returns errors in three formats:
 }
 ```
 
-The `detail` field is a list of validation error objects, each containing:
-- `type`: The validation error type
-- `loc`: Path to the invalid field (e.g., `["body", "field_name"]`)
-- `msg`: Human-readable error message
-- `input`: The invalid value that was provided
+Each validation error object contains `type`, `loc` (path to invalid field), `msg`, and `input` (the invalid value).
 
 **Common HTTP status codes:**
 
@@ -602,6 +596,28 @@ The `detail` field is a list of validation error objects, each containing:
 | 422 | Unprocessable Entity - request is well-formed but fails validation (e.g., Pydantic error) |
 | 500 | Internal Server Error - unexpected server error |
 | 504 | Gateway Timeout - operation exceeded time limit |
+
+## Security Limitations
+
+Magpie provides basic token-based authentication and optional IP allow-listing. Admins should understand these limitations when planning deployments.
+
+### Token Scopes Are Global
+
+Token scopes (read, write, admin) apply to all artifacts. You cannot restrict a CI/CD token to only access `/builds/` -- a read token can read any artifact path. Use separate Magpie instances if you need strict path isolation.
+
+### IP Allow-List Bypasses Authentication
+
+When `MAGPIE_ALLOWED_CIDRS` is set, requests from those IPs can read any artifact without a token. This is not per-path access control. Configure carefully to avoid unintended exposure.
+
+If Magpie is behind a load balancer or reverse proxy, configure `trusted_proxies` in Caddyfile to ensure client IPs are correctly identified for CIDR matching.
+
+### No Built-in Rate Limiting
+
+Magpie has no built-in rate limiting. Deploy behind Cloudflare, use Caddy's rate_limit plugin, or implement at the network layer.
+
+### Token Rotation
+
+Bearer tokens do not expire. Rotate tokens quarterly or after personnel changes using `magpie-ctl token revoke` followed by `token create`.
 
 ## Quick Reference
 

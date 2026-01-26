@@ -105,9 +105,9 @@ services:
 The forward_auth block is commented out by default in `Caddyfile.prod`. To enable Authentik SSO:
 
 1. Locate the `/artifacts/*` handler section in `Caddyfile.prod`
-2. In Caddyfile.prod, replace the current Bearer token forward_auth block (lines 276-279)
-   with the Authentik forward_auth block (commented at lines 268-271) and uncomment the
-   `request_header` directives at lines 263-266
+2. In Caddyfile.prod, replace the current Bearer token forward_auth block with the
+   Authentik forward_auth block (commented out by default) and uncomment the
+   `request_header` directives that strip client-provided auth headers
 3. Restart the Caddy container:
 
 Example configuration:
@@ -135,7 +135,7 @@ Run from the directory containing docker-compose.prod.yml:
 docker compose -f docker-compose.prod.yml restart caddy
 ```
 
-**Note:** The `request_header -X-authentik-*` directives strip any client-provided headers before authentication. This prevents malicious clients from spoofing identity headers.
+**Note:** The `request_header -X-authentik-*` directives strip client-provided headers before authentication.
 
 
 ## Testing
@@ -159,7 +159,7 @@ docker compose -f docker-compose.prod.yml restart caddy
 ## Security
 
 - **Sessions**: Authentik manages cookies; duration configured in provider settings. Sessions can be revoked centrally.
-- **Headers**: Authentik passes `X-authentik-username`, `X-authentik-email`, `X-authentik-name`, `X-authentik-groups`. Headers stripped from incoming client requests (defense-in-depth).
+- **Headers**: Authentik passes `X-authentik-username`, `X-authentik-email`, `X-authentik-name`, `X-authentik-groups`. Client-provided headers are stripped before authentication.
 - **Network**: Authentik endpoint must be reachable from Caddy. Use private networking or VPN if on different networks. TLS required for production.
 
 ## Authentication Methods
