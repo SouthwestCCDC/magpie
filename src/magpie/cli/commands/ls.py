@@ -185,7 +185,7 @@ def _extract_immediate_children(paths: list[str], prefix: str) -> list[str]:
 
     Examples:
         prefix="" and paths=["test/artifact1", "test/artifact2", "test/sub/deep", "images/ubuntu"]
-        -> ["external-test/", "images/", "iso/", "test/"]
+        -> ["images/", "test/"]
 
         prefix="test" and paths=["test/artifact1", "test/artifact2", "test/sub/deep"]
         -> ["artifact1", "artifact2", "sub/"]
