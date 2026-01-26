@@ -447,6 +447,31 @@ class TestListArtifactPaths:
         assert len(paths) == 1
         assert "test/artifact" in paths
 
+    def test_list_paths_slash_only_lists_all(self, storage_service: StorageService) -> None:
+        """list_artifact_paths should treat slash-only prefix as root listing."""
+        storage_service.store_artifact(
+            artifact_path="test/artifact1",
+            file_stream=io.BytesIO(b"content1"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="other/artifact2",
+            file_stream=io.BytesIO(b"content2"),
+            uploaded_by="user",
+        )
+
+        # Single slash should list all artifacts (normalized to empty prefix)
+        paths = storage_service.list_artifact_paths("/")
+        assert len(paths) == 2
+        assert "test/artifact1" in paths
+        assert "other/artifact2" in paths
+
+        # Multiple slashes should also work
+        paths = storage_service.list_artifact_paths("//")
+        assert len(paths) == 2
+        assert "test/artifact1" in paths
+        assert "other/artifact2" in paths
+
     def test_list_paths_empty_returns_empty(self, storage_service: StorageService) -> None:
         """list_artifact_paths should return empty list when no artifacts."""
         paths = storage_service.list_artifact_paths()

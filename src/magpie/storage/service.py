@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import TYPE_CHECKING, BinaryIO
 import structlog
 
 from magpie.storage.blob import store_blob
-from magpie.storage.exceptions import ArtifactNotFoundError
+from magpie.storage.exceptions import ArtifactNotFoundError, InvalidArtifactPathError
 from magpie.storage.hash import short_hash
 from magpie.storage.manifest import read_manifest, remove_tag, update_tag
 from magpie.storage.metadata import (
@@ -22,7 +23,6 @@ from magpie.storage.metadata import (
 from magpie.storage.paths import (
     artifact_dir_path,
     check_artifact_nesting,
-    normalize_artifact_path,
     validate_artifact_path,
     verify_path_is_descendant,
 )
@@ -511,13 +511,21 @@ class StorageService:
             list_artifact_paths("test", True) -> ["test/artifact1", "test/artifact2",
                                                    "test/sub/deep"]
         """
-        # Normalize and validate prefix to prevent path traversal
-        if prefix:
-            normalized_prefix = normalize_artifact_path(prefix)
+        # Normalize prefix for listing - allow empty result for root listing
+        # Strip leading/trailing slashes and collapse multiple slashes
+        normalized_prefix = prefix.strip("/") if prefix else ""
+        if normalized_prefix:
+            normalized_prefix = re.sub(r"/+", "/", normalized_prefix)
+
+            # Check for path traversal attempts
+            segments = normalized_prefix.split("/")
+            if any(segment == ".." for segment in segments):
+                raise InvalidArtifactPathError(
+                    "Path traversal '..' is not allowed in artifact paths"
+                )
+
             # Verify the prefix path is safe (no symlink escapes)
             verify_path_is_descendant(self.config.storage_path, normalized_prefix)
-        else:
-            normalized_prefix = ""
 
         artifact_paths: list[str] = []
 
