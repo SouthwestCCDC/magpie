@@ -974,13 +974,28 @@ cmd_update() {
     # Detect version from updated repo
     detect_version
 
-    # Checkout the version tag for consistency
-    log "Checking out version tag v${MAGPIE_VERSION}..."
-    if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "refs/tags/v${MAGPIE_VERSION}"; then
-        die "Failed to fetch version tag v${MAGPIE_VERSION}"
+    # Ensure repository is not shallow so tags can be fetched reliably
+    if git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository >/dev/null 2>&1; then
+        if [[ "$(git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository)" == "true" ]]; then
+            log "Repository is shallow; fetching full history to access tags..."
+            if ! git -C "${INSTALL_DIR}/repo" fetch --unshallow --tags; then
+                die "Failed to unshallow repository to fetch tags"
+            fi
+        fi
     fi
-    if ! git -C "${INSTALL_DIR}/repo" checkout "v${MAGPIE_VERSION}"; then
-        die "Failed to checkout version tag v${MAGPIE_VERSION}"
+
+    # Checkout the version tag for consistency when it exists.
+    # If no corresponding tag is found (e.g. development version), stay on the branch HEAD.
+    if git -C "${INSTALL_DIR}/repo" ls-remote --tags origin "v${MAGPIE_VERSION}" | grep -q .; then
+        log "Checking out version tag v${MAGPIE_VERSION}..."
+        if ! git -C "${INSTALL_DIR}/repo" fetch origin "refs/tags/v${MAGPIE_VERSION}:refs/tags/v${MAGPIE_VERSION}"; then
+            die "Failed to fetch version tag v${MAGPIE_VERSION}"
+        fi
+        if ! git -C "${INSTALL_DIR}/repo" checkout "v${MAGPIE_VERSION}"; then
+            die "Failed to checkout version tag v${MAGPIE_VERSION}"
+        fi
+    else
+        log_warn "No git tag v${MAGPIE_VERSION} found for detected version; continuing on branch ${GITHUB_BRANCH}"
     fi
 
     # Update compose files from repo
@@ -989,11 +1004,35 @@ cmd_update() {
     cp "${INSTALL_DIR}/repo/docker-compose.prod.yml" "${INSTALL_DIR}/" 2>/dev/null || true
 
     # Update Caddyfile from repo
-    log "Updating Caddyfile from Caddyfile.prod..."
+    log "Updating Caddyfile using Caddyfile.prod and existing configuration..."
     if [[ ! -f "${INSTALL_DIR}/repo/Caddyfile.prod" ]]; then
         log_warn "Caddyfile.prod not found in repo, skipping Caddyfile update"
     else
-        cp "${INSTALL_DIR}/repo/Caddyfile.prod" "${INSTALL_DIR}/etc/Caddyfile"
+        # Load existing environment (may include TLS_MODE, DOMAIN, TRUSTED_PROXIES if stored in .env)
+        # Note: Current installation only stores MAGPIE_* variables in .env (see generate_env_file).
+        # TLS_MODE and TRUSTED_PROXIES are not persisted, so this will only work if they were added
+        # manually or in a future version that persists them. See issue #340 for planned fix.
+        if [[ -f "${INSTALL_DIR}/etc/.env" ]]; then
+            set -a
+            # shellcheck disable=SC1091
+            source "${INSTALL_DIR}/etc/.env"
+            set +a
+        fi
+
+        # Prefer regenerating the Caddyfile to preserve TLS/trusted_proxies settings
+        # If TLS_MODE is not set (because it's not in .env), this will fall back to direct copy with a warning
+        if [[ -n "${TLS_MODE:-}" ]] && declare -F generate_caddyfile >/dev/null 2>&1; then
+            generate_caddyfile
+        else
+            if [[ -z "${TLS_MODE:-}" ]]; then
+                log_warn "TLS_MODE not found in environment; falling back to direct Caddyfile copy"
+                log_warn "If you customized TLS settings, you may need to reapply them manually"
+                log_warn "See issue #340 for planned improvement to persist TLS configuration"
+            else
+                log_warn "generate_caddyfile() not found; falling back to direct Caddyfile copy"
+            fi
+            cp "${INSTALL_DIR}/repo/Caddyfile.prod" "${INSTALL_DIR}/etc/Caddyfile"
+        fi
     fi
 
     # Re-patch compose files for deployment
@@ -1028,8 +1067,8 @@ cmd_update() {
     log "Update complete!"
     echo ""
     echo "  Updated to version: ${MAGPIE_VERSION}"
-    echo "  Note: Local customizations to docker-compose.yml or Caddyfile may have"
-    echo "  been overwritten. Review the updated files if you had custom changes."
+    echo "  Note: docker-compose.yml and Caddyfile have been regenerated from the repository."
+    echo "  Any local customizations to these files have been overwritten; review and reapply as needed."
     echo ""
 }
 
