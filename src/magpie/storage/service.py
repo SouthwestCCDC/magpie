@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import TYPE_CHECKING, BinaryIO
 import structlog
 
 from magpie.storage.blob import store_blob
-from magpie.storage.exceptions import ArtifactNotFoundError
+from magpie.storage.exceptions import ArtifactNotFoundError, InvalidArtifactPathError
 from magpie.storage.hash import short_hash
 from magpie.storage.manifest import read_manifest, remove_tag, update_tag
 from magpie.storage.metadata import (
@@ -23,6 +24,7 @@ from magpie.storage.paths import (
     artifact_dir_path,
     check_artifact_nesting,
     validate_artifact_path,
+    verify_path_is_descendant,
 )
 from magpie.storage.symlinks import reconcile_symlinks
 from magpie.validation import validate_tag_name
@@ -475,24 +477,107 @@ class StorageService:
 
         raise ArtifactNotFoundError(f"Blob not found for hash ref {hash_ref}")
 
-    def list_artifact_paths(self, prefix: str = "") -> list[str]:
+    def list_artifact_paths(self, prefix: str = "", recursive: bool = False) -> list[str]:
         """List artifact paths under a given prefix.
 
         Args:
             prefix: Path prefix to filter by (empty string lists all).
-                   Leading slashes are stripped for normalization.
+                   Leading slashes are normalized and path traversal sequences are rejected.
+            recursive: If True, list all artifacts recursively. If False (default),
+                      list only artifacts at the current level relative to the prefix.
+
+                      For empty prefix (""), "current level" means artifacts that are
+                      either 1 or 2 segments deep (e.g., "artifact" and "ns/artifact").
+                      This handles the common case where the storage root contains both
+                      single-segment artifacts and namespace directories.
+
+                      For non-empty prefix, "current level" means the prefix itself
+                      (if it's an artifact) plus its immediate children.
 
         Returns:
             Sorted list of artifact paths matching the prefix.
             Returns paths that have a .magpie manifest file.
+
+        Examples:
+            With artifacts at: test/artifact1, test/artifact2, test/sub/deep,
+                              images/ubuntu, other/path
+
+            list_artifact_paths("", False) -> ["images/ubuntu", "other/path",
+                                                "test/artifact1", "test/artifact2"]
+            list_artifact_paths("", True) -> ["images/ubuntu", "other/path",
+                                               "test/artifact1", "test/artifact2",
+                                               "test/sub/deep"]
+            list_artifact_paths("test", False) -> ["test/artifact1", "test/artifact2"]
+            list_artifact_paths("test", True) -> ["test/artifact1", "test/artifact2",
+                                                   "test/sub/deep"]
         """
-        # Normalize prefix by stripping leading slash
-        normalized_prefix = prefix.lstrip("/")
+        # Normalize prefix for listing - allow empty result for root listing
+        # Strip leading/trailing slashes and collapse multiple slashes
+        normalized_prefix = prefix.strip("/") if prefix else ""
+        if normalized_prefix:
+            normalized_prefix = re.sub(r"/+", "/", normalized_prefix)
+
+            # Check for path traversal attempts
+            segments = normalized_prefix.split("/")
+            if any(segment == ".." for segment in segments):
+                raise InvalidArtifactPathError(
+                    "Path traversal '..' is not allowed in artifact paths"
+                )
+
+            # Verify the prefix path is safe (no symlink escapes)
+            verify_path_is_descendant(self.config.storage_path, normalized_prefix)
 
         artifact_paths: list[str] = []
 
-        # Find all .magpie manifest files under storage_path
-        for manifest_file in self.config.storage_path.rglob(".magpie"):
+        # Determine search root based on prefix to avoid walking the entire tree
+        search_root = self.config.storage_path
+        if normalized_prefix:
+            search_root = search_root / normalized_prefix
+
+        if recursive:
+            if not search_root.exists() or not search_root.is_dir():
+                return []
+            manifest_iter = search_root.rglob(".magpie")
+        else:
+            # Non-recursive mode: find artifacts that are direct children
+            # Works at any depth - no hardcoded segment limits
+            if not search_root.exists() or not search_root.is_dir():
+                return []
+
+            manifest_iter = []
+
+            # When we have a prefix, also check if the prefix itself is an artifact
+            if normalized_prefix:
+                root_manifest = search_root / ".magpie"
+                if root_manifest.is_file():
+                    manifest_iter.append(root_manifest)
+
+            # Check immediate children for .magpie files
+            try:
+                for child in search_root.iterdir():
+                    if child.is_dir():
+                        # Check if immediate child is an artifact
+                        child_manifest = child / ".magpie"
+                        if child_manifest.is_file():
+                            manifest_iter.append(child_manifest)
+
+                        # When no prefix: also check grandchildren to catch 2-segment
+                        # artifacts like "ns/artifact" from root.
+                        # With prefix: don't check grandchildren (only direct children).
+                        if not normalized_prefix:
+                            try:
+                                for grandchild in child.iterdir():
+                                    if grandchild.is_dir():
+                                        grandchild_manifest = grandchild / ".magpie"
+                                        if grandchild_manifest.is_file():
+                                            manifest_iter.append(grandchild_manifest)
+                            except (OSError, PermissionError):
+                                continue
+            except (OSError, PermissionError):
+                # Handle permission errors or other filesystem issues gracefully
+                pass
+
+        for manifest_file in manifest_iter:
             # Get artifact directory (parent of .magpie file)
             artifact_dir = manifest_file.parent
 
@@ -501,10 +586,14 @@ class StorageService:
 
             # Filter by prefix if provided
             if normalized_prefix:
-                if artifact_path.startswith(normalized_prefix):
-                    artifact_paths.append(artifact_path)
-            else:
-                artifact_paths.append(artifact_path)
+                # Treat prefix as a path-segment prefix, not a raw string prefix
+                if not (
+                    artifact_path == normalized_prefix
+                    or artifact_path.startswith(normalized_prefix + "/")
+                ):
+                    continue
+
+            artifact_paths.append(artifact_path)
 
         return sorted(artifact_paths)
 

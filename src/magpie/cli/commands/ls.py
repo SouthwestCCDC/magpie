@@ -23,19 +23,32 @@ from magpie.cli.formatting import (
 
 @click.command(name="ls")
 @click.argument("artifact_path", required=False)
+@click.option(
+    "--recursive",
+    "-r",
+    is_flag=True,
+    help="List artifacts recursively (default: only current level)",
+)
 @click.pass_obj
-def ls(ctx: CLIContext, artifact_path: str | None) -> None:
+def ls(ctx: CLIContext, artifact_path: str | None, recursive: bool) -> None:
     """List artifacts or versions.
 
-    With no arguments, lists all available artifact paths.
+    With no arguments, lists artifact paths at the current level.
     With a partial path, lists artifact paths under that prefix.
     With a full artifact path, lists all versions of that artifact.
 
+    By default, only lists artifacts at the current level. Use --recursive
+    to list all artifacts recursively.
+
     Examples:
 
-        magpie ls                    # List all artifact paths
+        magpie ls                    # List artifact paths (current level)
 
-        magpie ls test               # List paths under test/
+        magpie ls --recursive        # List all artifact paths recursively
+
+        magpie ls test               # List paths under test/ (current level)
+
+        magpie ls -r test            # List all paths under test/ recursively
 
         magpie ls test/myartifact    # List versions of test/myartifact
 
@@ -52,7 +65,7 @@ def ls(ctx: CLIContext, artifact_path: str | None) -> None:
         # Case 1: No path provided - list all artifact paths
         # Also treat slash-only paths ("/", "//", etc.) as empty to list all artifacts
         if not artifact_path or artifact_path.strip("/") == "":
-            _list_paths(ctx, client, "")
+            _list_paths(ctx, client, "", recursive)
             return
 
         # Parse path, stripping any ref if accidentally provided (e.g., path:tag)
@@ -100,24 +113,26 @@ def ls(ctx: CLIContext, artifact_path: str | None) -> None:
             # No versions but path exists - fall through to prefix listing
 
         # Case 3: Treat as prefix and list matching paths
-        _list_paths(ctx, client, normalized_path)
+        _list_paths(ctx, client, normalized_path, recursive)
 
 
-def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str) -> None:
+def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str, recursive: bool) -> None:
     """List artifact paths matching a prefix.
 
     Args:
         ctx: CLI context.
         client: HTTP client.
         prefix: Path prefix to filter by (empty string for all).
+        recursive: If True, list all artifacts recursively. If False, list only current level.
     """
     if ctx.debug:
+        mode = "recursive" if recursive else "top-level only"
         if prefix:
-            click.echo(f"Listing paths with prefix: {prefix}...", err=True)
+            click.echo(f"Listing paths with prefix: {prefix} ({mode})...", err=True)
         else:
-            click.echo("Listing all artifact paths...", err=True)
+            click.echo(f"Listing artifact paths ({mode})...", err=True)
 
-    response = client.get("/api/v1/artifacts", params={"prefix": prefix})
+    response = client.get("/api/v1/artifacts", params={"prefix": prefix, "recursive": recursive})
 
     if response.status_code != 200:
         handle_response_error(response, "List", ctx.token)

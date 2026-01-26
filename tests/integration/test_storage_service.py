@@ -447,6 +447,31 @@ class TestListArtifactPaths:
         assert len(paths) == 1
         assert "test/artifact" in paths
 
+    def test_list_paths_slash_only_lists_all(self, storage_service: StorageService) -> None:
+        """list_artifact_paths should treat slash-only prefix as root listing."""
+        storage_service.store_artifact(
+            artifact_path="test/artifact1",
+            file_stream=io.BytesIO(b"content1"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="other/artifact2",
+            file_stream=io.BytesIO(b"content2"),
+            uploaded_by="user",
+        )
+
+        # Single slash should list all artifacts (normalized to empty prefix)
+        paths = storage_service.list_artifact_paths("/")
+        assert len(paths) == 2
+        assert "test/artifact1" in paths
+        assert "other/artifact2" in paths
+
+        # Multiple slashes should also work
+        paths = storage_service.list_artifact_paths("//")
+        assert len(paths) == 2
+        assert "test/artifact1" in paths
+        assert "other/artifact2" in paths
+
     def test_list_paths_empty_returns_empty(self, storage_service: StorageService) -> None:
         """list_artifact_paths should return empty list when no artifacts."""
         paths = storage_service.list_artifact_paths()
@@ -462,3 +487,179 @@ class TestListArtifactPaths:
 
         paths = storage_service.list_artifact_paths("images")
         assert paths == []
+
+    def test_list_paths_prefix_does_not_match_siblings(
+        self, storage_service: StorageService
+    ) -> None:
+        """list_artifact_paths prefix filter should not match sibling paths.
+
+        Regression test: prefix="test" should not match "test2/artifact".
+        """
+        # Store artifacts with similar prefixes
+        storage_service.store_artifact(
+            artifact_path="test/artifact",
+            file_stream=io.BytesIO(b"content1"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test2/artifact",
+            file_stream=io.BytesIO(b"content2"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="testing/artifact",
+            file_stream=io.BytesIO(b"content3"),
+            uploaded_by="user",
+        )
+
+        # List with prefix "test" should only match "test/artifact"
+        paths = storage_service.list_artifact_paths("test")
+        assert len(paths) == 1
+        assert "test/artifact" in paths
+        assert "test2/artifact" not in paths
+        assert "testing/artifact" not in paths
+
+    def test_list_paths_prefix_exact_match(self, storage_service: StorageService) -> None:
+        """list_artifact_paths should match artifact paths that exactly equal the prefix."""
+        # Store an artifact at the exact prefix path
+        storage_service.store_artifact(
+            artifact_path="myproject",
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="other/artifact",
+            file_stream=io.BytesIO(b"content2"),
+            uploaded_by="user",
+        )
+
+        # List with prefix "myproject" should only match the exact path
+        paths = storage_service.list_artifact_paths("myproject")
+        assert len(paths) == 1
+        assert "myproject" in paths
+        assert "other/artifact" not in paths
+
+    def test_list_paths_recursive_prefix_siblings(self, storage_service: StorageService) -> None:
+        """list_artifact_paths with recursive=True should not match sibling prefixes."""
+        # Store artifacts with similar prefixes
+        storage_service.store_artifact(
+            artifact_path="test/artifact",
+            file_stream=io.BytesIO(b"content1"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test/sub/deep",
+            file_stream=io.BytesIO(b"content2"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test2/artifact",
+            file_stream=io.BytesIO(b"content3"),
+            uploaded_by="user",
+        )
+
+        # Recursive list with prefix "test" should only match "test/*"
+        paths = storage_service.list_artifact_paths("test", recursive=True)
+        assert len(paths) == 2
+        assert "test/artifact" in paths
+        assert "test/sub/deep" in paths
+        assert "test2/artifact" not in paths
+
+    def test_list_paths_non_recursive_single_segment(self, storage_service: StorageService) -> None:
+        """Non-recursive list should find single-segment artifacts.
+
+        Regression test for issue #329: glob("*/*/.magpie") silently hid
+        single-segment artifacts like "simple".
+        """
+        # Store single-segment artifact
+        storage_service.store_artifact(
+            artifact_path="simple",
+            file_stream=io.BytesIO(b"content1"),
+            uploaded_by="user",
+        )
+        # Store multi-segment for comparison
+        storage_service.store_artifact(
+            artifact_path="ns/artifact",
+            file_stream=io.BytesIO(b"content2"),
+            uploaded_by="user",
+        )
+
+        # Non-recursive list with no prefix should find both
+        paths = storage_service.list_artifact_paths(recursive=False)
+        assert len(paths) == 2
+        assert "simple" in paths
+        assert "ns/artifact" in paths
+
+    def test_list_paths_non_recursive_deeply_nested(self, storage_service: StorageService) -> None:
+        """Non-recursive list should work at arbitrary depths.
+
+        Tests that non-recursive listing correctly interprets "direct children"
+        at various prefix depths.
+        """
+        # Create deeply nested artifacts
+        storage_service.store_artifact(
+            artifact_path="a/b/c/d",
+            file_stream=io.BytesIO(b"deep"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="a/b/c/e",
+            file_stream=io.BytesIO(b"deep2"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="a/b/c/sub/deeper",
+            file_stream=io.BytesIO(b"deeper"),
+            uploaded_by="user",
+        )
+
+        # Non-recursive at "a/b/c" should find d, e but not sub/deeper
+        paths = storage_service.list_artifact_paths(prefix="a/b/c", recursive=False)
+        assert len(paths) == 2
+        assert "a/b/c/d" in paths
+        assert "a/b/c/e" in paths
+        assert "a/b/c/sub/deeper" not in paths
+
+    def test_list_paths_non_recursive_various_depths(self, storage_service: StorageService) -> None:
+        """Non-recursive mode should correctly list direct children at each prefix depth."""
+        # Create artifacts at various depths
+        storage_service.store_artifact(
+            artifact_path="root",
+            file_stream=io.BytesIO(b"r"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test/one",
+            file_stream=io.BytesIO(b"t1"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test/two",
+            file_stream=io.BytesIO(b"t2"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test/sub/deep",
+            file_stream=io.BytesIO(b"td"),
+            uploaded_by="user",
+        )
+
+        # No prefix: list immediate children (root and test/one, test/two)
+        paths = storage_service.list_artifact_paths(recursive=False)
+        assert len(paths) == 3
+        assert "root" in paths
+        assert "test/one" in paths
+        assert "test/two" in paths
+        assert "test/sub/deep" not in paths
+
+        # Prefix "test": list direct children of test/ (one, two, not sub/deep)
+        paths = storage_service.list_artifact_paths(prefix="test", recursive=False)
+        assert len(paths) == 2
+        assert "test/one" in paths
+        assert "test/two" in paths
+        assert "test/sub/deep" not in paths
+
+        # Prefix "test/sub": list direct children of test/sub/ (deep)
+        paths = storage_service.list_artifact_paths(prefix="test/sub", recursive=False)
+        assert len(paths) == 1
+        assert "test/sub/deep" in paths
