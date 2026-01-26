@@ -482,7 +482,7 @@ class StorageService:
 
         Args:
             prefix: Path prefix to filter by (empty string lists all).
-                   Leading slashes and path traversal sequences are normalized.
+                   Leading slashes are normalized and path traversal sequences are rejected.
             recursive: If True, list all artifacts recursively. If False (default),
                       list only artifacts at the current level relative to the prefix.
 
