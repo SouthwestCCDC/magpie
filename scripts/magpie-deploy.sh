@@ -967,27 +967,48 @@ cmd_update() {
         die "Repository directory not found at ${INSTALL_DIR}/repo\nThe installation may be corrupted. Try reinstalling with 'install --force'."
     fi
 
+    # Pull latest repo code to detect current version
+    log "Pulling latest repository code to detect version..."
+    update_repo_to_latest
+
+    # Detect version from updated repo
+    detect_version
+
+    # Checkout the version tag for consistency
+    log "Checking out version tag v${MAGPIE_VERSION}..."
+    if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "refs/tags/v${MAGPIE_VERSION}"; then
+        die "Failed to fetch version tag v${MAGPIE_VERSION}"
+    fi
+    if ! git -C "${INSTALL_DIR}/repo" checkout "v${MAGPIE_VERSION}"; then
+        die "Failed to checkout version tag v${MAGPIE_VERSION}"
+    fi
+
+    # Update compose files from repo
+    log "Updating docker-compose files..."
+    cp "${INSTALL_DIR}/repo/docker-compose.yml" "${INSTALL_DIR}/"
+    cp "${INSTALL_DIR}/repo/docker-compose.prod.yml" "${INSTALL_DIR}/" 2>/dev/null || true
+
+    # Update Caddyfile from repo
+    log "Updating Caddyfile from Caddyfile.prod..."
+    if [[ ! -f "${INSTALL_DIR}/repo/Caddyfile.prod" ]]; then
+        log_warn "Caddyfile.prod not found in repo, skipping Caddyfile update"
+    else
+        cp "${INSTALL_DIR}/repo/Caddyfile.prod" "${INSTALL_DIR}/etc/Caddyfile"
+    fi
+
+    # Re-patch compose files for deployment
+    patch_compose_for_caddyfile
+    patch_compose_for_tls_certs
+    patch_compose_for_local_image
+
     if [[ "$FROM_SOURCE" == "true" ]]; then
-        log "Pulling latest repository code..."
-        update_repo_to_latest
-
-        # Detect version from updated repo
-        detect_version
-
         log "Rebuilding magpie image from source..."
         if ! docker build --pull -t magpie:latest "${INSTALL_DIR}/repo"; then
             die "Failed to rebuild magpie image"
         fi
     else
-        # Pull latest repo code to detect current version
-        log "Pulling latest repository code to detect version..."
-        update_repo_to_latest
-
-        # Detect version from updated repo
-        detect_version
-
         local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}"
-        log "Pulling latest magpie image from container registry..."
+        log "Pulling magpie image from container registry..."
         log "  Image: ${image_tag}"
         if ! docker pull "$image_tag"; then
             die "Failed to pull magpie image from ${image_tag}"
@@ -1006,9 +1027,9 @@ cmd_update() {
 
     log "Update complete!"
     echo ""
-    echo "  Note: docker-compose.yml and Caddyfile are not updated automatically"
-    echo "  to preserve local customizations. If upstream has breaking changes to"
-    echo "  these files, reinstall with: $SCRIPT_NAME install --force"
+    echo "  Updated to version: ${MAGPIE_VERSION}"
+    echo "  Note: Local customizations to docker-compose.yml or Caddyfile may have"
+    echo "  been overwritten. Review the updated files if you had custom changes."
     echo ""
 }
 
