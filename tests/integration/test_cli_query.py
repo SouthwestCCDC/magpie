@@ -210,6 +210,114 @@ class TestLsCommand:
         assert result.exit_code == 0
         assert "No artifacts found" in result.output
 
+    def test_ls_non_recursive_filters_nested_paths(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Ls without --recursive filters out nested paths."""
+        # Upload artifacts with nesting
+        upload_test_artifact(api_client, "test/artifact1", b"content1")
+        upload_test_artifact(api_client, "test/artifact2", b"content2")
+        upload_test_artifact(api_client, "test/sub/deep", b"content3")
+        upload_test_artifact(api_client, "images/ubuntu", b"content4")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "ls"],
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        # Should show top-level paths only
+        assert "test/artifact1" in result.output
+        assert "test/artifact2" in result.output
+        assert "images/ubuntu" in result.output
+        # Should NOT show nested path
+        assert "test/sub/deep" not in result.output
+
+    def test_ls_recursive_shows_all_nested_paths(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Ls with --recursive shows all nested paths."""
+        # Upload artifacts with nesting
+        upload_test_artifact(api_client, "test/artifact1", b"content1")
+        upload_test_artifact(api_client, "test/artifact2", b"content2")
+        upload_test_artifact(api_client, "test/sub/deep", b"content3")
+        upload_test_artifact(api_client, "images/ubuntu", b"content4")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "ls", "--recursive"],
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        # Should show all paths including nested
+        assert "test/artifact1" in result.output
+        assert "test/artifact2" in result.output
+        assert "test/sub/deep" in result.output
+        assert "images/ubuntu" in result.output
+
+    def test_ls_recursive_short_flag(self, cli_runner: CliRunner, api_client: TestClient) -> None:
+        """Ls with -r shows all nested paths."""
+        upload_test_artifact(api_client, "test/artifact1", b"content1")
+        upload_test_artifact(api_client, "test/sub/deep", b"content2")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "ls", "-r"],
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "test/artifact1" in result.output
+        assert "test/sub/deep" in result.output
+
+    def test_ls_with_prefix_non_recursive(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Ls with prefix and no --recursive filters nested paths."""
+        upload_test_artifact(api_client, "test/artifact1", b"content1")
+        upload_test_artifact(api_client, "test/artifact2", b"content2")
+        upload_test_artifact(api_client, "test/sub/deep", b"content3")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "ls", "test"],
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "test/artifact1" in result.output
+        assert "test/artifact2" in result.output
+        assert "test/sub/deep" not in result.output
+
+    def test_ls_with_prefix_recursive(self, cli_runner: CliRunner, api_client: TestClient) -> None:
+        """Ls with prefix and --recursive shows all nested paths."""
+        upload_test_artifact(api_client, "test/artifact1", b"content1")
+        upload_test_artifact(api_client, "test/artifact2", b"content2")
+        upload_test_artifact(api_client, "test/sub/deep", b"content3")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "ls", "-r", "test"],
+            )
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "test/artifact1" in result.output
+        assert "test/artifact2" in result.output
+        assert "test/sub/deep" in result.output
+
 
 class TestInfoCommand:
     """Integration tests for info command."""

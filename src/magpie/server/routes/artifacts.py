@@ -302,18 +302,22 @@ async def list_artifact_paths(
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
     _read_scope_check: Annotated[None, Depends(require_read_scope)] = None,
     prefix: str = "",
+    recursive: bool = False,
 ) -> ArtifactPathsResponse:
     """List artifact paths matching a prefix.
 
     Requires authentication (read, write, or admin scope). Unauthenticated
     requests will receive 401 before any path resolution occurs.
 
-    Returns all artifact paths (directories with .magpie manifests) under
-    the storage root. Useful for discovery and tab-completion.
+    Returns artifact paths (directories with .magpie manifests). By default,
+    lists only artifacts at the current level. Use recursive=true to list
+    all artifacts recursively.
 
     Args:
         prefix: Optional path prefix to filter by (default: "" lists all).
                Leading slashes are normalized.
+        recursive: If true, list all artifacts recursively. If false (default),
+                  list only artifacts at the current level.
 
     Returns:
         ArtifactPathsResponse with list of matching artifact paths.
@@ -328,7 +332,7 @@ async def list_artifact_paths(
         except InvalidArtifactPathError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-    paths = storage_service.list_artifact_paths(prefix)
+    paths = storage_service.list_artifact_paths(prefix, recursive=recursive)
     return ArtifactPathsResponse(paths=paths)
 
 

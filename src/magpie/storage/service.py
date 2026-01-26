@@ -475,23 +475,38 @@ class StorageService:
 
         raise ArtifactNotFoundError(f"Blob not found for hash ref {hash_ref}")
 
-    def list_artifact_paths(self, prefix: str = "") -> list[str]:
+    def list_artifact_paths(self, prefix: str = "", recursive: bool = False) -> list[str]:
         """List artifact paths under a given prefix.
 
         Args:
             prefix: Path prefix to filter by (empty string lists all).
                    Leading slashes are stripped for normalization.
+            recursive: If True, list all artifacts recursively. If False (default),
+                      list only artifacts at the immediate next level.
 
         Returns:
             Sorted list of artifact paths matching the prefix.
             Returns paths that have a .magpie manifest file.
+
+        Examples:
+            With artifacts at: test/artifact1, test/artifact2, test/sub/deep,
+                              images/ubuntu, other/path
+
+            list_artifact_paths("", False) -> ["images/ubuntu", "other/path",
+                                                "test/artifact1", "test/artifact2"]
+            list_artifact_paths("", True) -> ["images/ubuntu", "other/path",
+                                               "test/artifact1", "test/artifact2",
+                                               "test/sub/deep"]
+            list_artifact_paths("test", False) -> ["test/artifact1", "test/artifact2"]
+            list_artifact_paths("test", True) -> ["test/artifact1", "test/artifact2",
+                                                   "test/sub/deep"]
         """
         # Normalize prefix by stripping leading slash
         normalized_prefix = prefix.lstrip("/")
 
         artifact_paths: list[str] = []
 
-        # Find all .magpie manifest files under storage_path
+        # Find all .magpie manifest files recursively
         for manifest_file in self.config.storage_path.rglob(".magpie"):
             # Get artifact directory (parent of .magpie file)
             artifact_dir = manifest_file.parent
@@ -501,10 +516,32 @@ class StorageService:
 
             # Filter by prefix if provided
             if normalized_prefix:
-                if artifact_path.startswith(normalized_prefix):
-                    artifact_paths.append(artifact_path)
-            else:
-                artifact_paths.append(artifact_path)
+                if not artifact_path.startswith(normalized_prefix):
+                    continue
+
+            # For non-recursive mode, limit depth
+            if not recursive:
+                if normalized_prefix:
+                    # With prefix: only show direct children under prefix
+                    # e.g., prefix="test" -> show "test/artifact1" but not "test/sub/artifact2"
+                    if artifact_path.startswith(normalized_prefix + "/"):
+                        path_after_prefix = artifact_path[len(normalized_prefix) + 1 :]
+                        if "/" in path_after_prefix:
+                            # Has additional nesting - skip
+                            continue
+                    elif artifact_path == normalized_prefix:
+                        # Exact match - include it
+                        pass
+                    else:
+                        # Doesn't match properly - skip
+                        continue
+                else:
+                    # No prefix: only show paths one level deep (e.g., "dir/artifact")
+                    # Skip paths with multiple slashes like "dir/subdir/artifact"
+                    if artifact_path.count("/") > 1:
+                        continue
+
+            artifact_paths.append(artifact_path)
 
         return sorted(artifact_paths)
 

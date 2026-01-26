@@ -290,3 +290,100 @@ class TestListPathsEndpoint:
 
         assert "paths" in data
         assert isinstance(data["paths"], list)
+
+    def test_list_paths_non_recursive_default(self, client: TestClient) -> None:
+        """List paths without recursive flag filters nested paths."""
+        # Upload artifacts with nesting
+        files1 = {"file": ("f1.bin", io.BytesIO(b"content1"), "application/octet-stream")}
+        files2 = {"file": ("f2.bin", io.BytesIO(b"content2"), "application/octet-stream")}
+        files3 = {"file": ("f3.bin", io.BytesIO(b"content3"), "application/octet-stream")}
+        files4 = {"file": ("f4.bin", io.BytesIO(b"content4"), "application/octet-stream")}
+
+        client.post("/api/v1/upload/test/artifact1", files=files1)
+        client.post("/api/v1/upload/test/artifact2", files=files2)
+        client.post("/api/v1/upload/test/sub/deep", files=files3)
+        client.post("/api/v1/upload/images/ubuntu", files=files4)
+
+        # List without recursive (default)
+        response = client.get("/api/v1/artifacts")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should only show top-level paths (one slash)
+        assert len(data["paths"]) == 3
+        assert "test/artifact1" in data["paths"]
+        assert "test/artifact2" in data["paths"]
+        assert "images/ubuntu" in data["paths"]
+        # Should NOT show nested path
+        assert "test/sub/deep" not in data["paths"]
+
+    def test_list_paths_recursive_shows_all(self, client: TestClient) -> None:
+        """List paths with recursive=true shows all nested paths."""
+        # Upload artifacts with nesting
+        files1 = {"file": ("f1.bin", io.BytesIO(b"content1"), "application/octet-stream")}
+        files2 = {"file": ("f2.bin", io.BytesIO(b"content2"), "application/octet-stream")}
+        files3 = {"file": ("f3.bin", io.BytesIO(b"content3"), "application/octet-stream")}
+        files4 = {"file": ("f4.bin", io.BytesIO(b"content4"), "application/octet-stream")}
+
+        client.post("/api/v1/upload/test/artifact1", files=files1)
+        client.post("/api/v1/upload/test/artifact2", files=files2)
+        client.post("/api/v1/upload/test/sub/deep", files=files3)
+        client.post("/api/v1/upload/images/ubuntu", files=files4)
+
+        # List with recursive=true
+        response = client.get("/api/v1/artifacts", params={"recursive": True})
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should show all paths including nested
+        assert len(data["paths"]) == 4
+        assert "test/artifact1" in data["paths"]
+        assert "test/artifact2" in data["paths"]
+        assert "test/sub/deep" in data["paths"]
+        assert "images/ubuntu" in data["paths"]
+
+    def test_list_paths_with_prefix_non_recursive(self, client: TestClient) -> None:
+        """List paths with prefix and non-recursive filters correctly."""
+        files1 = {"file": ("f1.bin", io.BytesIO(b"content1"), "application/octet-stream")}
+        files2 = {"file": ("f2.bin", io.BytesIO(b"content2"), "application/octet-stream")}
+        files3 = {"file": ("f3.bin", io.BytesIO(b"content3"), "application/octet-stream")}
+
+        client.post("/api/v1/upload/test/artifact1", files=files1)
+        client.post("/api/v1/upload/test/artifact2", files=files2)
+        client.post("/api/v1/upload/test/sub/deep", files=files3)
+
+        # List with prefix, non-recursive
+        response = client.get("/api/v1/artifacts", params={"prefix": "test", "recursive": False})
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should only show direct children under test/
+        assert len(data["paths"]) == 2
+        assert "test/artifact1" in data["paths"]
+        assert "test/artifact2" in data["paths"]
+        assert "test/sub/deep" not in data["paths"]
+
+    def test_list_paths_with_prefix_recursive(self, client: TestClient) -> None:
+        """List paths with prefix and recursive shows all nested paths."""
+        files1 = {"file": ("f1.bin", io.BytesIO(b"content1"), "application/octet-stream")}
+        files2 = {"file": ("f2.bin", io.BytesIO(b"content2"), "application/octet-stream")}
+        files3 = {"file": ("f3.bin", io.BytesIO(b"content3"), "application/octet-stream")}
+
+        client.post("/api/v1/upload/test/artifact1", files=files1)
+        client.post("/api/v1/upload/test/artifact2", files=files2)
+        client.post("/api/v1/upload/test/sub/deep", files=files3)
+
+        # List with prefix, recursive
+        response = client.get("/api/v1/artifacts", params={"prefix": "test", "recursive": True})
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should show all paths under test/ including nested
+        assert len(data["paths"]) == 3
+        assert "test/artifact1" in data["paths"]
+        assert "test/artifact2" in data["paths"]
+        assert "test/sub/deep" in data["paths"]
