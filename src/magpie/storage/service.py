@@ -506,8 +506,36 @@ class StorageService:
 
         artifact_paths: list[str] = []
 
-        # Find all .magpie manifest files recursively
-        for manifest_file in self.config.storage_path.rglob(".magpie"):
+        # Determine search root based on prefix to avoid walking the entire tree
+        search_root = self.config.storage_path
+        if normalized_prefix:
+            search_root = search_root / normalized_prefix
+
+        if recursive:
+            if not search_root.exists() or not search_root.is_dir():
+                return []
+            manifest_iter = search_root.rglob(".magpie")
+        else:
+            # Non-recursive mode: limit depth to avoid walking entire tree
+            if not search_root.exists() or not search_root.is_dir():
+                return []
+
+            # Use glob with limited depth instead of rglob
+            # When prefix is given: check prefix/.magpie and prefix/*/.magpie
+            # When no prefix: check */*/.magpie (one level deep in artifact path terms)
+            manifest_iter = []
+            if normalized_prefix:
+                # Check for exact prefix match
+                prefix_manifest = search_root / ".magpie"
+                if prefix_manifest.is_file():
+                    manifest_iter.append(prefix_manifest)
+                # Check for immediate children under prefix
+                manifest_iter.extend(search_root.glob("*/.magpie"))
+            else:
+                # No prefix: find artifacts one level deep (e.g., "test/artifact1")
+                manifest_iter = search_root.glob("*/*/.magpie")
+
+        for manifest_file in manifest_iter:
             # Get artifact directory (parent of .magpie file)
             artifact_dir = manifest_file.parent
 
@@ -516,30 +544,12 @@ class StorageService:
 
             # Filter by prefix if provided
             if normalized_prefix:
-                if not artifact_path.startswith(normalized_prefix):
+                # Treat prefix as a path-segment prefix, not a raw string prefix
+                if not (
+                    artifact_path == normalized_prefix
+                    or artifact_path.startswith(normalized_prefix + "/")
+                ):
                     continue
-
-            # For non-recursive mode, limit depth
-            if not recursive:
-                if normalized_prefix:
-                    # With prefix: only show direct children under prefix
-                    # e.g., prefix="test" -> show "test/artifact1" but not "test/sub/artifact2"
-                    if artifact_path.startswith(normalized_prefix + "/"):
-                        path_after_prefix = artifact_path[len(normalized_prefix) + 1 :]
-                        if "/" in path_after_prefix:
-                            # Has additional nesting - skip
-                            continue
-                    elif artifact_path == normalized_prefix:
-                        # Exact match - include it
-                        pass
-                    else:
-                        # Doesn't match properly - skip
-                        continue
-                else:
-                    # No prefix: only show paths one level deep (e.g., "dir/artifact")
-                    # Skip paths with multiple slashes like "dir/subdir/artifact"
-                    if artifact_path.count("/") > 1:
-                        continue
 
             artifact_paths.append(artifact_path)
 

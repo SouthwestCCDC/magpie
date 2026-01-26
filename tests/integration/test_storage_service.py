@@ -462,3 +462,80 @@ class TestListArtifactPaths:
 
         paths = storage_service.list_artifact_paths("images")
         assert paths == []
+
+    def test_list_paths_prefix_does_not_match_siblings(
+        self, storage_service: StorageService
+    ) -> None:
+        """list_artifact_paths prefix filter should not match sibling paths.
+
+        Regression test: prefix="test" should not match "test2/artifact".
+        """
+        # Store artifacts with similar prefixes
+        storage_service.store_artifact(
+            artifact_path="test/artifact",
+            file_stream=io.BytesIO(b"content1"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test2/artifact",
+            file_stream=io.BytesIO(b"content2"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="testing/artifact",
+            file_stream=io.BytesIO(b"content3"),
+            uploaded_by="user",
+        )
+
+        # List with prefix "test" should only match "test/artifact"
+        paths = storage_service.list_artifact_paths("test")
+        assert len(paths) == 1
+        assert "test/artifact" in paths
+        assert "test2/artifact" not in paths
+        assert "testing/artifact" not in paths
+
+    def test_list_paths_prefix_exact_match(self, storage_service: StorageService) -> None:
+        """list_artifact_paths should match artifact paths that exactly equal the prefix."""
+        # Store an artifact at the exact prefix path
+        storage_service.store_artifact(
+            artifact_path="myproject",
+            file_stream=io.BytesIO(b"content"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="other/artifact",
+            file_stream=io.BytesIO(b"content2"),
+            uploaded_by="user",
+        )
+
+        # List with prefix "myproject" should only match the exact path
+        paths = storage_service.list_artifact_paths("myproject")
+        assert len(paths) == 1
+        assert "myproject" in paths
+        assert "other/artifact" not in paths
+
+    def test_list_paths_recursive_prefix_siblings(self, storage_service: StorageService) -> None:
+        """list_artifact_paths with recursive=True should not match sibling prefixes."""
+        # Store artifacts with similar prefixes
+        storage_service.store_artifact(
+            artifact_path="test/artifact",
+            file_stream=io.BytesIO(b"content1"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test/sub/deep",
+            file_stream=io.BytesIO(b"content2"),
+            uploaded_by="user",
+        )
+        storage_service.store_artifact(
+            artifact_path="test2/artifact",
+            file_stream=io.BytesIO(b"content3"),
+            uploaded_by="user",
+        )
+
+        # Recursive list with prefix "test" should only match "test/*"
+        paths = storage_service.list_artifact_paths("test", recursive=True)
+        assert len(paths) == 2
+        assert "test/artifact" in paths
+        assert "test/sub/deep" in paths
+        assert "test2/artifact" not in paths
