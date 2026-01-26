@@ -75,14 +75,16 @@ class StorageService:
         file_stream: BinaryIO,
         uploaded_by: str,
         source_uri: str | None = None,
+        no_latest: bool = False,
     ) -> tuple[ArtifactInfo, bool]:
-        """Store an artifact with automatic tagging as 'latest'.
+        """Store an artifact with optional automatic tagging as 'latest'.
 
         Args:
             artifact_path: Logical path for the artifact (e.g., "project/component").
             file_stream: Binary stream of artifact content.
             uploaded_by: Identity of uploader.
             source_uri: Optional source URI for provenance.
+            no_latest: If True, skip creating/updating the "latest" tag (default: False).
 
         Returns:
             Tuple of (ArtifactInfo, is_duplicate):
@@ -118,12 +120,12 @@ class StorageService:
         )
         write_metadata(artifact_dir, hash_ref, metadata)
 
-        # Update manifest with "latest" tag - store full hash for verification,
-        # symlinks will extract first 8 chars for the actual blob path
-        manifest = update_tag(artifact_dir, "latest", full_hash)
-
-        # Reconcile symlinks to match manifest
-        reconcile_symlinks(artifact_dir, manifest)
+        # Conditionally update manifest with "latest" tag
+        if not no_latest:
+            # Store full hash for verification, symlinks will extract first 8 chars
+            manifest = update_tag(artifact_dir, "latest", full_hash)
+            # Reconcile symlinks to match manifest
+            reconcile_symlinks(artifact_dir, manifest)
 
         # Build artifact info
         tags = self._get_tags_for_hash(artifact_dir, full_hash)

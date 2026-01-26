@@ -132,6 +132,7 @@ async def upload_artifact(
     settings: Annotated[MagpieSettings, Depends(get_magpie_settings)],
     _write_scope_check: Annotated[None, Depends(require_write_scope)] = None,
     source_uri: Annotated[str | None, Query(max_length=2048)] = None,
+    no_latest: Annotated[bool, Query()] = False,
     uploaded_by: str = "anonymous",
     x_magpie_user: Annotated[str | None, Header(alias="X-Magpie-User")] = None,
     content_length: Annotated[int | None, Header(alias="Content-Length")] = None,
@@ -153,6 +154,7 @@ async def upload_artifact(
         file: File content to upload (streamed).
         settings: Application settings for size limit configuration.
         source_uri: Optional source URI for provenance tracking.
+        no_latest: If True, skip creating/updating the "latest" tag (default: False).
         uploaded_by: Identity of the uploader (fallback, default: "anonymous").
         x_magpie_user: Authenticated user from Caddy forward_auth header.
         content_length: Content-Length header for early size validation.
@@ -216,6 +218,7 @@ async def upload_artifact(
             file_stream=file_stream,
             uploaded_by=effective_user,
             source_uri=source_uri,
+            no_latest=no_latest,
         )
     except UploadSizeExceededError as e:
         raise HTTPException(
