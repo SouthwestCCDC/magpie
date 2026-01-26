@@ -99,10 +99,13 @@ class TestLsCommand:
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        # Should list all paths, one per line
-        assert "test/artifact1" in result.output
-        assert "test/artifact2" in result.output
-        assert "images/ubuntu" in result.output
+        # Should list top-level directories with trailing slash
+        assert "test/" in result.output
+        assert "images/" in result.output
+        # Should NOT show full paths
+        assert "test/artifact1" not in result.output
+        assert "test/artifact2" not in result.output
+        assert "images/ubuntu" not in result.output
         # Should NOT show table headers (not listing versions)
         assert "HASH" not in result.output
 
@@ -123,11 +126,11 @@ class TestLsCommand:
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        # Should list paths under test/
-        assert "test/artifact1" in result.output
-        assert "test/artifact2" in result.output
+        # Should list immediate children under test/ (no prefix in output)
+        assert "artifact1" in result.output
+        assert "artifact2" in result.output
         # Should NOT list other paths
-        assert "images/ubuntu" not in result.output
+        assert "images" not in result.output
 
     def test_ls_with_root_slash_lists_all(
         self, cli_runner: CliRunner, api_client: TestClient
@@ -147,10 +150,11 @@ class TestLsCommand:
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        # Should list all paths, one per line (same as no argument)
-        assert "test/artifact1" in result.output
-        assert "test/artifact2" in result.output
-        assert "images/ubuntu" in result.output
+        # Should list top-level directories with trailing slash (same as no argument)
+        assert "test/" in result.output
+        assert "images/" in result.output
+        # Should NOT show full paths
+        assert "test/artifact1" not in result.output
         # Should NOT show table headers (not listing versions)
         assert "HASH" not in result.output
 
@@ -229,11 +233,11 @@ class TestLsCommand:
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        # Should show top-level paths only
-        assert "test/artifact1" in result.output
-        assert "test/artifact2" in result.output
-        assert "images/ubuntu" in result.output
-        # Should NOT show nested path
+        # Should show top-level directories only
+        assert "test/" in result.output
+        assert "images/" in result.output
+        # Should NOT show full paths or nested paths
+        assert "test/artifact1" not in result.output
         assert "test/sub/deep" not in result.output
 
     def test_ls_recursive_shows_all_nested_paths(
@@ -295,9 +299,14 @@ class TestLsCommand:
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        assert "test/artifact1" in result.output
-        assert "test/artifact2" in result.output
+        # Should show immediate artifact children under test/
+        assert "artifact1" in result.output
+        assert "artifact2" in result.output
+        # Note: Storage service non-recursive mode doesn't discover intermediate
+        # directories (test/sub/), only actual artifacts at the current level
+        # Should NOT show deeply nested paths
         assert "test/sub/deep" not in result.output
+        assert "deep" not in result.output
 
     def test_ls_with_prefix_recursive(self, cli_runner: CliRunner, api_client: TestClient) -> None:
         """Ls with prefix and --recursive shows all nested paths."""

@@ -140,6 +140,10 @@ def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str, recursive:
     data = response.json()
     paths = data.get("paths", [])
 
+    # Transform paths to immediate children for directory-style UX when not recursive
+    if not recursive:
+        paths = _extract_immediate_children(paths, prefix)
+
     # JSON output
     if is_json_output():
         output_result(
@@ -164,6 +168,61 @@ def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str, recursive:
     # Display paths one per line
     for path in paths:
         click.echo(path)
+
+
+def _extract_immediate_children(paths: list[str], prefix: str) -> list[str]:
+    """Extract immediate children from full artifact paths.
+
+    For non-recursive listing, shows only the immediate child level relative
+    to the prefix, similar to filesystem ls behavior.
+
+    Args:
+        paths: Full artifact paths from storage.
+        prefix: Current prefix (empty string for root).
+
+    Returns:
+        List of immediate child names, with directories marked with trailing /.
+
+    Examples:
+        prefix="" and paths=["test/artifact1", "test/artifact2", "test/sub/deep", "images/ubuntu"]
+        -> ["images/", "test/"]
+
+        prefix="test" and paths=["test/artifact1", "test/artifact2", "test/sub/deep"]
+        -> ["artifact1", "artifact2", "sub/"]
+    """
+    # Normalize prefix - strip leading/trailing slashes for consistency
+    normalized_prefix = prefix.strip("/")
+
+    children: set[str] = set()
+
+    for path in paths:
+        # Remove prefix from path if present
+        if normalized_prefix:
+            # Path should start with prefix/ or be exactly prefix
+            if path == normalized_prefix:
+                # Prefix itself is an artifact
+                children.add(normalized_prefix.split("/")[-1])
+                continue
+            elif path.startswith(normalized_prefix + "/"):
+                # Get remainder after prefix
+                remainder = path[len(normalized_prefix) + 1 :]
+            else:
+                # Path doesn't match prefix (shouldn't happen)
+                continue
+        else:
+            # No prefix - working from root
+            remainder = path
+
+        # Extract first segment of remainder
+        if "/" in remainder:
+            # There's more depth - this is a directory
+            first_segment = remainder.split("/", 1)[0]
+            children.add(first_segment + "/")
+        else:
+            # No more slashes - this is an artifact at current level
+            children.add(remainder)
+
+    return sorted(children)
 
 
 def _display_versions_table(versions: list[dict]) -> None:
