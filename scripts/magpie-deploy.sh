@@ -967,27 +967,87 @@ cmd_update() {
         die "Repository directory not found at ${INSTALL_DIR}/repo\nThe installation may be corrupted. Try reinstalling with 'install --force'."
     fi
 
+    # Pull latest repo code to detect current version
+    log "Pulling latest repository code to detect version..."
+    update_repo_to_latest
+
+    # Detect version from updated repo
+    detect_version
+
+    # Ensure repository is not shallow so tags can be fetched reliably
+    if git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository >/dev/null 2>&1; then
+        if [[ "$(git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository)" == "true" ]]; then
+            log "Repository is shallow; fetching full history to access tags..."
+            if ! git -C "${INSTALL_DIR}/repo" fetch --unshallow --tags; then
+                die "Failed to unshallow repository to fetch tags"
+            fi
+        fi
+    fi
+
+    # Checkout the version tag for consistency when it exists.
+    # If no corresponding tag is found (e.g. development version), stay on the branch HEAD.
+    if git -C "${INSTALL_DIR}/repo" ls-remote --tags origin "v${MAGPIE_VERSION}" | grep -q .; then
+        log "Checking out version tag v${MAGPIE_VERSION}..."
+        if ! git -C "${INSTALL_DIR}/repo" fetch origin "refs/tags/v${MAGPIE_VERSION}:refs/tags/v${MAGPIE_VERSION}"; then
+            die "Failed to fetch version tag v${MAGPIE_VERSION}"
+        fi
+        if ! git -C "${INSTALL_DIR}/repo" checkout "v${MAGPIE_VERSION}"; then
+            die "Failed to checkout version tag v${MAGPIE_VERSION}"
+        fi
+    else
+        log_warn "No git tag v${MAGPIE_VERSION} found for detected version; continuing on branch ${GITHUB_BRANCH}"
+    fi
+
+    # Update compose files from repo
+    log "Updating docker-compose files..."
+    cp "${INSTALL_DIR}/repo/docker-compose.yml" "${INSTALL_DIR}/"
+    cp "${INSTALL_DIR}/repo/docker-compose.prod.yml" "${INSTALL_DIR}/" 2>/dev/null || true
+
+    # Update Caddyfile from repo
+    log "Updating Caddyfile using Caddyfile.prod and existing configuration..."
+    if [[ ! -f "${INSTALL_DIR}/repo/Caddyfile.prod" ]]; then
+        log_warn "Caddyfile.prod not found in repo, skipping Caddyfile update"
+    else
+        # Load existing environment (may include TLS_MODE, DOMAIN, TRUSTED_PROXIES if stored in .env)
+        # Note: Current installation only stores MAGPIE_* variables in .env (see generate_env_file).
+        # TLS_MODE and TRUSTED_PROXIES are not persisted, so this will only work if they were added
+        # manually or in a future version that persists them. See issue #340 for planned fix.
+        if [[ -f "${INSTALL_DIR}/etc/.env" ]]; then
+            set -a
+            # shellcheck disable=SC1091
+            source "${INSTALL_DIR}/etc/.env"
+            set +a
+        fi
+
+        # Prefer regenerating the Caddyfile to preserve TLS/trusted_proxies settings
+        # If TLS_MODE is not set (because it's not in .env), this will fall back to direct copy with a warning
+        if [[ -n "${TLS_MODE:-}" ]] && declare -F generate_caddyfile >/dev/null 2>&1; then
+            generate_caddyfile
+        else
+            if [[ -z "${TLS_MODE:-}" ]]; then
+                log_warn "TLS_MODE not found in environment; falling back to direct Caddyfile copy"
+                log_warn "If you customized TLS settings, you may need to reapply them manually"
+                log_warn "See issue #340 for planned improvement to persist TLS configuration"
+            else
+                log_warn "generate_caddyfile() not found; falling back to direct Caddyfile copy"
+            fi
+            cp "${INSTALL_DIR}/repo/Caddyfile.prod" "${INSTALL_DIR}/etc/Caddyfile"
+        fi
+    fi
+
+    # Re-patch compose files for deployment
+    patch_compose_for_caddyfile
+    patch_compose_for_tls_certs
+    patch_compose_for_local_image
+
     if [[ "$FROM_SOURCE" == "true" ]]; then
-        log "Pulling latest repository code..."
-        update_repo_to_latest
-
-        # Detect version from updated repo
-        detect_version
-
         log "Rebuilding magpie image from source..."
         if ! docker build --pull -t magpie:latest "${INSTALL_DIR}/repo"; then
             die "Failed to rebuild magpie image"
         fi
     else
-        # Pull latest repo code to detect current version
-        log "Pulling latest repository code to detect version..."
-        update_repo_to_latest
-
-        # Detect version from updated repo
-        detect_version
-
         local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}"
-        log "Pulling latest magpie image from container registry..."
+        log "Pulling magpie image from container registry..."
         log "  Image: ${image_tag}"
         if ! docker pull "$image_tag"; then
             die "Failed to pull magpie image from ${image_tag}"
@@ -1006,9 +1066,9 @@ cmd_update() {
 
     log "Update complete!"
     echo ""
-    echo "  Note: docker-compose.yml and Caddyfile are not updated automatically"
-    echo "  to preserve local customizations. If upstream has breaking changes to"
-    echo "  these files, reinstall with: $SCRIPT_NAME install --force"
+    echo "  Updated to version: ${MAGPIE_VERSION}"
+    echo "  Note: docker-compose.yml and Caddyfile have been regenerated from the repository."
+    echo "  Any local customizations to these files have been overwritten; review and reapply as needed."
     echo ""
 }
 
