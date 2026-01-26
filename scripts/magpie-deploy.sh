@@ -23,7 +23,7 @@ SCRIPT_NAME="$(basename "$0")"
 GITHUB_REPO="SouthwestCCDC/magpie"
 GITHUB_BRANCH="default"
 GHCR_IMAGE="ghcr.io/southwestccdc/magpie"
-MAGPIE_VERSION="0.1.0-rc5"
+MAGPIE_VERSION=""  # Dynamically detected from pyproject.toml after cloning repo
 
 # Default configuration
 DEFAULT_INSTALL_DIR="/opt/magpie"
@@ -647,6 +647,38 @@ EOF
 # Repository and image handling
 # =============================================================================
 
+detect_version() {
+    # Extract version from pyproject.toml
+    # This function should be called after clone_repo() to ensure the repo exists
+    local pyproject="${INSTALL_DIR}/repo/pyproject.toml"
+
+    if [[ ! -f "$pyproject" ]]; then
+        die "Cannot detect version: pyproject.toml not found at $pyproject"
+    fi
+
+    # Extract version using robust sed with extended regex
+    # Format: version = "0.1.0-rc8"
+    # Handles flexible whitespace around = and ensures only first match
+    MAGPIE_VERSION=$(sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$pyproject" | head -n1)
+
+    if [[ -z "$MAGPIE_VERSION" ]]; then
+        die "Failed to extract version from $pyproject"
+    fi
+
+    log "Detected magpie version: ${MAGPIE_VERSION}"
+}
+
+update_repo_to_latest() {
+    # Update repository to latest code from remote branch
+    # Expects repo to already exist at ${INSTALL_DIR}/repo
+    if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "$GITHUB_BRANCH"; then
+        die "Failed to fetch latest repository code"
+    fi
+    if ! git -C "${INSTALL_DIR}/repo" reset --hard "origin/$GITHUB_BRANCH"; then
+        die "Failed to reset repository to latest code"
+    fi
+}
+
 clone_repo() {
     log "Cloning magpie repository..."
 
@@ -877,6 +909,7 @@ cmd_install() {
 
     # Clone repo first (needed for Caddyfile.prod and Dockerfile)
     clone_repo
+    detect_version
 
     # Generate configuration files
     generate_env_file
@@ -936,18 +969,23 @@ cmd_update() {
 
     if [[ "$FROM_SOURCE" == "true" ]]; then
         log "Pulling latest repository code..."
-        if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "$GITHUB_BRANCH"; then
-            die "Failed to fetch latest repository code"
-        fi
-        if ! git -C "${INSTALL_DIR}/repo" reset --hard "origin/$GITHUB_BRANCH"; then
-            die "Failed to reset repository to latest code"
-        fi
+        update_repo_to_latest
+
+        # Detect version from updated repo
+        detect_version
 
         log "Rebuilding magpie image from source..."
         if ! docker build --pull -t magpie:latest "${INSTALL_DIR}/repo"; then
             die "Failed to rebuild magpie image"
         fi
     else
+        # Pull latest repo code to detect current version
+        log "Pulling latest repository code to detect version..."
+        update_repo_to_latest
+
+        # Detect version from updated repo
+        detect_version
+
         local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}"
         log "Pulling latest magpie image from container registry..."
         log "  Image: ${image_tag}"
