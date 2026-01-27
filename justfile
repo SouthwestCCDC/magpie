@@ -24,7 +24,7 @@ test-unit:
 test-integration:
     uv run pytest tests/integration
 
-# Run e2e tests (requires docker compose up)
+# Run e2e tests (tests manage their own Docker Compose stack)
 e2e:
     uv run pytest -m e2e
 
