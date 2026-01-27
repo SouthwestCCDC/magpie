@@ -149,6 +149,10 @@
 	# If you must enable the admin API temporarily, restrict access to localhost
 	# and disable it again before returning to production.
 	admin off
+
+	servers {
+		trusted_proxies static private_ranges
+	}
 }
 
 # Site block - uses environment variable for domain (required)
