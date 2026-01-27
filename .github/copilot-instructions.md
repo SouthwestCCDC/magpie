@@ -11,15 +11,14 @@ This document provides context for AI assistants working on the Magpie project.
 
 ## Key Documentation
 
-For full context, read these documents in `deployment/docs/docs/projects/active/magpie/`:
-
 | Document | Description |
 |----------|-------------|
-| `design.md` | **Primary reference** - detailed design, architecture, all resolved decisions |
-| `proposal.md` | One-pager summary with progress checklist |
-| `index.md` | Project overview |
+| `docs/user-guide.md` | CLI usage, concepts, authentication |
+| `docs/installation.md` | Server and client setup |
+| `docs/ansible-integration.md` | Using magpie in Ansible playbooks |
+| `CONTRIBUTING.md` | Labels, milestones, triage guidelines, PR workflow |
 
-Also in the repo root:
+Additional docs in `docs/`:
 
 | Document | Description |
 |----------|-------------|
@@ -80,9 +79,21 @@ src/magpie/
 
 -->
 
+## Risk Levels
+
+Classify changes by risk before implementing:
+
+| Risk | Areas | Review Required |
+|------|-------|-----------------|
+| **High** | Auth/token handling, `forward_auth` flow, token generation/storage | Security-focused review, test coverage mandatory |
+| **Medium** | Storage operations, API endpoints, hash computation | Standard review, verify idempotency |
+| **Lower** | CLI formatting, documentation, test fixtures | Normal PR process |
+
+Prefer small, focused changes in high-risk areas. Token and auth code changes require explicit security review.
+
 ## Key Design Decisions
 
-These are documented in detail in `design.md` Resolved Design Questions table:
+Resolved design questions:
 
 - **Hash prefix:** 8 characters (SHA-256)
 - **Config hierarchy:** file < env < CLI arg
@@ -107,11 +118,11 @@ uv run ruff check .                        # Lint
 uv run ruff format .                       # Format
 ```
 
-## Related Repositories
+## Related Repositories (SWCCDC internal)
 
-- `deployment` - Documentation site (design docs in `docs/docs/projects/active/magpie/`)
 - `scoring` - Reference for code style alignment (ruff, line-length 100)
-- `infra-deployment` - Current artifacts v1 Ansible role
+- `deployment` - Infrastructure where magpie is deployed
+- `infra-deployment` - Bootstrap services including artifacts v1
 
 ## Style Guide
 
@@ -176,6 +187,16 @@ At the end of your review, include a brief summary comment with:
 3. **Files skipped**: If you skipped any files as "low risk" or due to size limits, list them so the author knows to check them manually.
 
 4. **Categories reviewed**: Briefly note which categories you checked (security, API design, tests, storage logic) so authors know what wasn't covered if you focused narrowly.
+
+## See Also
+
+| Resource | Location | Purpose |
+|----------|----------|---------|
+| User guide | `docs/user-guide.md` | CLI usage, concepts, authentication |
+| Installation | `docs/installation.md` | Server and client setup |
+| Ansible integration | `docs/ansible-integration.md` | Playbook usage patterns |
+| Contributing guide | `CONTRIBUTING.md` | Labels, milestones, PR workflow |
+| Python conventions | Align with `scoring/` repo | Ruff config, line length, style |
 
 ## MANDATORY: Be transparent about AI use
 
