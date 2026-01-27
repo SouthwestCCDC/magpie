@@ -200,7 +200,7 @@ If you require a non-changing reference for deployments, pin to the full version
 docker pull ghcr.io/southwestccdc/magpie:latest
 
 # Client: Install from git tag
-uv pip install git+https://github.com/SouthwestCCDC/magpie@v1.0.0
+uv pip install git+https://github.com/SouthwestCCDC/magpie@v0.1.0
 ```
 
 ---
