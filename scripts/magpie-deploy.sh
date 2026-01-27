@@ -1029,18 +1029,11 @@ cmd_update() {
         TLS_MODE="${TLS_MODE:-$DEFAULT_TLS_MODE}"
         TRUSTED_PROXIES="${TRUSTED_PROXIES:-$DEFAULT_TRUSTED_PROXIES}"
 
-        # Prefer regenerating the Caddyfile to preserve TLS/trusted_proxies settings
-        # If TLS_MODE is not set (because it's not in .env), this will fall back to direct copy with a warning
-        if [[ -n "${TLS_MODE:-}" ]] && declare -F generate_caddyfile >/dev/null 2>&1; then
+        # Regenerate the Caddyfile using the configured (or defaulted) TLS settings
+        if declare -F generate_caddyfile >/dev/null 2>&1; then
             generate_caddyfile
         else
-            if [[ -z "${TLS_MODE:-}" ]]; then
-                log_warn "TLS_MODE not found in environment; falling back to direct Caddyfile copy"
-                log_warn "If you customized TLS settings, you may need to reapply them manually"
-                log_warn "See issue #340 for planned improvement to persist TLS configuration"
-            else
-                log_warn "generate_caddyfile() not found; falling back to direct Caddyfile copy"
-            fi
+            log_warn "generate_caddyfile() not found; falling back to direct Caddyfile copy"
             cp "${INSTALL_DIR}/repo/Caddyfile.prod" "${INSTALL_DIR}/etc/Caddyfile"
         fi
     fi
