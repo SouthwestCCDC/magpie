@@ -1025,6 +1025,10 @@ cmd_update() {
             set +a
         fi
 
+        # Apply defaults for vars that may be missing from old .env files (migration from pre-#345 installs)
+        TLS_MODE="${TLS_MODE:-$DEFAULT_TLS_MODE}"
+        TRUSTED_PROXIES="${TRUSTED_PROXIES:-$DEFAULT_TRUSTED_PROXIES}"
+
         # Prefer regenerating the Caddyfile to preserve TLS/trusted_proxies settings
         # If TLS_MODE is not set (because it's not in .env), this will fall back to direct copy with a warning
         if [[ -n "${TLS_MODE:-}" ]] && declare -F generate_caddyfile >/dev/null 2>&1; then
