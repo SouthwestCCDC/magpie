@@ -37,7 +37,7 @@ Production deployment requires a domain name for TLS.
 ```bash
 # Set required environment variables
 export MAGPIE_DOMAIN=magpie.example.com
-export MAGPIE_DATA_DIR=/data  # Host path for persistent storage (contains artifacts/ and magpie.db)
+export MAGPIE_DATA_DIR=./data  # Host path for persistent storage (contains artifacts/ and magpie.db)
 
 # Start with production configuration
 docker compose -f docker-compose.prod.yml up -d
@@ -45,7 +45,7 @@ docker compose -f docker-compose.prod.yml up -d
 
 **Required environment variables** (see [docker-compose.prod.yml](../docker-compose.prod.yml#L14-L15)):
 - `MAGPIE_DOMAIN`: Domain name for TLS (e.g., `magpie.swccdc.com`)
-- `MAGPIE_DATA_DIR`: Host directory for data storage (default: `/data`). This directory will contain the `artifacts/` subdirectory and `magpie.db` database file
+- `MAGPIE_DATA_DIR`: Host directory for data storage (default: `/data`). This directory is mounted into the container at `/data`. The directory will contain the `artifacts/` subdirectory and `magpie.db` database file
 
 Production setup automatically provisions TLS certificates via Let's Encrypt. The `caddy_data` volume persists certificates across container restarts.
 

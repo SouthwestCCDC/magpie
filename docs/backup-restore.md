@@ -68,7 +68,9 @@ Metadata files (`metadata/{hash}.json`) store the full SHA-256 hash and upload p
 ### Full Backup with rsync
 
 ```bash
-# Use the same data directory as your docker-compose deployment (host path, not container path)
+# Use the same data directory as your docker-compose deployment (HOST path, not container path)
+# This should match the host path you mounted (e.g., ./data or /data on your host machine)
+# Inside containers, this is always /data, but on the host it depends on your docker-compose.yml
 MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/data}"
 BACKUP_PATH="/backup/magpie/$(date +%Y%m%d-%H%M%S)"
 
@@ -141,14 +143,14 @@ docker compose down
 mkdir -p "$MAGPIE_DATA_DIR"
 rsync -av --delete "$BACKUP_PATH/" "$MAGPIE_DATA_DIR/"
 
+# Ensure temp directory exists before setting ownership
+mkdir -p "$MAGPIE_DATA_DIR/artifacts/.tmp"
+
 # Set ownership to match MAGPIE_UID/MAGPIE_GID or the data directory owner
 # The entrypoint will auto-detect from directory ownership
 OWNER_UID=$(stat -c %u "$MAGPIE_DATA_DIR")
 OWNER_GID=$(stat -c %g "$MAGPIE_DATA_DIR")
 chown -R "$OWNER_UID:$OWNER_GID" "$MAGPIE_DATA_DIR"
-
-# Ensure temp directory exists
-mkdir -p "$MAGPIE_DATA_DIR/artifacts/.tmp"
 
 # Start services and reconcile symlinks
 docker compose up -d

@@ -62,12 +62,13 @@ DB_LOCK_FILE="${LOCK_DIR}/.magpie-init.lock"
 # directory to coordinate initialization, but the database has its own fixed location.
 if [ -n "$MAGPIE_DATABASE_PATH" ]; then
     DB_PATH="$MAGPIE_DATABASE_PATH"
-elif [ -d /data ]; then
-    DB_PATH="/data/magpie.db"
 else
-    # Last resort fallback if /data doesn't exist (shouldn't happen in normal deployments)
-    DB_PATH="${LOCK_DIR}/magpie.db"
+    # Default to /data/magpie.db (matches Python default in config.py)
+    DB_PATH="/data/magpie.db"
 fi
+
+# Export MAGPIE_DATABASE_PATH so magpie-ctl init uses the correct path
+export MAGPIE_DATABASE_PATH="$DB_PATH"
 
 # Verify gosu is available before we need it (only required when not running as root)
 if [ "$RUN_UID" != "0" ] && ! command -v gosu >/dev/null 2>&1; then
