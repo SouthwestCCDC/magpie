@@ -86,8 +86,9 @@ def docker_services(
 
     env = os.environ.copy()
     env["COMPOSE_PROJECT_NAME"] = docker_compose_project_name
-    # Use the temp directory for data isolation - this overrides the default ./data/artifacts
-    env["MAGPIE_DATA_DIR"] = str(artifacts_dir)
+    # Use the temp directory for data isolation - this overrides the default ./data
+    # The temp directory will contain both artifacts/ subdirectory and magpie.db file
+    env["MAGPIE_DATA_DIR"] = str(temp_data_dir)
 
     compose_cmd = ["docker", "compose", "-f", str(PROJECT_ROOT / "docker-compose.yml")]
 

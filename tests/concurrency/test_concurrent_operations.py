@@ -36,7 +36,7 @@ def test_config(tmp_path: Path) -> MagpieSettings:
     The tmp_path fixture is session-scoped and automatically cleaned up by pytest,
     so no explicit cleanup is needed here.
     """
-    config = MagpieSettings(storage_path=tmp_path)
+    config = MagpieSettings(storage_path=tmp_path, database_path=tmp_path / "magpie.db")
     config.temp_path.mkdir(parents=True, exist_ok=True)
     return config
 

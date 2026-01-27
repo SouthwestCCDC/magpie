@@ -12,7 +12,7 @@
 #
 # Required Environment Variables:
 #   MAGPIE_DOMAIN     - The domain name for TLS (REQUIRED - e.g., magpie.swccdc.com)
-#   MAGPIE_DATA_DIR   - Host path for artifact storage (default: ./data/artifacts)
+#   MAGPIE_DATA_DIR   - Host path for data directory (default: ./data)
 #
 # Optional Environment Variables:
 #   MAGPIE_HTTP_PORT  - External HTTP port (default: 80)
@@ -36,7 +36,7 @@ services:
       - "${MAGPIE_HTTPS_PORT:-443}:443"  # HTTPS
     volumes:
       - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
-      - ${MAGPIE_DATA_DIR:-./data/artifacts}:/data/artifacts:ro
+      - ${MAGPIE_DATA_DIR:-./data}/artifacts:/data/artifacts:ro
       - caddy_data:/data      # TLS certificates and state
       - caddy_config:/config  # Caddy configuration
     environment:
@@ -69,9 +69,10 @@ services:
   magpie:
     build: .
     volumes:
-      - ${MAGPIE_DATA_DIR:-./data/artifacts}:/data/artifacts
+      - ${MAGPIE_DATA_DIR:-./data}:/data
     environment:
       - MAGPIE_STORAGE_PATH=/data/artifacts
+      - MAGPIE_DATABASE_PATH=${MAGPIE_DATABASE_PATH:-/data/magpie.db}
       # IMPORTANT: Keep debug mode disabled in production. Enabling it exposes
       # detailed error messages and stack traces that could leak sensitive info.
       - MAGPIE_DEBUG=false
@@ -88,7 +89,7 @@ services:
     cap_drop:
       - ALL
     # Filesystem is read-only for security; writable paths:
-    # - /data/artifacts: bind mount for artifact storage (includes database and lock file)
+    # - /data: bind mount for artifact storage and database
     # - /run: tmpfs for entrypoint runtime files (magpie-user UID/GID marker)
     # - /tmp: tmpfs for temporary files
     read_only: true

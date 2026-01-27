@@ -25,6 +25,7 @@ def test_settings(tmp_path: Path) -> MagpieSettings:
     """Create test MagpieSettings with temporary paths."""
     return MagpieSettings(
         storage_path=tmp_path / "storage",
+        database_path=tmp_path / "magpie.db",
         retention_days=30,
     )
 

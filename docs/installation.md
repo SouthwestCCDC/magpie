@@ -37,7 +37,7 @@ Production deployment requires a domain name for TLS.
 ```bash
 # Set required environment variables
 export MAGPIE_DOMAIN=magpie.example.com
-export MAGPIE_DATA_DIR=/data/artifacts  # Host path for persistent storage
+export MAGPIE_DATA_DIR=./data  # Host path for persistent storage (contains artifacts/ and magpie.db)
 
 # Start with production configuration
 docker compose -f docker-compose.prod.yml up -d
@@ -45,7 +45,7 @@ docker compose -f docker-compose.prod.yml up -d
 
 **Required environment variables** (see [docker-compose.prod.yml](../docker-compose.prod.yml#L14-L15)):
 - `MAGPIE_DOMAIN`: Domain name for TLS (e.g., `magpie.swccdc.com`)
-- `MAGPIE_DATA_DIR`: Host directory for artifact storage (default: `./data/artifacts`)
+- `MAGPIE_DATA_DIR`: Host directory for data storage (default: `./data` in docker-compose.yml). This is the HOST path - can be relative (e.g., `./data`) or absolute (e.g., `/opt/magpie/data`). Inside the container, it's always mounted at `/data`. The directory will contain the `artifacts/` subdirectory and `magpie.db` database file
 
 Production setup automatically provisions TLS certificates via Let's Encrypt. The `caddy_data` volume persists certificates across container restarts.
 
@@ -107,6 +107,7 @@ All server configuration is optional except `MAGPIE_DOMAIN` in production. See [
 
 Key variables from [.env.example](../.env.example):
 - `MAGPIE_STORAGE_PATH`: Root directory for artifacts (default: `/data/artifacts`)
+- `MAGPIE_DATABASE_PATH`: Path to SQLite database file (default: `/data/magpie.db`)
 - `MAGPIE_RETENTION_DAYS`: Days before untagged blobs are eligible for GC (default: `90`)
 - `MAGPIE_DEBUG`: Enable verbose logging (default: `false`, **never enable in production**)
 - `MAGPIE_MAX_UPLOAD_SIZE`: Maximum upload size in bytes (default: no limit)

@@ -19,7 +19,11 @@ from magpie.storage.service import StorageService
 @pytest.fixture
 def test_config(tmp_path: Path) -> MagpieSettings:
     """Create test configuration with retention_days for GC tests."""
-    config = MagpieSettings(storage_path=tmp_path, retention_days=90)
+    config = MagpieSettings(
+        storage_path=tmp_path,
+        database_path=tmp_path / "magpie.db",
+        retention_days=90,
+    )
     config.temp_path.mkdir(parents=True, exist_ok=True)
     return config
 

@@ -18,7 +18,10 @@ from magpie.server.deps import get_token_service
 @pytest.fixture
 def test_config(tmp_path: Path) -> MagpieSettings:
     """Create test configuration with temporary paths."""
-    config = MagpieSettings(storage_path=tmp_path)
+    config = MagpieSettings(
+        storage_path=tmp_path,
+        database_path=tmp_path / "magpie.db",
+    )
     config.temp_path.mkdir(parents=True, exist_ok=True)
     return config
 

@@ -3,19 +3,19 @@ set -e
 
 # Determine UID/GID to run as:
 # 1. Use MAGPIE_UID/MAGPIE_GID environment variables if set
-# 2. Otherwise, detect from /data/artifacts (docker-compose mount) or /data directory ownership
+# 2. Otherwise, detect from /data directory ownership (parent of both artifacts/ and magpie.db)
 # 3. Fall back to 1000:1000 if /data is missing or stat on /data fails
 
 if [ -n "$MAGPIE_UID" ]; then
     RUN_UID="$MAGPIE_UID"
 else
-    RUN_UID=$(stat -c %u /data/artifacts 2>/dev/null || stat -c %u /data 2>/dev/null || echo 1000)
+    RUN_UID=$(stat -c %u /data 2>/dev/null || echo 1000)
 fi
 
 if [ -n "$MAGPIE_GID" ]; then
     RUN_GID="$MAGPIE_GID"
 else
-    RUN_GID=$(stat -c %g /data/artifacts 2>/dev/null || stat -c %g /data 2>/dev/null || echo 1000)
+    RUN_GID=$(stat -c %g /data 2>/dev/null || echo 1000)
 fi
 
 # Validate that RUN_UID and RUN_GID are positive integers
@@ -57,17 +57,18 @@ else
 fi
 DB_LOCK_FILE="${LOCK_DIR}/.magpie-init.lock"
 
-# Determine database path: MAGPIE_DATABASE_PATH takes precedence, otherwise derive from validated LOCK_DIR
-# NOTE: When MAGPIE_DATABASE_PATH points outside LOCK_DIR, the lock file and database
-# reside in different locations. This lock is designed for single-container use (preventing
-# race conditions between the entrypoint and concurrent docker exec invocations). If you
-# override MAGPIE_DATABASE_PATH in a multi-container deployment, you are responsible for
-# your own coordination to avoid concurrent database initialization.
+# Determine database path: MAGPIE_DATABASE_PATH takes precedence, otherwise default to /data/magpie.db
+# NOTE: The database path is independent of LOCK_DIR. The lock file resides in the storage
+# directory to coordinate initialization, but the database has its own fixed location.
 if [ -n "$MAGPIE_DATABASE_PATH" ]; then
     DB_PATH="$MAGPIE_DATABASE_PATH"
 else
-    DB_PATH="${LOCK_DIR}/.magpie.db"
+    # Default to /data/magpie.db (matches Python default in config.py)
+    DB_PATH="/data/magpie.db"
 fi
+
+# Export MAGPIE_DATABASE_PATH so magpie-ctl init uses the correct path
+export MAGPIE_DATABASE_PATH="$DB_PATH"
 
 # Verify gosu is available before we need it (only required when not running as root)
 if [ "$RUN_UID" != "0" ] && ! command -v gosu >/dev/null 2>&1; then

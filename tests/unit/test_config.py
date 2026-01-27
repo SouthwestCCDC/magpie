@@ -57,20 +57,15 @@ class TestMagpieSettingsPathDerivation:
         settings = MagpieSettings(storage_path=Path("/custom/storage"))
         assert settings.temp_path == Path("/custom/storage/.tmp")
 
-    def test_database_path_derived_from_storage_path(self) -> None:
-        """database_path should derive from storage_path when not explicitly set."""
-        settings = MagpieSettings(storage_path=Path("/custom/storage"))
-        assert settings.database_path == Path("/custom/storage/.magpie.db")
-
     def test_default_temp_path(self) -> None:
         """Default temp_path should be {storage_path}/.tmp."""
         settings = MagpieSettings()
         assert settings.temp_path == Path("/data/artifacts/.tmp")
 
     def test_default_database_path(self) -> None:
-        """Default database_path should be {storage_path}/.magpie.db."""
+        """Default database_path should be /data/magpie.db."""
         settings = MagpieSettings()
-        assert settings.database_path == Path("/data/artifacts/.magpie.db")
+        assert settings.database_path == Path("/data/magpie.db")
 
     def test_explicit_temp_path_not_overridden(self) -> None:
         """Explicitly set temp_path should not be overridden."""
@@ -123,11 +118,12 @@ class TestMagpieSettingsEnvironmentOverride:
         assert settings.database_path == Path("/env/db.sqlite")
 
     def test_derived_paths_use_overridden_storage(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Derived paths should use env-overridden storage_path."""
+        """temp_path should use env-overridden storage_path."""
         monkeypatch.setenv("MAGPIE_STORAGE_PATH", "/env/storage")
         settings = MagpieSettings()
         assert settings.temp_path == Path("/env/storage/.tmp")
-        assert settings.database_path == Path("/env/storage/.magpie.db")
+        # database_path has its own default, not derived from storage_path
+        assert settings.database_path == Path("/data/magpie.db")
 
     def test_gc_lock_path_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """MAGPIE_GC_LOCK_PATH env var should override default."""

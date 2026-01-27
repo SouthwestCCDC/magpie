@@ -361,14 +361,22 @@ class TestUploadSizeLimitEndpoint:
     @pytest.fixture
     def test_config_with_limit(self, tmp_path: Path) -> MagpieSettings:
         """Create test configuration with size limit."""
-        config = MagpieSettings(storage_path=tmp_path, max_upload_size=1000)
+        config = MagpieSettings(
+            storage_path=tmp_path,
+            database_path=tmp_path / "magpie.db",
+            max_upload_size=1000,
+        )
         config.temp_path.mkdir(parents=True, exist_ok=True)
         return config
 
     @pytest.fixture
     def test_config_no_limit(self, tmp_path: Path) -> MagpieSettings:
         """Create test configuration without size limit."""
-        config = MagpieSettings(storage_path=tmp_path, max_upload_size=None)
+        config = MagpieSettings(
+            storage_path=tmp_path,
+            database_path=tmp_path / "magpie.db",
+            max_upload_size=None,
+        )
         config.temp_path.mkdir(parents=True, exist_ok=True)
         return config
 
@@ -451,7 +459,11 @@ class TestUploadSizeLimitEndpoint:
         Uses 2000 byte limit to avoid Content-Length rejection from multipart
         overhead when testing file content boundary conditions.
         """
-        config = MagpieSettings(storage_path=tmp_path, max_upload_size=2000)
+        config = MagpieSettings(
+            storage_path=tmp_path,
+            database_path=tmp_path / "magpie.db",
+            max_upload_size=2000,
+        )
         config.temp_path.mkdir(parents=True, exist_ok=True)
         return config
 

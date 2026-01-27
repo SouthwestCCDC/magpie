@@ -165,7 +165,10 @@ def test_config(tmp_path: Path) -> MagpieSettings:
     Creates a MagpieSettings instance with storage_path set to a temporary
     directory, and ensures the temp_path subdirectory exists.
     """
-    config = MagpieSettings(storage_path=tmp_path)
+    config = MagpieSettings(
+        storage_path=tmp_path,
+        database_path=tmp_path / "magpie.db",
+    )
     config.temp_path.mkdir(parents=True, exist_ok=True)
     return config
 

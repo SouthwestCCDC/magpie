@@ -20,6 +20,7 @@ def test_config_with_sentry(tmp_path: Path) -> MagpieSettings:
     """Create test configuration with Sentry DSN."""
     config = MagpieSettings(
         storage_path=tmp_path,
+        database_path=tmp_path / "magpie.db",
         sentry_dsn="https://test@sentry.io/123",
     )
     config.temp_path.mkdir(parents=True, exist_ok=True)
@@ -111,7 +112,11 @@ class TestSentryIntegration:
 @pytest.fixture
 def test_config_no_sentry(tmp_path: Path) -> MagpieSettings:
     """Create test configuration without Sentry DSN."""
-    config = MagpieSettings(storage_path=tmp_path, sentry_dsn=None)
+    config = MagpieSettings(
+        storage_path=tmp_path,
+        database_path=tmp_path / "magpie.db",
+        sentry_dsn=None,
+    )
     config.temp_path.mkdir(parents=True, exist_ok=True)
     return config
 

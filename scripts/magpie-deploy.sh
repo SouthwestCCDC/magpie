@@ -913,7 +913,7 @@ cmd_install() {
     # Create directory structure
     log "Creating directory structure..."
     mkdir -p "${INSTALL_DIR}/etc"
-    mkdir -p "${DATA_DIR}"
+    mkdir -p "${DATA_DIR}/artifacts"
 
     # Clone repo first (needed for Caddyfile.prod and Dockerfile)
     clone_repo
