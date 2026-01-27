@@ -255,10 +255,6 @@
 		path /api/v1/artifacts*
 	}
 	handle @artifacts_read {
-		# Strip client-provided auth headers (defense-in-depth)
-		request_header -X-Magpie-User
-		request_header -X-Magpie-Scope
-
 		# Define matchers for allowed vs non-allowed IPs
 		@allowed_ip {
 			client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
@@ -266,7 +262,9 @@
 		@require_auth {
 			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 		}
-		# For allowed IPs: inject synthetic headers (forward_auth skipped)
+		# For allowed IPs: strip client headers and inject synthetic ones (forward_auth skipped)
+		request_header @allowed_ip -X-Magpie-User
+		request_header @allowed_ip -X-Magpie-Scope
 		request_header @allowed_ip X-Magpie-User "cidr-bypass"
 		request_header @allowed_ip X-Magpie-Scope "read"
 		# For non-allowed IPs: run forward_auth to get real headers
@@ -306,10 +304,6 @@
 	#         copy_headers X-authentik-username X-authentik-email X-authentik-name X-authentik-groups
 	#     }
 	handle /artifacts/* {
-		# Strip client-provided auth headers (defense-in-depth)
-		request_header -X-Magpie-User
-		request_header -X-Magpie-Scope
-
 		# Define matchers for allowed vs non-allowed IPs
 		@allowed_ip {
 			client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
@@ -317,10 +311,9 @@
 		@require_auth {
 			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 		}
-		# For allowed IPs: inject synthetic headers (forward_auth skipped)
-		request_header @allowed_ip X-Magpie-User "cidr-bypass"
-		request_header @allowed_ip X-Magpie-Scope "read"
-		# For non-allowed IPs: run forward_auth to get real headers
+		# For non-allowed IPs: run forward_auth to validate token
+		# Note: Caddy's file_server serves static files directly; no headers are
+		# forwarded to the backend, so we don't inject synthetic headers for allowed IPs
 		forward_auth @require_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
