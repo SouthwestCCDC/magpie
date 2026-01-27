@@ -121,6 +121,8 @@ src/magpie/
 | `amend` | Update artifact metadata |
 | `gc` | Run garbage collection (admin) |
 | `flush-tag` | Remove tag globally (admin) |
+| `status` | Check server health and connectivity |
+| `token` | Create tokens (admin) |
 | `config` | Show resolved configuration |
 
 ### Server Admin (`magpie-ctl`)
@@ -131,6 +133,7 @@ src/magpie/
 | `token` | Manage tokens (create, list, revoke) |
 | `gc` | Run garbage collection |
 | `flush-tag` | Remove tag globally |
+| `sync` | S3 backup operations (to-s3, from-s3, gc-s3) |
 
 ## Testing
 
