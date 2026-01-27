@@ -16,7 +16,7 @@ class MagpieSettings(BaseSettings):
 
     Settings can be configured via environment variables with MAGPIE_ prefix.
     temp_path is derived from storage_path unless explicitly overridden.
-    database_path must be explicitly configured via MAGPIE_DATABASE_PATH.
+    database_path defaults to /data/magpie.db and can be overridden via MAGPIE_DATABASE_PATH.
     """
 
     model_config = SettingsConfigDict(
