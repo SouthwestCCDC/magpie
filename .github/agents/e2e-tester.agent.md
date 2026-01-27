@@ -27,7 +27,7 @@ Also read `.github/copilot-instructions.md` for project conventions.
    ```bash
    just e2e
    ```
-   Note: E2E tests start/stop their own Docker Compose stack automatically.
+   Note: E2E tests start/stop their own Docker Compose stack automatically (`conftest.py` manages lifecycle). You only need Docker/Compose installed.
 
 2. **Manual testing** (only if automated tests don't cover the scenario):
    ```bash

@@ -8,7 +8,7 @@ End-to-end tests validate magpie in real Docker environments.
 just e2e
 ```
 
-Note: E2E tests automatically start/stop their own Docker Compose stack with isolated project names. Do not start the stack manually before running `just e2e`.
+Note: E2E tests automatically start/stop their own Docker Compose stack with isolated project names (`tests/e2e/conftest.py` manages the lifecycle). You only need Docker and Docker Compose installed; do not run `docker compose up` yourself before `just e2e`. The manual commands below are for ad-hoc testing only.
 
 ## Manual Testing with Docker Compose
 
