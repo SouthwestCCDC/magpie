@@ -134,10 +134,17 @@
 		path /api/v1/artifacts*
 	}
 	handle @artifacts_read {
-		# Apply forward_auth only for non-allowed IPs
+		# Define matchers for allowed vs non-allowed IPs
+		@allowed_ip {
+			client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
+		}
 		@require_auth {
 			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 		}
+		# For allowed IPs: inject synthetic headers (forward_auth skipped)
+		request_header @allowed_ip X-Magpie-User "cidr-bypass"
+		request_header @allowed_ip X-Magpie-Scope "read"
+		# For non-allowed IPs: run forward_auth to get real headers
 		forward_auth @require_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
@@ -149,10 +156,17 @@
 	# Static files accessed via /artifacts/{artifact_path}/{ref} symlinks
 	# Directory browsing enabled for discovery and debugging
 	handle /artifacts/* {
-		# Apply forward_auth only for non-allowed IPs
+		# Define matchers for allowed vs non-allowed IPs
+		@allowed_ip {
+			client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
+		}
 		@require_auth {
 			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 		}
+		# For allowed IPs: inject synthetic headers (forward_auth skipped)
+		request_header @allowed_ip X-Magpie-User "cidr-bypass"
+		request_header @allowed_ip X-Magpie-Scope "read"
+		# For non-allowed IPs: run forward_auth to get real headers
 		forward_auth @require_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
