@@ -193,8 +193,7 @@ At the end of your review, include a brief summary comment with:
 
 | Resource | Location | Purpose |
 |----------|----------|---------|
-| Design document | `deployment/docs/docs/projects/active/magpie/design.md` | Architecture, all design decisions |
-| API specification | `docs/api.md` | OpenAPI endpoints (when created) |
+| Design document | [deployment repo](https://github.com/SouthwestCCDC/deployment/blob/master/docs/docs/projects/active/magpie/design.md) | Architecture, all design decisions |
 | User guide | `docs/user-guide.md` | CLI usage documentation |
 | Contributing guide | `CONTRIBUTING.md` | Labels, milestones, PR workflow |
 | Python conventions | Align with `scoring/` repo | Ruff config, line length, style |
