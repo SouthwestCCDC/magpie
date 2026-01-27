@@ -1,5 +1,19 @@
 # PR Comment Handling
 
+## Prerequisites
+
+These instructions use the [GitHub CLI (`gh`)](https://cli.github.com/). Install and authenticate:
+
+```bash
+# Install (macOS)
+brew install gh
+
+# Authenticate
+gh auth login
+```
+
+**Without `gh` CLI**: Use the GitHub web UI instead. Navigate to the PR's "Files changed" tab to view and reply to comments, or the "Conversation" tab to create issues.
+
 ## Proactive Check After Push
 
 After pushing changes to a PR, check for review comments:
