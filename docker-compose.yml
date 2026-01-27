@@ -39,7 +39,7 @@ services:
       - ${MAGPIE_DATA_DIR:-./data}:/data  # Read-write for uploads and database
     environment:
       - MAGPIE_STORAGE_PATH=/data/artifacts
-      - MAGPIE_DATABASE_PATH=/data/magpie.db
+      - MAGPIE_DATABASE_PATH=${MAGPIE_DATABASE_PATH:-/data/magpie.db}
       - MAGPIE_DEBUG=${MAGPIE_DEBUG:-false}
     expose:
       - "8000"  # Internal only - accessed via Caddy

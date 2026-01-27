@@ -72,7 +72,7 @@ services:
       - ${MAGPIE_DATA_DIR:-./data}:/data
     environment:
       - MAGPIE_STORAGE_PATH=/data/artifacts
-      - MAGPIE_DATABASE_PATH=/data/magpie.db
+      - MAGPIE_DATABASE_PATH=${MAGPIE_DATABASE_PATH:-/data/magpie.db}
       # IMPORTANT: Keep debug mode disabled in production. Enabling it exposes
       # detailed error messages and stack traces that could leak sensitive info.
       - MAGPIE_DEBUG=false
