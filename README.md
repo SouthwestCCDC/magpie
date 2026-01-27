@@ -178,9 +178,9 @@ The release workflow will:
 
 | Git Tag | Container Tags |
 |---------|----------------|
-| `vX.Y.Z` (new release) | `X.Y.Z`, `X.Y`, `X`, `latest` |
-| `vX.Y.Z` (patch update) | `X.Y.Z`, `X.Y`, `X`, `latest` |
-| `vX.Y.Z-rcN` (pre-release) | `X.Y.Z-rcN` only (no `latest`) |
+| `v1.2.0` | `1.2.0`, `1.2`, `1`, `latest` |
+| `v1.2.1` | `1.2.1`, `1.2`, `1`, `latest` |
+| `v2.0.0-rc1` | `2.0.0-rc1` (no `latest`) |
 
 **Note on tag mutability**
 
