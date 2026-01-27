@@ -80,6 +80,18 @@ src/magpie/
 
 -->
 
+## Risk Levels
+
+Classify changes by risk before implementing:
+
+| Risk | Areas | Review Required |
+|------|-------|-----------------|
+| **High** | Auth/token handling, `forward_auth` flow, token generation/storage | Security-focused review, test coverage mandatory |
+| **Medium** | Storage operations, API endpoints, hash computation | Standard review, verify idempotency |
+| **Lower** | CLI formatting, documentation, test fixtures | Normal PR process |
+
+Prefer small, focused changes in high-risk areas. Token and auth code changes require explicit security review.
+
 ## Key Design Decisions
 
 These are documented in detail in `design.md` Resolved Design Questions table:
@@ -176,6 +188,16 @@ At the end of your review, include a brief summary comment with:
 3. **Files skipped**: If you skipped any files as "low risk" or due to size limits, list them so the author knows to check them manually.
 
 4. **Categories reviewed**: Briefly note which categories you checked (security, API design, tests, storage logic) so authors know what wasn't covered if you focused narrowly.
+
+## See Also
+
+| Resource | Location | Purpose |
+|----------|----------|---------|
+| Design document | `deployment/docs/docs/projects/active/magpie/design.md` | Architecture, all design decisions |
+| API specification | `docs/api.md` | OpenAPI endpoints (when created) |
+| User guide | `docs/user-guide.md` | CLI usage documentation |
+| Contributing guide | `CONTRIBUTING.md` | Labels, milestones, PR workflow |
+| Python conventions | Align with `scoring/` repo | Ruff config, line length, style |
 
 ## MANDATORY: Be transparent about AI use
 
