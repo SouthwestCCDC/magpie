@@ -21,7 +21,10 @@ def cli_runner() -> CliRunner:
 @pytest.fixture
 def test_settings(tmp_path: Path) -> MagpieSettings:
     """Create test MagpieSettings with temporary paths."""
-    settings = MagpieSettings(storage_path=tmp_path / "storage")
+    settings = MagpieSettings(
+        storage_path=tmp_path / "storage",
+        database_path=tmp_path / "magpie.db",
+    )
     # Ensure database directory exists
     settings.database_path.parent.mkdir(parents=True, exist_ok=True)
     return settings

@@ -21,7 +21,10 @@ from magpie.storage.hash import compute_hash, short_hash
 @pytest.fixture
 def test_config(tmp_path: Path) -> MagpieSettings:
     """Create test configuration with temporary paths."""
-    return MagpieSettings(storage_path=tmp_path)
+    return MagpieSettings(
+        storage_path=tmp_path,
+        database_path=tmp_path / "magpie.db",
+    )
 
 
 @pytest.fixture
