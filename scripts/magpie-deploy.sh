@@ -25,7 +25,7 @@ GHCR_IMAGE="ghcr.io/southwestccdc/magpie"
 MAGPIE_VERSION=""  # Dynamically detected from pyproject.toml after cloning repo
 # For --version output before repo clone, hardcode to match current pyproject.toml.
 # IMPORTANT: Update this when bumping version in pyproject.toml
-HARDCODED_VERSION="0.1.0-rc13"
+HARDCODED_VERSION="0.1.0-rc15"
 
 # Default configuration
 DEFAULT_INSTALL_DIR="/opt/magpie"
