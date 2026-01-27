@@ -63,9 +63,7 @@ docker compose down
 1. Description of failures
 
 **Logs**:
-```
-relevant output
-```
+    relevant output
 
 **Recommendations**: What to fix
 ```

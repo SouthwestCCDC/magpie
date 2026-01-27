@@ -32,7 +32,7 @@ Also read `.github/copilot-instructions.md` for project conventions.
 
 1. **Understand**: Read the issue/PR and relevant existing code
 2. **Implement**: Make incremental changes, commit frequently
-3. **Test**: Run `uv run ruff check && uv run pytest tests/unit/ -x`
+3. **Test**: Run `just lint && just test-unit` (see justfile for more options)
 4. **Push**: Create PR or push to existing branch
 5. **Respond**: Address any review comments
 
