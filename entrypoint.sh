@@ -57,15 +57,15 @@ else
 fi
 DB_LOCK_FILE="${LOCK_DIR}/.magpie-init.lock"
 
-# Determine database path: MAGPIE_DATABASE_PATH takes precedence, otherwise derive from validated LOCK_DIR
-# NOTE: When MAGPIE_DATABASE_PATH points outside LOCK_DIR, the lock file and database
-# reside in different locations. This lock is designed for single-container use (preventing
-# race conditions between the entrypoint and concurrent docker exec invocations). If you
-# override MAGPIE_DATABASE_PATH in a multi-container deployment, you are responsible for
-# your own coordination to avoid concurrent database initialization.
+# Determine database path: MAGPIE_DATABASE_PATH takes precedence, otherwise default to /data/magpie.db
+# NOTE: The database path is independent of LOCK_DIR. The lock file resides in the storage
+# directory to coordinate initialization, but the database has its own fixed location.
 if [ -n "$MAGPIE_DATABASE_PATH" ]; then
     DB_PATH="$MAGPIE_DATABASE_PATH"
+elif [ -d /data ]; then
+    DB_PATH="/data/magpie.db"
 else
+    # Last resort fallback if /data doesn't exist (shouldn't happen in normal deployments)
     DB_PATH="${LOCK_DIR}/magpie.db"
 fi
 
