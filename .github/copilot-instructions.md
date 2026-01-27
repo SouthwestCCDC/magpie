@@ -11,15 +11,14 @@ This document provides context for AI assistants working on the Magpie project.
 
 ## Key Documentation
 
-For full context, read these documents in `deployment/docs/docs/projects/active/magpie/`:
-
 | Document | Description |
 |----------|-------------|
-| `design.md` | **Primary reference** - detailed design, architecture, all resolved decisions |
-| `proposal.md` | One-pager summary with progress checklist |
-| `index.md` | Project overview |
+| `docs/user-guide.md` | CLI usage, concepts, authentication |
+| `docs/installation.md` | Server and client setup |
+| `docs/ansible-integration.md` | Using magpie in Ansible playbooks |
+| `CONTRIBUTING.md` | Labels, milestones, triage guidelines, PR workflow |
 
-Also in the repo root:
+Additional docs in `docs/`:
 
 | Document | Description |
 |----------|-------------|
@@ -94,7 +93,7 @@ Prefer small, focused changes in high-risk areas. Token and auth code changes re
 
 ## Key Design Decisions
 
-These are documented in detail in `design.md` Resolved Design Questions table:
+Resolved design questions:
 
 - **Hash prefix:** 8 characters (SHA-256)
 - **Config hierarchy:** file < env < CLI arg
@@ -119,11 +118,11 @@ uv run ruff check .                        # Lint
 uv run ruff format .                       # Format
 ```
 
-## Related Repositories
+## Related Repositories (SWCCDC internal)
 
-- `deployment` - Documentation site (design docs in `docs/docs/projects/active/magpie/`)
 - `scoring` - Reference for code style alignment (ruff, line-length 100)
-- `infra-deployment` - Current artifacts v1 Ansible role
+- `deployment` - Infrastructure where magpie is deployed
+- `infra-deployment` - Bootstrap services including artifacts v1
 
 ## Style Guide
 
@@ -193,8 +192,9 @@ At the end of your review, include a brief summary comment with:
 
 | Resource | Location | Purpose |
 |----------|----------|---------|
-| Design document | [deployment repo](https://github.com/SouthwestCCDC/deployment/blob/master/docs/docs/projects/active/magpie/design.md) | Architecture, all design decisions |
-| User guide | `docs/user-guide.md` | CLI usage documentation |
+| User guide | `docs/user-guide.md` | CLI usage, concepts, authentication |
+| Installation | `docs/installation.md` | Server and client setup |
+| Ansible integration | `docs/ansible-integration.md` | Playbook usage patterns |
 | Contributing guide | `CONTRIBUTING.md` | Labels, milestones, PR workflow |
 | Python conventions | Align with `scoring/` repo | Ruff config, line length, style |
 
