@@ -15,8 +15,8 @@ class MagpieSettings(BaseSettings):
     """Configuration settings for Magpie artifact storage.
 
     Settings can be configured via environment variables with MAGPIE_ prefix.
-    Derived paths (temp_path, database_path) are computed from storage_path
-    unless explicitly overridden.
+    temp_path is derived from storage_path unless explicitly overridden.
+    database_path must be explicitly configured via MAGPIE_DATABASE_PATH.
     """
 
     model_config = SettingsConfigDict(
@@ -27,7 +27,7 @@ class MagpieSettings(BaseSettings):
 
     storage_path: Path = Path("/data/artifacts")
     temp_path: Path | None = None
-    database_path: Path | None = None
+    database_path: Path = Path("/data/magpie.db")
     retention_days: int = 90
     debug: bool = False
 
@@ -89,11 +89,9 @@ class MagpieSettings(BaseSettings):
 
     @model_validator(mode="after")
     def derive_paths(self) -> Self:
-        """Derive temp_path and database_path from storage_path if not set."""
+        """Derive temp_path from storage_path if not set."""
         if self.temp_path is None:
             self.temp_path = self.storage_path / ".tmp"
-        if self.database_path is None:
-            self.database_path = self.storage_path / ".magpie.db"
         return self
 
 
