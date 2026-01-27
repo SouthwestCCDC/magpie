@@ -77,12 +77,14 @@ BACKUP_PATH="/backup/magpie/$(date +%Y%m%d-%H%M%S)"
 
 mkdir -p "$BACKUP_PATH"
 
-# Backup storage (exclude temp directory)
-rsync -av --exclude='artifacts/.tmp/' "$MAGPIE_DATA_DIR/" "$BACKUP_PATH/"
+# Backup artifact storage (exclude temp directory and database)
+# IMPORTANT: Exclude magpie.db* to prevent corrupted backups of live SQLite database
+rsync -av --exclude='artifacts/.tmp/' --exclude='magpie.db*' "$MAGPIE_DATA_DIR/" "$BACKUP_PATH/"
 
-# Alternatively, backup database separately using SQLite online backup (safe during writes)
+# Backup database separately using SQLite online backup (safe during writes)
+# This command creates a consistent snapshot even while the database is in use
 # Note: sqlite3 must be installed on the host (not in container)
-# sqlite3 "$MAGPIE_DATA_DIR/magpie.db" ".backup '$BACKUP_PATH/magpie.db'"
+sqlite3 "$MAGPIE_DATA_DIR/magpie.db" ".backup '$BACKUP_PATH/magpie.db'"
 ```
 
 ### S3 Backup with magpie-ctl sync
@@ -227,7 +229,7 @@ Note: Set `BACKUP_PATH` (e.g., `BACKUP_PATH="/backup/magpie/$(date +%Y%m%d-%H%M%
 
 | Task | Command |
 |------|---------|
-| Full backup | `rsync -av --exclude='artifacts/.tmp/' ${MAGPIE_DATA_DIR:-./data}/ $BACKUP_PATH/` |
+| Full backup | `rsync -av --exclude='artifacts/.tmp/' --exclude='magpie.db*' ${MAGPIE_DATA_DIR:-./data}/ $BACKUP_PATH/` then `sqlite3 ${MAGPIE_DATA_DIR:-./data}/magpie.db ".backup '$BACKUP_PATH/magpie.db'"` |
 | Database backup | `sqlite3 ${MAGPIE_DATA_DIR:-./data}/magpie.db ".backup '$BACKUP_PATH/magpie.db'"` |
 | Full restore | `rsync -av --delete $BACKUP_PATH/ ${MAGPIE_DATA_DIR:-./data}/` |
 | Reconcile symlinks | `docker compose exec magpie magpie-ctl gc --reconcile-only` |
