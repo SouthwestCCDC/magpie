@@ -66,7 +66,7 @@ DB_LOCK_FILE="${LOCK_DIR}/.magpie-init.lock"
 if [ -n "$MAGPIE_DATABASE_PATH" ]; then
     DB_PATH="$MAGPIE_DATABASE_PATH"
 else
-    DB_PATH="${LOCK_DIR}/.magpie.db"
+    DB_PATH="${LOCK_DIR}/magpie.db"
 fi
 
 # Verify gosu is available before we need it (only required when not running as root)

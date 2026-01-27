@@ -13,23 +13,25 @@ Magpie stores data in these locations:
 | **Blob files** | `{storage}/**/blobs/` | Actual artifact content |
 | **Manifests** | `{storage}/**/.magpie` | Tag-to-hash mappings (JSON) |
 | **Metadata** | `{storage}/**/metadata/` | Upload provenance (uploaded_by, uploaded_at, source_uri) |
-| **SQLite database** | `{storage}/.magpie.db` | Authentication tokens |
+| **SQLite database** | `/data/magpie.db` | Authentication tokens |
 
 Default storage path: `/data/artifacts` (configurable via `MAGPIE_STORAGE_PATH`).
+Default database path: `/data/magpie.db` (configurable via `MAGPIE_DATABASE_PATH`).
 
 ### Storage Directory Structure
 
 ```
-/data/artifacts/
-├── .magpie.db              # SQLite database (tokens only)
-├── .tmp/                   # Temporary upload staging (exclude from backups)
-├── {artifact-path}/        # Artifact directories (e.g., images/ubuntu/)
-│   ├── .magpie             # Manifest JSON
-│   ├── blobs/              # Content-addressed storage
-│   │   └── {hash}          # Blob files (8-char SHA-256 prefix)
-│   ├── metadata/           # Provenance sidecars
-│   │   └── {hash}.json     # uploaded_by, uploaded_at, source_uri
-│   └── latest -> blobs/{hash}  # Tag symlinks
+/data/
+├── magpie.db               # SQLite database (tokens only)
+├── artifacts/              # Artifact storage root
+│   ├── .tmp/               # Temporary upload staging (exclude from backups)
+│   └── {artifact-path}/    # Artifact directories (e.g., images/ubuntu/)
+│       ├── .magpie         # Manifest JSON
+│       ├── blobs/          # Content-addressed storage
+│       │   └── {hash}      # Blob files (8-char SHA-256 prefix)
+│       ├── metadata/       # Provenance sidecars
+│       │   └── {hash}.json # uploaded_by, uploaded_at, source_uri
+│       └── latest -> blobs/{hash}  # Tag symlinks
 ```
 
 ### Manifest Format
@@ -67,17 +69,17 @@ Metadata files (`metadata/{hash}.json`) store the full SHA-256 hash and upload p
 
 ```bash
 # Use the same data directory as your docker-compose deployment (host path, not container path)
-MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data/artifacts}"
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/data}"
 BACKUP_PATH="/backup/magpie/$(date +%Y%m%d-%H%M%S)"
 
 mkdir -p "$BACKUP_PATH"
 
 # Backup storage (exclude temp directory)
-rsync -av --exclude='.tmp/' "$MAGPIE_DATA_DIR/" "$BACKUP_PATH/artifacts/"
+rsync -av --exclude='artifacts/.tmp/' "$MAGPIE_DATA_DIR/" "$BACKUP_PATH/"
 
-# SQLite online backup (safe during writes)
+# Alternatively, backup database separately using SQLite online backup (safe during writes)
 # Note: sqlite3 must be installed on the host (not in container)
-sqlite3 "$MAGPIE_DATA_DIR/.magpie.db" ".backup '$BACKUP_PATH/magpie.db'"
+# sqlite3 "$MAGPIE_DATA_DIR/magpie.db" ".backup '$BACKUP_PATH/magpie.db'"
 ```
 
 ### S3 Backup with magpie-ctl sync
@@ -108,17 +110,17 @@ Requires `MAGPIE_S3_BUCKET` environment variable. Optionally set `MAGPIE_S3_PREF
 - Add them to the `environment` section in `docker-compose.yml`, or
 - Pass them inline with `-e` flags: `docker compose exec -e MAGPIE_S3_BUCKET=my-bucket -e MAGPIE_S3_PREFIX=backup magpie magpie-ctl sync to-s3`
 
-**Important:** The sync commands only back up artifact data (manifests, blobs, metadata sidecars). They do NOT back up the token database (`.magpie.db`) or configuration files. Back up the database using the rsync/SQLite procedure above. Configuration files (`.env`, `docker-compose.yml`, `Caddyfile`) require separate manual backup (e.g., `cp .env docker-compose.yml Caddyfile "$BACKUP_PATH/"`).
+**Important:** The sync commands only back up artifact data (manifests, blobs, metadata sidecars). They do NOT back up the token database (`magpie.db`) or configuration files. Back up the database using the rsync/SQLite procedure above. Configuration files (`.env`, `docker-compose.yml`, `Caddyfile`) require separate manual backup (e.g., `cp .env docker-compose.yml Caddyfile "$BACKUP_PATH/"`).
 
 The sync commands require either `rclone` or `aws` CLI. If `rclone` is available, it uses `--checksum` for content-based comparison. If falling back to AWS CLI, uploads use `aws s3 cp` (overwrites on each run), while restores use `aws s3 sync` (incremental).
 
 **Warning - Destructive Behavior:** When using `rclone` for `from-s3` restores, `rclone sync` will DELETE any local files that don't exist in S3. This includes:
 - **Untagged blobs** not backed up to S3 (only tagged artifacts are synced)
-- **The token database** (`.magpie.db`) since `to-s3` does not upload it
+- **The token database** (`magpie.db`) since `to-s3` does not upload it
 
-**Critical:** If you restore from S3 to a directory containing `.magpie.db`, rclone will delete the database file, requiring token regeneration. To avoid data loss:
+**Critical:** If you restore from S3 to a directory containing `magpie.db`, rclone will delete the database file, requiring token regeneration. To avoid data loss:
 - Restore to an empty directory, OR
-- Back up `.magpie.db` separately before restoring (see Database-Only Restore section), OR
+- Back up `magpie.db` separately before restoring (see Database-Only Restore section), OR
 - Use `--dry-run` first to preview what will be deleted
 
 ---
@@ -129,28 +131,24 @@ The sync commands require either `rclone` or `aws` CLI. If `rclone` is available
 
 ```bash
 BACKUP_PATH="/backup/magpie/20260115-103000"
-MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data/artifacts}"
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/data}"
 
 # Stop services
 docker compose down
 
-# Restore storage to empty directory to avoid stale data
+# Restore data directory to empty directory to avoid stale data
 # If directory exists, use rsync --delete or manually clear it first
 mkdir -p "$MAGPIE_DATA_DIR"
-rsync -av --delete "$BACKUP_PATH/artifacts/" "$MAGPIE_DATA_DIR/"
-
-# Restore database
-cp "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/.magpie.db"
+rsync -av --delete "$BACKUP_PATH/" "$MAGPIE_DATA_DIR/"
 
 # Set ownership to match MAGPIE_UID/MAGPIE_GID or the data directory owner
 # The entrypoint will auto-detect from directory ownership
 OWNER_UID=$(stat -c %u "$MAGPIE_DATA_DIR")
 OWNER_GID=$(stat -c %g "$MAGPIE_DATA_DIR")
-chown "$OWNER_UID:$OWNER_GID" "$MAGPIE_DATA_DIR/.magpie.db"
+chown -R "$OWNER_UID:$OWNER_GID" "$MAGPIE_DATA_DIR"
 
 # Ensure temp directory exists
-mkdir -p "$MAGPIE_DATA_DIR/.tmp"
-chown -R "$OWNER_UID:$OWNER_GID" "$MAGPIE_DATA_DIR"
+mkdir -p "$MAGPIE_DATA_DIR/artifacts/.tmp"
 
 # Start services and reconcile symlinks
 docker compose up -d
@@ -164,16 +162,16 @@ For restoring tokens without touching artifacts:
 
 ```bash
 BACKUP_PATH="/backup/magpie/20260115-103000"
-MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data/artifacts}"
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/data}"
 
 docker compose stop magpie
-cp "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/.magpie.db"
-sqlite3 "$MAGPIE_DATA_DIR/.magpie.db" "PRAGMA wal_checkpoint(TRUNCATE);"
+cp "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/magpie.db"
+sqlite3 "$MAGPIE_DATA_DIR/magpie.db" "PRAGMA wal_checkpoint(TRUNCATE);"
 
 # Set ownership to match data directory owner
 OWNER_UID=$(stat -c %u "$MAGPIE_DATA_DIR")
 OWNER_GID=$(stat -c %g "$MAGPIE_DATA_DIR")
-chown "$OWNER_UID:$OWNER_GID" "$MAGPIE_DATA_DIR/.magpie.db"
+chown "$OWNER_UID:$OWNER_GID" "$MAGPIE_DATA_DIR/magpie.db"
 
 docker compose start magpie
 docker compose exec magpie magpie-ctl token list
@@ -185,7 +183,7 @@ docker compose exec magpie magpie-ctl token list
 
 ### Lost Database (Token Regeneration)
 
-If `.magpie.db` is lost or corrupted, artifact data is unaffected. Generate new tokens:
+If `magpie.db` is lost or corrupted, artifact data is unaffected. Generate new tokens:
 
 ```bash
 # Initialize new database and generate admin token
@@ -213,7 +211,7 @@ This reads all `.magpie` manifests and recreates symlinks to match. Safe and ide
 To identify broken symlinks (pointing to missing blobs):
 
 ```bash
-find "${MAGPIE_DATA_DIR:-./data/artifacts}" -type l ! -exec test -e {} \; -print
+find "${MAGPIE_DATA_DIR:-/data}/artifacts" -type l ! -exec test -e {} \; -print
 ```
 
 Restore missing blobs from backup, or re-upload from original source.
@@ -226,9 +224,9 @@ Note: Set `BACKUP_PATH` (e.g., `BACKUP_PATH="/backup/magpie/$(date +%Y%m%d-%H%M%
 
 | Task | Command |
 |------|---------|
-| Full backup | `rsync -av --exclude='.tmp/' ${MAGPIE_DATA_DIR:-./data/artifacts}/ $BACKUP_PATH/artifacts/` |
-| Database backup | `sqlite3 ${MAGPIE_DATA_DIR:-./data/artifacts}/.magpie.db ".backup '$BACKUP_PATH/magpie.db'"` |
-| Full restore | `rsync -av --delete $BACKUP_PATH/artifacts/ ${MAGPIE_DATA_DIR:-./data/artifacts}/` |
+| Full backup | `rsync -av --exclude='artifacts/.tmp/' ${MAGPIE_DATA_DIR:-/data}/ $BACKUP_PATH/` |
+| Database backup | `sqlite3 ${MAGPIE_DATA_DIR:-/data}/magpie.db ".backup '$BACKUP_PATH/magpie.db'"` |
+| Full restore | `rsync -av --delete $BACKUP_PATH/ ${MAGPIE_DATA_DIR:-/data}/` |
 | Reconcile symlinks | `docker compose exec magpie magpie-ctl gc --reconcile-only` |
 | Reset admin token | `docker compose exec magpie magpie-ctl init --reset-admin-token` |
 | GC untagged blobs older than 90 days | `docker compose exec magpie magpie-ctl gc --retention-days 90` |
