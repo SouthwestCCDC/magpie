@@ -45,6 +45,9 @@ services:
       # Optional: Authentik SSO integration for browser access to /artifacts/*
       # See docs/authentik-setup.md for setup instructions
       - AUTHENTIK_HOST=${AUTHENTIK_HOST:-}
+      # Optional: CIDR allow-list for read-only access without bearer token
+      # Example: MAGPIE_ALLOWED_CIDRS=10.0.0.0/8,192.168.1.0/24
+      - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-}
     depends_on:
       magpie:
         condition: service_healthy
