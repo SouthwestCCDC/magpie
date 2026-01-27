@@ -10,7 +10,7 @@ type(area): brief description
 
 Addresses #ISSUE_NUMBER
 
-Co-Authored-By: Claude {Model} <noreply@anthropic.com>
+Co-Authored-By: {AI Tool/Model} <noreply@{domain}.com>
 ```
 
 ## Types
@@ -39,10 +39,10 @@ Co-Authored-By: Claude {Model} <noreply@anthropic.com>
 All AI-generated commits MUST include the co-author trailer:
 
 ```
-Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+Co-Authored-By: {AI Tool/Model} <noreply@{domain}.com>
 ```
 
-Use the actual model (Sonnet 4.5, Opus 4.5, Haiku, etc.).
+Examples: `Claude Sonnet 4.5 <noreply@anthropic.com>`, `GitHub Copilot <noreply@github.com>`.
 
 ## Examples
 

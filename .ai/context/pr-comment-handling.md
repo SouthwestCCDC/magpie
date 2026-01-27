@@ -5,7 +5,7 @@
 After pushing changes to a PR, check for review comments:
 
 ```bash
-gh api repos/SouthwestCCDC/magpie/pulls/{N}/comments --jq '.[].body' | head -20
+gh api repos/SouthwestCCDC/magpie/pulls/{N}/comments --jq '.[] | {id, path, line, body}' | head -20
 ```
 
 ## Response Workflow
@@ -28,7 +28,7 @@ Every addressed comment needs an inline reply with AI disclosure:
 gh api repos/SouthwestCCDC/magpie/pulls/{N}/comments/{comment_id}/replies \
   -f body="Fixed in {SHA}. {brief explanation}
 
-(AI-generated via Claude Code w/ {Model})"
+(AI-generated via {tool} w/ {model})"
 ```
 
 ## Comment Categories
@@ -55,7 +55,7 @@ gh issue create --repo SouthwestCCDC/magpie \
 
 Original comment: https://github.com/SouthwestCCDC/magpie/pull/{N}#discussion_r{comment_id}
 
-(AI-generated via Claude Code w/ {Model})"
+(AI-generated via {tool} w/ {model})"
 ```
 
 Then reply to the original comment with the issue link.

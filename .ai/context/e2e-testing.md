@@ -31,13 +31,13 @@ export MAGPIE_SERVER=http://localhost:8080
 export MAGPIE_TOKEN=<token from init>
 
 # Push an artifact
-uv run magpie push /tmp/test.txt artifacts/test.txt
+uv run magpie push /tmp/test.txt --to artifacts/test.txt
 
 # Get an artifact
-uv run magpie get artifacts/test.txt /tmp/out.txt
+uv run magpie get artifacts/test.txt -o /tmp/out.txt
 
 # List artifacts
-uv run magpie list artifacts/
+uv run magpie ls artifacts/
 ```
 
 ### Cleanup

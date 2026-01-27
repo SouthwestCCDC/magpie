@@ -1,25 +1,26 @@
 # Quality Commands
 
-Quality checks use `uv run` for consistent Python environment.
+Quality checks use `just` recipes for consistency with CI.
 
 ## Commands
 
 | Command | Purpose |
 |---------|---------|
-| `uv run ruff check src/ tests/` | Lint Python code |
-| `uv run ruff format src/ tests/` | Format Python code |
-| `uv run pytest tests/unit/ -x` | Run unit tests (stop on first failure) |
-| `uv run pytest tests/e2e/ -v` | Run E2E tests |
-| `uv run pytest tests/ -v` | Run all tests |
+| `just lint` | Lint Python code with ruff |
+| `just fmt` | Format Python code with ruff |
+| `just fmt-check` | Check formatting without modifying files |
+| `just test-unit` | Run unit tests only |
+| `just test-ci` | Run tests with coverage (excludes e2e) |
+| `just check` | Run lint + format check + all tests |
 
 ## Pre-Push Checklist
 
 Before pushing any changes:
 
 ```bash
-uv run ruff check src/ tests/
-uv run ruff format src/ tests/
-uv run pytest tests/unit/ -x
+just lint
+just fmt-check
+just test-unit
 ```
 
 All must pass before creating or updating a PR.
