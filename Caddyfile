@@ -155,7 +155,7 @@
 	# Static files accessed via /artifacts/{artifact_path}/{ref} symlinks
 	# Directory browsing enabled for discovery and debugging
 	handle /artifacts/* {
-		# Define matcher for non-allowed IPs (allowed IPs use global @allowed_ip matcher)
+		# Define matcher for non-allowed IPs (allowed IPs bypass auth check)
 		@require_auth {
 			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 		}
