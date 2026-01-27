@@ -166,7 +166,7 @@ Releases are automated via GitHub Actions when a version tag is pushed.
 3. Create and push the tag:
    ```bash
    git tag vX.Y.Z
-   git push origin vX.Y.Z
+   git push origin HEAD vX.Y.Z
    ```
 
 The release workflow will:
