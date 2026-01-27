@@ -237,7 +237,7 @@
 
 	# Redirect root to artifact browser
 	handle / {
-		redir /artifacts/ permanent
+		redir * /artifacts/ permanent
 	}
 
 	# =========================================================================
