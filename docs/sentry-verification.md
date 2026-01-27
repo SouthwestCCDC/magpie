@@ -202,5 +202,4 @@ Set appropriate filters in Sentry dashboard to focus on production issues.
 ## References
 
 - [Sentry FastAPI Documentation](https://docs.sentry.io/platforms/python/integrations/fastapi/)
-- [Magpie Design Doc - Sentry Integration](./design.md#sentry-integration)
 - [Magpie User Guide - Configuration](./user-guide.md)
