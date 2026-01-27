@@ -5,11 +5,11 @@
 # - magpie: FastAPI backend for API operations (internal port 8000)
 #
 # Volumes:
-# - ${MAGPIE_DATA_DIR:-./data/artifacts}: Shared storage for artifact blobs and symlinks
+# - ${MAGPIE_DATA_DIR:-./data}: Shared storage for artifact blobs, symlinks, and database
 # - caddy_data/caddy_config: Caddy's internal state and certificates
 #
 # Configuration:
-# - MAGPIE_DATA_DIR: Host path for artifact storage (default: ./data/artifacts)
+# - MAGPIE_DATA_DIR: Host path for data directory (default: ./data)
 
 services:
   # Caddy reverse proxy - handles routing and static file serving
@@ -22,7 +22,7 @@ services:
       - "${MAGPIE_HTTPS_PORT:-8443}:443"  # HTTPS (auto-TLS in production)
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${MAGPIE_DATA_DIR:-./data/artifacts}:/data/artifacts:ro  # Read-only for static serving
+      - ${MAGPIE_DATA_DIR:-./data}/artifacts:/data/artifacts:ro  # Read-only for static serving
       - caddy_data:/data
       - caddy_config:/config
     environment:
@@ -36,9 +36,10 @@ services:
   magpie:
     build: .
     volumes:
-      - ${MAGPIE_DATA_DIR:-./data/artifacts}:/data/artifacts  # Read-write for uploads
+      - ${MAGPIE_DATA_DIR:-./data}:/data  # Read-write for uploads and database
     environment:
       - MAGPIE_STORAGE_PATH=/data/artifacts
+      - MAGPIE_DATABASE_PATH=/data/magpie.db
       - MAGPIE_DEBUG=${MAGPIE_DEBUG:-false}
     expose:
       - "8000"  # Internal only - accessed via Caddy
