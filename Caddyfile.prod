@@ -252,7 +252,7 @@
 	}
 	handle @artifacts_read {
 		@require_auth {
-			not remote_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
+			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 		}
 		forward_auth @require_auth magpie:8000 {
 			uri /api/v1/auth/validate
@@ -291,7 +291,7 @@
 	#     }
 	handle /artifacts/* {
 		@require_auth {
-			not remote_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
+			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 		}
 		forward_auth @require_auth magpie:8000 {
 			uri /api/v1/auth/validate

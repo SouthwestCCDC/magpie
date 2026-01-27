@@ -92,7 +92,7 @@
 	# Matches requests from allowed CIDR ranges (if MAGPIE_ALLOWED_CIDRS is set)
 	# Used to bypass bearer token authentication for trusted networks
 	@allowed_ip {
-		remote_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
+		client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 	}
 	# =========================================================================
 	# PUBLIC ROUTES - No authentication required
@@ -129,7 +129,7 @@
 	handle @artifacts_read {
 		# Apply forward_auth only for non-allowed IPs
 		@require_auth {
-			not remote_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
+			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 		}
 		forward_auth @require_auth magpie:8000 {
 			uri /api/v1/auth/validate
@@ -144,7 +144,7 @@
 	handle /artifacts/* {
 		# Apply forward_auth only for non-allowed IPs
 		@require_auth {
-			not remote_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
+			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 		}
 		forward_auth @require_auth magpie:8000 {
 			uri /api/v1/auth/validate
