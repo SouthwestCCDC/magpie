@@ -65,7 +65,7 @@ class TestPrivilegeDropping:
 
             # Pre-create an empty database file to skip magpie-ctl init
             # (otherwise init would fail with permission errors when running as non-root)
-            db_file = artifacts_dir / ".magpie.db"
+            db_file = temp_path / "magpie.db"
             db_file.touch()
 
             # Get current user's UID/GID
@@ -89,7 +89,7 @@ class TestPrivilegeDropping:
                         "run",
                         "--rm",
                         "-v",
-                        f"{artifacts_dir}:/data/artifacts",
+                        f"{temp_path}:/data",
                         "magpie-privtest:latest",
                         "sh",
                         "-c",
@@ -125,7 +125,7 @@ class TestPrivilegeDropping:
             artifacts_dir.mkdir(parents=True)
 
             # Pre-create database to skip init
-            (artifacts_dir / ".magpie.db").touch()
+            (temp_path / "magpie.db").touch()
 
             # Build the image
             subprocess.run(
@@ -150,7 +150,7 @@ class TestPrivilegeDropping:
                         "-e",
                         f"MAGPIE_GID={test_gid}",
                         "-v",
-                        f"{artifacts_dir}:/data/artifacts",
+                        f"{temp_path}:/data",
                         "magpie-privtest-env:latest",
                         "sh",
                         "-c",
@@ -270,7 +270,7 @@ class TestPrivilegeDropping:
             artifacts_dir.mkdir(parents=True)
 
             # Pre-create database to skip init
-            (artifacts_dir / ".magpie.db").touch()
+            (temp_path / "magpie.db").touch()
 
             # Build the image
             subprocess.run(
@@ -292,7 +292,7 @@ class TestPrivilegeDropping:
                         "-e",
                         "MAGPIE_GID=0",
                         "-v",
-                        f"{artifacts_dir}:/data/artifacts",
+                        f"{temp_path}:/data",
                         "magpie-privtest-root:latest",
                         "sh",
                         "-c",
@@ -330,7 +330,7 @@ class TestPrivilegeDropping:
             artifacts_dir.mkdir(parents=True)
 
             # Pre-create database to skip init
-            (artifacts_dir / ".magpie.db").touch()
+            (temp_path / "magpie.db").touch()
 
             # Build the image
             subprocess.run(
@@ -354,7 +354,7 @@ class TestPrivilegeDropping:
                         "-e",
                         f"MAGPIE_GID={test_gid}",
                         "-v",
-                        f"{artifacts_dir}:/data/artifacts",
+                        f"{temp_path}:/data",
                         "magpie-privtest-userfile:latest",
                         "sh",
                         "-c",
@@ -475,7 +475,7 @@ class TestPrivilegeDropping:
             artifacts_dir.mkdir(parents=True)
 
             # Pre-create database to skip init
-            (artifacts_dir / ".magpie.db").touch()
+            (temp_path / "magpie.db").touch()
 
             # Get GID from directory ownership
             stat_info = os.stat(artifacts_dir)
@@ -501,7 +501,7 @@ class TestPrivilegeDropping:
                         "-e",
                         f"MAGPIE_UID={test_uid}",
                         "-v",
-                        f"{artifacts_dir}:/data/artifacts",
+                        f"{temp_path}:/data",
                         "magpie-privtest-mixed:latest",
                         "sh",
                         "-c",
