@@ -255,6 +255,10 @@
 		path /api/v1/artifacts*
 	}
 	handle @artifacts_read {
+		# Strip client-provided auth headers (defense-in-depth)
+		request_header -X-Magpie-User
+		request_header -X-Magpie-Scope
+
 		# Define matchers for allowed vs non-allowed IPs
 		@allowed_ip {
 			client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
@@ -302,6 +306,10 @@
 	#         copy_headers X-authentik-username X-authentik-email X-authentik-name X-authentik-groups
 	#     }
 	handle /artifacts/* {
+		# Strip client-provided auth headers (defense-in-depth)
+		request_header -X-Magpie-User
+		request_header -X-Magpie-Scope
+
 		# Define matchers for allowed vs non-allowed IPs
 		@allowed_ip {
 			client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
@@ -323,6 +331,10 @@
 
 	# Upload endpoint - requires write or admin scope
 	handle /api/v1/upload/* {
+		# Strip client-provided auth headers (defense-in-depth)
+		request_header -X-Magpie-User
+		request_header -X-Magpie-Scope
+
 		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
@@ -338,6 +350,10 @@
 		path_regexp ^/api/v1/artifacts/.+
 	}
 	handle @artifacts_amend {
+		# Strip client-provided auth headers (defense-in-depth)
+		request_header -X-Magpie-User
+		request_header -X-Magpie-Scope
+
 		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
@@ -355,6 +371,10 @@
 		path_regexp ^/api/v1/artifacts/.+/tags
 	}
 	handle @artifacts_tags {
+		# Strip client-provided auth headers (defense-in-depth)
+		request_header -X-Magpie-User
+		request_header -X-Magpie-Scope
+
 		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
@@ -375,6 +395,10 @@
 		path /api/v1/tags/*/flush
 	}
 	handle @tags_flush {
+		# Strip client-provided auth headers (defense-in-depth)
+		request_header -X-Magpie-User
+		request_header -X-Magpie-Scope
+
 		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
@@ -384,6 +408,10 @@
 
 	# Token management endpoints - requires admin scope
 	handle /api/v1/tokens* {
+		# Strip client-provided auth headers (defense-in-depth)
+		request_header -X-Magpie-User
+		request_header -X-Magpie-Scope
+
 		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
@@ -393,6 +421,10 @@
 
 	# GC endpoint - requires admin scope
 	handle /api/v1/gc {
+		# Strip client-provided auth headers (defense-in-depth)
+		request_header -X-Magpie-User
+		request_header -X-Magpie-Scope
+
 		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
@@ -402,6 +434,10 @@
 
 	# Status endpoint - requires admin scope
 	handle /api/v1/status {
+		# Strip client-provided auth headers (defense-in-depth)
+		request_header -X-Magpie-User
+		request_header -X-Magpie-Scope
+
 		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope
