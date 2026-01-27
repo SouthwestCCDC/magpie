@@ -31,7 +31,7 @@ If needed, configure in `.env`:
 
 - [ ] `AUTHENTIK_HOST` - SSO integration (see [authentik-setup.md](authentik-setup.md))
 
-**Note:** Additional environment variables (e.g., `MAGPIE_ALLOWED_CIDRS`, `MAGPIE_RETENTION_DAYS`, `MAGPIE_LOG_FORMAT`, `MAGPIE_SENTRY_DSN`, `MAGPIE_OTEL_*`) are supported by Magpie but require manual modification of `docker-compose.prod.yml` to pass them to the `magpie` service. By default, only `MAGPIE_STORAGE_PATH` and `MAGPIE_DEBUG` are configured in the production compose file. See `.env.example` and `config.py` for the full list of available settings.
+**Note:** `MAGPIE_ALLOWED_CIDRS` is automatically passed to the Caddy service in `docker-compose.prod.yml` for CIDR-based access control (set in `.env` as needed). Additional environment variables for the Magpie service itself (e.g., `MAGPIE_RETENTION_DAYS`, `MAGPIE_LOG_FORMAT`, `MAGPIE_SENTRY_DSN`, `MAGPIE_OTEL_*`) require manual modification of `docker-compose.prod.yml` to pass them to the `magpie` service. By default, only `MAGPIE_STORAGE_PATH` and `MAGPIE_DEBUG` are configured in the production compose file. See `.env.example` and `config.py` for the full list of available settings.
 
 ## Deployment
 
