@@ -1,7 +1,7 @@
 ---
 name: Magpie Reviewer
 description: Reviews PRs and triages review comments for magpie
-tools: ['githubRepo', 'search', 'fetch']
+tools: ['githubRepo', 'search', 'fetch', 'runTerminalLastCommand']
 handoffs:
   - label: "Fix Issues"
     agent: developer

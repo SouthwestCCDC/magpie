@@ -10,7 +10,7 @@ type(area): brief description
 
 Addresses #ISSUE_NUMBER
 
-Co-Authored-By: {AI Tool/Model} <noreply@{domain}.com>
+Co-authored-by: {AI Tool/Model} <noreply@{domain}.com>
 ```
 
 ## Types
@@ -39,7 +39,7 @@ Co-Authored-By: {AI Tool/Model} <noreply@{domain}.com>
 All AI-generated commits MUST include the co-author trailer:
 
 ```
-Co-Authored-By: {AI Tool/Model} <noreply@{domain}.com>
+Co-authored-by: {AI Tool/Model} <noreply@{domain}.com>
 ```
 
 Examples: `Claude Sonnet 4.5 <noreply@anthropic.com>`, `GitHub Copilot <noreply@github.com>`.

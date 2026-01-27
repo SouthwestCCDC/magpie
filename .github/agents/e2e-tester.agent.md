@@ -25,20 +25,16 @@ Also read `.github/copilot-instructions.md` for project conventions.
 
 1. **Run existing E2E tests first**:
    ```bash
-   uv run pytest tests/e2e/ -v --tb=short
+   just e2e
    ```
+   Note: E2E tests start/stop their own Docker Compose stack automatically.
 
-2. **Start stack if needed**:
+2. **Manual testing** (only if automated tests don't cover the scenario):
    ```bash
    docker compose up -d --build
    docker compose ps
-   ```
-
-3. **Manual testing** (if automated tests don't cover the scenario)
-
-4. **Cleanup**:
-   ```bash
-   docker compose down
+   # ... run manual tests ...
+   docker compose down   # Clean up when done
    ```
 
 ## Output Format

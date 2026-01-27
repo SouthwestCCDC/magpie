@@ -5,8 +5,10 @@ End-to-end tests validate magpie in real Docker environments.
 ## Running Existing E2E Tests
 
 ```bash
-uv run pytest tests/e2e/ -v --tb=short
+just e2e
 ```
+
+Note: E2E tests automatically start/stop their own Docker Compose stack with isolated project names. Do not start the stack manually before running `just e2e`.
 
 ## Manual Testing with Docker Compose
 
