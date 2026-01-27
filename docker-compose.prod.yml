@@ -42,6 +42,8 @@ services:
     environment:
       # MAGPIE_DOMAIN is required - Let's Encrypt will fail without a valid domain
       - MAGPIE_DOMAIN=${MAGPIE_DOMAIN:?MAGPIE_DOMAIN must be set}
+      # Optional: IP allow-listing for read-only access without bearer tokens
+      - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-255.255.255.255/32}
       # Optional: Authentik SSO integration for browser access to /artifacts/*
       # See docs/authentik-setup.md for setup instructions
       - AUTHENTIK_HOST=${AUTHENTIK_HOST:-}

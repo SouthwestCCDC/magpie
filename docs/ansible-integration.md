@@ -203,4 +203,3 @@ magpie_mode: "0644"
 
 - [User Guide](user-guide.md) - CLI and server administration
 - [Authentik Integration](authentik-setup.md) - SSO for browser access
-- [Design Document](design.md) - Architecture

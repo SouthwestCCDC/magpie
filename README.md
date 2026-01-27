@@ -121,7 +121,10 @@ src/magpie/
 | `amend` | Update artifact metadata |
 | `gc` | Run garbage collection (admin) |
 | `flush-tag` | Remove tag globally (admin) |
+| `status` | Check server health and connectivity (admin) |
+| `token` | Create tokens (admin) |
 | `config` | Show resolved configuration |
+| `version` | Show client version |
 
 ### Server Admin (`magpie-ctl`)
 
@@ -131,6 +134,8 @@ src/magpie/
 | `token` | Manage tokens (create, list, revoke) |
 | `gc` | Run garbage collection |
 | `flush-tag` | Remove tag globally |
+| `sync` | S3 backup operations (to-s3, from-s3, gc-s3) |
+| `version` | Show server version |
 
 ## Testing
 
@@ -156,12 +161,12 @@ Releases are automated via GitHub Actions when a version tag is pushed.
 2. Commit the change:
    ```bash
    git add pyproject.toml
-   git commit -m "Release v1.0.0"
+   git commit -m "Release vX.Y.Z"
    ```
 3. Create and push the tag:
    ```bash
-   git tag v1.0.0
-   git push origin default --tags
+   git tag vX.Y.Z
+   git push origin HEAD vX.Y.Z
    ```
 
 The release workflow will:
@@ -175,8 +180,8 @@ The release workflow will:
 
 | Git Tag | Container Tags |
 |---------|----------------|
-| `v1.0.0` | `1.0.0`, `1.0`, `1`, `latest` |
-| `v1.0.1` | `1.0.1`, `1.0`, `1`, `latest` |
+| `v1.2.0` | `1.2.0`, `1.2`, `1`, `latest` |
+| `v1.2.1` | `1.2.1`, `1.2`, `1`, `latest` |
 | `v2.0.0-rc1` | `2.0.0-rc1` (no `latest`) |
 
 **Note on tag mutability**
@@ -197,7 +202,7 @@ If you require a non-changing reference for deployments, pin to the full version
 docker pull ghcr.io/southwestccdc/magpie:latest
 
 # Client: Install from git tag
-uv pip install git+https://github.com/SouthwestCCDC/magpie@v1.0.0
+uv pip install git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z
 ```
 
 ---

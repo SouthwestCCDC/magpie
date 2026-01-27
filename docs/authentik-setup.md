@@ -175,4 +175,3 @@ By default, `/artifacts/*` uses Bearer token authentication. Authentik SSO is an
 ## See Also
 
 - [Authentik Testing Guide](authentik-testing-guide.md) - Manual testing procedures
-- [Design Doc](design.md) - Auth architecture
