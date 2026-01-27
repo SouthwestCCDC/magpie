@@ -414,6 +414,8 @@ MAGPIE_HTTPS_PORT=${HTTPS_PORT}
 MAGPIE_DOMAIN=${DOMAIN:-}
 
 # Server settings
+MAGPIE_STORAGE_PATH=/data/artifacts
+MAGPIE_DATABASE_PATH=/data/magpie.db
 MAGPIE_DEBUG=false
 MAGPIE_LOG_FORMAT=json
 MAGPIE_RETENTION_DAYS=90
@@ -911,7 +913,7 @@ cmd_install() {
     # Create directory structure
     log "Creating directory structure..."
     mkdir -p "${INSTALL_DIR}/etc"
-    mkdir -p "${DATA_DIR}"
+    mkdir -p "${DATA_DIR}/artifacts"
 
     # Clone repo first (needed for Caddyfile.prod and Dockerfile)
     clone_repo
