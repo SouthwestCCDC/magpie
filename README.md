@@ -124,6 +124,7 @@ src/magpie/
 | `status` | Check server health and connectivity (admin) |
 | `token` | Create tokens (admin) |
 | `config` | Show resolved configuration |
+| `version` | Show client version |
 
 ### Server Admin (`magpie-ctl`)
 
@@ -134,6 +135,7 @@ src/magpie/
 | `gc` | Run garbage collection |
 | `flush-tag` | Remove tag globally |
 | `sync` | S3 backup operations (to-s3, from-s3, gc-s3) |
+| `version` | Show server version |
 
 ## Testing
 
