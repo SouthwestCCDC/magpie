@@ -38,7 +38,7 @@ Also read `.github/copilot-instructions.md` for project conventions.
 
 ## Key References
 
-- `docs/design.md` - Architecture decisions
+- `docs/index.md` - Documentation overview
 - `src/magpie/` - Main source code
 
 ## Output

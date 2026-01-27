@@ -24,6 +24,10 @@ docker compose ps  # Verify all services running
 ```bash
 docker compose exec magpie magpie-ctl init
 # Note the token output
+
+# If re-initializing after previous runs, use:
+# docker compose exec magpie magpie-ctl init --reset-admin-token
+# Or completely reset: docker compose down -v && docker compose up -d --build
 ```
 
 ### Test Operations

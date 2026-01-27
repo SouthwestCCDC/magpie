@@ -21,7 +21,7 @@ All implementation work happens in isolated git worktrees, never in the main rep
 # From main repo directory
 git fetch origin
 git worktree add ../magpie-worktrees/issue-{N}-$(date +%s) \
-  -b issue-{N}-$(date +%s) origin/default
+  -b issue-{N}-$(date +%s) origin/HEAD
 
 # Navigate to worktree
 cd ../magpie-worktrees/issue-{N}-*

@@ -18,7 +18,7 @@ If you have neither, STOP and request a fact inventory first.
 
 ## Citation Rules
 
-- Preserve citations from fact inventory: `(see [config.py](src/magpie/config.py))`
+- Preserve citations from fact inventory: `(see [config.py](../../src/magpie/config.py))`
 - Do NOT cite line numbers (they drift)
 - For user guides: keep prose clean, citations optional
 - For technical docs: include file/function references from inventory
@@ -35,7 +35,7 @@ If you have neither, STOP and request a fact inventory first.
 | File | Purpose |
 |------|---------|
 | `docs/user-guide.md` | CLI usage, workflows, admin ops |
-| `docs/design.md` | Architecture (read-only reference) |
+| `docs/index.md` | Documentation overview and references |
 | `.github/copilot-instructions.md` | AI context |
 
 ## Workflow

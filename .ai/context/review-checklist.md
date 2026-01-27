@@ -36,7 +36,7 @@ Use this checklist when reviewing PRs or pre-commit changes.
 
 ## AI Disclosure
 
-- [ ] Commits have `Co-Authored-By: {AI Tool/Model} <noreply@{domain}.com>`
+- [ ] Commits have `Co-authored-by: {AI Tool/Model} <noreply@{domain}.com>`
 - [ ] PR description mentions AI assistance if applicable
 
 ## Assessment Categories

@@ -33,6 +33,9 @@ Co-authored-by: {AI Tool/Model} <noreply@{domain}.com>
 | `storage` | Artifact storage layer |
 | `auth` | Authentication |
 | `config` | Configuration handling |
+| `ai` | AI tooling and agent configuration |
+
+Note: This list is non-exhaustive. Use descriptive areas that match your change scope.
 
 ## AI Disclosure
 
@@ -54,5 +57,5 @@ feat(cli): add verify command for artifact integrity
 
 Addresses #129
 
-Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+Co-authored-by: Claude Sonnet 4.5 <noreply@anthropic.com>
 ```

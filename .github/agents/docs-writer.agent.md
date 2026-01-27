@@ -38,7 +38,7 @@ If you have neither, STOP and request a fact inventory first.
 | File | Purpose |
 |------|---------|
 | `docs/user-guide.md` | CLI usage, workflows, admin ops |
-| `docs/design.md` | Architecture (read-only reference) |
+| `docs/index.md` | Documentation overview |
 
 ## Output
 
