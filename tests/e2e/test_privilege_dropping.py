@@ -425,7 +425,7 @@ class TestPrivilegeDropping:
                 temp_path = Path(temp_dir)
 
                 # Pre-create database to skip init
-                (temp_path / ".magpie.db").touch()
+                (temp_path / "magpie.db").touch()
 
                 # Get UID/GID from this directory
                 stat_info = os.stat(temp_path)

@@ -69,9 +69,10 @@ Metadata files (`metadata/{hash}.json`) store the full SHA-256 hash and upload p
 
 ```bash
 # Use the same data directory as your docker-compose deployment (HOST path, not container path)
-# This should match the host path you mounted (e.g., ./data or /data on your host machine)
+# This should match the host path you mounted (e.g., ./data or /opt/magpie/data)
 # Inside containers, this is always /data, but on the host it depends on your docker-compose.yml
-MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/data}"
+# Default in docker-compose.yml is ./data (relative), not /data (absolute)
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data}"
 BACKUP_PATH="/backup/magpie/$(date +%Y%m%d-%H%M%S)"
 
 mkdir -p "$BACKUP_PATH"
@@ -133,7 +134,7 @@ The sync commands require either `rclone` or `aws` CLI. If `rclone` is available
 
 ```bash
 BACKUP_PATH="/backup/magpie/20260115-103000"
-MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/data}"
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data}"
 
 # Stop services
 docker compose down
@@ -164,7 +165,7 @@ For restoring tokens without touching artifacts:
 
 ```bash
 BACKUP_PATH="/backup/magpie/20260115-103000"
-MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/data}"
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data}"
 
 docker compose stop magpie
 cp "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/magpie.db"
@@ -213,7 +214,7 @@ This reads all `.magpie` manifests and recreates symlinks to match. Safe and ide
 To identify broken symlinks (pointing to missing blobs):
 
 ```bash
-find "${MAGPIE_DATA_DIR:-/data}/artifacts" -type l ! -exec test -e {} \; -print
+find "${MAGPIE_DATA_DIR:-./data}/artifacts" -type l ! -exec test -e {} \; -print
 ```
 
 Restore missing blobs from backup, or re-upload from original source.
@@ -226,9 +227,9 @@ Note: Set `BACKUP_PATH` (e.g., `BACKUP_PATH="/backup/magpie/$(date +%Y%m%d-%H%M%
 
 | Task | Command |
 |------|---------|
-| Full backup | `rsync -av --exclude='artifacts/.tmp/' ${MAGPIE_DATA_DIR:-/data}/ $BACKUP_PATH/` |
-| Database backup | `sqlite3 ${MAGPIE_DATA_DIR:-/data}/magpie.db ".backup '$BACKUP_PATH/magpie.db'"` |
-| Full restore | `rsync -av --delete $BACKUP_PATH/ ${MAGPIE_DATA_DIR:-/data}/` |
+| Full backup | `rsync -av --exclude='artifacts/.tmp/' ${MAGPIE_DATA_DIR:-./data}/ $BACKUP_PATH/` |
+| Database backup | `sqlite3 ${MAGPIE_DATA_DIR:-./data}/magpie.db ".backup '$BACKUP_PATH/magpie.db'"` |
+| Full restore | `rsync -av --delete $BACKUP_PATH/ ${MAGPIE_DATA_DIR:-./data}/` |
 | Reconcile symlinks | `docker compose exec magpie magpie-ctl gc --reconcile-only` |
 | Reset admin token | `docker compose exec magpie magpie-ctl init --reset-admin-token` |
 | GC untagged blobs older than 90 days | `docker compose exec magpie magpie-ctl gc --retention-days 90` |

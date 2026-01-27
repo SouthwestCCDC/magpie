@@ -45,7 +45,7 @@ docker compose -f docker-compose.prod.yml up -d
 
 **Required environment variables** (see [docker-compose.prod.yml](../docker-compose.prod.yml#L14-L15)):
 - `MAGPIE_DOMAIN`: Domain name for TLS (e.g., `magpie.swccdc.com`)
-- `MAGPIE_DATA_DIR`: Host directory for data storage (default: `/data`). This directory is mounted into the container at `/data`. The directory will contain the `artifacts/` subdirectory and `magpie.db` database file
+- `MAGPIE_DATA_DIR`: Host directory for data storage (default: `./data` in docker-compose.yml). This is the HOST path - can be relative (e.g., `./data`) or absolute (e.g., `/opt/magpie/data`). Inside the container, it's always mounted at `/data`. The directory will contain the `artifacts/` subdirectory and `magpie.db` database file
 
 Production setup automatically provisions TLS certificates via Let's Encrypt. The `caddy_data` volume persists certificates across container restarts.
 
