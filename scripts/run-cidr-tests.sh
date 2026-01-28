@@ -22,9 +22,9 @@ cd "$(dirname "$0")/.."
 
 # Default pytest args if none provided
 if [ $# -eq 0 ]; then
-    PYTEST_ARGS="-v --tb=short"
+    PYTEST_ARGS=("-v" "--tb=short")
 else
-    PYTEST_ARGS="$*"
+    PYTEST_ARGS=("$@")
 fi
 
 echo "Starting CIDR test environment..."
@@ -33,6 +33,13 @@ docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml up -d --bui
 # Wait for services to be healthy
 echo "Waiting for services to be healthy..."
 sleep 5
+
+# Check curl availability
+if ! command -v curl &> /dev/null; then
+    echo "ERROR: curl is not installed. Please install curl or use docker compose ps to check health status."
+    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down
+    exit 1
+fi
 
 # Check health endpoint
 if ! curl -f http://localhost:8080/health > /dev/null 2>&1; then
@@ -61,12 +68,17 @@ echo "=========================================="
 echo "Running CIDR tests from INSIDE allowed network (172.18.0.x)..."
 echo "These tests verify IPs in the allow-list CAN read without auth"
 echo "=========================================="
+
+# Temporarily disable errexit to allow tests to fail without stopping the script
+set +e
 docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml \
   exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner-inside \
-  pytest tests/e2e/test_cidr_allowlist.py -k "not OutsideIP" $PYTEST_ARGS
+  pytest tests/e2e/test_cidr_allowlist.py -k "not OutsideIP" "${PYTEST_ARGS[@]}"
 
 # Capture exit code from inside tests
 INSIDE_EXIT_CODE=$?
+# Re-enable errexit
+set -e
 
 # Run tests from outside allowed network (negative cases)
 echo ""
@@ -74,12 +86,17 @@ echo "=========================================="
 echo "Running CIDR tests from OUTSIDE allowed network (192.168.100.x)..."
 echo "These tests verify IPs outside the allow-list CANNOT read without auth"
 echo "=========================================="
+
+# Temporarily disable errexit to allow tests to fail without stopping the script
+set +e
 docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml \
   exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner-outside \
-  pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied $PYTEST_ARGS
+  pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied "${PYTEST_ARGS[@]}"
 
 # Capture exit code from outside tests
 OUTSIDE_EXIT_CODE=$?
+# Re-enable errexit
+set -e
 
 # Determine overall exit code
 if [ $INSIDE_EXIT_CODE -ne 0 ] || [ $OUTSIDE_EXIT_CODE -ne 0 ]; then
