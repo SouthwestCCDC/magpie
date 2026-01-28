@@ -109,7 +109,7 @@ jobs:
           sed -i "s|^HARDCODED_VERSION=.*|HARDCODED_VERSION=\"$VERSION\"|" scripts/magpie-deploy.sh
 
           # Verify the update succeeded
-          if ! grep -q "HARDCODED_VERSION=\"$VERSION\"" scripts/magpie-deploy.sh; then
+          if ! grep -qF "HARDCODED_VERSION=\"$VERSION\"" scripts/magpie-deploy.sh; then
             echo "::error::Failed to update HARDCODED_VERSION in scripts/magpie-deploy.sh"
             exit 1
           fi
