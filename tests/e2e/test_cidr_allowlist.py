@@ -17,10 +17,6 @@ from typing import Generator
 import httpx
 import pytest
 
-# Docker Compose network typically uses 172.18.0.0/16 range
-# We'll use this to simulate allowed IPs (test client runs in the same network)
-ALLOWED_CIDR = "172.18.0.0/16"
-
 #  NOTE: These tests are currently skipped in CI because setting up a second
 # docker-compose instance with CIDR configuration requires additional CI
 # infrastructure work. The tests are valuable for manual testing and
