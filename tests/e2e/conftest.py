@@ -305,7 +305,7 @@ def test_artifact_path() -> str:
 #
 # CIDR tests must run from within the Docker network to properly test the bypass
 # behavior because:
-# 1. Test client running on host appears as different IP to Caddy (not in 172.16.0.0/12)
+# 1. Test client running on host appears as different IP to Caddy (not in 172.18.0.0/24)
 # 2. CIDR bypass never triggers because client IP is outside the allowed range
 # 3. Tests would fail with 401 even though the feature works correctly
 #
