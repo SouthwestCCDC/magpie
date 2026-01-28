@@ -360,10 +360,11 @@ def cidr_admin_token(cidr_base_url: str) -> str:
     Raises:
         pytest.fail: If MAGPIE_CIDR_ADMIN_TOKEN is not set.
     """
-    # Wait for magpie service to be healthy before attempting to use token
-    magpie_url = "http://magpie:8000"
-    if not _wait_for_health(magpie_url, timeout=30, interval=1.0):
-        pytest.fail(f"Magpie service did not become healthy at {magpie_url}")
+    # Wait for service to be healthy via Caddy (which is accessible from both networks)
+    # Note: We check via cidr_base_url (caddy) instead of http://magpie:8000 because
+    # the test-runner-outside container cannot reach magpie directly (different network)
+    if not _wait_for_health(cidr_base_url, timeout=30, interval=1.0):
+        pytest.fail(f"Magpie service did not become healthy at {cidr_base_url}")
 
     token = os.environ.get("MAGPIE_CIDR_ADMIN_TOKEN")
     if not token:
