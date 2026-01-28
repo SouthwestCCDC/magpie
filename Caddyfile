@@ -119,6 +119,9 @@
 	# Files placed in /data/artifacts/public/ are accessible without auth
 	handle /artifacts/public/* {
 		root * /data
+		# Security: Force download of artifact files to prevent XSS from user-uploaded HTML/JS
+		# The header directive applies to file responses but not to browse template pages
+		header Content-Disposition "attachment"
 		file_server browse
 	}
 
@@ -167,6 +170,9 @@
 			copy_headers X-Magpie-User X-Magpie-Scope
 		}
 		root * /data
+		# Security: Force download of artifact files to prevent XSS from user-uploaded HTML/JS
+		# The header directive applies to file responses but not to browse template pages
+		header Content-Disposition "attachment"
 		file_server browse
 	}
 
