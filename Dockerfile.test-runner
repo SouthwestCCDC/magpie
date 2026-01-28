@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+# Test runner container for CIDR E2E tests
+#
+# This Dockerfile creates a container with dev dependencies (pytest, httpx, etc.)
+# that runs inside the Docker network for CIDR allow-list testing.
+#
+# Unlike the main Dockerfile which excludes dev dependencies (--no-dev),
+# this includes them so pytest can run.
+
+FROM python:3.13-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install uv for fast dependency management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy project files
+COPY pyproject.toml uv.lock README.md ./
+COPY src/ ./src/
+COPY tests/ ./tests/
+
+# Install dependencies INCLUDING dev dependencies (pytest, etc.)
+RUN uv sync --frozen
+
+# Add venv to PATH
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Create results directory
+RUN mkdir -p /app/test-results
+
+# Keep container running so we can exec into it
+CMD ["sleep", "infinity"]
