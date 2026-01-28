@@ -16,11 +16,36 @@ gh auth login
 
 ## Proactive Check After Push
 
-After pushing changes to a PR, check for review comments:
+After pushing changes to a PR, check for review comments.
+
+Use GraphQL to filter out resolved and outdated comments:
 
 ```bash
-gh api repos/SouthwestCCDC/magpie/pulls/{N}/comments --jq '.[] | {id, path, line, body}' | head -20
+gh api graphql -f query='
+query {
+  repository(owner: "SouthwestCCDC", name: "magpie") {
+    pullRequest(number: {N}) {
+      reviewThreads(first: 20) {
+        nodes {
+          isResolved
+          isOutdated
+          comments(first: 10) {
+            nodes {
+              id
+              body
+              path
+              line
+              author { login }
+            }
+          }
+        }
+      }
+    }
+  }
+}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and .isOutdated == false) | .comments.nodes[] | {id: .id, path: .path, line: .line, body: .body}'
 ```
+
+Replace `{N}` with the PR number.
 
 ## Response Workflow
 
