@@ -106,7 +106,7 @@ jobs:
       - name: Update installer HARDCODED_VERSION
         run: |
           VERSION="${{ needs.validate.outputs.version }}"
-          sed -i "s/^HARDCODED_VERSION=.*/HARDCODED_VERSION=\"$VERSION\"/" scripts/magpie-deploy.sh
+          sed -i "s|^HARDCODED_VERSION=.*|HARDCODED_VERSION=\"$VERSION\"|" scripts/magpie-deploy.sh
 
           # Verify the update succeeded
           if ! grep -q "HARDCODED_VERSION=\"$VERSION\"" scripts/magpie-deploy.sh; then
