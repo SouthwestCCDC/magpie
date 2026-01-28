@@ -393,8 +393,12 @@ def cidr_admin_token(cidr_base_url: str) -> str:
         health_check = httpx.get(f"{magpie_url}/health", timeout=5.0)
         if health_check.status_code != 200:
             pytest.fail(f"Magpie service not healthy: {health_check.status_code}")
-    except Exception as e:
-        pytest.fail(f"Cannot connect to magpie service: {e}")
+    except httpx.ConnectError as e:
+        pytest.fail(f"Cannot connect to magpie service at {magpie_url}: {e}")
+    except httpx.TimeoutException as e:
+        pytest.fail(f"Connection to magpie service timed out: {e}")
+    except httpx.HTTPStatusError as e:
+        pytest.fail(f"HTTP error from magpie service: {e.response.status_code} {e}")
 
     # Since we can't run magpie-ctl from inside test-runner, we need a different approach
     # Option 1: Use a pre-shared token via environment variable
