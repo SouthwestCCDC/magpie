@@ -10,6 +10,9 @@
 #    - Tagging and listing operations
 #    - Caddy direct artifact serving
 #    - Authentication and authorization flows
+# 5. Runs CIDR allow-list E2E tests in a two-network environment:
+#    - Tests from inside the allowed network (200 without auth)
+#    - Tests from outside the allowed network (401 without auth)
 
 name: E2E Tests
 
@@ -50,3 +53,6 @@ jobs:
 
       - name: Run E2E tests
         run: just e2e
+
+      - name: Run CIDR E2E tests
+        run: ./scripts/run-cidr-tests.sh
