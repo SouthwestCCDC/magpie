@@ -159,16 +159,15 @@ class TestCIDRAllowListReadAccess:
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
         )
         assert upload_response.status_code == 200
-        artifact_hash = upload_response.json()["hash"]
-        short_hash = artifact_hash[:8]
+        upload_data = upload_response.json()
+        download_url = upload_data["download_url"]
 
         # Download artifact without auth (from allowed IP)
-        download_path = f"/artifacts/cidr-test/download-access/@{short_hash}/artifact"
-        response = cidr_http_client.get(download_path)
+        response = cidr_http_client.get(download_url)
 
         assert response.status_code == 200, (
             "Allowed IP should be able to download artifacts without auth. "
-            f"Expected 200, got {response.status_code}. Path: {download_path}"
+            f"Expected 200, got {response.status_code}. URL: {download_url}"
         )
 
         # Verify content matches
