@@ -216,7 +216,7 @@ class TestCIDRAllowListWriteBlocked:
 
         # Test: Attempt to amend without authentication
         amend_response = cidr_http_client.patch(
-            f"/api/v1/artifacts/cidr-test/amend-blocked/@{artifact_hash}",
+            f"/api/v1/artifacts/cidr-test/amend-blocked/@{artifact_hash[:8]}",
             json={"description": "Should fail"},
         )
         assert amend_response.status_code == 401, (
@@ -241,7 +241,7 @@ class TestCIDRAllowListWriteBlocked:
 
         # Test: Attempt to add tag without authentication
         tag_response = cidr_http_client.post(
-            f"/api/v1/artifacts/cidr-test/tag-add-blocked/@{artifact_hash}/tags",
+            f"/api/v1/artifacts/cidr-test/tag-add-blocked/@{artifact_hash[:8]}/tags",
             json={"tag_name": "unauthorized-tag"},
         )
         assert tag_response.status_code == 401, (
@@ -265,7 +265,7 @@ class TestCIDRAllowListWriteBlocked:
         artifact_hash = upload_response.json()["hash"]
 
         tag_response = cidr_authenticated_client.post(
-            f"/api/v1/artifacts/cidr-test/tag-delete-blocked/@{artifact_hash}/tags",
+            f"/api/v1/artifacts/cidr-test/tag-delete-blocked/@{artifact_hash[:8]}/tags",
             json={"tag_name": "temp-tag"},
         )
         assert tag_response.status_code in (200, 201)

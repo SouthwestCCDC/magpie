@@ -101,7 +101,7 @@ else
 fi
 
 echo "Cleaning up..."
-docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down
+docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down -v
 
 # Exit with test result
 exit $TEST_EXIT_CODE
