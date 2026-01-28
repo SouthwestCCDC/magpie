@@ -196,7 +196,9 @@
 
 		# Content Security Policy - restrict resource loading
 		# API-only service: strict policy with no data URIs
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		# Note: 'unsafe-inline' is safe here because Content-Disposition: attachment
+		# prevents uploaded HTML from rendering, so only Caddy's browse template executes
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
 		# Remove server identification headers
 		-Server
@@ -240,6 +242,14 @@
 	# Files placed in /data/artifacts/public/ are accessible without auth
 	handle /artifacts/public/* {
 		root * /data
+		# Security: Force download of artifact files to prevent XSS from user-uploaded HTML/JS
+		# Use matcher to apply header only to actual file responses, not browse template pages
+		@public_artifact_file {
+			file {
+				try_files {path}
+			}
+		}
+		header @public_artifact_file Content-Disposition "attachment"
 		file_server browse
 	}
 
@@ -316,6 +326,14 @@
 			copy_headers X-Magpie-User X-Magpie-Scope
 		}
 		root * /data
+		# Security: Force download of artifact files to prevent XSS from user-uploaded HTML/JS
+		# Use matcher to apply header only to actual file responses, not browse template pages
+		@artifact_file {
+			file {
+				try_files {path}
+			}
+		}
+		header @artifact_file Content-Disposition "attachment"
 		file_server browse
 	}
 
