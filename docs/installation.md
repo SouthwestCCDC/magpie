@@ -27,6 +27,20 @@ Requires: domain name for TLS (auto-provisioned via Let's Encrypt).
 docker compose -f docker-compose.prod.yml logs magpie | grep "ADMIN TOKEN"
 ```
 
+The admin token (format: `mgp_ADMIN_...`) is displayed only once. Save it securely - it's required for CLI authentication and creating additional tokens.
+
+**Security Note:** The initial admin token appears in container logs. As a best practice, create a new admin token and revoke the initial one after deployment:
+
+```bash
+# Create new admin token
+docker compose exec magpie magpie-ctl token create --name ops-admin --scope admin
+
+# Revoke the initial break-glass token (find name with: magpie-ctl token list)
+docker compose exec magpie magpie-ctl token revoke mgp_ADMIN_...
+```
+
+See [Issue #387](https://github.com/SouthwestCCDC/magpie/issues/387) for tracking improvements to token initialization.
+
 2. Create CI tokens:
 ```bash
 docker compose exec magpie magpie-ctl token create --name ci-deployer --scope write
