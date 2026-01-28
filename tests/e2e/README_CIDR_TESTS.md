@@ -27,20 +27,24 @@ If we used a single network or ran tests from the host:
 ### Option 1: Using the Helper Script (Recommended)
 
 ```bash
-# Run all CIDR tests
+# Run all CIDR tests (default: verbose with short traceback)
 ./scripts/run-cidr-tests.sh
 
-# Run with verbose output
-./scripts/run-cidr-tests.sh -v
+# Run with very verbose output
+./scripts/run-cidr-tests.sh -vv
 
-# Run specific test
-./scripts/run-cidr-tests.sh -k test_allowed_ip_can_list
+# Run with custom pytest arguments
+./scripts/run-cidr-tests.sh --maxfail=1
 ```
 
 The script:
 1. Starts Docker Compose with CIDR testing enabled
-2. Runs tests inside the test-runner container
+2. Runs tests inside both test-runner containers (inside and outside networks)
 3. Cleans up containers and volumes
+
+**Note:** The script automatically filters tests by class to run inside/outside
+tests separately. Custom `-k` filters are not supported. To run specific tests,
+use the manual approach (Option 2) below.
 
 ### Option 2: Manual Steps
 

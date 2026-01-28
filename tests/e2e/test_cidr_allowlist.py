@@ -6,10 +6,13 @@ artifacts without authentication, while still requiring auth for write operation
 IMPORTANT: These tests must run from within the Docker network to work correctly.
 See tests/e2e/conftest.py for CIDR testing infrastructure details.
 
-To run these tests:
-    cd /path/to/magpie
+To run these tests, use the helper script (recommended):
+    ./scripts/run-cidr-tests.sh
+
+Or manually:
     docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml up -d --build
-    docker compose exec test-runner pytest tests/e2e/test_cidr_allowlist.py -v
+    docker compose exec test-runner-inside pytest tests/e2e/test_cidr_allowlist.py -k "not OutsideIP" -v
+    docker compose exec test-runner-outside pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied -v
     docker compose down
 
 These tests verify security-critical CIDR bypass functionality:

@@ -8,9 +8,12 @@
 #   ./scripts/run-cidr-tests.sh [pytest-args]
 #
 # Examples:
-#   ./scripts/run-cidr-tests.sh                    # Run all CIDR tests
-#   ./scripts/run-cidr-tests.sh -v                 # Verbose output
-#   ./scripts/run-cidr-tests.sh -k test_read       # Run only read tests
+#   ./scripts/run-cidr-tests.sh                    # Run all CIDR tests (verbose, short traceback)
+#   ./scripts/run-cidr-tests.sh -vv                # Very verbose output
+#
+# Note: This script filters tests by class name to run inside/outside tests
+# separately. Custom -k filters are not supported. To run specific tests,
+# use docker compose exec directly (see tests/e2e/README_CIDR_TESTS.md).
 
 set -euo pipefail
 
@@ -19,7 +22,9 @@ cd "$(dirname "$0")/.."
 
 # Default pytest args if none provided
 if [ $# -eq 0 ]; then
-    set -- -v --tb=short
+    PYTEST_ARGS="-v --tb=short"
+else
+    PYTEST_ARGS="$*"
 fi
 
 echo "Starting CIDR test environment..."
@@ -32,7 +37,7 @@ sleep 5
 # Check health endpoint
 if ! curl -f http://localhost:8080/health > /dev/null 2>&1; then
     echo "ERROR: Services failed to start. Check logs:"
-    docker compose logs
+    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml logs
     docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down
     exit 1
 fi
@@ -43,7 +48,7 @@ ADMIN_TOKEN=$(docker compose exec -T magpie magpie-ctl init --reset-admin-token 
 
 if [ -z "$ADMIN_TOKEN" ]; then
     echo "ERROR: Failed to get admin token"
-    docker compose logs magpie
+    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml logs magpie
     docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down
     exit 1
 fi
@@ -58,7 +63,7 @@ echo "These tests verify IPs in the allow-list CAN read without auth"
 echo "=========================================="
 docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml \
   exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner-inside \
-  pytest tests/e2e/test_cidr_allowlist.py -k "not OutsideIP" -v "$@"
+  pytest tests/e2e/test_cidr_allowlist.py -k "not OutsideIP" $PYTEST_ARGS
 
 # Capture exit code from inside tests
 INSIDE_EXIT_CODE=$?
@@ -71,7 +76,7 @@ echo "These tests verify IPs outside the allow-list CANNOT read without auth"
 echo "=========================================="
 docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml \
   exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner-outside \
-  pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied -v "$@"
+  pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied $PYTEST_ARGS
 
 # Capture exit code from outside tests
 OUTSIDE_EXIT_CODE=$?

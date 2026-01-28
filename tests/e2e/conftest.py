@@ -309,9 +309,13 @@ def test_artifact_path() -> str:
 # 2. CIDR bypass never triggers because client IP is outside the allowed range
 # 3. Tests would fail with 401 even though the feature works correctly
 #
-# To run CIDR tests:
+# To run CIDR tests, use the helper script (recommended):
+#   ./scripts/run-cidr-tests.sh
+#
+# Or manually:
 #   docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml up -d --build
-#   docker compose exec test-runner pytest tests/e2e/test_cidr_allowlist.py -v
+#   docker compose exec test-runner-inside pytest tests/e2e/test_cidr_allowlist.py -k "not OutsideIP" -v
+#   docker compose exec test-runner-outside pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied -v
 #
 # =============================================================================
 
@@ -323,16 +327,6 @@ def _is_cidr_test_enabled() -> bool:
         True if running inside test-runner container with CIDR tests enabled.
     """
     return os.environ.get("MAGPIE_CIDR_TEST_ENABLED", "").lower() == "true"
-
-
-@pytest.fixture(scope="session")
-def cidr_test_enabled() -> bool:
-    """Check if CIDR testing environment is available.
-
-    Returns:
-        True if tests are running inside Docker network with CIDR bypass enabled.
-    """
-    return _is_cidr_test_enabled()
 
 
 @pytest.fixture(scope="session")
@@ -356,43 +350,20 @@ def cidr_base_url() -> str:
 def cidr_admin_token(cidr_base_url: str) -> str:
     """Get admin token for CIDR-enabled services.
 
-    Initializes the system and returns an admin token.
-    Note: For CIDR tests, we need to run magpie-ctl init via HTTP since we're
-    inside the test-runner container and don't have docker access.
-
-    This fixture makes an HTTP request to the magpie service directly (port 8000)
-    to initialize the system.
+    The admin token must be initialized outside the test environment and passed
+    via MAGPIE_CIDR_ADMIN_TOKEN environment variable. This is because the
+    test-runner container cannot execute docker commands to run magpie-ctl init.
 
     Returns:
-        Admin token string.
+        Admin token string from environment.
+
+    Raises:
+        pytest.fail: If MAGPIE_CIDR_ADMIN_TOKEN is not set.
     """
-    # When running in test-runner container, we can't use docker commands
-    # Instead, we'll use the magpie service's direct HTTP endpoint
-    # The magpie container exposes port 8000 internally
+    # Wait for magpie service to be healthy before attempting to use token
     magpie_url = "http://magpie:8000"
-
-    # Use magpie-ctl via HTTP to get the token
-    # We'll exec the init command by making an HTTP request to trigger initialization
-    # Since we can't exec directly, we'll use a workaround: create a token via the API
-    # after the system is initialized (the admin token is created during first startup)
-
-    # For now, let's try to get the admin token that was created during container startup
-    # We'll need to store it or retrieve it somehow
-    # Actually, the best approach is to set a known admin token via environment variable
-    # or use the init endpoint if it exists
-
-    # For CIDR tests, we'll use a pre-set admin token
-    # This should be configured in the docker-compose.cidr-test.yml
-    # For now, let's make an HTTP request to check if init is needed
-
-    # Wait for services to be fully ready
     if not _wait_for_health(magpie_url, timeout=30, interval=1.0):
         pytest.fail(f"Magpie service did not become healthy at {magpie_url}")
-
-    # Since we can't run magpie-ctl from inside test-runner, we need a different approach
-    # Option 1: Use a pre-shared token via environment variable
-    # Option 2: Have the token initialization happen outside the test
-    # For now, we'll use a token that should be passed via environment or fail gracefully
 
     token = os.environ.get("MAGPIE_CIDR_ADMIN_TOKEN")
     if not token:
@@ -432,17 +403,6 @@ def cidr_authenticated_client(
     headers = {"Authorization": f"Bearer {cidr_admin_token}"}
     with httpx.Client(base_url=cidr_base_url, headers=headers, timeout=30.0) as client:
         yield client
-
-
-@pytest.fixture
-def is_outside_cidr() -> bool:
-    """Check if running from outside-CIDR test container.
-
-    Returns:
-        True if tests are running in test-runner-outside container (192.168.100.x),
-        False if running in test-runner-inside container (172.18.0.x).
-    """
-    return os.environ.get("MAGPIE_CIDR_OUTSIDE_TEST", "").lower() == "true"
 
 
 @pytest.fixture
