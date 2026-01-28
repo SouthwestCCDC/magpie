@@ -35,8 +35,8 @@ The admin token (format: `mgp_ADMIN_...`) is displayed only once. Save it secure
 # Create new admin token
 docker compose exec magpie magpie-ctl token create --name ops-admin --scope admin
 
-# Revoke the initial break-glass token (find name with: magpie-ctl token list)
-docker compose exec magpie magpie-ctl token revoke mgp_ADMIN_...
+# Revoke the initial break-glass token (default name: "admin")
+docker compose exec magpie magpie-ctl token revoke admin
 ```
 
 See [Issue #387](https://github.com/SouthwestCCDC/magpie/issues/387) for tracking improvements to token initialization.
