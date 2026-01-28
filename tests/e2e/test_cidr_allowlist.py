@@ -13,7 +13,7 @@ Or manually:
     docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml up -d --build
     docker compose exec test-runner-inside pytest tests/e2e/test_cidr_allowlist.py -k "not OutsideIP" -v
     docker compose exec test-runner-outside pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied -v
-    docker compose down
+    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down
 
 These tests verify security-critical CIDR bypass functionality:
 1. Allowed IPs can read without auth (GET /api/v1/artifacts*, GET /artifacts/*)

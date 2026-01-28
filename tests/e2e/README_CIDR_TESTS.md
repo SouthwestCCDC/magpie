@@ -75,6 +75,7 @@ docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down
 |-------|---------|----------------|
 | `TestCIDRAllowListReadAccess` | Verify allowed IPs can read without auth (positive case) | CRITICAL |
 | `TestCIDRAllowListWriteBlocked` | Verify allowed IPs cannot write without auth | CRITICAL |
+| `TestCIDRAllowListTokenInteraction` | Verify token authentication works correctly with CIDR settings | CRITICAL |
 | `TestCIDRAllowListOutsideIPDenied` | Verify outside IPs cannot read without auth (negative case) | CRITICAL |
 | `TestCIDRAllowListPublicPaths` | Verify public paths work regardless of CIDR | Medium |
 

@@ -17,6 +17,13 @@
 
 set -euo pipefail
 
+# Cleanup function to ensure containers are removed on exit
+cleanup() {
+    echo "Cleaning up..."
+    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down -v
+}
+trap cleanup EXIT
+
 # Change to project root
 cd "$(dirname "$0")/.."
 
@@ -91,7 +98,10 @@ echo "=========================================="
 set +e
 docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml \
   exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner-outside \
-  pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied "${PYTEST_ARGS[@]}"
+  pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied \
+  tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListTokenInteraction::test_outside_cidr_with_valid_read_token \
+  tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListTokenInteraction::test_outside_cidr_with_valid_write_token \
+  "${PYTEST_ARGS[@]}"
 
 # Capture exit code from outside tests
 OUTSIDE_EXIT_CODE=$?
@@ -117,8 +127,5 @@ else
     echo "=========================================="
 fi
 
-echo "Cleaning up..."
-docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down -v
-
-# Exit with test result
+# Exit with test result (cleanup handled by trap)
 exit $TEST_EXIT_CODE
