@@ -268,8 +268,8 @@ class TestCaddyForwardAuth:
         response = authenticated_client.get("/api/v1/artifacts/")
 
         # Should not be 401 (auth succeeded)
-        # May be 200 (has content) or 404 (no content yet)
-        assert response.status_code in (200, 404)
+        # May be 200 (has content), 404 (no content yet), or 400 (path validation)
+        assert response.status_code in (200, 400, 404)
         assert response.status_code != 401, "Valid token should be accepted"
 
     def test_auth_headers_propagated_to_backend(
