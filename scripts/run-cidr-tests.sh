@@ -18,7 +18,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Default pytest args if none provided
-PYTEST_ARGS="${@:--v --tb=short}"
+if [ $# -eq 0 ]; then
+    set -- -v --tb=short
+fi
 
 echo "Starting CIDR test environment..."
 docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml up -d --build
@@ -56,7 +58,7 @@ echo "These tests verify IPs in the allow-list CAN read without auth"
 echo "=========================================="
 docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml \
   exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner-inside \
-  pytest tests/e2e/test_cidr_allowlist.py -k "not OutsideIP" -v ${PYTEST_ARGS}
+  pytest tests/e2e/test_cidr_allowlist.py -k "not OutsideIP" -v "$@"
 
 # Capture exit code from inside tests
 INSIDE_EXIT_CODE=$?
@@ -69,7 +71,7 @@ echo "These tests verify IPs outside the allow-list CANNOT read without auth"
 echo "=========================================="
 docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml \
   exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner-outside \
-  pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied -v ${PYTEST_ARGS}
+  pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied -v "$@"
 
 # Capture exit code from outside tests
 OUTSIDE_EXIT_CODE=$?

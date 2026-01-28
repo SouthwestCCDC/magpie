@@ -41,7 +41,7 @@ services:
       - allowed-net
 
   # Test runner for positive CIDR cases (inside allowed CIDR)
-  # This container has an IP in 172.18.0.x, which IS in the allow-list
+  # This container has an IP in 172.18.0.x (within 172.18.0.0/24), which IS in the allow-list
   test-runner-inside:
     build:
       context: .

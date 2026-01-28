@@ -385,20 +385,9 @@ def cidr_admin_token(cidr_base_url: str) -> str:
     # This should be configured in the docker-compose.cidr-test.yml
     # For now, let's make an HTTP request to check if init is needed
 
-    # Wait a moment for services to be fully ready
-    time.sleep(2)
-
-    # Try to use the health endpoint to verify connection
-    try:
-        health_check = httpx.get(f"{magpie_url}/health", timeout=5.0)
-        if health_check.status_code != 200:
-            pytest.fail(f"Magpie service not healthy: {health_check.status_code}")
-    except httpx.ConnectError as e:
-        pytest.fail(f"Cannot connect to magpie service at {magpie_url}: {e}")
-    except httpx.TimeoutException as e:
-        pytest.fail(f"Connection to magpie service timed out: {e}")
-    except httpx.HTTPStatusError as e:
-        pytest.fail(f"HTTP error from magpie service: {e.response.status_code} {e}")
+    # Wait for services to be fully ready
+    if not _wait_for_health(magpie_url, timeout=30, interval=1.0):
+        pytest.fail(f"Magpie service did not become healthy at {magpie_url}")
 
     # Since we can't run magpie-ctl from inside test-runner, we need a different approach
     # Option 1: Use a pre-shared token via environment variable
@@ -421,7 +410,7 @@ def cidr_http_client(cidr_base_url: str) -> Generator[httpx.Client, None, None]:
     """Create an unauthenticated HTTP client for CIDR bypass tests.
 
     This client makes requests from within the Docker network, so its IP
-    (172.16-31.x.x) falls within the MAGPIE_ALLOWED_CIDRS range (172.16.0.0/12)
+    (172.18.0.x) falls within the MAGPIE_ALLOWED_CIDRS range (172.18.0.0/24)
     configured in docker-compose.cidr-test.yml.
 
     Use this to verify that allowed IPs can access read operations without auth.
