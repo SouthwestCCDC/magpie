@@ -5,7 +5,7 @@ This guide covers deploying Magpie artifact storage using Docker Compose.
 ## Prerequisites
 
 - **Docker with Compose v2.1+** (required for healthcheck conditions in `docker-compose.prod.yml`)
-- **Python 3.13+** (only if installing client CLI locally, see [pyproject.toml](../pyproject.toml#L7))
+- **Python 3.13+** (only if installing client CLI locally, see [pyproject.toml](../pyproject.toml))
 
 For production deployments with Let's Encrypt auto-TLS:
 - Public DNS record pointing to your server
@@ -43,7 +43,7 @@ export MAGPIE_DATA_DIR=./data  # Host path for persistent storage (contains arti
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-**Required environment variables** (see [docker-compose.prod.yml](../docker-compose.prod.yml#L14-L15)):
+**Required environment variables** (see [docker-compose.prod.yml](../docker-compose.prod.yml)):
 - `MAGPIE_DOMAIN`: Domain name for TLS (e.g., `magpie.swccdc.com`)
 - `MAGPIE_DATA_DIR`: Host directory for data storage (default: `./data` in docker-compose.yml). This is the HOST path - can be relative (e.g., `./data`) or absolute (e.g., `/opt/magpie/data`). Inside the container, it's always mounted at `/data`. The directory will contain the `artifacts/` subdirectory and `magpie.db` database file
 
