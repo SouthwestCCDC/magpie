@@ -1,25 +1,14 @@
-# Monitoring
+# Monitoring & Observability
 
-This document covers basic monitoring for Magpie deployments.
+## Health Checks
 
-## Health Check Endpoints
-
-### GET /health
-
-Public health check endpoint (no authentication required). Returns HTTP 200 with:
-
-```json
-{"status": "ok"}
+**Public health endpoint** (`GET /health`):
+```bash
+curl https://magpie.example.com/health
 ```
+Returns `{"status": "ok"}` if operational. Used by Docker health checks and load balancers.
 
-Implementation: `src/magpie/server/app.py`.
-
-Used by Docker health checks (`docker-compose.yml`, `docker-compose.prod.yml`) and container orchestration.
-
-### GET /api/v1/status
-
-Server status endpoint with storage statistics (requires admin token). Returns HTTP 200 with:
-
+**Admin status endpoint** (`GET /api/v1/status`, admin token required):
 ```json
 {
   "status": "ok",
@@ -32,168 +21,90 @@ Server status endpoint with storage statistics (requires admin token). Returns H
 }
 ```
 
-Implementation: `src/magpie/server/routes/status.py`.
-
-**Performance note:** This endpoint may be slow for large deployments. Call sparingly in production.
-
-### CLI Status Command
-
-The `magpie status` command queries `/api/v1/status` and displays formatted output:
-
+**CLI status command:**
 ```bash
-$ magpie status
-Server:    https://magpie.example.com
-Status:    OK
-Version:   1.2.3
-Storage:   1.15 GiB used
-Artifacts: 42 total
-Blobs:     156 total
+magpie status    # Shows storage stats (requires admin token)
 ```
-
-Requires admin token via `--token` or `MAGPIE_TOKEN`.
-
-Implementation: `src/magpie/cli/commands/status.py`.
 
 ## Logging
 
-### Log Format
+Magpie uses structured logging (`structlog`) for machine-readable output.
 
-Magpie uses structured logging (via `structlog`) with two output modes:
+**Configuration:**
+- `MAGPIE_LOG_FORMAT=json` (default) - JSON for aggregation systems
+- `MAGPIE_LOG_FORMAT=console` - Human-readable for development
+- `MAGPIE_DEBUG=true` - DEBUG level (verbose)
+- `MAGPIE_DEBUG=false` (default) - INFO level
 
-- `MAGPIE_LOG_FORMAT=json` (default): JSON logs for production/aggregation
-- `MAGPIE_LOG_FORMAT=console`: Human-readable logs for development
+**Standard fields:** All logs include timestamp, level, event, logger, and request_id (for HTTP requests).
 
-Implementation: `src/magpie/logging_config.py`.
+**Key events:**
+- `upload_complete` - artifact_path, hash_ref, size_bytes, duration_ms, is_duplicate
+- `tag_created`, `tag_removed`, `tag_flushed` - tag_name, artifact_path
+- `gc_complete` - artifacts_scanned, blobs_deleted, space_reclaimed_bytes
+- `auth_validation_success`, `auth_validation_failed` - token_name, scope
 
-### Log Level
-
-Controlled by `MAGPIE_DEBUG`:
-
-- `MAGPIE_DEBUG=true`: DEBUG level (verbose)
-- `MAGPIE_DEBUG=false` (default): INFO level
-
-Implementation: `src/magpie/logging_config.py`.
-
-### Log Output
-
-Logs are written to stderr (stdout is reserved for program output like JSON responses).
-
-Implementation: `src/magpie/logging_config.py`.
-
-### Request Correlation
-
-Every HTTP request gets a unique `request_id` that appears in all logs during that request. The ID is also returned in the `X-Request-ID` response header.
-
-Example log entry:
-
+**Example JSON log entry:**
 ```json
 {
   "timestamp": "2026-01-17T00:29:09.772480Z",
   "level": "info",
-  "logger": "magpie.server.middleware",
-  "event": "request_complete",
+  "event": "upload_complete",
   "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "method": "GET",
-  "path": "/api/v1/artifacts/example/file.txt",
-  "status_code": 200,
-  "duration_ms": 12.34
+  "artifact_path": "images/ubuntu",
+  "hash_ref": "abc12345",
+  "size_bytes": 51200,
+  "duration_ms": 45.12,
+  "is_duplicate": false
 }
 ```
 
-Implementation: `src/magpie/server/middleware.py`.
+**Log aggregation:** JSON format works with Loki, Elasticsearch, Datadog, and New Relic.
 
-### Key Log Events
+## Critical Metrics
 
-The middleware logs these events for all requests:
+Alert on these conditions:
+1. Health endpoint returns non-200
+2. Disk space < 20% free on `MAGPIE_STORAGE_PATH` volume
+3. Error rate > 5% of requests
+4. Request latency p95 > 5 seconds
+5. Health check failures (3+ consecutive)
 
-- `request_start`: Request received (method, path, client_host)
-- `request_complete`: Request succeeded (method, path, status_code, duration_ms)
-- `request_failed`: Request failed with exception (method, path, duration_ms, error)
+## Error Tracking (Sentry)
 
-Implementation: `src/magpie/server/middleware.py`.
+Optional integration for unhandled exceptions and performance monitoring.
 
-See `docs/structured-logging.md` for full details on log format and fields.
-
-## Garbage Collection Monitoring
-
-### Systemd Timer
-
-For deployments using `deployment/systemd/magpie-gc.timer`:
-
+**Setup:**
+1. Create Sentry project at [sentry.io](https://sentry.io) (free tier available)
+2. Get DSN from project settings
+3. Set environment variable:
 ```bash
-# Check timer status and next scheduled run
-systemctl status magpie-gc.timer
+export MAGPIE_SENTRY_DSN="https://<key>@<org>.ingest.sentry.io/<project>"
+```
+4. Restart server
 
-# List all timers including magpie-gc
-systemctl list-timers magpie-gc.timer
+**What's captured:**
+- 5xx errors and FastAPI exceptions
+- Performance traces (100% in debug, 10% in production)
+- Request context and stack traces
+- Not captured: 4xx errors, handled exceptions, PII
 
-# View GC service logs
-journalctl -u magpie-gc.service
+**Verification:**
+```bash
+docker compose logs magpie | grep -i sentry
+```
+Check Sentry dashboard for stack traces and environment tags.
+
+## Distributed Tracing (OpenTelemetry)
+
+Enable distributed tracing across services:
+```bash
+MAGPIE_OTEL_ENABLED=true
+MAGPIE_OTEL_ENDPOINT=http://otel-collector:4317
 ```
 
-Default schedule: Daily at 2:00 AM (with 30-minute randomization window).
+Logs include `trace_id` and `span_id` for correlation with other services.
 
-Implementation: `deployment/systemd/magpie-gc.timer`.
+## GC Monitoring
 
-### GC Lock File
-
-GC uses flock-based locking to prevent concurrent runs:
-
-- Lock file: `/var/run/magpie-gc.lock` (configurable via `MAGPIE_GC_LOCK_PATH`)
-- Lock is automatically released when GC completes or crashes (flock handles stale locks)
-
-Implementation: `deployment/systemd/magpie-gc.service`, `src/magpie/config.py`.
-
-## Observability Integrations
-
-### Sentry
-
-Error tracking via Sentry (optional):
-
-- Enable: Set `MAGPIE_SENTRY_DSN` to your Sentry DSN
-- Configuration: `src/magpie/server/observability.py`
-- Environment: Automatically set to "development" (debug=true) or "production" (debug=false)
-- Trace sampling: 100% in development, 10% in production
-
-### OpenTelemetry
-
-Distributed tracing via OpenTelemetry (optional):
-
-- Enable: Set `MAGPIE_OTEL_ENABLED=true`
-- Endpoint: Set `MAGPIE_OTEL_ENDPOINT` (e.g., `http://localhost:4317` for OTLP gRPC)
-- Service name: Configure via `MAGPIE_OTEL_SERVICE_NAME` (default: "magpie")
-- Configuration: `src/magpie/server/observability.py`
-
-When OTEL is enabled, log entries include `trace_id` and `span_id` fields for correlation.
-
-Implementation: `src/magpie/logging_config.py`.
-
-## Monitoring Recommendations
-
-### Critical Metrics
-
-Based on the available instrumentation:
-
-1. **Health endpoint availability**: Monitor `GET /health` returns HTTP 200
-2. **Disk space**: Monitor filesystem where `MAGPIE_STORAGE_PATH` is mounted
-   - Storage usage is reported by `/api/v1/status` (slow for large deployments)
-   - Consider filesystem-level monitoring (df, node_exporter, etc.)
-3. **Error rates**: Monitor log events with `"level": "error"` or `"event": "request_failed"`
-4. **Request latency**: Monitor `duration_ms` field in `request_complete` events
-5. **GC timer failures**: Monitor `systemctl status magpie-gc.timer` and GC service logs
-
-### Alert Thresholds
-
-Suggested thresholds (adjust based on deployment):
-
-- Disk space < 20% free on storage volume
-- Health check failures (3+ consecutive failures)
-- Error rate > 5% of requests over 5-minute window
-- GC timer not running (check `systemctl list-timers`)
-- Request latency p95 > 5 seconds (baseline depends on artifact sizes)
-
-Note: These thresholds are recommendations and have not been tested in production. Adjust based on observed behavior.
-
----
-
-*This documentation was generated with AI assistance (Claude Code w/ Sonnet 4.5).*
+See [backup-restore.md](backup-restore.md) for garbage collection scheduling and monitoring.
