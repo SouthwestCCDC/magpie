@@ -305,7 +305,7 @@ def test_artifact_path() -> str:
 #
 # CIDR tests must run from within the Docker network to properly test the bypass
 # behavior because:
-# 1. Test client running on host appears as different IP to Caddy (not in 172.18.0.0/16)
+# 1. Test client running on host appears as different IP to Caddy (not in 172.16.0.0/12)
 # 2. CIDR bypass never triggers because client IP is outside the allowed range
 # 3. Tests would fail with 401 even though the feature works correctly
 #
@@ -384,7 +384,6 @@ def cidr_admin_token(cidr_base_url: str) -> str:
     # For CIDR tests, we'll use a pre-set admin token
     # This should be configured in the docker-compose.cidr-test.yml
     # For now, let's make an HTTP request to check if init is needed
-    import time
 
     # Wait a moment for services to be fully ready
     time.sleep(2)
@@ -418,8 +417,8 @@ def cidr_http_client(cidr_base_url: str) -> Generator[httpx.Client, None, None]:
     """Create an unauthenticated HTTP client for CIDR bypass tests.
 
     This client makes requests from within the Docker network, so its IP
-    (172.18.x.x) falls within the MAGPIE_ALLOWED_CIDRS range configured
-    in docker-compose.cidr-test.yml.
+    (172.16-31.x.x) falls within the MAGPIE_ALLOWED_CIDRS range (172.16.0.0/12)
+    configured in docker-compose.cidr-test.yml.
 
     Use this to verify that allowed IPs can access read operations without auth.
     """

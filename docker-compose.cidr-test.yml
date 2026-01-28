@@ -21,7 +21,7 @@ services:
       - MAGPIE_ALLOWED_CIDRS=172.16.0.0/12
 
   # Test runner container - runs pytest from within Docker network
-  # This container has an IP in the 172.18.0.0/16 range, making it appear
+  # This container has an IP in the 172.16.0.0/12 range, making it appear
   # as an "allowed IP" to the CIDR bypass logic in Caddy
   test-runner:
     build:

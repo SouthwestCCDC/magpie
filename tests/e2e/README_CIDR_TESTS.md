@@ -6,12 +6,12 @@ This document explains how to run the CIDR allow-list E2E tests and why they req
 
 The CIDR allow-list feature (`MAGPIE_ALLOWED_CIDRS`) allows IPs in specific CIDR ranges to read artifacts without authentication. Testing this feature requires:
 
-1. **Running tests from within the Docker network** - The test client must have an IP in the allowed CIDR range (172.18.0.0/16)
+1. **Running tests from within the Docker network** - The test client must have an IP in the allowed CIDR range (172.16.0.0/12)
 2. **Separate Docker Compose configuration** - We need to set `MAGPIE_ALLOWED_CIDRS` environment variable
 3. **Test-runner container** - A container that runs pytest from inside the Docker network
 
 If tests run from the host machine:
-- Host IP appears different to Caddy (not in 172.18.0.0/16)
+- Host IP appears different to Caddy (not in 172.16.0.0/12)
 - CIDR bypass never triggers
 - Tests fail with 401 even though the feature works correctly
 
@@ -100,7 +100,7 @@ docker compose exec test-runner pytest tests/e2e/test_cidr_allowlist.py -v
 ### All Tests Fail with 401
 
 Check that:
-1. `MAGPIE_ALLOWED_CIDRS=172.18.0.0/16` is set in docker-compose.cidr-test.yml
+1. `MAGPIE_ALLOWED_CIDRS=172.16.0.0/12` is set in docker-compose.cidr-test.yml
 2. Tests are running inside test-runner container (not on host)
 3. Caddy container has the environment variable (check with `docker compose exec caddy env | grep CIDR`)
 

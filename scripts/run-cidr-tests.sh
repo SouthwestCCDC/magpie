@@ -49,7 +49,7 @@ fi
 echo "Admin token obtained: ${ADMIN_TOKEN:0:10}..."
 
 echo "Running CIDR tests inside test-runner container..."
-docker compose exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner pytest tests/e2e/test_cidr_allowlist.py $PYTEST_ARGS
+docker compose exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner pytest tests/e2e/test_cidr_allowlist.py "$PYTEST_ARGS"
 
 # Capture exit code
 TEST_EXIT_CODE=$?

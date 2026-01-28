@@ -25,6 +25,7 @@ import pytest
 
 
 @pytest.mark.e2e
+@pytest.mark.slow
 class TestCIDRAllowListReadAccess:
     """Tests that allowed IPs can read without authentication.
 
@@ -33,7 +34,7 @@ class TestCIDRAllowListReadAccess:
     - GET /artifacts/* (static file downloads)
 
     All tests in this class use cidr_http_client which makes requests from
-    within the Docker network (IP in 172.18.0.0/16 range), appearing as an
+    within the Docker network (IP in 172.16.0.0/12 range), appearing as an
     "allowed IP" to Caddy's CIDR bypass logic.
     """
 
@@ -164,6 +165,7 @@ class TestCIDRAllowListReadAccess:
 
 
 @pytest.mark.e2e
+@pytest.mark.slow
 class TestCIDRAllowListWriteBlocked:
     """Tests that allowed IPs CANNOT write without authentication.
 
@@ -350,6 +352,7 @@ class TestCIDRAllowListWriteBlocked:
 
 
 @pytest.mark.e2e
+@pytest.mark.slow
 class TestCIDRAllowListPublicPaths:
     """Tests that public paths remain accessible regardless of CIDR setting.
 
