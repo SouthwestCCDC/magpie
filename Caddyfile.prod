@@ -196,7 +196,9 @@
 
 		# Content Security Policy - restrict resource loading
 		# API-only service: strict policy with no data URIs
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		# Note: 'unsafe-inline' is safe here because Content-Disposition: attachment
+		# prevents uploaded HTML from rendering, so only Caddy's browse template executes
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
 		# Remove server identification headers
 		-Server
