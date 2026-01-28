@@ -30,8 +30,11 @@ import pytest
 # See issue #371 for tracking full E2E CIDR test automation.
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("MAGPIE_RUN_CIDR_TESTS"),
-    reason="Set MAGPIE_RUN_CIDR_TESTS=1 and run custom docker-compose to execute",
+    not (os.environ.get("MAGPIE_RUN_CIDR_TESTS") and os.environ.get("MAGPIE_ALLOWED_CIDRS")),
+    reason=(
+        "Set MAGPIE_RUN_CIDR_TESTS=1 and MAGPIE_ALLOWED_CIDRS to a non-empty value, "
+        "then run custom docker-compose to execute"
+    ),
 )
 
 # NOTE: The fixtures below are preserved for future use when CI infrastructure

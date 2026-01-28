@@ -81,11 +81,12 @@ class TestRootRedirect:
         # Should get 401 at /artifacts/ (requires auth)
         assert response.status_code == 401
 
-        # With auth, should reach /artifacts/ successfully
+        # With auth, should reach /artifacts/ successfully and serve the browser HTML
         auth_response = authenticated_client.get("/", follow_redirects=True)
-        # Should get 200 or 404 (depending on if artifacts exist), NOT 401
-        assert auth_response.status_code in (200, 404)
-        assert auth_response.status_code != 401
+        # In the E2E docker setup, /artifacts/ must exist and return 200
+        assert auth_response.status_code == 200, (
+            f"With auth, following redirect should reach /artifacts/ (200). Got {auth_response.status_code}"
+        )
 
 
 @pytest.mark.e2e
@@ -264,13 +265,21 @@ class TestCaddyForwardAuth:
         self,
         authenticated_client: httpx.Client,
     ) -> None:
-        """Verify valid Bearer token is accepted by forward_auth."""
+        """Verify valid Bearer token is accepted by forward_auth and backend.
+
+        GET /api/v1/artifacts should reliably return 200 with JSON body (even when empty),
+        not 400/404. Accepting error codes would let broken routes slip through while
+        still "passing" the forward_auth test.
+        """
         response = authenticated_client.get("/api/v1/artifacts")
 
-        # Should not be 401 (auth succeeded)
-        # May be 200 (has content), 404 (no content yet), or 400 (path validation)
-        assert response.status_code in (200, 400, 404)
-        assert response.status_code != 401, "Valid token should be accepted"
+        # Auth should succeed and artifacts endpoint should return a valid JSON body
+        assert response.status_code == 200, (
+            "Valid token should be accepted and route should succeed"
+        )
+
+        data = response.json()
+        assert "paths" in data, "Artifacts response should include a 'paths' field"
 
     def test_auth_headers_propagated_to_backend(
         self,
