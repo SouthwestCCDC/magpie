@@ -241,8 +241,13 @@
 	handle /artifacts/public/* {
 		root * /data
 		# Security: Force download of artifact files to prevent XSS from user-uploaded HTML/JS
-		# The header directive applies to file responses but not to browse template pages
-		header Content-Disposition "attachment"
+		# Use matcher to apply header only to actual file responses, not browse template pages
+		@public_artifact_file {
+			file {
+				try_files {path}
+			}
+		}
+		header @public_artifact_file Content-Disposition "attachment"
 		file_server browse
 	}
 
@@ -320,8 +325,13 @@
 		}
 		root * /data
 		# Security: Force download of artifact files to prevent XSS from user-uploaded HTML/JS
-		# The header directive applies to file responses but not to browse template pages
-		header Content-Disposition "attachment"
+		# Use matcher to apply header only to actual file responses, not browse template pages
+		@artifact_file {
+			file {
+				try_files {path}
+			}
+		}
+		header @artifact_file Content-Disposition "attachment"
 		file_server browse
 	}
 
