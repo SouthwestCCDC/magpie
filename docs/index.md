@@ -15,3 +15,7 @@
 
 - [Ansible](ansible-integration.md) - Download artifacts in playbooks
 - [Authentik SSO](authentik-setup.md) - Browser-based authentication (optional)
+
+---
+
+*(AI-generated via Claude Code w/ Sonnet 4.5)*

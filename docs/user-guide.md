@@ -145,4 +145,4 @@ Requires `MAGPIE_S3_BUCKET` and AWS credentials.
 
 ---
 
-*(AI-generated via Claude Code w/ Opus 4.5)*
+*(AI-generated via Claude Code w/ Sonnet 4.5)*

@@ -68,3 +68,7 @@ curl -H "Authorization: Bearer $MAGPIE_TOKEN" https://magpie.example.com/api/v1/
 - Client headers stripped before authentication (defense-in-depth)
 - Requires network connectivity between Caddy and Authentik
 - Bearer tokens remain the auth method for all API and CLI access
+
+---
+
+*(AI-generated via Claude Code w/ Sonnet 4.5)*

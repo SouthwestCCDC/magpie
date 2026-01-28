@@ -108,3 +108,7 @@ Logs include `trace_id` and `span_id` for correlation with other services.
 ## GC Monitoring
 
 See [backup-restore.md](backup-restore.md) for garbage collection scheduling and monitoring.
+
+---
+
+*(AI-generated via Claude Code w/ Sonnet 4.5)*

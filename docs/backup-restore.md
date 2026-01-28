@@ -75,3 +75,7 @@ docker compose exec magpie magpie-ctl gc --reconcile-only
 ```bash
 find "$MAGPIE_DATA_DIR/artifacts" -type l ! -exec test -e {} \; -print
 ```
+
+---
+
+*(AI-generated via Claude Code w/ Sonnet 4.5)*

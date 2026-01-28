@@ -24,7 +24,7 @@ Requires: domain name for TLS (auto-provisioned via Let's Encrypt).
 
 1. Get admin token:
 ```bash
-docker compose logs magpie | grep "ADMIN TOKEN"
+docker compose -f docker-compose.prod.yml logs magpie | grep "ADMIN TOKEN"
 ```
 
 2. Create CI tokens:
@@ -60,3 +60,7 @@ Key environment variables (see [.env.example](../.env.example) for all):
 - `MAGPIE_DEBUG` - Verbose logging (default: false; never in production)
 
 Next: [Production Checklist](production-checklist.md) → [User Guide](user-guide.md) → [Backup & Restore](backup-restore.md)
+
+---
+
+*(AI-generated via Claude Code w/ Sonnet 4.5)*

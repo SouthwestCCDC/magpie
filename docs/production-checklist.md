@@ -18,7 +18,7 @@ Before deploying to production:
 export MAGPIE_DOMAIN=magpie.example.com
 export MAGPIE_DATA_DIR=/path/to/persistent/storage
 docker compose -f docker-compose.prod.yml up -d
-docker compose logs magpie | grep "ADMIN TOKEN"
+docker compose -f docker-compose.prod.yml logs magpie | grep "ADMIN TOKEN"
 ```
 
 ## Validation
@@ -38,3 +38,7 @@ docker compose logs magpie | grep "ADMIN TOKEN"
 ```bash
 docker compose -f docker-compose.prod.yml exec magpie magpie-ctl init --reset-admin-token
 ```
+
+---
+
+*(AI-generated via Claude Code w/ Sonnet 4.5)*

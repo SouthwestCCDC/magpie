@@ -90,3 +90,7 @@ magpie_mode: "0644"
 - Use hash refs for immutable artifact verification
 - Use read-only tokens when possible
 - Rotate tokens quarterly
+
+---
+
+*(AI-generated via Claude Code w/ Sonnet 4.5)*
