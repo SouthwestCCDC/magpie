@@ -3,11 +3,10 @@
 Tests the MAGPIE_ALLOWED_CIDRS feature which allows trusted IPs to read
 artifacts without authentication, while still requiring auth for write operations.
 
-These tests verify the security-critical CIDR bypass functionality:
+These tests currently verify the CIDR allow-list behavior for allowed IPs and public paths:
 1. Allowed IPs can read without auth (GET /api/v1/artifacts*, GET /artifacts/*)
 2. Allowed IPs cannot write without auth (POST, PATCH, DELETE operations)
-3. Non-allowed IPs require auth for all operations
-4. Public paths remain accessible regardless of CIDR setting
+3. Public paths remain accessible regardless of CIDR setting
 """
 
 from __future__ import annotations
@@ -107,7 +106,7 @@ class TestCIDRAllowListReadAccess:
         assert upload_response.status_code == 200
 
         # Unauthenticated request from allowed IP should work
-        response = cidr_http_client.get("/api/v1/artifacts/cidr-test/")
+        response = cidr_http_client.get("/api/v1/artifacts/cidr-test/list-access")
         assert response.status_code == 200, (
             "Allowed IP should be able to list artifacts without auth. "
             f"Expected 200, got {response.status_code}"
