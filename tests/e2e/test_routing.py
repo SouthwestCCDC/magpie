@@ -29,7 +29,7 @@ class TestRootRedirect:
     ) -> None:
         """Verify GET / returns redirect to /artifacts/.
 
-        The Caddyfile configures: redir / /artifacts/ permanent
+        The Caddyfile configures: redir * /artifacts/ permanent
         This should return a 301 (permanent) or 308 redirect.
         """
         # Use follow_redirects=False to check the redirect itself
@@ -265,7 +265,7 @@ class TestCaddyForwardAuth:
         authenticated_client: httpx.Client,
     ) -> None:
         """Verify valid Bearer token is accepted by forward_auth."""
-        response = authenticated_client.get("/api/v1/artifacts/")
+        response = authenticated_client.get("/api/v1/artifacts")
 
         # Should not be 401 (auth succeeded)
         # May be 200 (has content), 404 (no content yet), or 400 (path validation)

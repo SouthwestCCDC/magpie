@@ -12,6 +12,7 @@ These tests verify the security-critical CIDR bypass functionality:
 
 from __future__ import annotations
 
+import os
 from typing import Generator
 
 import httpx
@@ -29,12 +30,13 @@ ALLOWED_CIDR = "172.18.0.0/16"
 # To run these tests locally:
 # 1. Set MAGPIE_ALLOWED_CIDRS=172.18.0.0/16 in your environment
 # 2. Run: docker compose up --build
-# 3. Run: pytest tests/e2e/test_cidr_allowlist.py
+# 3. Run: MAGPIE_RUN_CIDR_TESTS=1 pytest tests/e2e/test_cidr_allowlist.py
 #
 # See issue #371 for tracking full E2E CIDR test automation.
 
-pytestmark = pytest.mark.skip(
-    reason="CIDR tests require custom docker-compose configuration not yet supported in CI"
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("MAGPIE_RUN_CIDR_TESTS"),
+    reason="Set MAGPIE_RUN_CIDR_TESTS=1 and run custom docker-compose to execute",
 )
 
 # NOTE: The fixtures below are preserved for future use when CI infrastructure
@@ -111,18 +113,8 @@ class TestCIDRAllowListReadAccess:
             f"Expected 200, got {response.status_code}"
         )
 
-        # Verify response headers indicate CIDR bypass
-        assert "x-magpie-user" in response.headers.keys() or "X-Magpie-User" in response.headers
-        # Response may normalize header case, so check case-insensitively
-        user_header = (
-            response.headers.get("x-magpie-user") or response.headers.get("X-Magpie-User") or ""
-        )
-        assert user_header == "cidr-bypass", f"Expected cidr-bypass user, got {user_header}"
-
-        scope_header = (
-            response.headers.get("x-magpie-scope") or response.headers.get("X-Magpie-Scope") or ""
-        )
-        assert scope_header == "read", f"Expected read scope, got {scope_header}"
+        # Note: X-Magpie-User and X-Magpie-Scope are REQUEST headers injected by
+        # Caddy to the upstream service, not RESPONSE headers returned to the client
 
     def test_allowed_ip_can_get_artifact_info_without_auth(
         self,
