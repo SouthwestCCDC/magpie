@@ -35,12 +35,55 @@ token = "mgp_your_token_here"
 
 **Precedence:** CLI flags > environment variables > config file
 
-| Env Var | Use |
-|---------|-----|
-| `MAGPIE_SERVER` | Server URL |
-| `MAGPIE_TOKEN` | Bearer token |
-| `MAGPIE_TIMEOUT` | Request timeout (default: 600s) |
-| `MAGPIE_CA_CERT` | Custom CA certificate path |
+### Client Environment Variables
+
+All client environment variables can be overridden by CLI flags. Server and token can also be set in `~/.magpie/config.toml`.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAGPIE_SERVER` | *(none)* | Server URL (e.g., `https://magpie.example.com`) |
+| `MAGPIE_TOKEN` | *(none)* | Bearer token (e.g., `mgp_your_token_here`) |
+| `MAGPIE_TIMEOUT` | `600` | Request timeout in seconds or duration format (`30s`, `5m`, `1h`, `1h30m`). Not configurable in `config.toml` to prevent silent network behavior changes. |
+| `MAGPIE_CA_CERT` | *(none)* | Path to custom CA certificate for TLS verification |
+
+### Server Environment Variables
+
+Server configuration uses environment variables with the `MAGPIE_` prefix. See `.env.example` for complete examples.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| **Storage** | | |
+| `MAGPIE_STORAGE_PATH` | `/data/artifacts` | Root directory for artifact storage |
+| `MAGPIE_TEMP_PATH` | `{storage}/.tmp` | Temporary files during uploads (derived from storage path) |
+| `MAGPIE_DATABASE_PATH` | `/data/magpie.db` | SQLite database path for token storage |
+| `MAGPIE_RETENTION_DAYS` | `90` | Days before untagged blobs are eligible for GC |
+| `MAGPIE_MAX_UPLOAD_SIZE` | *(none)* | Maximum upload size in bytes (leave empty for unlimited) |
+| **Garbage Collection** | | |
+| `MAGPIE_GC_LOCK_PATH` | `/var/run/magpie-gc.lock` | Lock file path to prevent concurrent GC runs |
+| **S3 Backup** | | |
+| `MAGPIE_S3_BUCKET` | *(none)* | S3 bucket name for artifact backup (leave empty to disable) |
+| `MAGPIE_S3_PREFIX` | *(empty)* | Optional S3 key prefix (e.g., `magpie/backups`) |
+| `AWS_ACCESS_KEY_ID` | *(none)* | AWS credentials for S3 backup (or use IAM role) |
+| `AWS_SECRET_ACCESS_KEY` | *(none)* | AWS secret key for S3 backup |
+| `AWS_SESSION_TOKEN` | *(none)* | AWS session token for temporary credentials (STS) |
+| `AWS_DEFAULT_REGION` | *(none)* | AWS region for S3 bucket |
+| **Logging & Debug** | | |
+| `MAGPIE_LOG_FORMAT` | `json` | Log format: `json` for structured logs, `console` for human-readable |
+| `MAGPIE_DEBUG` | `false` | Enable debug mode (verbose logging, detailed error responses) |
+| **Observability** | | |
+| `MAGPIE_SENTRY_DSN` | *(none)* | Sentry DSN for error tracking (leave empty to disable) |
+| `MAGPIE_OTEL_ENABLED` | `false` | Enable OpenTelemetry tracing |
+| `MAGPIE_OTEL_ENDPOINT` | *(none)* | OpenTelemetry collector endpoint (required if OTEL enabled) |
+| `MAGPIE_OTEL_SERVICE_NAME` | `magpie` | Service name for OpenTelemetry traces |
+| **Security** | | |
+| `MAGPIE_ALLOWED_CIDRS` | *(empty)* | Comma-separated CIDR ranges for read-only IP allow-listing (e.g., `10.0.0.0/8,192.168.1.0/24`). Requests from these IPs can read artifacts without bearer tokens. Write operations still require tokens. |
+| `AUTHENTIK_HOST` | *(none)* | Authentik server hostname for SSO browser access to `/artifacts/*` (e.g., `authentik.example.com`). API access via bearer tokens continues to work. See `docs/authentik-setup.md`. |
+| **Docker Compose Only** | | |
+| `MAGPIE_DATA_DIR` | `./data` | Host directory for data storage (mounted at `/data` in containers). Only used by `docker-compose.yml`, not the application. |
+| `MAGPIE_HTTP_PORT` | `8080` | External HTTP port for Caddy. Docker Compose only. |
+| `MAGPIE_HTTPS_PORT` | `8443` | External HTTPS port for Caddy. Docker Compose only. |
+| `MAGPIE_UID` | *(auto)* | User ID for magpie process (auto-detected from volume ownership). Used by `entrypoint.sh`, not the application. |
+| `MAGPIE_GID` | *(auto)* | Group ID for magpie process (auto-detected from volume ownership). Used by `entrypoint.sh`, not the application. |
 
 #### Managing Configuration
 
