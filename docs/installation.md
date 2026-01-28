@@ -46,6 +46,7 @@ export MAGPIE_TOKEN=mgp_your_token_here
 5. Test:
 ```bash
 curl https://magpie.example.com/health
+echo "test" > test.txt
 magpie push test.txt --to test/hello
 magpie get test/hello:latest
 ```

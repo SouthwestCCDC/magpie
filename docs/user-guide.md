@@ -42,6 +42,18 @@ token = "mgp_your_token_here"
 | `MAGPIE_TIMEOUT` | Request timeout (default: 600s) |
 | `MAGPIE_CA_CERT` | Custom CA certificate path |
 
+#### Managing Configuration
+
+Use the `magpie config` command to view or modify configuration without manually editing files:
+
+```bash
+magpie config --show                                # View resolved configuration
+magpie config --server URL --token TOKEN            # Set server and token
+magpie config --clear                               # Reset configuration to defaults
+```
+
+Configuration precedence applies: config file < environment variables < CLI flags. The `--show` command displays the effective configuration after applying all sources.
+
 ### Token Scopes
 
 | Scope | Permissions |

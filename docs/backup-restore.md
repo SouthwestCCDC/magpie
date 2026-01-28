@@ -32,6 +32,8 @@ docker compose exec magpie magpie-ctl sync to-s3
 ```
 Requires `MAGPIE_S3_BUCKET` environment variable. Note: Backs up artifacts only; separately backup `magpie.db`.
 
+**WARNING:** S3 restore using `rclone sync` is destructive and will delete local files not present in S3 (including untagged blobs). Back up `magpie.db` separately, as it is not synced to S3. Always use `--dry-run` first to preview changes before running restore operations.
+
 ## Restore Procedures
 
 **Full restore:**
