@@ -401,6 +401,217 @@ class TestCIDRAllowListPublicPaths:
 
 @pytest.mark.e2e
 @pytest.mark.slow
+class TestCIDRAllowListTokenInteraction:
+    """Tests verifying token authentication works correctly with CIDR settings.
+
+    These tests ensure that:
+    1. Token authentication still functions from inside the CIDR allow-list
+    2. Invalid tokens are rejected even from trusted IPs
+    3. Token authentication works from outside the CIDR allow-list (overrides denial)
+    4. Token scope enforcement works regardless of CIDR setting
+
+    SECURITY CRITICAL: Validates that CIDR bypass and token auth work together correctly.
+    """
+
+    def test_inside_cidr_with_valid_read_token(
+        self,
+        cidr_http_client: httpx.Client,
+        cidr_authenticated_client: httpx.Client,
+        cidr_admin_token: str,
+        test_artifact_content: bytes,
+    ) -> None:
+        """Verify inside CIDR + valid read token works for read operations.
+
+        Token authentication should still function from inside the CIDR range.
+        """
+        from tests.e2e.conftest import create_token_via_api
+
+        # Create a read-only token
+        read_token = create_token_via_api(
+            cidr_authenticated_client,
+            cidr_admin_token,
+            "cidr-read-token-test",
+            "read",
+        )
+
+        # Setup: Upload artifact
+        upload_response = cidr_authenticated_client.post(
+            "/api/v1/upload/cidr-test/token-read-test",
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+        )
+        assert upload_response.status_code in (200, 201)
+
+        # Test: List artifacts with read token (should work)
+        list_response = cidr_http_client.get(
+            "/api/v1/artifacts",
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert list_response.status_code == 200, (
+            f"Read token should work from inside CIDR. "
+            f"Expected 200, got {list_response.status_code}"
+        )
+
+        data = list_response.json()
+        assert "cidr-test/token-read-test" in data["paths"]
+
+    def test_inside_cidr_with_valid_write_token(
+        self,
+        cidr_http_client: httpx.Client,
+        cidr_authenticated_client: httpx.Client,
+        cidr_admin_token: str,
+        test_artifact_content: bytes,
+    ) -> None:
+        """Verify inside CIDR + valid write token works for write operations.
+
+        Token authentication should still function from inside the CIDR range.
+        """
+        from tests.e2e.conftest import create_token_via_api
+
+        # Create a write token
+        write_token = create_token_via_api(
+            cidr_authenticated_client,
+            cidr_admin_token,
+            "cidr-write-token-test",
+            "write",
+        )
+
+        # Test: Upload with write token (should work)
+        upload_response = cidr_http_client.post(
+            "/api/v1/upload/cidr-test/token-write-test",
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            headers={"Authorization": f"Bearer {write_token}"},
+        )
+        assert upload_response.status_code in (200, 201), (
+            f"Write token should work from inside CIDR. "
+            f"Expected 200/201, got {upload_response.status_code}"
+        )
+
+    def test_inside_cidr_with_invalid_token(
+        self,
+        cidr_http_client: httpx.Client,
+    ) -> None:
+        """Verify inside CIDR + invalid token is rejected.
+
+        SECURITY CRITICAL: Bad tokens must fail even from trusted IPs.
+        """
+        # Test: Use invalid token (should fail with 401)
+        response = cidr_http_client.get(
+            "/api/v1/artifacts",
+            headers={"Authorization": "Bearer mgp_invalid_token_12345"},
+        )
+        assert response.status_code == 401, (
+            f"SECURITY FAILURE: Invalid token accepted from inside CIDR. "
+            f"Expected 401, got {response.status_code}"
+        )
+
+    def test_outside_cidr_with_valid_read_token(
+        self,
+        cidr_outside_http_client: httpx.Client,
+        cidr_authenticated_client: httpx.Client,
+        cidr_admin_token: str,
+        test_artifact_content: bytes,
+    ) -> None:
+        """Verify outside CIDR + valid read token works.
+
+        Token auth should override CIDR denial for valid tokens.
+        """
+        from tests.e2e.conftest import create_token_via_api
+
+        # Create a read-only token
+        read_token = create_token_via_api(
+            cidr_authenticated_client,
+            cidr_admin_token,
+            "outside-cidr-read-token",
+            "read",
+        )
+
+        # Setup: Upload artifact
+        upload_response = cidr_authenticated_client.post(
+            "/api/v1/upload/cidr-test/outside-read-test",
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+        )
+        assert upload_response.status_code in (200, 201)
+
+        # Test: List artifacts from outside CIDR with valid token (should work)
+        list_response = cidr_outside_http_client.get(
+            "/api/v1/artifacts",
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert list_response.status_code == 200, (
+            f"Valid read token should work from outside CIDR. "
+            f"Expected 200, got {list_response.status_code}"
+        )
+
+        data = list_response.json()
+        assert "cidr-test/outside-read-test" in data["paths"]
+
+    def test_outside_cidr_with_valid_write_token(
+        self,
+        cidr_outside_http_client: httpx.Client,
+        cidr_authenticated_client: httpx.Client,
+        cidr_admin_token: str,
+        test_artifact_content: bytes,
+    ) -> None:
+        """Verify outside CIDR + valid write token works.
+
+        Token auth should override CIDR denial for valid tokens.
+        """
+        from tests.e2e.conftest import create_token_via_api
+
+        # Create a write token
+        write_token = create_token_via_api(
+            cidr_authenticated_client,
+            cidr_admin_token,
+            "outside-cidr-write-token",
+            "write",
+        )
+
+        # Test: Upload from outside CIDR with valid token (should work)
+        upload_response = cidr_outside_http_client.post(
+            "/api/v1/upload/cidr-test/outside-write-test",
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            headers={"Authorization": f"Bearer {write_token}"},
+        )
+        assert upload_response.status_code in (200, 201), (
+            f"Valid write token should work from outside CIDR. "
+            f"Expected 200/201, got {upload_response.status_code}"
+        )
+
+    def test_inside_cidr_read_token_cannot_write(
+        self,
+        cidr_http_client: httpx.Client,
+        cidr_authenticated_client: httpx.Client,
+        cidr_admin_token: str,
+        test_artifact_content: bytes,
+    ) -> None:
+        """Verify inside CIDR + read token attempting write is denied.
+
+        SECURITY CRITICAL: Token scope enforcement must work regardless of CIDR.
+        """
+        from tests.e2e.conftest import create_token_via_api
+
+        # Create a read-only token
+        read_token = create_token_via_api(
+            cidr_authenticated_client,
+            cidr_admin_token,
+            "cidr-read-scope-test",
+            "read",
+        )
+
+        # Test: Attempt upload with read token (should fail)
+        upload_response = cidr_http_client.post(
+            "/api/v1/upload/cidr-test/scope-violation-test",
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert upload_response.status_code == 403, (
+            f"SECURITY FAILURE: Read token allowed write from inside CIDR. "
+            f"Expected 403, got {upload_response.status_code}"
+        )
+
+
+@pytest.mark.e2e
+@pytest.mark.slow
 class TestCIDRAllowListOutsideIPDenied:
     """Tests verifying IPs OUTSIDE the CIDR allow-list get 401 on read attempts.
 
