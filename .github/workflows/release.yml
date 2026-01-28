@@ -103,6 +103,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Update installer HARDCODED_VERSION
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          sed -i "s/^HARDCODED_VERSION=.*/HARDCODED_VERSION=\"$VERSION\"/" scripts/magpie-deploy.sh
+
+          # Verify the update succeeded
+          if ! grep -q "HARDCODED_VERSION=\"$VERSION\"" scripts/magpie-deploy.sh; then
+            echo "::error::Failed to update HARDCODED_VERSION in scripts/magpie-deploy.sh"
+            exit 1
+          fi
+
+          echo "Updated HARDCODED_VERSION to $VERSION"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:

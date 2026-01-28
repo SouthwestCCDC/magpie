@@ -87,3 +87,33 @@ jobs:
 
       - name: Run bandit security scan
         run: just security
+
+  version-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify installer version matches pyproject.toml
+        run: |
+          # Extract version from pyproject.toml
+          PYPROJECT_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+
+          # Extract HARDCODED_VERSION from installer script
+          INSTALLER_VERSION=$(grep '^HARDCODED_VERSION=' scripts/magpie-deploy.sh | sed -E 's/^HARDCODED_VERSION="(.*)"/\1/')
+
+          echo "pyproject.toml version: $PYPROJECT_VERSION"
+          echo "Installer HARDCODED_VERSION: $INSTALLER_VERSION"
+
+          if [ "$PYPROJECT_VERSION" != "$INSTALLER_VERSION" ]; then
+            echo "::error::Version mismatch! pyproject.toml: $PYPROJECT_VERSION, scripts/magpie-deploy.sh HARDCODED_VERSION: $INSTALLER_VERSION"
+            echo "::error::Please update HARDCODED_VERSION in scripts/magpie-deploy.sh to match pyproject.toml"
+            echo "::error::This should be updated automatically during release, but manual bumps require syncing both files."
+            exit 1
+          fi
+
+          echo "Versions match: $PYPROJECT_VERSION"
