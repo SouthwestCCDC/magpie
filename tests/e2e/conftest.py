@@ -443,3 +443,34 @@ def cidr_authenticated_client(
     headers = {"Authorization": f"Bearer {cidr_admin_token}"}
     with httpx.Client(base_url=cidr_base_url, headers=headers, timeout=30.0) as client:
         yield client
+
+
+@pytest.fixture
+def is_outside_cidr() -> bool:
+    """Check if running from outside-CIDR test container.
+
+    Returns:
+        True if tests are running in test-runner-outside container (192.168.100.x),
+        False if running in test-runner-inside container (172.18.0.x).
+    """
+    return os.environ.get("MAGPIE_CIDR_OUTSIDE_TEST", "").lower() == "true"
+
+
+@pytest.fixture
+def cidr_outside_http_client(cidr_base_url: str) -> Generator[httpx.Client, None, None]:
+    """Create an HTTP client from OUTSIDE the CIDR allow-list.
+
+    This client makes requests from the external-net Docker network (192.168.100.x),
+    which is NOT in MAGPIE_ALLOWED_CIDRS (172.18.0.0/24). Requests should fail
+    with 401 for protected read endpoints.
+
+    Use this to verify that IPs outside the CIDR range are properly denied.
+
+    Raises:
+        pytest.skip: If not running in test-runner-outside container.
+    """
+    if not os.environ.get("MAGPIE_CIDR_OUTSIDE_TEST"):
+        pytest.skip("Outside CIDR tests require running in test-runner-outside container")
+
+    with httpx.Client(base_url=cidr_base_url, timeout=30.0) as client:
+        yield client

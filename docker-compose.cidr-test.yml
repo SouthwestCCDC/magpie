@@ -1,45 +1,83 @@
 # Docker Compose override for CIDR allow-list E2E tests
 #
-# This file extends the base docker-compose.yml to enable CIDR-based testing.
-# It adds:
-# 1. MAGPIE_ALLOWED_CIDRS configuration to allow the Docker network
-# 2. A test-runner container that runs pytest from within the Docker network
+# This file extends the base docker-compose.yml to enable CIDR-based testing with
+# two separate networks to test both positive and negative CIDR cases:
+# 1. allowed-net (172.18.0.0/24) - IPs INSIDE the CIDR allow-list
+# 2. external-net (192.168.100.0/24) - IPs OUTSIDE the CIDR allow-list
 #
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml up --build
 #
-# The test-runner container executes tests with an IP in the allowed CIDR range
-# (172.18.0.0/16 by default for Docker bridge networks), enabling verification
-# of the CIDR bypass behavior.
+# Two test-runner containers verify:
+# - test-runner-inside: IPs in 172.18.0.0/24 can read without auth (200)
+# - test-runner-outside: IPs in 192.168.100.0/24 cannot read without auth (401)
+
+networks:
+  allowed-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.18.0.0/24
+  external-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24
 
 services:
-  # Override caddy to enable CIDR allow-list for the Docker network
+  # Override caddy to enable CIDR allow-list for allowed-net only
   caddy:
+    networks:
+      - allowed-net
+      - external-net
     environment:
-      # Allow all Docker bridge networks (172.16.0.0/12 covers 172.16-31.x.x)
-      # This ensures CIDR bypass works regardless of which subnet Docker Compose assigns
-      - MAGPIE_ALLOWED_CIDRS=172.16.0.0/12
+      # Only allow IPs from allowed-net subnet (172.18.0.0/24)
+      # external-net IPs (192.168.100.x) should be denied
+      - MAGPIE_ALLOWED_CIDRS=172.18.0.0/24
 
-  # Test runner container - runs pytest from within Docker network
-  # This container has an IP in the 172.16.0.0/12 range, making it appear
-  # as an "allowed IP" to the CIDR bypass logic in Caddy
-  test-runner:
+  # Override magpie to only connect to allowed-net (backend network)
+  magpie:
+    networks:
+      - allowed-net
+
+  # Test runner for positive CIDR cases (inside allowed CIDR)
+  # This container has an IP in 172.18.0.x, which IS in the allow-list
+  test-runner-inside:
     build:
       context: .
       dockerfile: Dockerfile.test-runner
     volumes:
-      # Mount source code and tests
       - ./src:/app/src:ro
       - ./tests:/app/tests:ro
       - ./pyproject.toml:/app/pyproject.toml:ro
-      # Mount pytest results directory
       - ./test-results:/app/test-results
     environment:
-      # Point tests at the Caddy service (internal DNS name)
       - MAGPIE_CIDR_TEST_BASE_URL=http://caddy
       - MAGPIE_CIDR_TEST_ENABLED=true
     depends_on:
       - caddy
       - magpie
     networks:
-      - default
+      - allowed-net
+    command: ["sleep", "infinity"]
+
+  # Test runner for negative CIDR cases (outside allowed CIDR)
+  # This container has an IP in 192.168.100.x, which is NOT in the allow-list
+  test-runner-outside:
+    build:
+      context: .
+      dockerfile: Dockerfile.test-runner
+    volumes:
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./test-results:/app/test-results
+    environment:
+      - MAGPIE_CIDR_TEST_BASE_URL=http://caddy
+      - MAGPIE_CIDR_TEST_ENABLED=true
+      - MAGPIE_CIDR_OUTSIDE_TEST=true
+    depends_on:
+      - caddy
+    networks:
+      - external-net
+    command: ["sleep", "infinity"]

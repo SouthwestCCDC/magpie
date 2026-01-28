@@ -410,3 +410,89 @@ class TestCIDRAllowListPublicPaths:
         download_response = cidr_http_client.get(download_url)
         assert download_response.status_code == 200
         assert download_response.content == test_content
+
+
+@pytest.mark.e2e
+@pytest.mark.slow
+class TestCIDRAllowListOutsideIPDenied:
+    """Tests verifying IPs OUTSIDE the CIDR allow-list get 401 on read attempts.
+
+    These tests run from test-runner-outside container (192.168.100.x subnet),
+    which is NOT in MAGPIE_ALLOWED_CIDRS (172.18.0.0/24).
+
+    This class tests the negative case: IPs outside the allow-list should be
+    denied access to read endpoints just like any other unauthenticated request.
+
+    SECURITY CRITICAL: Ensures the CIDR allow-list doesn't accidentally grant
+    access to unintended IPs.
+    """
+
+    def test_outside_ip_cannot_list_artifacts_without_auth(
+        self,
+        cidr_outside_http_client: httpx.Client,
+    ) -> None:
+        """Verify GET /api/v1/artifacts returns 401 from outside CIDR.
+
+        SECURITY CRITICAL: IPs outside the allow-list should not have read access.
+        """
+        response = cidr_outside_http_client.get("/api/v1/artifacts")
+        assert response.status_code == 401, (
+            f"SECURITY FAILURE: IP outside CIDR range accessed artifact list. "
+            f"Expected 401, got {response.status_code}. "
+            f"CIDR bypass should only work for IPs in 172.18.0.0/24."
+        )
+
+    def test_outside_ip_cannot_get_artifact_metadata_without_auth(
+        self,
+        cidr_outside_http_client: httpx.Client,
+    ) -> None:
+        """Verify GET /api/v1/artifacts/{path} returns 401 from outside CIDR.
+
+        Note: We don't need to create test artifacts for these negative tests
+        because the 401 should happen before the backend checks if the artifact exists.
+        """
+        response = cidr_outside_http_client.get("/api/v1/artifacts/test/artifact")
+        assert response.status_code == 401, (
+            f"SECURITY FAILURE: IP outside CIDR range accessed artifact metadata. "
+            f"Expected 401, got {response.status_code}"
+        )
+
+    def test_outside_ip_cannot_get_artifact_info_without_auth(
+        self,
+        cidr_outside_http_client: httpx.Client,
+    ) -> None:
+        """Verify GET /api/v1/artifacts/{path}/{ref}/info returns 401 from outside CIDR."""
+        response = cidr_outside_http_client.get("/api/v1/artifacts/test/artifact/@12345678/info")
+        assert response.status_code == 401, (
+            f"SECURITY FAILURE: IP outside CIDR range accessed artifact info. "
+            f"Expected 401, got {response.status_code}"
+        )
+
+    def test_outside_ip_cannot_download_artifact_without_auth(
+        self,
+        cidr_outside_http_client: httpx.Client,
+    ) -> None:
+        """Verify GET /artifacts/* returns 401 from outside CIDR.
+
+        SECURITY CRITICAL: Static file downloads should be blocked for outside IPs.
+        """
+        # Try to access a hypothetical artifact download URL
+        # The 401 should happen at forward_auth before Caddy tries to serve the file
+        response = cidr_outside_http_client.get("/artifacts/test/artifact/@12345678")
+        assert response.status_code == 401, (
+            f"SECURITY FAILURE: IP outside CIDR range downloaded artifact. "
+            f"Expected 401, got {response.status_code}"
+        )
+
+    def test_outside_ip_health_endpoint_still_works(
+        self,
+        cidr_outside_http_client: httpx.Client,
+    ) -> None:
+        """Verify GET /health works from outside CIDR (public endpoint).
+
+        This test ensures that public endpoints remain accessible regardless
+        of CIDR configuration, even from outside the allow-list.
+        """
+        response = cidr_outside_http_client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
