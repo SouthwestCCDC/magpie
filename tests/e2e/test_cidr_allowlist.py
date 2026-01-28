@@ -40,7 +40,6 @@ class TestCIDRAllowListReadAccess:
 
     def test_allowed_ip_can_list_artifacts_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
         cidr_authenticated_client: httpx.Client,
         test_artifact_content: bytes,
@@ -73,7 +72,6 @@ class TestCIDRAllowListReadAccess:
 
     def test_allowed_ip_can_get_artifact_metadata_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
         cidr_authenticated_client: httpx.Client,
         test_artifact_content: bytes,
@@ -102,7 +100,6 @@ class TestCIDRAllowListReadAccess:
 
     def test_allowed_ip_can_get_artifact_info_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
         cidr_authenticated_client: httpx.Client,
         test_artifact_content: bytes,
@@ -134,7 +131,6 @@ class TestCIDRAllowListReadAccess:
 
     def test_allowed_ip_can_download_artifact_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
         cidr_authenticated_client: httpx.Client,
         test_artifact_content: bytes,
@@ -182,7 +178,6 @@ class TestCIDRAllowListWriteBlocked:
 
     def test_allowed_ip_cannot_upload_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
         test_artifact_content: bytes,
     ) -> None:
@@ -203,7 +198,6 @@ class TestCIDRAllowListWriteBlocked:
 
     def test_allowed_ip_cannot_amend_metadata_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
         cidr_authenticated_client: httpx.Client,
         test_artifact_content: bytes,
@@ -229,7 +223,6 @@ class TestCIDRAllowListWriteBlocked:
 
     def test_allowed_ip_cannot_add_tags_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
         cidr_authenticated_client: httpx.Client,
         test_artifact_content: bytes,
@@ -255,7 +248,6 @@ class TestCIDRAllowListWriteBlocked:
 
     def test_allowed_ip_cannot_delete_tags_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
         cidr_authenticated_client: httpx.Client,
         test_artifact_content: bytes,
@@ -286,7 +278,6 @@ class TestCIDRAllowListWriteBlocked:
 
     def test_allowed_ip_cannot_flush_tags_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
     ) -> None:
         """Verify allowed IP gets 401 for POST /api/v1/tags/{tag}/flush without token."""
@@ -301,7 +292,6 @@ class TestCIDRAllowListWriteBlocked:
 
     def test_allowed_ip_cannot_list_tokens_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
     ) -> None:
         """Verify allowed IP gets 401 for GET /api/v1/tokens without token."""
@@ -313,7 +303,6 @@ class TestCIDRAllowListWriteBlocked:
 
     def test_allowed_ip_cannot_create_tokens_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
     ) -> None:
         """Verify allowed IP gets 401 for POST /api/v1/tokens without token."""
@@ -328,7 +317,6 @@ class TestCIDRAllowListWriteBlocked:
 
     def test_allowed_ip_cannot_run_gc_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
     ) -> None:
         """Verify allowed IP gets 401 for POST /api/v1/gc without token."""
@@ -340,7 +328,6 @@ class TestCIDRAllowListWriteBlocked:
 
     def test_allowed_ip_cannot_get_status_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
     ) -> None:
         """Verify allowed IP gets 401 for GET /api/v1/status without token."""
@@ -367,7 +354,6 @@ class TestCIDRAllowListPublicPaths:
 
     def test_health_endpoint_accessible_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
     ) -> None:
         """Verify GET /health works without auth (CIDR setting irrelevant)."""
@@ -377,7 +363,6 @@ class TestCIDRAllowListPublicPaths:
 
     def test_auth_validate_endpoint_accessible_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
     ) -> None:
         """Verify GET /api/v1/auth/validate returns 401 without token (public endpoint).
@@ -391,7 +376,6 @@ class TestCIDRAllowListPublicPaths:
 
     def test_public_artifacts_accessible_without_auth(
         self,
-        cidr_test_enabled: bool,
         cidr_http_client: httpx.Client,
         cidr_authenticated_client: httpx.Client,
     ) -> None:
