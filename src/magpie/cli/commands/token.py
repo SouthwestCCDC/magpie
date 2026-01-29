@@ -86,3 +86,66 @@ def create_token(ctx: CLIContext, name: str, scope: str) -> None:
     click.echo()
     click.echo("Token (save this - it will only be shown once):")
     click.echo(f"  {data['token']}")
+
+
+@token.command(name="rotate")
+@click.argument("name")
+@click.pass_obj
+def rotate_token(ctx: CLIContext, name: str) -> None:
+    """Rotate an authentication token.
+
+    Requires admin scope. Revokes the existing token and creates a new one with
+    the same name and scope in a single atomic operation. The plaintext token is
+    only returned once and cannot be retrieved later. Make sure to save it securely.
+
+    This command supports rotating the token currently being used to authenticate
+    the request. After rotation, the old token is immediately invalidated, so
+    switch to using the new token.
+
+    NAME is the token name to rotate.
+
+    Examples:
+
+        magpie token rotate my-token
+
+        magpie token rotate compromised-token
+    """
+    if not ctx.server:
+        msg = "No server configured. Use --server or set MAGPIE_SERVER."
+        if is_json_output():
+            output_error(ErrorCode.CONFIG_ERROR, msg)
+            return  # output_error never returns, but explicit for clarity
+        raise click.ClickException(msg)
+
+    with ctx.get_client() as client:
+        if ctx.debug:
+            click.echo(f"Rotating token '{name}'...", err=True)
+        response = client.post(f"/api/v1/tokens/{name}/rotate")
+
+        if response.status_code != 200:
+            handle_response_error(response, "Token rotate", ctx.token)
+
+        data = response.json()
+
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "name": data["name"],
+                    "token": data["token"],
+                    "scope": data["scope"],
+                },
+                human_output="",  # Not used for JSON
+            )
+        )
+        return
+
+    # Human output
+    click.echo(f"Rotated token: {data['name']}")
+    click.echo(f"Scope: {data['scope']}")
+    click.echo()
+    click.echo("New token (save this - it will only be shown once):")
+    click.echo(f"  {data['token']}")
+    click.echo()
+    click.echo("WARNING: The old token has been invalidated. Use the new token above.")
