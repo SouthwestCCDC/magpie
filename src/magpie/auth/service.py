@@ -284,12 +284,13 @@ class TokenService:
                 # Store scope before deletion
                 scope = existing_token.scope
 
-                # Delete old token
-                delete_token(conn, name)
+                # Delete old token (without committing - part of transaction)
+                delete_token(conn, name, commit=False)
 
-                # Create and persist new token with same name and scope
+                # Create and persist new token with same name and scope (without committing)
                 new_plaintext = self._create_and_save_token(conn, name, scope)
 
+            # Transaction commits here when exiting the 'with conn:' context
             return (new_plaintext, scope)
         finally:
             conn.close()
@@ -325,7 +326,7 @@ class TokenService:
         # Hash the token for storage
         token_hash = self._hash_token(plaintext)
 
-        # Persist the new token record
+        # Persist the new token record (without committing - part of transaction)
         token = Token(
             name=name,
             token_hash=token_hash,
@@ -333,7 +334,7 @@ class TokenService:
             created_at=datetime.now(timezone.utc),
             enabled=True,
         )
-        save_token(conn, token)
+        save_token(conn, token, commit=False)
         return plaintext
 
     def has_scope(self, token_scope: TokenScope, required_scope: TokenScope) -> bool:
