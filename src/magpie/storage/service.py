@@ -539,8 +539,11 @@ class StorageService:
                 return []
             manifest_iter = search_root.rglob(".magpie")
         else:
-            # Non-recursive mode: find artifacts that are direct children
-            # Works at any depth - no hardcoded segment limits
+            # Non-recursive mode: return all artifacts that are descendants of the prefix.
+            # The CLI's _extract_immediate_children will filter to show only immediate
+            # children and virtual directories. This approach ensures that intermediate
+            # virtual directories are discoverable even when artifacts only exist at
+            # deeper nesting levels.
             if not search_root.exists() or not search_root.is_dir():
                 return []
 
@@ -552,27 +555,16 @@ class StorageService:
                 if root_manifest.is_file():
                     manifest_iter.append(root_manifest)
 
-            # Check immediate children for .magpie files
+            # Recursively find all artifacts under immediate children
             try:
                 for child in search_root.iterdir():
                     if child.is_dir():
-                        # Check if immediate child is an artifact
-                        child_manifest = child / ".magpie"
-                        if child_manifest.is_file():
-                            manifest_iter.append(child_manifest)
-
-                        # When no prefix: also check grandchildren to catch 2-segment
-                        # artifacts like "ns/artifact" from root.
-                        # With prefix: don't check grandchildren (only direct children).
-                        if not normalized_prefix:
-                            try:
-                                for grandchild in child.iterdir():
-                                    if grandchild.is_dir():
-                                        grandchild_manifest = grandchild / ".magpie"
-                                        if grandchild_manifest.is_file():
-                                            manifest_iter.append(grandchild_manifest)
-                            except (OSError, PermissionError):
-                                continue
+                        # Use rglob to find all .magpie files under this child at any depth
+                        try:
+                            for manifest in child.rglob(".magpie"):
+                                manifest_iter.append(manifest)
+                        except (OSError, PermissionError):
+                            continue
             except (OSError, PermissionError):
                 # Handle permission errors or other filesystem issues gracefully
                 pass

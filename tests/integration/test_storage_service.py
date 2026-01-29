@@ -591,10 +591,10 @@ class TestListArtifactPaths:
         assert "ns/artifact" in paths
 
     def test_list_paths_non_recursive_deeply_nested(self, storage_service: StorageService) -> None:
-        """Non-recursive list should work at arbitrary depths.
+        """Non-recursive list should return all descendants to support virtual directories.
 
-        Tests that non-recursive listing correctly interprets "direct children"
-        at various prefix depths.
+        Tests that non-recursive listing returns artifacts at all depths under a prefix
+        so the CLI can extract virtual directories correctly.
         """
         # Create deeply nested artifacts
         storage_service.store_artifact(
@@ -613,15 +613,16 @@ class TestListArtifactPaths:
             uploaded_by="user",
         )
 
-        # Non-recursive at "a/b/c" should find d, e but not sub/deeper
+        # Non-recursive at "a/b/c" should return all descendants (d, e, sub/deeper)
+        # so the CLI can show virtual directory "sub/"
         paths = storage_service.list_artifact_paths(prefix="a/b/c", recursive=False)
-        assert len(paths) == 2
+        assert len(paths) == 3
         assert "a/b/c/d" in paths
         assert "a/b/c/e" in paths
-        assert "a/b/c/sub/deeper" not in paths
+        assert "a/b/c/sub/deeper" in paths
 
     def test_list_paths_non_recursive_various_depths(self, storage_service: StorageService) -> None:
-        """Non-recursive mode should correctly list direct children at each prefix depth."""
+        """Non-recursive mode should return all descendants to support virtual directories."""
         # Create artifacts at various depths
         storage_service.store_artifact(
             artifact_path="root",
@@ -644,22 +645,67 @@ class TestListArtifactPaths:
             uploaded_by="user",
         )
 
-        # No prefix: list immediate children (root and test/one, test/two)
+        # No prefix: list all artifacts (root and all under test/)
+        # CLI will extract "root" and "test/" virtual directory
         paths = storage_service.list_artifact_paths(recursive=False)
-        assert len(paths) == 3
+        assert len(paths) == 4
         assert "root" in paths
         assert "test/one" in paths
         assert "test/two" in paths
-        assert "test/sub/deep" not in paths
+        assert "test/sub/deep" in paths
 
-        # Prefix "test": list direct children of test/ (one, two, not sub/deep)
+        # Prefix "test": list all descendants of test/ (one, two, sub/deep)
+        # CLI will extract "one", "two", "sub/" virtual directory
         paths = storage_service.list_artifact_paths(prefix="test", recursive=False)
-        assert len(paths) == 2
+        assert len(paths) == 3
         assert "test/one" in paths
         assert "test/two" in paths
-        assert "test/sub/deep" not in paths
+        assert "test/sub/deep" in paths
 
-        # Prefix "test/sub": list direct children of test/sub/ (deep)
+        # Prefix "test/sub": list all descendants of test/sub/ (deep)
         paths = storage_service.list_artifact_paths(prefix="test/sub", recursive=False)
         assert len(paths) == 1
         assert "test/sub/deep" in paths
+
+    def test_list_paths_non_recursive_discovers_intermediate_dirs(
+        self, storage_service: StorageService
+    ) -> None:
+        """Non-recursive list should discover intermediate virtual directories.
+
+        Reproduces issue #398: When artifacts exist only at deeper nesting levels
+        (e.g., builds/infra/github-runner.qcow2), non-recursive listing should
+        still return artifacts to enable the CLI to show intermediate virtual
+        directories.
+
+        Expected behavior:
+        - ls (no prefix) -> should include builds/infra/github-runner.qcow2
+          so CLI can show builds/
+        - ls builds -> should include builds/infra/github-runner.qcow2
+          so CLI can show infra/
+        - ls builds/infra -> should show builds/infra/github-runner.qcow2
+        """
+        # Create artifact at deep nesting level only
+        storage_service.store_artifact(
+            artifact_path="builds/infra/github-runner.qcow2",
+            file_stream=io.BytesIO(b"deep artifact"),
+            uploaded_by="user",
+        )
+
+        # Root level: should find the deep artifact so CLI can extract "builds/"
+        paths = storage_service.list_artifact_paths(recursive=False)
+        assert "builds/infra/github-runner.qcow2" in paths, (
+            "Non-recursive list at root should return deep artifacts "
+            "to enable CLI to show intermediate directories"
+        )
+
+        # Prefix "builds": should find the artifact so CLI can extract "infra/"
+        paths = storage_service.list_artifact_paths(prefix="builds", recursive=False)
+        assert "builds/infra/github-runner.qcow2" in paths, (
+            "Non-recursive list with prefix 'builds' should return deeper artifacts "
+            "to enable CLI to show subdirectories"
+        )
+
+        # Prefix "builds/infra": should find the direct child
+        paths = storage_service.list_artifact_paths(prefix="builds/infra", recursive=False)
+        assert len(paths) == 1
+        assert "builds/infra/github-runner.qcow2" in paths
