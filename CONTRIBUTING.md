@@ -14,6 +14,7 @@
 | `docs` | Documentation |
 | `installer` | Install script |
 | `deployment` | Generic deployment features (not environment-specific) |
+| `security` | Security-related issues and improvements |
 
 **Priority:**
 | Label | Meaning |
