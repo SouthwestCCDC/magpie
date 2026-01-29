@@ -95,3 +95,9 @@ jobs:
         uses: pypa/gh-action-pip-audit@v1.1.0
         with:
           inputs: requirements.txt
+          # Ignore CVE-2026-0994 in protobuf: DoS via ParseDict recursion bypass
+          # No fix available yet (checked 2026-01-29)
+          # Impact: Limited - magpie doesn't use protobuf.json_format.ParseDict
+          # Protobuf is transitive via opentelemetry-exporter-otlp
+          ignore-vulns: |
+            CVE-2026-0994
