@@ -233,24 +233,30 @@ def token_rotate(ctx: CTLContext, name: str) -> None:
     if ctx.debug:
         click.echo(f"Rotating token '{name}'...", err=True)
 
-    new_token = token_service.rotate_token(name)
+    try:
+        result = token_service.rotate_token(name)
+    except ValidationError as e:
+        # Token name validation failed
+        if is_json_output():
+            output_error(ErrorCode.VALIDATION_ERROR, str(e))
+        else:
+            raise click.ClickException(str(e))
+    except ValueError as e:
+        # Unexpected error during rotation (e.g., race condition)
+        if is_json_output():
+            output_error(ErrorCode.CONFLICT, str(e))
+        else:
+            raise click.ClickException(str(e))
 
-    if new_token is None:
+    if result is None:
         msg = f"Token not found: {name}"
         if is_json_output():
             output_error(ErrorCode.NOT_FOUND, msg)
         else:
             raise click.ClickException(msg)
 
-    # Get the scope from the newly created token for display
-    from magpie.auth.database import get_connection, get_token_by_name
-
-    conn = get_connection(settings.database_path)
-    try:
-        token_info = get_token_by_name(conn, name)
-        scope = token_info.scope.value if token_info else "unknown"
-    finally:
-        conn.close()
+    # Unpack the result (new_token, scope)
+    new_token, scope = result
 
     # JSON output
     if is_json_output():
@@ -259,7 +265,7 @@ def token_rotate(ctx: CTLContext, name: str) -> None:
                 data={
                     "token": new_token,
                     "name": name,
-                    "scope": scope,
+                    "scope": scope.value,
                 },
                 human_output="",
             )
@@ -269,7 +275,7 @@ def token_rotate(ctx: CTLContext, name: str) -> None:
     # Human output
     click.echo("")
     click.echo("=" * 60)
-    click.echo(f"TOKEN ROTATED: {name} (scope: {scope})")
+    click.echo(f"TOKEN ROTATED: {name} (scope: {scope.value})")
     click.echo("Save this token - it will NOT be shown again!")
     click.echo("")
     click.echo(new_token)

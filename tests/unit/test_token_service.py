@@ -196,17 +196,19 @@ class TestRotateToken:
         """rotate_token should create a new token with the same scope."""
         original_token = token_service.create_token("to-rotate", TokenScope.WRITE)
 
-        new_token = token_service.rotate_token("to-rotate")
+        result = token_service.rotate_token("to-rotate")
 
-        assert new_token is not None
+        assert result is not None
+        new_token, scope = result
         assert new_token != original_token
         assert new_token.startswith("mgp_")
+        assert scope == TokenScope.WRITE
 
         # New token should validate with original scope
-        result = token_service.validate_token(new_token)
-        assert result is not None
-        assert result.name == "to-rotate"
-        assert result.scope == TokenScope.WRITE
+        validation_result = token_service.validate_token(new_token)
+        assert validation_result is not None
+        assert validation_result.name == "to-rotate"
+        assert validation_result.scope == TokenScope.WRITE
 
     def test_rotate_token_invalidates_old_token(self, token_service: TokenService) -> None:
         """rotate_token should invalidate the old token."""
@@ -226,11 +228,13 @@ class TestRotateToken:
         original_token = token_service.create_token("admin-rotate", TokenScope.ADMIN)
         assert original_token.startswith("mgp_ADMIN_")
 
-        new_token = token_service.rotate_token("admin-rotate")
+        result = token_service.rotate_token("admin-rotate")
 
-        assert new_token is not None
+        assert result is not None
+        new_token, scope = result
         assert new_token.startswith("mgp_ADMIN_")
         assert new_token != original_token
+        assert scope == TokenScope.ADMIN
 
     def test_rotate_token_returns_none_for_nonexistent(self, token_service: TokenService) -> None:
         """rotate_token should return None for non-existent token."""
@@ -244,12 +248,14 @@ class TestRotateToken:
             name = f"rotate-{scope.value}"
             original = token_service.create_token(name, scope)
 
-            new_token = token_service.rotate_token(name)
+            result = token_service.rotate_token(name)
 
-            assert new_token is not None
+            assert result is not None
+            new_token, returned_scope = result
             assert new_token != original
-            result = token_service.validate_token(new_token)
-            assert result.scope == scope
+            assert returned_scope == scope
+            validation_result = token_service.validate_token(new_token)
+            assert validation_result.scope == scope
 
 
 class TestHasScope:

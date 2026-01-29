@@ -252,42 +252,89 @@ class TokenService:
         finally:
             conn.close()
 
-    def rotate_token(self, name: str) -> str | None:
+    def rotate_token(self, name: str) -> tuple[str, TokenScope] | None:
         """Rotate a token by revoking and creating a new one with the same scope.
 
         This is an atomic operation that:
         1. Looks up the existing token by name
         2. Deletes the old token
         3. Creates a new token with the same name and scope
-        4. Returns the new plaintext token
+        4. Returns the new plaintext token and its scope
 
         If the token doesn't exist, returns None.
+
+        Both the deletion and creation happen within a single database transaction
+        to ensure atomicity - there is no window where the token doesn't exist.
 
         Args:
             name: Name of the token to rotate.
 
         Returns:
-            New plaintext token string if rotation succeeded, None if token not found.
+            Tuple of (plaintext_token, scope) if rotation succeeded, None if token not found.
         """
         conn = get_connection(self.db_path)
         try:
-            # Look up existing token to get its scope
-            existing_token = get_token_by_name(conn, name)
-            if existing_token is None:
-                return None
+            with conn:
+                # Look up existing token to get its scope
+                existing_token = get_token_by_name(conn, name)
+                if existing_token is None:
+                    # Nothing to rotate; no changes committed
+                    return None
 
-            # Store scope before deletion
-            scope = existing_token.scope
+                # Store scope before deletion
+                scope = existing_token.scope
 
-            # Delete old token
-            delete_token(conn, name)
+                # Delete old token
+                delete_token(conn, name)
+
+                # Create and persist new token with same name and scope
+                new_plaintext = self._create_and_save_token(conn, name, scope)
+
+            return (new_plaintext, scope)
         finally:
             conn.close()
 
-        # Create new token with same name and scope
-        # This uses a fresh connection to ensure atomicity
-        new_plaintext = self.create_token(name, scope)
-        return new_plaintext
+    def _create_and_save_token(
+        self,
+        conn: sqlite3.Connection,
+        name: str,
+        scope: TokenScope,
+    ) -> str:
+        """Create a new token with the given name and scope using an existing connection.
+
+        This helper is used by rotate_token to ensure that token deletion and creation
+        happen within a single database transaction.
+
+        Args:
+            conn: Existing database connection.
+            name: Token name.
+            scope: Token scope.
+
+        Returns:
+            Plaintext token string.
+        """
+        # Generate a new secure plaintext token
+        random_part = secrets.token_urlsafe(32)
+
+        # Add prefix based on scope
+        if scope == TokenScope.ADMIN:
+            plaintext = f"mgp_ADMIN_{random_part}"
+        else:
+            plaintext = f"mgp_{random_part}"
+
+        # Hash the token for storage
+        token_hash = self._hash_token(plaintext)
+
+        # Persist the new token record
+        token = Token(
+            name=name,
+            token_hash=token_hash,
+            scope=scope,
+            created_at=datetime.now(timezone.utc),
+            enabled=True,
+        )
+        save_token(conn, token)
+        return plaintext
 
     def has_scope(self, token_scope: TokenScope, required_scope: TokenScope) -> bool:
         """Check if token_scope satisfies required_scope.
