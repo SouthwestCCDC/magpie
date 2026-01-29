@@ -26,6 +26,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from tests.e2e.conftest import create_token_via_api
+
 
 @pytest.mark.e2e
 @pytest.mark.slow
@@ -424,8 +426,6 @@ class TestCIDRAllowListTokenInteraction:
 
         Token authentication should still function from inside the CIDR range.
         """
-        from tests.e2e.conftest import create_token_via_api
-
         # Create a read-only token
         read_token = create_token_via_api(
             cidr_authenticated_client,
@@ -465,8 +465,6 @@ class TestCIDRAllowListTokenInteraction:
 
         Token authentication should still function from inside the CIDR range.
         """
-        from tests.e2e.conftest import create_token_via_api
-
         # Create a write token
         write_token = create_token_via_api(
             cidr_authenticated_client,
@@ -531,8 +529,6 @@ class TestCIDRAllowListTokenInteraction:
 
         Token auth should override CIDR denial for valid tokens.
         """
-        from tests.e2e.conftest import create_token_via_api
-
         # Create a read-only token
         read_token = create_token_via_api(
             cidr_authenticated_client,
@@ -572,8 +568,6 @@ class TestCIDRAllowListTokenInteraction:
 
         Token auth should override CIDR denial for valid tokens.
         """
-        from tests.e2e.conftest import create_token_via_api
-
         # Create a write token
         write_token = create_token_via_api(
             cidr_authenticated_client,
@@ -604,8 +598,6 @@ class TestCIDRAllowListTokenInteraction:
 
         SECURITY CRITICAL: Token scope enforcement must work regardless of CIDR.
         """
-        from tests.e2e.conftest import create_token_via_api
-
         # Create a read-only token
         read_token = create_token_via_api(
             cidr_authenticated_client,
