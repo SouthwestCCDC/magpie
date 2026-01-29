@@ -49,3 +49,6 @@ data/
 
 # Claude Code hook logs
 .claude/logs/
+
+# AI agent scratch notes (not committed)
+.ai/scratch/
