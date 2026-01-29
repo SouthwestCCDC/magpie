@@ -709,8 +709,9 @@ class TestListArtifactPaths:
            marked with trailing /)
 
         This enables navigation to discover deeply nested artifacts without full
-        tree traversal. The storage layer is still O(immediate_children) efficient,
-        just with a quick existence check for nested artifacts.
+        tree traversal. The storage layer is O(immediate_children) efficient because
+        it does not perform recursive existence checks; all subdirectories are treated
+        as virtual directories unconditionally.
 
         For issue #398 use case (discovering deeply nested artifacts):
         Users can navigate step-by-step through virtual directories.

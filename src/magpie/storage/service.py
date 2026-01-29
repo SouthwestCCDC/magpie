@@ -589,6 +589,10 @@ class StorageService:
                     if not child.is_dir():
                         continue
 
+                    # Skip hidden/system directories (e.g., .tmp/)
+                    if child.name.startswith("."):
+                        continue
+
                     # Compute full path relative to storage_path
                     child_rel_path = str(child.relative_to(self.config.storage_path))
 
