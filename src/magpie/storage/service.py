@@ -572,6 +572,8 @@ class StorageService:
             if prefix_manifest.is_file() and normalized_prefix:
                 # The prefix itself is an artifact, return it
                 artifact_paths.append(normalized_prefix)
+                # Artifacts are leaf nodes - no need to check children
+                return sorted(artifact_paths)
 
             # Step 2: Do non-recursive directory listing of immediate children
             try:
@@ -589,8 +591,13 @@ class StorageService:
                         artifact_paths.append(child_rel_path)
                     else:
                         # Check if it contains artifacts deeper down (virtual directory)
-                        # Use a quick existence check: any .magpie files in subdirectories?
-                        has_nested_artifacts = any(child.rglob(".magpie"))
+                        # Use explicit next() to short-circuit and handle edge cases
+                        try:
+                            next(child.rglob(".magpie"))
+                            has_nested_artifacts = True
+                        except (StopIteration, OSError, PermissionError):
+                            has_nested_artifacts = False
+
                         if has_nested_artifacts:
                             # It's a virtual directory - return with trailing /
                             artifact_paths.append(child_rel_path + "/")
