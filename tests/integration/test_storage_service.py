@@ -378,7 +378,7 @@ class TestListArtifactPaths:
     """Tests for list_artifact_paths functionality."""
 
     def test_list_all_paths(self, storage_service: StorageService) -> None:
-        """list_artifact_paths should return all artifact paths."""
+        """list_artifact_paths should return all artifact paths recursively."""
         # Store artifacts at different paths
         storage_service.store_artifact(
             artifact_path="test/artifact1",
@@ -396,8 +396,8 @@ class TestListArtifactPaths:
             uploaded_by="user",
         )
 
-        # List all paths
-        paths = storage_service.list_artifact_paths()
+        # List all paths recursively
+        paths = storage_service.list_artifact_paths(recursive=True)
 
         assert len(paths) == 3
         assert "test/artifact1" in paths
@@ -460,14 +460,14 @@ class TestListArtifactPaths:
             uploaded_by="user",
         )
 
-        # Single slash should list all artifacts (normalized to empty prefix)
-        paths = storage_service.list_artifact_paths("/")
+        # Single slash should list all artifacts recursively (normalized to empty prefix)
+        paths = storage_service.list_artifact_paths("/", recursive=True)
         assert len(paths) == 2
         assert "test/artifact1" in paths
         assert "other/artifact2" in paths
 
         # Multiple slashes should also work
-        paths = storage_service.list_artifact_paths("//")
+        paths = storage_service.list_artifact_paths("//", recursive=True)
         assert len(paths) == 2
         assert "test/artifact1" in paths
         assert "other/artifact2" in paths
@@ -584,17 +584,24 @@ class TestListArtifactPaths:
             uploaded_by="user",
         )
 
-        # Non-recursive list with no prefix should find both
+        # Non-recursive list with no prefix should find only immediate children
+        # "simple" is an immediate child, but "ns/artifact" is not (it's under "ns/")
         paths = storage_service.list_artifact_paths(recursive=False)
-        assert len(paths) == 2
+        assert len(paths) == 1
         assert "simple" in paths
+        assert "ns/artifact" not in paths
+
+        # Non-recursive list with prefix "ns" should find "ns/artifact"
+        paths = storage_service.list_artifact_paths(prefix="ns", recursive=False)
+        assert len(paths) == 1
         assert "ns/artifact" in paths
 
     def test_list_paths_non_recursive_deeply_nested(self, storage_service: StorageService) -> None:
-        """Non-recursive list should return all descendants to support virtual directories.
+        """Non-recursive list should return only immediate children artifacts.
 
-        Tests that non-recursive listing returns artifacts at all depths under a prefix
-        so the CLI can extract virtual directories correctly.
+        Tests that non-recursive listing returns only artifacts that are immediate
+        children of the prefix directory. Nested artifacts in subdirectories are
+        not returned (but can be discovered by listing those subdirectories).
         """
         # Create deeply nested artifacts
         storage_service.store_artifact(
@@ -613,16 +620,16 @@ class TestListArtifactPaths:
             uploaded_by="user",
         )
 
-        # Non-recursive at "a/b/c" should return all descendants (d, e, sub/deeper)
-        # so the CLI can show virtual directory "sub/"
+        # Non-recursive at "a/b/c" should return only immediate children (d, e)
+        # sub/deeper is NOT an immediate child, so it's excluded
         paths = storage_service.list_artifact_paths(prefix="a/b/c", recursive=False)
-        assert len(paths) == 3
+        assert len(paths) == 2
         assert "a/b/c/d" in paths
         assert "a/b/c/e" in paths
-        assert "a/b/c/sub/deeper" in paths
+        assert "a/b/c/sub/deeper" not in paths
 
     def test_list_paths_non_recursive_various_depths(self, storage_service: StorageService) -> None:
-        """Non-recursive mode should return all descendants to support virtual directories."""
+        """Non-recursive mode should return only immediate children artifacts."""
         # Create artifacts at various depths
         storage_service.store_artifact(
             artifact_path="root",
@@ -645,44 +652,46 @@ class TestListArtifactPaths:
             uploaded_by="user",
         )
 
-        # No prefix: list all artifacts (root and all under test/)
-        # CLI will extract "root" and "test/" virtual directory
+        # No prefix: list only immediate children at root level
+        # Only "root" is an immediate child (test/one, test/two, test/sub/deep are not)
         paths = storage_service.list_artifact_paths(recursive=False)
-        assert len(paths) == 4
+        assert len(paths) == 1
         assert "root" in paths
-        assert "test/one" in paths
-        assert "test/two" in paths
-        assert "test/sub/deep" in paths
+        assert "test/one" not in paths
+        assert "test/two" not in paths
+        assert "test/sub/deep" not in paths
 
-        # Prefix "test": list all descendants of test/ (one, two, sub/deep)
-        # CLI will extract "one", "two", "sub/" virtual directory
+        # Prefix "test": list only immediate children of test/ (one, two)
+        # sub/deep is NOT an immediate child, so it's excluded
         paths = storage_service.list_artifact_paths(prefix="test", recursive=False)
-        assert len(paths) == 3
+        assert len(paths) == 2
         assert "test/one" in paths
         assert "test/two" in paths
-        assert "test/sub/deep" in paths
+        assert "test/sub/deep" not in paths
 
         # Prefix "test/sub": list all descendants of test/sub/ (deep)
         paths = storage_service.list_artifact_paths(prefix="test/sub", recursive=False)
         assert len(paths) == 1
         assert "test/sub/deep" in paths
 
-    def test_list_paths_non_recursive_discovers_intermediate_dirs(
+    def test_list_paths_non_recursive_returns_only_immediate_children(
         self, storage_service: StorageService
     ) -> None:
-        """Non-recursive list should discover intermediate virtual directories.
+        """Non-recursive list returns only immediate children artifacts.
 
-        Reproduces issue #398: When artifacts exist only at deeper nesting levels
-        (e.g., builds/infra/github-runner.qcow2), non-recursive listing should
-        still return artifacts to enable the CLI to show intermediate virtual
-        directories.
+        With the simpler O(immediate_children) approach, non-recursive mode
+        only returns artifacts that are immediate children of the prefix directory.
+        Virtual directories (directories without .magpie) are not returned.
+
+        For issue #398 use case (discovering deeply nested artifacts):
+        Users should use recursive mode (--recursive flag) to find all artifacts,
+        or navigate step-by-step through the directory structure.
 
         Expected behavior:
-        - ls (no prefix) -> should include builds/infra/github-runner.qcow2
-          so CLI can show builds/
-        - ls builds -> should include builds/infra/github-runner.qcow2
-          so CLI can show infra/
-        - ls builds/infra -> should show builds/infra/github-runner.qcow2
+        - ls (no prefix) -> returns [] (no immediate children)
+        - ls builds -> returns [] (no immediate children, "infra" is virtual dir)
+        - ls builds/infra -> returns ["builds/infra/github-runner.qcow2"]
+        - ls -r (recursive) -> returns ["builds/infra/github-runner.qcow2"]
         """
         # Create artifact at deep nesting level only
         storage_service.store_artifact(
@@ -691,21 +700,29 @@ class TestListArtifactPaths:
             uploaded_by="user",
         )
 
-        # Root level: should find the deep artifact so CLI can extract "builds/"
+        # Root level non-recursive: no immediate children, so returns empty
         paths = storage_service.list_artifact_paths(recursive=False)
-        assert "builds/infra/github-runner.qcow2" in paths, (
-            "Non-recursive list at root should return deep artifacts "
-            "to enable CLI to show intermediate directories"
+        assert len(paths) == 0, (
+            "Non-recursive list at root should return [] when no immediate children exist"
         )
 
-        # Prefix "builds": should find the artifact so CLI can extract "infra/"
+        # Prefix "builds" non-recursive: "infra" is a virtual dir (no .magpie), so returns empty
         paths = storage_service.list_artifact_paths(prefix="builds", recursive=False)
-        assert "builds/infra/github-runner.qcow2" in paths, (
-            "Non-recursive list with prefix 'builds' should return deeper artifacts "
-            "to enable CLI to show subdirectories"
+        assert len(paths) == 0, (
+            "Non-recursive list at 'builds' should return [] when only virtual subdirs exist"
         )
 
-        # Prefix "builds/infra": should find the direct child
+        # Prefix "builds/infra" non-recursive: finds the immediate child artifact
         paths = storage_service.list_artifact_paths(prefix="builds/infra", recursive=False)
+        assert len(paths) == 1
+        assert "builds/infra/github-runner.qcow2" in paths
+
+        # Recursive mode from root: finds all artifacts regardless of depth
+        paths = storage_service.list_artifact_paths(recursive=True)
+        assert len(paths) == 1
+        assert "builds/infra/github-runner.qcow2" in paths
+
+        # Recursive mode from "builds": finds all artifacts under builds/
+        paths = storage_service.list_artifact_paths(prefix="builds", recursive=True)
         assert len(paths) == 1
         assert "builds/infra/github-runner.qcow2" in paths

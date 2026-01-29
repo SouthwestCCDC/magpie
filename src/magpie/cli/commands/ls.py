@@ -132,7 +132,9 @@ def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str, recursive:
         else:
             click.echo(f"Listing artifact paths ({mode})...", err=True)
 
-    response = client.get("/api/v1/artifacts", params={"prefix": prefix, "recursive": recursive})
+    # Always fetch recursively to discover virtual directories, then filter client-side
+    # This allows non-recursive mode to show immediate children and virtual directories
+    response = client.get("/api/v1/artifacts", params={"prefix": prefix, "recursive": True})
 
     if response.status_code != 200:
         handle_response_error(response, "List", ctx.token)
