@@ -126,13 +126,7 @@ class TokenService:
 
         if plaintext_token is None:
             # Generate secure random token
-            random_part = secrets.token_urlsafe(32)
-
-            # Add prefix based on scope
-            if scope == TokenScope.ADMIN:
-                plaintext_token = f"mgp_ADMIN_{random_part}"
-            else:
-                plaintext_token = f"mgp_{random_part}"
+            plaintext_token = self._generate_plaintext_token(scope)
         else:
             # Validate provided token has correct prefix
             if scope == TokenScope.ADMIN:
@@ -271,6 +265,9 @@ class TokenService:
 
         Returns:
             Tuple of (plaintext_token, scope) if rotation succeeded, None if token not found.
+
+        Raises:
+            TokenError: If hash collision occurs during token creation (extremely unlikely).
         """
         conn = get_connection(self.db_path)
         try:
@@ -288,7 +285,13 @@ class TokenService:
                 delete_token(conn, name, commit=False)
 
                 # Create and persist new token with same name and scope (without committing)
-                new_plaintext = self._create_and_save_token(conn, name, scope)
+                try:
+                    new_plaintext = self._create_and_save_token(conn, name, scope)
+                except sqlite3.IntegrityError as e:
+                    # Extremely unlikely hash collision during rotation
+                    raise TokenError(
+                        f"Failed to rotate token '{name}' due to hash collision. Please try again."
+                    ) from e
 
             # Transaction commits here when exiting the 'with conn:' context
             return (new_plaintext, scope)
@@ -314,14 +317,11 @@ class TokenService:
         Returns:
             Plaintext token string.
         """
-        # Generate a new secure plaintext token
-        random_part = secrets.token_urlsafe(32)
+        # Validate token name defensively (defense in depth)
+        validate_token_name(name)
 
-        # Add prefix based on scope
-        if scope == TokenScope.ADMIN:
-            plaintext = f"mgp_ADMIN_{random_part}"
-        else:
-            plaintext = f"mgp_{random_part}"
+        # Generate a new secure plaintext token
+        plaintext = self._generate_plaintext_token(scope)
 
         # Hash the token for storage
         token_hash = self._hash_token(plaintext)
@@ -353,6 +353,21 @@ class TokenService:
             True if token_scope has sufficient permissions.
         """
         return _SCOPE_LEVELS[token_scope] >= _SCOPE_LEVELS[required_scope]
+
+    def _generate_plaintext_token(self, scope: TokenScope) -> str:
+        """Generate a new plaintext token with appropriate prefix.
+
+        Args:
+            scope: Token scope (determines prefix).
+
+        Returns:
+            Plaintext token string with mgp_ or mgp_ADMIN_ prefix.
+        """
+        random_part = secrets.token_urlsafe(32)
+        if scope == TokenScope.ADMIN:
+            return f"mgp_ADMIN_{random_part}"
+        else:
+            return f"mgp_{random_part}"
 
     def _hash_token(self, token: str) -> str:
         """Hash a token using SHA-256.
