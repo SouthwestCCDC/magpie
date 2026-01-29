@@ -20,7 +20,7 @@ The loop MUST halt when:
 
 1. **Non-convergence**: Issues not decreasing round-over-round
 2. **Circular feedback**: Same issue 3+ times, or A->B->A reversion
-3. **Design decision**: Category C items present
+3. **Design decision**: comments flagged as design decisions (requiring human input)
 4. **Round limit**: 4 rounds completed
 
 ## Escalation Format
