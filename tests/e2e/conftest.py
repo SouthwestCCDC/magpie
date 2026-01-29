@@ -293,3 +293,134 @@ def test_artifact_content() -> bytes:
 def test_artifact_path() -> str:
     """Generate a test artifact path."""
     return "e2e-tests/test-artifact"
+
+
+# =============================================================================
+# CIDR ALLOW-LIST TESTING FIXTURES
+# =============================================================================
+#
+# These fixtures support testing CIDR allow-list bypass behavior.
+# They detect whether tests are running inside Docker network (via environment
+# variable) and configure accordingly.
+#
+# CIDR tests must run from within the Docker network to properly test the bypass
+# behavior because:
+# 1. Test client running on host appears as different IP to Caddy (not in 172.18.0.0/24)
+# 2. CIDR bypass never triggers because client IP is outside the allowed range
+# 3. Tests would fail with 401 even though the feature works correctly
+#
+# To run CIDR tests, use the helper script (recommended):
+#   ./scripts/run-cidr-tests.sh
+#
+# Or manually:
+#   docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml up -d --build
+#   docker compose exec test-runner-inside pytest tests/e2e/test_cidr_allowlist.py -k "not OutsideIP" -v
+#   docker compose exec test-runner-outside pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied -v
+#
+# =============================================================================
+
+
+def _is_cidr_test_enabled() -> bool:
+    """Check if CIDR testing is enabled via environment variable.
+
+    Returns:
+        True if running inside test-runner container with CIDR tests enabled.
+    """
+    return os.environ.get("MAGPIE_CIDR_TEST_ENABLED", "").lower() == "true"
+
+
+@pytest.fixture(scope="session")
+def cidr_base_url() -> str:
+    """Get base URL for CIDR tests (internal Docker network URL).
+
+    When running inside test-runner container, this returns the internal
+    Caddy URL (http://caddy) which makes requests appear from Docker network IP.
+
+    Raises:
+        pytest.skip: If CIDR testing is not enabled.
+    """
+    if not _is_cidr_test_enabled():
+        pytest.skip("CIDR tests require running inside test-runner container")
+
+    # Use internal Docker service name when running in test-runner container
+    return os.environ.get("MAGPIE_CIDR_TEST_BASE_URL", "http://caddy")
+
+
+@pytest.fixture(scope="session")
+def cidr_admin_token(cidr_base_url: str) -> str:
+    """Get admin token for CIDR-enabled services.
+
+    The admin token must be initialized outside the test environment and passed
+    via MAGPIE_CIDR_ADMIN_TOKEN environment variable. This is because the
+    test-runner container cannot execute docker commands to run magpie-ctl init.
+
+    Returns:
+        Admin token string from environment.
+
+    Raises:
+        pytest.fail: If MAGPIE_CIDR_ADMIN_TOKEN is not set.
+    """
+    # Wait for service to be healthy via Caddy (which is accessible from both networks)
+    # Note: We check via cidr_base_url (caddy) instead of http://magpie:8000 because
+    # the test-runner-outside container cannot reach magpie directly (different network)
+    if not _wait_for_health(cidr_base_url, timeout=30, interval=1.0):
+        pytest.fail(f"Magpie service did not become healthy at {cidr_base_url}")
+
+    token = os.environ.get("MAGPIE_CIDR_ADMIN_TOKEN")
+    if not token:
+        pytest.fail(
+            "MAGPIE_CIDR_ADMIN_TOKEN environment variable not set. "
+            "Run 'docker compose exec magpie magpie-ctl init --reset-admin-token' "
+            "and set the token in the test environment."
+        )
+
+    return token
+
+
+@pytest.fixture
+def cidr_http_client(cidr_base_url: str) -> Generator[httpx.Client, None, None]:
+    """Create an unauthenticated HTTP client for CIDR bypass tests.
+
+    This client makes requests from within the Docker network, so its IP
+    (172.18.0.x) falls within the MAGPIE_ALLOWED_CIDRS range (172.18.0.0/24)
+    configured in docker-compose.cidr-test.yml.
+
+    Use this to verify that allowed IPs can access read operations without auth.
+    """
+    with httpx.Client(base_url=cidr_base_url, timeout=30.0) as client:
+        yield client
+
+
+@pytest.fixture
+def cidr_authenticated_client(
+    cidr_base_url: str,
+    cidr_admin_token: str,
+) -> Generator[httpx.Client, None, None]:
+    """Create an authenticated HTTP client for CIDR tests.
+
+    Use this to set up test data (upload artifacts) before testing
+    unauthenticated access via cidr_http_client.
+    """
+    headers = {"Authorization": f"Bearer {cidr_admin_token}"}
+    with httpx.Client(base_url=cidr_base_url, headers=headers, timeout=30.0) as client:
+        yield client
+
+
+@pytest.fixture
+def cidr_outside_http_client(cidr_base_url: str) -> Generator[httpx.Client, None, None]:
+    """Create an HTTP client from OUTSIDE the CIDR allow-list.
+
+    This client makes requests from the external-net Docker network (192.168.100.x),
+    which is NOT in MAGPIE_ALLOWED_CIDRS (172.18.0.0/24). Requests should fail
+    with 401 for protected read endpoints.
+
+    Use this to verify that IPs outside the CIDR range are properly denied.
+
+    Raises:
+        pytest.skip: If not running in test-runner-outside container.
+    """
+    if not os.environ.get("MAGPIE_CIDR_OUTSIDE_TEST"):
+        pytest.skip("Outside CIDR tests require running in test-runner-outside container")
+
+    with httpx.Client(base_url=cidr_base_url, timeout=30.0) as client:
+        yield client
