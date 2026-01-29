@@ -210,8 +210,8 @@ class TestListPathsEndpoint:
         client.post("/api/v1/upload/test/artifact2", files=files2)
         client.post("/api/v1/upload/images/ubuntu", files=files3)
 
-        # List all paths
-        response = client.get("/api/v1/artifacts")
+        # List all paths recursively
+        response = client.get("/api/v1/artifacts", params={"recursive": True})
 
         assert response.status_code == 200
         data = response.json()
@@ -261,13 +261,18 @@ class TestListPathsEndpoint:
         assert "test/artifact" in data["paths"]
 
     def test_list_paths_empty_storage(self, client: TestClient) -> None:
-        """List paths with no artifacts returns empty list."""
+        """List paths with no artifacts returns empty list.
+
+        Note: May show .tmp/ as a virtual directory if temp directory exists.
+        """
         response = client.get("/api/v1/artifacts")
 
         assert response.status_code == 200
         data = response.json()
 
-        assert data["paths"] == []
+        # May include .tmp/ as a virtual directory if temp directory exists
+        paths = [p for p in data["paths"] if not p.startswith(".tmp")]
+        assert paths == []
 
     def test_list_paths_no_matching_prefix(self, client: TestClient) -> None:
         """List paths with non-matching prefix returns empty list."""
@@ -292,7 +297,7 @@ class TestListPathsEndpoint:
         assert isinstance(data["paths"], list)
 
     def test_list_paths_non_recursive_default(self, client: TestClient) -> None:
-        """List paths without recursive flag filters nested paths."""
+        """List paths without recursive flag returns immediate children and virtual directories."""
         # Upload artifacts with nesting
         files1 = {"file": ("f1.bin", io.BytesIO(b"content1"), "application/octet-stream")}
         files2 = {"file": ("f2.bin", io.BytesIO(b"content2"), "application/octet-stream")}
@@ -304,19 +309,19 @@ class TestListPathsEndpoint:
         client.post("/api/v1/upload/test/sub/deep", files=files3)
         client.post("/api/v1/upload/images/ubuntu", files=files4)
 
-        # List without recursive (default)
+        # List without recursive (default) - returns virtual directory indicators
         response = client.get("/api/v1/artifacts")
 
         assert response.status_code == 200
         data = response.json()
 
-        # Should only show top-level paths (one slash)
-        assert len(data["paths"]) == 3
-        assert "test/artifact1" in data["paths"]
-        assert "test/artifact2" in data["paths"]
-        assert "images/ubuntu" in data["paths"]
-        # Should NOT show nested path
-        assert "test/sub/deep" not in data["paths"]
+        # Non-recursive mode returns virtual directory indicators (with trailing /)
+        # for directories containing artifacts deeper down
+        # May also include .tmp/ if temp directory exists
+        paths = [p for p in data["paths"] if not p.startswith(".tmp")]
+        assert len(paths) == 2
+        assert "test/" in paths
+        assert "images/" in paths
 
     def test_list_paths_recursive_shows_all(self, client: TestClient) -> None:
         """List paths with recursive=true shows all nested paths."""
@@ -345,7 +350,7 @@ class TestListPathsEndpoint:
         assert "images/ubuntu" in data["paths"]
 
     def test_list_paths_with_prefix_non_recursive(self, client: TestClient) -> None:
-        """List paths with prefix and non-recursive filters correctly."""
+        """List paths with prefix and non-recursive returns immediate children and virtual dirs."""
         files1 = {"file": ("f1.bin", io.BytesIO(b"content1"), "application/octet-stream")}
         files2 = {"file": ("f2.bin", io.BytesIO(b"content2"), "application/octet-stream")}
         files3 = {"file": ("f3.bin", io.BytesIO(b"content3"), "application/octet-stream")}
@@ -354,16 +359,18 @@ class TestListPathsEndpoint:
         client.post("/api/v1/upload/test/artifact2", files=files2)
         client.post("/api/v1/upload/test/sub/deep", files=files3)
 
-        # List with prefix, non-recursive
+        # List with prefix, non-recursive - returns immediate children and virtual directories
         response = client.get("/api/v1/artifacts", params={"prefix": "test", "recursive": False})
 
         assert response.status_code == 200
         data = response.json()
 
-        # Should only show direct children under test/
-        assert len(data["paths"]) == 2
+        # Non-recursive returns immediate children (artifact1, artifact2) and
+        # virtual directory indicator (sub/)
+        assert len(data["paths"]) == 3
         assert "test/artifact1" in data["paths"]
         assert "test/artifact2" in data["paths"]
+        assert "test/sub/" in data["paths"]
         assert "test/sub/deep" not in data["paths"]
 
     def test_list_paths_with_prefix_recursive(self, client: TestClient) -> None:

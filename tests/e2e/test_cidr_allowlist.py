@@ -63,7 +63,8 @@ class TestCIDRAllowListReadAccess:
         assert upload_response.status_code in (200, 201), f"Setup failed: {upload_response.text}"
 
         # Test: List artifact paths without authentication (CIDR bypass)
-        list_response = cidr_http_client.get("/api/v1/artifacts")
+        # Note: Use recursive=true to get nested artifacts (non-recursive only returns immediate children)
+        list_response = cidr_http_client.get("/api/v1/artifacts?recursive=true")
         assert list_response.status_code == 200, (
             f"CIDR bypass failed for GET /api/v1/artifacts. "
             f"Expected 200, got {list_response.status_code}. "
@@ -442,8 +443,9 @@ class TestCIDRAllowListTokenInteraction:
         assert upload_response.status_code in (200, 201)
 
         # Test: List artifacts with read token (should work)
+        # Note: Use recursive=true to get nested artifacts
         list_response = cidr_http_client.get(
-            "/api/v1/artifacts",
+            "/api/v1/artifacts?recursive=true",
             headers={"Authorization": f"Bearer {read_token}"},
         )
         assert list_response.status_code == 200, (
@@ -505,8 +507,9 @@ class TestCIDRAllowListTokenInteraction:
         assert upload_response.status_code in (200, 201)
 
         # Test: Use invalid token (CIDR bypass allows read access)
+        # Note: Use recursive=true to get nested artifacts
         response = cidr_http_client.get(
-            "/api/v1/artifacts",
+            "/api/v1/artifacts?recursive=true",
             headers={"Authorization": "Bearer mgp_invalid_token_12345"},
         )
         assert response.status_code == 200, (
@@ -545,8 +548,9 @@ class TestCIDRAllowListTokenInteraction:
         assert upload_response.status_code in (200, 201)
 
         # Test: List artifacts from outside CIDR with valid token (should work)
+        # Note: Use recursive=true to get nested artifacts
         list_response = cidr_outside_http_client.get(
-            "/api/v1/artifacts",
+            "/api/v1/artifacts?recursive=true",
             headers={"Authorization": f"Bearer {read_token}"},
         )
         assert list_response.status_code == 200, (
