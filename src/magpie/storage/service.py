@@ -499,8 +499,8 @@ class StorageService:
         Returns:
             Sorted list of artifact paths and virtual directory indicators.
             - Artifacts (have .magpie): returned as-is (e.g., "test/artifact1")
-            - Virtual directories (contain artifacts deeper): returned with trailing /
-              (e.g., "test/")
+            - Virtual directories (subdirectories, may or may not contain artifacts):
+              returned with trailing / (e.g., "test/")
 
         Examples:
             With artifacts at: test/artifact1, test/artifact2, test/sub/deep,
@@ -575,12 +575,17 @@ class StorageService:
             # Tradeoff: may show virtual directories that don't contain artifacts,
             # but reconciliation job can clean those up
 
-            # Step 1: Check if the prefix path itself is a leaf directory (artifact)
+            # Step 1: For non-empty prefixes, check if the prefix path itself is a leaf
+            # directory (artifact). For the root prefix (normalized_prefix == ""),
+            # we intentionally skip this early-return so that root-level artifacts
+            # and virtual directories can be listed together. Root listing needs to
+            # continue checking children even if root itself has a .magpie, because
+            # root can contain both artifacts and virtual directories.
             prefix_manifest = search_root / ".magpie"
             if prefix_manifest.is_file() and normalized_prefix:
-                # The prefix itself is an artifact, include it
+                # The (non-root) prefix itself is an artifact, include it and stop:
+                # artifacts are leaf nodes, so there are no child entries to list.
                 artifact_paths.append(normalized_prefix)
-                # Since artifacts are leaf nodes, no need to check children
                 return sorted(artifact_paths)
 
             # Step 2: List immediate children - simple iterdir() only
