@@ -570,10 +570,9 @@ class StorageService:
             # Step 1: Check if the prefix path itself is a leaf directory (artifact)
             prefix_manifest = search_root / ".magpie"
             if prefix_manifest.is_file() and normalized_prefix:
-                # The prefix itself is an artifact, return it
+                # The prefix itself is an artifact, include it
                 artifact_paths.append(normalized_prefix)
-                # Artifacts are leaf nodes - no need to check children
-                return sorted(artifact_paths)
+                # Continue to check for child artifacts (prefix can have nested artifacts)
 
             # Step 2: Do non-recursive directory listing of immediate children
             try:
