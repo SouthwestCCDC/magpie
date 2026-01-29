@@ -465,3 +465,157 @@ class TestRevokeTokenEndpoint:
             headers={"Authorization": f"Bearer {victim_token}"},
         )
         assert check_response.status_code == 401
+
+
+class TestRotateTokenEndpoint:
+    """Tests for POST /api/v1/tokens/{name}/rotate endpoint."""
+
+    def test_rotate_token_returns_new_plaintext(
+        self, client: TestClient, admin_token: str, token_service: TokenService
+    ) -> None:
+        """Rotate token returns new plaintext token."""
+        original_token = token_service.create_token("to-rotate", TokenScope.WRITE)
+
+        response = client.post(
+            "/api/v1/tokens/to-rotate/rotate",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["name"] == "to-rotate"
+        assert data["scope"] == "write"
+        assert "token" in data
+        assert data["token"].startswith("mgp_")
+        assert data["token"] != original_token
+
+    def test_rotate_token_invalidates_old_token(
+        self, client: TestClient, admin_token: str, token_service: TokenService
+    ) -> None:
+        """Rotate token invalidates the old token."""
+        original_token = token_service.create_token("invalidate-test", TokenScope.READ)
+
+        # Verify original works
+        assert token_service.validate_token(original_token) is not None
+
+        # Rotate
+        response = client.post(
+            "/api/v1/tokens/invalidate-test/rotate",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert response.status_code == 200
+
+        # Verify original no longer works
+        assert token_service.validate_token(original_token) is None
+
+    def test_rotate_token_preserves_scope(
+        self, client: TestClient, admin_token: str, token_service: TokenService
+    ) -> None:
+        """Rotate token preserves the original scope."""
+        token_service.create_token("scope-test", TokenScope.ADMIN)
+
+        response = client.post(
+            "/api/v1/tokens/scope-test/rotate",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["scope"] == "admin"
+        assert data["token"].startswith("mgp_ADMIN_")
+
+    def test_rotate_token_supports_self_rotation(
+        self, client: TestClient, token_service: TokenService
+    ) -> None:
+        """Rotate token supports rotating the token currently being used."""
+        # Create an admin token that will rotate itself
+        self_rotate_token = token_service.create_token("self-rotate", TokenScope.ADMIN)
+
+        # Use the token to rotate itself
+        response = client.post(
+            "/api/v1/tokens/self-rotate/rotate",
+            headers={"Authorization": f"Bearer {self_rotate_token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # New token should work
+        new_token = data["token"]
+        assert new_token != self_rotate_token
+
+        # Old token should not work
+        assert token_service.validate_token(self_rotate_token) is None
+
+        # New token should work
+        assert token_service.validate_token(new_token) is not None
+
+    def test_rotate_token_requires_admin_scope(
+        self, client: TestClient, read_token: str, token_service: TokenService
+    ) -> None:
+        """Rotate token requires admin scope."""
+        token_service.create_token("target", TokenScope.READ)
+
+        response = client.post(
+            "/api/v1/tokens/target/rotate",
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+
+        assert response.status_code == 403
+
+    def test_rotate_token_with_write_scope_returns_403(
+        self, client: TestClient, write_token: str, token_service: TokenService
+    ) -> None:
+        """Rotate token with write scope returns 403."""
+        token_service.create_token("target2", TokenScope.READ)
+
+        response = client.post(
+            "/api/v1/tokens/target2/rotate",
+            headers={"Authorization": f"Bearer {write_token}"},
+        )
+
+        assert response.status_code == 403
+
+    def test_rotate_nonexistent_token_returns_404(
+        self, client: TestClient, admin_token: str
+    ) -> None:
+        """Rotate nonexistent token returns 404."""
+        response = client.post(
+            "/api/v1/tokens/nonexistent/rotate",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"]
+
+    def test_rotate_token_without_auth_returns_401(self, client: TestClient) -> None:
+        """Rotate token without authorization returns 401."""
+        response = client.post("/api/v1/tokens/some-token/rotate")
+
+        assert response.status_code == 401
+
+    def test_rotate_token_works_for_all_scopes(
+        self, client: TestClient, admin_token: str, token_service: TokenService
+    ) -> None:
+        """Rotate token works for all scope levels."""
+        scopes = [
+            (TokenScope.READ, "read", "mgp_"),
+            (TokenScope.WRITE, "write", "mgp_"),
+            (TokenScope.ADMIN, "admin", "mgp_ADMIN_"),
+        ]
+
+        for scope, scope_str, prefix in scopes:
+            name = f"rotate-{scope_str}"
+            token_service.create_token(name, scope)
+
+            response = client.post(
+                f"/api/v1/tokens/{name}/rotate",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["name"] == name
+            assert data["scope"] == scope_str
+            assert data["token"].startswith(prefix)
