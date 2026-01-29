@@ -135,6 +135,7 @@ class TestPublicRoutes:
         # Verify it returns valid JSON health status
         data = response.json()
         assert "status" in data
+        assert "version" in data
 
     def test_public_artifacts_path_is_public(
         self,

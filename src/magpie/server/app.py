@@ -57,4 +57,4 @@ app.include_router(status_router)
 @app.get("/health")
 async def health() -> dict[str, str]:
     """Health check endpoint."""
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}

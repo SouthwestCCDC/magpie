@@ -145,11 +145,33 @@ def cli(
 
 
 @cli.command()
-def version() -> None:
+@click.option(
+    "--server",
+    is_flag=True,
+    default=False,
+    help="Show server version in addition to client version.",
+)
+@pass_context
+def version(ctx: CLIContext, server: bool) -> None:
     """Show version."""
     from magpie import __version__
 
-    click.echo(f"magpie {__version__}")
+    if not server:
+        click.echo(f"magpie {__version__}")
+        return
+
+    # Query server version from /health endpoint
+    try:
+        client = ctx.get_client()
+        # /health is a public endpoint, no auth needed, but we use the client for consistency
+        response = client.get("/health")
+        response.raise_for_status()
+        data = response.json()
+        server_version = data.get("version", "unknown")
+        click.echo(f"magpie {__version__} (server: {server_version})")
+    except Exception as e:
+        click.echo(f"magpie {__version__} (server: error - {e})", err=True)
+        raise click.Abort() from e
 
 
 # Register subcommands
