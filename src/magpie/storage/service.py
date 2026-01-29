@@ -566,15 +566,20 @@ class StorageService:
 
                 artifact_paths.append(artifact_path)
         else:
-            # Non-recursive mode: return immediate artifacts and virtual directory indicators
+            # Non-recursive mode: return immediate children only
+            # O(immediate_children) - no recursive filesystem checks
+            # Tradeoff: may show virtual directories that don't contain artifacts,
+            # but reconciliation job can clean those up
+
             # Step 1: Check if the prefix path itself is a leaf directory (artifact)
             prefix_manifest = search_root / ".magpie"
             if prefix_manifest.is_file() and normalized_prefix:
                 # The prefix itself is an artifact, include it
                 artifact_paths.append(normalized_prefix)
-                # Continue to check for child artifacts (prefix can have nested artifacts)
+                # Since artifacts are leaf nodes, no need to check children
+                return sorted(artifact_paths)
 
-            # Step 2: Do non-recursive directory listing of immediate children
+            # Step 2: List immediate children - simple iterdir() only
             try:
                 for child in search_root.iterdir():
                     if not child.is_dir():
@@ -589,17 +594,9 @@ class StorageService:
                         # It's an artifact - return as-is
                         artifact_paths.append(child_rel_path)
                     else:
-                        # Check if it contains artifacts deeper down (virtual directory)
-                        # Use explicit next() to short-circuit and handle edge cases
-                        try:
-                            next(child.rglob(".magpie"))
-                            has_nested_artifacts = True
-                        except (StopIteration, OSError, PermissionError):
-                            has_nested_artifacts = False
-
-                        if has_nested_artifacts:
-                            # It's a virtual directory - return with trailing /
-                            artifact_paths.append(child_rel_path + "/")
+                        # It's a directory without .magpie - treat as virtual directory
+                        # No recursive checks - just show it unconditionally
+                        artifact_paths.append(child_rel_path + "/")
             except (OSError, PermissionError):
                 # Handle permission errors or other filesystem issues gracefully
                 pass
