@@ -22,10 +22,9 @@ updates:
     # Add labels for easier triage
     labels:
       - "dependencies"
-      - "python"
     # Keep PR reviewers in the loop
     reviewers:
-      - "SouthwestCCDC/magpie-maintainers"
+      - "SouthwestCCDC/blackteam"
     # Allow Dependabot to rebase PRs automatically
     rebase-strategy: "auto"
 
@@ -45,7 +44,6 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
-      - "github-actions"
     reviewers:
-      - "SouthwestCCDC/magpie-maintainers"
+      - "SouthwestCCDC/blackteam"
     rebase-strategy: "auto"
