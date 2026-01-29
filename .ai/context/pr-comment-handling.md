@@ -32,6 +32,7 @@ query {
           comments(first: 10) {
             nodes {
               id
+              databaseId
               body
               path
               line
@@ -42,7 +43,7 @@ query {
       }
     }
   }
-}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and .isOutdated == false) | .comments.nodes[] | {id: .id, path: .path, line: .line, body: .body}'
+}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and .isOutdated == false) | .comments.nodes[] | {comment_id: .databaseId, path: .path, line: .line, body: .body}'
 ```
 
 Replace `{N}` with the PR number.
@@ -98,3 +99,42 @@ Original comment: https://github.com/SouthwestCCDC/magpie/pull/{N}#discussion_r{
 ```
 
 Then reply to the original comment with the issue link.
+
+## Feedback Loop Integration
+
+When working within an orchestrator-managed feedback loop:
+
+### Before Starting
+
+1. Check for existing scratch notes:
+   ```bash
+   ls -la .ai/scratch/issue-{N}/
+   ```
+
+2. Read the most recent orchestrator notes to understand:
+   - Current round number
+   - Previous comments and resolutions
+   - Any patterns to watch for
+
+### During Round
+
+Track as you work:
+- Comments received this round
+- Comments addressed (with commit SHAs)
+- Any issues that seem recurring
+
+### After Round
+
+Update scratch notes in `.ai/scratch/issue-{N}/developer/{timestamp}.md`:
+- What was addressed
+- Any non-convergence patterns noticed
+- Recommendations for orchestrator
+
+### Flagging Patterns
+
+Alert the orchestrator if you notice:
+- **Recurring issues**: Same feedback appearing 3+ times
+- **Circular feedback**: "Change A to B" followed by "Change B to A"
+- **Non-convergence**: More issues appearing than being resolved
+
+Include these observations in your summary to help the orchestrator decide whether to continue or escalate.
