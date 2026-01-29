@@ -44,7 +44,6 @@ sleep 5
 # Check curl availability
 if ! command -v curl &> /dev/null; then
     echo "ERROR: curl is not installed. Please install curl or use docker compose ps to check health status."
-    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down
     exit 1
 fi
 
@@ -52,18 +51,28 @@ fi
 if ! curl -f http://localhost:8080/health > /dev/null 2>&1; then
     echo "ERROR: Services failed to start. Check logs:"
     docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml logs
-    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down
     exit 1
 fi
 
 # Initialize magpie and get admin token
 echo "Initializing magpie and getting admin token..."
-ADMIN_TOKEN=$(docker compose exec -T magpie magpie-ctl init --reset-admin-token 2>&1 | grep "^mgp_" | head -1)
+# Capture output and return code separately to avoid mixing stdout/stderr
+INIT_OUTPUT=$(docker compose exec -T magpie magpie-ctl init --reset-admin-token 2>&1)
+INIT_EXIT_CODE=$?
+
+if [ $INIT_EXIT_CODE -ne 0 ]; then
+    echo "ERROR: magpie-ctl init failed with exit code $INIT_EXIT_CODE"
+    echo "Output: $INIT_OUTPUT"
+    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml logs magpie
+    exit 1
+fi
+
+# Extract token from stdout only after confirming success
+ADMIN_TOKEN=$(echo "$INIT_OUTPUT" | grep "^mgp_" | head -1)
 
 if [ -z "$ADMIN_TOKEN" ]; then
-    echo "ERROR: Failed to get admin token"
-    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml logs magpie
-    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down
+    echo "ERROR: Failed to extract admin token from output"
+    echo "Output: $INIT_OUTPUT"
     exit 1
 fi
 
