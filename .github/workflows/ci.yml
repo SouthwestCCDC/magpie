@@ -99,5 +99,7 @@ jobs:
           # No fix available yet (checked 2026-01-29)
           # Impact: Limited - magpie doesn't use protobuf.json_format.ParseDict
           # Protobuf is transitive via opentelemetry-exporter-otlp
+          # TODO: Remove this ignore once protobuf includes a fix for CVE-2026-0994.
+          #       Track status at https://nvd.nist.gov/vuln/detail/CVE-2026-0994
           ignore-vulns: |
             CVE-2026-0994
