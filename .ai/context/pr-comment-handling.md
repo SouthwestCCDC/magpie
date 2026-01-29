@@ -43,7 +43,7 @@ query {
       }
     }
   }
-}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and .isOutdated == false) | .comments.nodes[] | {id: .databaseId, path: .path, line: .line, body: .body}'
+}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and .isOutdated == false) | .comments.nodes[] | {comment_id: .databaseId, path: .path, line: .line, body: .body}'
 ```
 
 Replace `{N}` with the PR number.
