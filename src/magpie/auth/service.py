@@ -15,6 +15,7 @@ from magpie.auth.database import (
     delete_token,
     get_connection,
     get_token_by_hash,
+    get_token_by_name,
     init_database,
     save_token,
 )
@@ -250,6 +251,43 @@ class TokenService:
             return delete_token(conn, name)
         finally:
             conn.close()
+
+    def rotate_token(self, name: str) -> str | None:
+        """Rotate a token by revoking and creating a new one with the same scope.
+
+        This is an atomic operation that:
+        1. Looks up the existing token by name
+        2. Deletes the old token
+        3. Creates a new token with the same name and scope
+        4. Returns the new plaintext token
+
+        If the token doesn't exist, returns None.
+
+        Args:
+            name: Name of the token to rotate.
+
+        Returns:
+            New plaintext token string if rotation succeeded, None if token not found.
+        """
+        conn = get_connection(self.db_path)
+        try:
+            # Look up existing token to get its scope
+            existing_token = get_token_by_name(conn, name)
+            if existing_token is None:
+                return None
+
+            # Store scope before deletion
+            scope = existing_token.scope
+
+            # Delete old token
+            delete_token(conn, name)
+        finally:
+            conn.close()
+
+        # Create new token with same name and scope
+        # This uses a fresh connection to ensure atomicity
+        new_plaintext = self.create_token(name, scope)
+        return new_plaintext
 
     def has_scope(self, token_scope: TokenScope, required_scope: TokenScope) -> bool:
         """Check if token_scope satisfies required_scope.

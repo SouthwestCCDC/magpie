@@ -121,6 +121,38 @@ def get_token_by_hash(conn: sqlite3.Connection, token_hash: str) -> Token | None
     )
 
 
+def get_token_by_name(conn: sqlite3.Connection, name: str) -> Token | None:
+    """Look up a token by its name.
+
+    Args:
+        conn: Database connection.
+        name: Name of the token to find.
+
+    Returns:
+        Token instance if found, None otherwise.
+    """
+    cursor = conn.execute(
+        """
+        SELECT name, token_hash, scope, enabled, created_at
+        FROM tokens
+        WHERE name = ?
+        """,
+        (name,),
+    )
+    row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return Token(
+        name=row["name"],
+        token_hash=row["token_hash"],
+        scope=TokenScope(row["scope"]),
+        enabled=bool(row["enabled"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
 def list_tokens(conn: sqlite3.Connection) -> list[Token]:
     """List all tokens in the database.
 

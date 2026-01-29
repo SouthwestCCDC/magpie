@@ -215,6 +215,133 @@ class TestTokenList:
         assert "CREATED_AT" in result.output
 
 
+class TestTokenRotate:
+    """Tests for token rotate command."""
+
+    def test_token_rotate_returns_new_token(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Token rotate returns a new token with same scope."""
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            # Create a token
+            create_result = cli_runner.invoke(
+                cli, ["token", "create", "--name", "to-rotate", "--scope", "write"]
+            )
+            assert create_result.exit_code == 0
+
+            # Extract original token
+            original_token = None
+            for line in create_result.output.split("\n"):
+                if line.startswith("mgp_"):
+                    original_token = line.strip()
+                    break
+
+            # Rotate it
+            rotate_result = cli_runner.invoke(cli, ["token", "rotate", "to-rotate"])
+            assert rotate_result.exit_code == 0, f"Output: {rotate_result.output}"
+            assert "TOKEN ROTATED" in rotate_result.output
+            assert "to-rotate" in rotate_result.output
+            assert "write" in rotate_result.output
+
+            # Extract new token
+            new_token = None
+            for line in rotate_result.output.split("\n"):
+                if line.startswith("mgp_"):
+                    new_token = line.strip()
+                    break
+
+            assert new_token is not None
+            assert new_token != original_token
+            assert new_token.startswith("mgp_")
+
+    def test_token_rotate_invalidates_old_token(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Token rotate invalidates the old token."""
+        from magpie.auth.service import TokenService
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            # Create a token
+            create_result = cli_runner.invoke(
+                cli, ["token", "create", "--name", "rotate-test", "--scope", "read"]
+            )
+            assert create_result.exit_code == 0
+
+            # Extract original token
+            original_token = None
+            for line in create_result.output.split("\n"):
+                if line.startswith("mgp_"):
+                    original_token = line.strip()
+                    break
+
+            # Verify original token works
+            token_service = TokenService(test_settings)
+            assert token_service.validate_token(original_token) is not None
+
+            # Rotate it
+            rotate_result = cli_runner.invoke(cli, ["token", "rotate", "rotate-test"])
+            assert rotate_result.exit_code == 0
+
+            # Verify original token no longer works
+            assert token_service.validate_token(original_token) is None
+
+    def test_token_rotate_handles_nonexistent(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Token rotate handles nonexistent token gracefully."""
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["token", "rotate", "nonexistent"])
+
+        assert result.exit_code != 0
+        assert "not found" in result.output.lower()
+
+    def test_token_rotate_requires_name_argument(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Token rotate requires name argument."""
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["token", "rotate"])
+
+        assert result.exit_code != 0
+        assert "Missing argument" in result.output or "NAME" in result.output
+
+    def test_token_rotate_preserves_admin_scope(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Token rotate preserves admin scope and prefix."""
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            # Create admin token
+            cli_runner.invoke(
+                cli, ["token", "create", "--name", "admin-rotate", "--scope", "admin"]
+            )
+
+            # Rotate it
+            result = cli_runner.invoke(cli, ["token", "rotate", "admin-rotate"])
+
+            assert result.exit_code == 0
+            assert "mgp_ADMIN_" in result.output
+            assert "admin" in result.output
+
+    def test_token_rotate_all_scopes_work(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Token rotate works with all valid scopes."""
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            for scope in ["read", "write", "admin"]:
+                # Create token
+                cli_runner.invoke(
+                    cli,
+                    ["token", "create", "--name", f"rotate-{scope}", "--scope", scope],
+                )
+
+                # Rotate it
+                result = cli_runner.invoke(cli, ["token", "rotate", f"rotate-{scope}"])
+
+                assert result.exit_code == 0, f"Failed for scope {scope}: {result.output}"
+                assert "TOKEN ROTATED" in result.output
+                assert scope in result.output
+
+
 class TestTokenRevoke:
     """Tests for token revoke command."""
 

@@ -187,6 +187,71 @@ class TestRevokeToken:
         assert token_service.validate_token(plaintext) is None
 
 
+class TestRotateToken:
+    """Tests for TokenService.rotate_token method."""
+
+    def test_rotate_token_creates_new_token_with_same_scope(
+        self, token_service: TokenService
+    ) -> None:
+        """rotate_token should create a new token with the same scope."""
+        original_token = token_service.create_token("to-rotate", TokenScope.WRITE)
+
+        new_token = token_service.rotate_token("to-rotate")
+
+        assert new_token is not None
+        assert new_token != original_token
+        assert new_token.startswith("mgp_")
+
+        # New token should validate with original scope
+        result = token_service.validate_token(new_token)
+        assert result is not None
+        assert result.name == "to-rotate"
+        assert result.scope == TokenScope.WRITE
+
+    def test_rotate_token_invalidates_old_token(self, token_service: TokenService) -> None:
+        """rotate_token should invalidate the old token."""
+        original_token = token_service.create_token("rotate-invalidate", TokenScope.READ)
+
+        # Verify original works
+        assert token_service.validate_token(original_token) is not None
+
+        # Rotate
+        token_service.rotate_token("rotate-invalidate")
+
+        # Verify original no longer works
+        assert token_service.validate_token(original_token) is None
+
+    def test_rotate_token_preserves_admin_prefix(self, token_service: TokenService) -> None:
+        """rotate_token should preserve mgp_ADMIN_ prefix for admin tokens."""
+        original_token = token_service.create_token("admin-rotate", TokenScope.ADMIN)
+        assert original_token.startswith("mgp_ADMIN_")
+
+        new_token = token_service.rotate_token("admin-rotate")
+
+        assert new_token is not None
+        assert new_token.startswith("mgp_ADMIN_")
+        assert new_token != original_token
+
+    def test_rotate_token_returns_none_for_nonexistent(self, token_service: TokenService) -> None:
+        """rotate_token should return None for non-existent token."""
+        result = token_service.rotate_token("nonexistent")
+
+        assert result is None
+
+    def test_rotate_token_works_for_all_scopes(self, token_service: TokenService) -> None:
+        """rotate_token should work for all scope levels."""
+        for scope in [TokenScope.READ, TokenScope.WRITE, TokenScope.ADMIN]:
+            name = f"rotate-{scope.value}"
+            original = token_service.create_token(name, scope)
+
+            new_token = token_service.rotate_token(name)
+
+            assert new_token is not None
+            assert new_token != original
+            result = token_service.validate_token(new_token)
+            assert result.scope == scope
+
+
 class TestHasScope:
     """Tests for TokenService.has_scope method."""
 
