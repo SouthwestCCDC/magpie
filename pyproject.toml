@@ -12,7 +12,7 @@ dependencies = [
     "httpx",
     "pydantic-settings",
     "aiofiles",
-    "python-multipart",
+    "python-multipart>=0.0.22",
     "sentry-sdk[fastapi]",
     "opentelemetry-instrumentation-fastapi",
     "opentelemetry-exporter-otlp",
@@ -20,6 +20,7 @@ dependencies = [
     "tomli_w",
     "structlog",
     "truststore>=0.8.0",
+    "protobuf>=6.33.4",
 ]
 
 [project.scripts]
