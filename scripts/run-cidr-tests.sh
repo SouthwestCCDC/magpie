@@ -37,19 +37,34 @@ fi
 echo "Starting CIDR test environment..."
 docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml up -d --build
 
-# Wait for services to be healthy
+# Wait for services to be healthy with retry loop
 echo "Waiting for services to be healthy..."
-sleep 5
 
-# Check curl availability
+# Check curl availability first
 if ! command -v curl &> /dev/null; then
     echo "ERROR: curl is not installed. Please install curl or use docker compose ps to check health status."
     exit 1
 fi
 
-# Check health endpoint
-if ! curl -f http://localhost:8080/health > /dev/null 2>&1; then
-    echo "ERROR: Services failed to start. Check logs:"
+# Health check with retry loop (similar to magpie-deploy.sh wait_for_healthy)
+max_attempts=30
+attempt=1
+health_url="http://localhost:8080/health"
+
+while [ $attempt -le $max_attempts ]; do
+    if curl -sf "$health_url" > /dev/null 2>&1; then
+        echo "Services are healthy (attempt $attempt/$max_attempts)"
+        break
+    fi
+    echo -n "."
+    sleep 2
+    attempt=$((attempt + 1))
+done
+
+# Check if we exhausted all attempts
+if [ $attempt -gt $max_attempts ]; then
+    echo ""
+    echo "ERROR: Services failed to become healthy after $max_attempts attempts. Check logs:"
     docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml logs
     exit 1
 fi
