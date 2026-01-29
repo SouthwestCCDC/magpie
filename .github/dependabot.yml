@@ -1,0 +1,49 @@
+# Dependabot configuration for automated dependency updates
+# Documentation: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # Python dependencies (via pip - compatible with uv)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Phoenix"
+    # Group minor and patch updates together to reduce PR noise
+    groups:
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # Limit open PRs to avoid overwhelming maintainers
+    open-pull-requests-limit: 10
+    # Add labels for easier triage
+    labels:
+      - "dependencies"
+    # Keep PR reviewers in the loop
+    reviewers:
+      - "SouthwestCCDC/blackteam"
+    # Allow Dependabot to rebase PRs automatically
+    rebase-strategy: "auto"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Phoenix"
+    # Group all GitHub Actions updates together
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    reviewers:
+      - "SouthwestCCDC/blackteam"
+    rebase-strategy: "auto"
