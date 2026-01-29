@@ -255,3 +255,59 @@ async def revoke_token(
         )
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/api/v1/tokens/{name}/rotate")
+async def rotate_token(
+    name: str,
+    admin_info: Annotated[TokenInfo, Depends(require_admin_scope)],
+    token_service: Annotated[TokenService, Depends(get_token_service)],
+) -> CreateTokenResponse:
+    """Rotate an authentication token.
+
+    Requires admin scope. Revokes the existing token and creates a new one with
+    the same name and scope in a single atomic operation. The plaintext token is
+    only returned once in this response and cannot be retrieved later.
+
+    This endpoint supports rotating the token currently being used to authenticate
+    the request. After rotation, the old token is immediately invalidated, so the
+    caller should switch to using the new token.
+
+    Args:
+        name: Name of the token to rotate.
+        admin_info: Validated admin token info (from dependency).
+        token_service: TokenService instance.
+
+    Returns:
+        CreateTokenResponse with the new plaintext token (only visible once!).
+
+    Raises:
+        HTTPException 401: If Authorization header is missing or invalid.
+        HTTPException 403: If token doesn't have admin scope.
+        HTTPException 404: If token with given name doesn't exist.
+    """
+    # Rotate the token
+    result = token_service.rotate_token(name)
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Token '{name}' not found",
+        )
+
+    # Unpack result (new_token, scope)
+    plaintext_token, scope = result
+
+    # Log if caller is rotating their own token
+    if admin_info.name == name:
+        logger.info(
+            "token_self_rotation",
+            token_name=name,
+            message="Token rotated itself - caller should switch to new token",
+        )
+
+    return CreateTokenResponse(
+        name=name,
+        token=plaintext_token,
+        scope=scope.value,
+    )

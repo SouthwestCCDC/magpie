@@ -59,7 +59,7 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def save_token(conn: sqlite3.Connection, token: Token) -> None:
+def save_token(conn: sqlite3.Connection, token: Token, *, commit: bool = True) -> None:
     """Save a token to the database.
 
     Token Prefix Convention:
@@ -69,6 +69,9 @@ def save_token(conn: sqlite3.Connection, token: Token) -> None:
     Args:
         conn: Database connection.
         token: Token instance to save.
+        commit: Whether to commit the transaction immediately. Defaults to True
+            for backward compatibility. Set to False when using within a larger
+            transaction managed by a context manager.
 
     Raises:
         sqlite3.IntegrityError: If token name or hash already exists.
@@ -86,7 +89,8 @@ def save_token(conn: sqlite3.Connection, token: Token) -> None:
             token.created_at.isoformat(),
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def get_token_by_hash(conn: sqlite3.Connection, token_hash: str) -> Token | None:
@@ -106,6 +110,38 @@ def get_token_by_hash(conn: sqlite3.Connection, token_hash: str) -> Token | None
         WHERE token_hash = ?
         """,
         (token_hash,),
+    )
+    row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return Token(
+        name=row["name"],
+        token_hash=row["token_hash"],
+        scope=TokenScope(row["scope"]),
+        enabled=bool(row["enabled"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def get_token_by_name(conn: sqlite3.Connection, name: str) -> Token | None:
+    """Look up a token by its name.
+
+    Args:
+        conn: Database connection.
+        name: Name of the token to find.
+
+    Returns:
+        Token instance if found, None otherwise.
+    """
+    cursor = conn.execute(
+        """
+        SELECT name, token_hash, scope, enabled, created_at
+        FROM tokens
+        WHERE name = ?
+        """,
+        (name,),
     )
     row = cursor.fetchone()
 
@@ -154,12 +190,15 @@ def list_tokens(conn: sqlite3.Connection) -> list[Token]:
     return tokens
 
 
-def delete_token(conn: sqlite3.Connection, name: str) -> bool:
+def delete_token(conn: sqlite3.Connection, name: str, *, commit: bool = True) -> bool:
     """Delete a token by name.
 
     Args:
         conn: Database connection.
         name: Name of the token to delete.
+        commit: Whether to commit the transaction immediately. Defaults to True
+            for backward compatibility. Set to False when using within a larger
+            transaction managed by a context manager.
 
     Returns:
         True if a token was deleted, False if no token with that name existed.
@@ -170,5 +209,6 @@ def delete_token(conn: sqlite3.Connection, name: str) -> bool:
         """,
         (name,),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return cursor.rowcount > 0

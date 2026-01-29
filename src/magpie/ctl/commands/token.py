@@ -6,7 +6,7 @@ import click
 
 from magpie.auth.database import get_connection, list_tokens
 from magpie.auth.models import TokenScope
-from magpie.auth.service import TokenService
+from magpie.auth.service import TokenError, TokenService
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -205,3 +205,78 @@ def token_revoke(ctx: CTLContext, name: str) -> None:
             output_error(ErrorCode.NOT_FOUND, msg)
         else:
             raise click.ClickException(msg)
+
+
+@token.command("rotate")
+@click.argument("name")
+@click.pass_obj
+def token_rotate(ctx: CTLContext, name: str) -> None:
+    """Rotate an API token.
+
+    Revokes the existing token and creates a new one with the same name
+    and scope. This is an atomic operation.
+
+    The new token is printed to stdout and is ONLY VISIBLE ONCE.
+    Store it securely!
+
+    NAME is the token name to rotate.
+
+    Examples:
+
+        magpie-ctl token rotate ci-reader
+
+        magpie-ctl token rotate compromised-token
+    """
+    settings = ctx.settings
+    token_service = TokenService(settings)
+
+    if ctx.debug:
+        click.echo(f"Rotating token '{name}'...", err=True)
+
+    try:
+        result = token_service.rotate_token(name)
+    except ValidationError as e:
+        # Token name validation failed
+        if is_json_output():
+            output_error(ErrorCode.VALIDATION_ERROR, str(e))
+        else:
+            raise click.ClickException(str(e))
+    except TokenError as e:
+        # Hash collision during rotation (extremely unlikely)
+        if is_json_output():
+            output_error(ErrorCode.CONFLICT, str(e))
+        else:
+            raise click.ClickException(str(e))
+
+    if result is None:
+        msg = f"Token not found: {name}"
+        if is_json_output():
+            output_error(ErrorCode.NOT_FOUND, msg)
+        else:
+            raise click.ClickException(msg)
+
+    # Unpack the result (new_token, scope)
+    new_token, scope = result
+
+    # JSON output
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "token": new_token,
+                    "name": name,
+                    "scope": scope.value,
+                },
+                human_output="",
+            )
+        )
+        return
+
+    # Human output
+    click.echo("")
+    click.echo("=" * 60)
+    click.echo(f"TOKEN ROTATED: {name} (scope: {scope.value})")
+    click.echo("Save this token - it will NOT be shown again!")
+    click.echo("")
+    click.echo(new_token)
+    click.echo("=" * 60)

@@ -15,6 +15,7 @@ from magpie.auth.database import (
     delete_token,
     get_connection,
     get_token_by_hash,
+    get_token_by_name,
     init_database,
     save_token,
 )
@@ -125,13 +126,7 @@ class TokenService:
 
         if plaintext_token is None:
             # Generate secure random token
-            random_part = secrets.token_urlsafe(32)
-
-            # Add prefix based on scope
-            if scope == TokenScope.ADMIN:
-                plaintext_token = f"mgp_ADMIN_{random_part}"
-            else:
-                plaintext_token = f"mgp_{random_part}"
+            plaintext_token = self._generate_plaintext_token(scope)
         else:
             # Validate provided token has correct prefix
             if scope == TokenScope.ADMIN:
@@ -251,6 +246,97 @@ class TokenService:
         finally:
             conn.close()
 
+    def rotate_token(self, name: str) -> tuple[str, TokenScope] | None:
+        """Rotate a token by revoking and creating a new one with the same scope.
+
+        This is an atomic operation that:
+        1. Looks up the existing token by name
+        2. Deletes the old token
+        3. Creates a new token with the same name and scope
+        4. Returns the new plaintext token and its scope
+
+        If the token doesn't exist, returns None.
+
+        Both the deletion and creation happen within a single database transaction
+        to ensure atomicity - there is no window where the token doesn't exist.
+
+        Args:
+            name: Name of the token to rotate.
+
+        Returns:
+            Tuple of (plaintext_token, scope) if rotation succeeded, None if token not found.
+
+        Raises:
+            TokenError: If hash collision occurs during token creation (extremely unlikely).
+        """
+        conn = get_connection(self.db_path)
+        try:
+            with conn:
+                # Look up existing token to get its scope
+                existing_token = get_token_by_name(conn, name)
+                if existing_token is None:
+                    # Nothing to rotate; no changes committed
+                    return None
+
+                # Store scope before deletion
+                scope = existing_token.scope
+
+                # Delete old token (without committing - part of transaction)
+                delete_token(conn, name, commit=False)
+
+                # Create and persist new token with same name and scope (without committing)
+                try:
+                    new_plaintext = self._create_and_save_token(conn, name, scope)
+                except sqlite3.IntegrityError as e:
+                    # Extremely unlikely hash collision during rotation
+                    raise TokenError(
+                        f"Failed to rotate token '{name}' due to hash collision. Please try again."
+                    ) from e
+
+            # Transaction commits here when exiting the 'with conn:' context
+            return (new_plaintext, scope)
+        finally:
+            conn.close()
+
+    def _create_and_save_token(
+        self,
+        conn: sqlite3.Connection,
+        name: str,
+        scope: TokenScope,
+    ) -> str:
+        """Create a new token with the given name and scope using an existing connection.
+
+        This helper is used by rotate_token to ensure that token deletion and creation
+        happen within a single database transaction.
+
+        Args:
+            conn: Existing database connection.
+            name: Token name.
+            scope: Token scope.
+
+        Returns:
+            Plaintext token string.
+        """
+        # Validate token name defensively (defense in depth)
+        validate_token_name(name)
+
+        # Generate a new secure plaintext token
+        plaintext = self._generate_plaintext_token(scope)
+
+        # Hash the token for storage
+        token_hash = self._hash_token(plaintext)
+
+        # Persist the new token record (without committing - part of transaction)
+        token = Token(
+            name=name,
+            token_hash=token_hash,
+            scope=scope,
+            created_at=datetime.now(timezone.utc),
+            enabled=True,
+        )
+        save_token(conn, token, commit=False)
+        return plaintext
+
     def has_scope(self, token_scope: TokenScope, required_scope: TokenScope) -> bool:
         """Check if token_scope satisfies required_scope.
 
@@ -267,6 +353,21 @@ class TokenService:
             True if token_scope has sufficient permissions.
         """
         return _SCOPE_LEVELS[token_scope] >= _SCOPE_LEVELS[required_scope]
+
+    def _generate_plaintext_token(self, scope: TokenScope) -> str:
+        """Generate a new plaintext token with appropriate prefix.
+
+        Args:
+            scope: Token scope (determines prefix).
+
+        Returns:
+            Plaintext token string with mgp_ or mgp_ADMIN_ prefix.
+        """
+        random_part = secrets.token_urlsafe(32)
+        if scope == TokenScope.ADMIN:
+            return f"mgp_ADMIN_{random_part}"
+        else:
+            return f"mgp_{random_part}"
 
     def _hash_token(self, token: str) -> str:
         """Hash a token using SHA-256.
