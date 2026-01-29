@@ -6,7 +6,7 @@ import click
 
 from magpie.auth.database import get_connection, list_tokens
 from magpie.auth.models import TokenScope
-from magpie.auth.service import TokenService
+from magpie.auth.service import TokenError, TokenService
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -241,8 +241,8 @@ def token_rotate(ctx: CTLContext, name: str) -> None:
             output_error(ErrorCode.VALIDATION_ERROR, str(e))
         else:
             raise click.ClickException(str(e))
-    except ValueError as e:
-        # Unexpected error during rotation (e.g., race condition)
+    except TokenError as e:
+        # Hash collision during rotation (extremely unlikely)
         if is_json_output():
             output_error(ErrorCode.CONFLICT, str(e))
         else:

@@ -307,6 +307,46 @@ class TestRotateToken:
         # Verify original token still works (wasn't permanently deleted)
         assert token_service.validate_token(original_token) is not None
 
+    def test_rotate_token_preserves_scope_immutably(self, token_service: TokenService) -> None:
+        """rotate_token should always preserve the original token scope.
+
+        The scope is an inherent property of the token and cannot be changed during rotation.
+        This is by design - to change scope, the token must be revoked and a new one created.
+        """
+        # Create a token with WRITE scope
+        original_token = token_service.create_token("immutable-scope", TokenScope.WRITE)
+
+        # Verify original has WRITE scope
+        original_info = token_service.validate_token(original_token)
+        assert original_info is not None
+        assert original_info.scope == TokenScope.WRITE
+
+        # Rotate the token
+        result = token_service.rotate_token("immutable-scope")
+        assert result is not None
+        new_token, returned_scope = result
+
+        # Verify the returned scope is still WRITE
+        assert returned_scope == TokenScope.WRITE
+
+        # Verify the new token validates with WRITE scope (not READ, not ADMIN)
+        new_info = token_service.validate_token(new_token)
+        assert new_info is not None
+        assert new_info.scope == TokenScope.WRITE
+        assert new_info.scope != TokenScope.READ
+        assert new_info.scope != TokenScope.ADMIN
+
+        # Verify the rotate_token method signature - it should NOT accept a scope parameter
+        # This is a compile-time check via type inspection
+        import inspect
+
+        sig = inspect.signature(token_service.rotate_token)
+        param_names = list(sig.parameters.keys())
+        # Should only have 'name' parameter (besides self which is implicit)
+        assert param_names == ["name"], (
+            f"rotate_token should only accept 'name' parameter, got: {param_names}"
+        )
+
 
 class TestHasScope:
     """Tests for TokenService.has_scope method."""
