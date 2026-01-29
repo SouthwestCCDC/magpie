@@ -132,19 +132,15 @@ def _list_paths(ctx: CLIContext, client: "httpx.Client", prefix: str, recursive:
         else:
             click.echo(f"Listing artifact paths ({mode})...", err=True)
 
-    # Always fetch recursively to discover virtual directories, then filter client-side
-    # This allows non-recursive mode to show immediate children and virtual directories
-    response = client.get("/api/v1/artifacts", params={"prefix": prefix, "recursive": True})
+    # Use the requested mode - storage layer returns virtual directory indicators
+    # in non-recursive mode (paths with trailing /) to enable navigation
+    response = client.get("/api/v1/artifacts", params={"prefix": prefix, "recursive": recursive})
 
     if response.status_code != 200:
         handle_response_error(response, "List", ctx.token)
 
     data = response.json()
     paths = data.get("paths", [])
-
-    # Transform paths to immediate children for directory-style UX when not recursive
-    if not recursive:
-        paths = _extract_immediate_children(paths, prefix)
 
     # JSON output
     if is_json_output():

@@ -484,39 +484,38 @@ class StorageService:
             prefix: Path prefix to filter by (empty string lists all).
                    Leading slashes are normalized and path traversal sequences are rejected.
             recursive: If True, list all artifacts recursively under the prefix.
-                      If False (default), list only immediate children (non-recursive).
+                      If False (default), list immediate children and virtual directories.
 
                       Non-recursive mode checks each immediate child of the prefix path:
                       - If it's a directory with .magpie → it's an artifact (return it)
-                      - If it's a directory without .magpie → it's a virtual directory prefix
-                        (not returned, but can be explored by listing with that prefix)
-
-                      This is O(immediate_children) rather than O(all_descendants).
+                      - If it's a directory without .magpie but contains artifacts deeper
+                        → return as virtual directory indicator (with trailing /)
+                      - Empty directories are not returned
 
         Returns:
-            Sorted list of artifact paths matching the prefix.
-            Returns paths that have a .magpie manifest file.
+            Sorted list of artifact paths and virtual directory indicators.
+            - Artifacts (have .magpie): returned as-is (e.g., "test/artifact1")
+            - Virtual directories (contain artifacts deeper): returned with trailing /
+              (e.g., "test/")
 
         Examples:
             With artifacts at: test/artifact1, test/artifact2, test/sub/deep,
                               images/ubuntu, other/path
 
-            list_artifact_paths("", False) -> ["images/ubuntu", "other/path",
-                                                "test/artifact1", "test/artifact2"]
+            list_artifact_paths("", False) -> ["images/", "other/", "test/"]
             list_artifact_paths("", True) -> ["images/ubuntu", "other/path",
                                                "test/artifact1", "test/artifact2",
                                                "test/sub/deep"]
-            list_artifact_paths("test", False) -> ["test/artifact1", "test/artifact2"]
+            list_artifact_paths("test", False) -> ["test/artifact1", "test/artifact2", "test/sub/"]
             list_artifact_paths("test", True) -> ["test/artifact1", "test/artifact2",
                                                    "test/sub/deep"]
+            list_artifact_paths("test/sub", False) -> ["test/sub/deep"]
 
         Note:
-            For non-recursive mode, the behavior is:
-            1. Check if the prefix path itself exists
-            2. If it's a leaf directory (has .magpie), treat as artifact and return it
-            3. Otherwise, do a non-recursive directory listing (iterdir)
-            4. For each immediate child: check if it has .magpie to determine if it's
-               an artifact or a virtual directory prefix
+            For non-recursive mode, virtual directory indicators enable navigation:
+            - Client sees "builds/" in root listing
+            - Client can then list with prefix="builds" to navigate deeper
+            This allows discovering deeply nested artifacts without full tree traversal.
         """
         # Normalize prefix for listing - allow empty result for root listing
         # Strip leading/trailing slashes and collapse multiple slashes
@@ -567,7 +566,7 @@ class StorageService:
 
                 artifact_paths.append(artifact_path)
         else:
-            # Non-recursive mode: simpler O(immediate_children) approach
+            # Non-recursive mode: return immediate artifacts and virtual directory indicators
             # Step 1: Check if the prefix path itself is a leaf directory (artifact)
             prefix_manifest = search_root / ".magpie"
             if prefix_manifest.is_file() and normalized_prefix:
@@ -580,15 +579,21 @@ class StorageService:
                     if not child.is_dir():
                         continue
 
+                    # Compute full path relative to storage_path
+                    child_rel_path = str(child.relative_to(self.config.storage_path))
+
                     # Check if this immediate child is an artifact (has .magpie)
                     child_manifest = child / ".magpie"
                     if child_manifest.is_file():
-                        # Compute full artifact path relative to storage_path
-                        artifact_path = str(child.relative_to(self.config.storage_path))
-                        artifact_paths.append(artifact_path)
-                    # If child doesn't have .magpie, it's a virtual directory prefix
-                    # (not returned, but can be explored by calling list_artifact_paths
-                    # with that path as the prefix)
+                        # It's an artifact - return as-is
+                        artifact_paths.append(child_rel_path)
+                    else:
+                        # Check if it contains artifacts deeper down (virtual directory)
+                        # Use a quick existence check: any .magpie files in subdirectories?
+                        has_nested_artifacts = any(child.rglob(".magpie"))
+                        if has_nested_artifacts:
+                            # It's a virtual directory - return with trailing /
+                            artifact_paths.append(child_rel_path + "/")
             except (OSError, PermissionError):
                 # Handle permission errors or other filesystem issues gracefully
                 pass
