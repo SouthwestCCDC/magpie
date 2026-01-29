@@ -488,9 +488,13 @@ class StorageService:
 
                       Non-recursive mode checks each immediate child of the prefix path:
                       - If it's a directory with .magpie → it's an artifact (return it)
-                      - If it's a directory without .magpie but contains artifacts deeper
-                        → return as virtual directory indicator (with trailing /)
-                      - Empty directories are not returned
+                      - If it's a directory without .magpie → return as virtual directory
+                        indicator (with trailing /)
+
+                      Note: Empty directories may appear as virtual directories. This is an
+                      intentional performance tradeoff to keep listings O(immediate_children)
+                      without deep filesystem traversal. The reconciliation job will clean up
+                      empty directories over time.
 
         Returns:
             Sorted list of artifact paths and virtual directory indicators.
