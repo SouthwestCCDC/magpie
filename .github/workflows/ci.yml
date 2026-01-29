@@ -88,7 +88,10 @@ jobs:
       - name: Run bandit security scan
         run: just security
 
+      - name: Export requirements for pip-audit
+        run: uv export --frozen --no-hashes > requirements.txt
+
       - name: Run pip-audit dependency scan
         uses: pypa/gh-action-pip-audit@v1.1.0
         with:
-          virtual-environment: .venv
+          inputs: requirements.txt
