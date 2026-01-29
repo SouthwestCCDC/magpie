@@ -289,7 +289,9 @@ class TestCaddyForwardAuth:
         """Verify X-Magpie-User and X-Magpie-Scope headers are propagated.
 
         The Caddyfile configures forward_auth to copy these headers from the
-        auth validation response to the upstream request.
+        auth validation response to the upstream request. This test verifies
+        header propagation by uploading an artifact and then checking that the
+        uploaded_by metadata field contains the token name (not "anonymous").
         """
         # Upload an artifact to get a response that includes metadata
         response = authenticated_client.post(
@@ -299,8 +301,27 @@ class TestCaddyForwardAuth:
 
         assert response.status_code == 200
 
-        # The backend should have received X-Magpie-User and X-Magpie-Scope
-        # We can't directly observe these in the response, but we can verify
-        # the request succeeded (which requires the headers for authorization)
+        # Extract hash_ref from upload response to query artifact info
         data = response.json()
         assert "hash" in data
+        assert "hash_ref" in data
+        hash_ref = data["hash_ref"]
+
+        # Fetch artifact metadata to verify X-Magpie-User was propagated
+        info_response = authenticated_client.get(
+            f"/api/v1/artifacts/routing-test/auth-headers/{hash_ref}/info"
+        )
+
+        assert info_response.status_code == 200
+        info_data = info_response.json()
+
+        # Verify uploaded_by is not "anonymous" (the default fallback)
+        # It should be "admin" (the token name from forward_auth X-Magpie-User header)
+        assert info_data["uploaded_by"] != "anonymous", (
+            "uploaded_by should not be 'anonymous' when authenticated. "
+            "This indicates X-Magpie-User header was not propagated from forward_auth."
+        )
+        assert info_data["uploaded_by"] == "admin", (
+            f"Expected uploaded_by to be 'admin' (admin token name), "
+            f"got '{info_data['uploaded_by']}'"
+        )
