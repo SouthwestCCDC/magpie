@@ -289,9 +289,10 @@ class TestAuthenticationConsistency:
         # Test all read endpoints with authentication
         auth_headers = {"X-Magpie-Scope": "read"}
 
-        # List all paths
+        # List all paths (use recursive to find nested artifacts)
         response = client_with_write_auth.get(
             "/api/v1/artifacts",
+            params={"recursive": True},
             headers=auth_headers,
         )
         assert response.status_code == 200
