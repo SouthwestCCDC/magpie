@@ -336,13 +336,12 @@ load_existing_config() {
         # shellcheck source=/dev/null
         source "${INSTALL_DIR}/etc/.env"
 
-        # Map env vars to script variables
+        # Map env vars to script variables (only for MAGPIE_* prefixed vars)
         DATA_DIR="${MAGPIE_DATA_DIR:-$DATA_DIR}"
         HTTP_PORT="${MAGPIE_HTTP_PORT:-$HTTP_PORT}"
         HTTPS_PORT="${MAGPIE_HTTPS_PORT:-$HTTPS_PORT}"
         DOMAIN="${MAGPIE_DOMAIN:-$DOMAIN}"
-        TLS_MODE="${TLS_MODE:-$TLS_MODE}"
-        TRUSTED_PROXIES="${TRUSTED_PROXIES:-$TRUSTED_PROXIES}"
+        # TLS_MODE and TRUSTED_PROXIES are loaded directly (no prefix mapping needed)
     fi
 }
 
