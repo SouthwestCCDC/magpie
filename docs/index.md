@@ -8,6 +8,7 @@
 
 ## Operations
 
+- [Operations Runbook](operations-runbook.md) - Comprehensive reference for deployment, maintenance, and troubleshooting
 - [Backup & Restore](backup-restore.md) - Backup procedures and disaster recovery
 - [Monitoring](monitoring.md) - Health checks, logging, error tracking, and observability
 
