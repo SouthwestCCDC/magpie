@@ -169,6 +169,11 @@ def version(ctx: CLIContext, server_version: bool) -> None:
         click.echo(f"magpie {__version__}")
         return
 
+    # Check server configuration when --server-version flag is used
+    if not ctx.server:
+        msg = "No server configured. Use --server or set MAGPIE_SERVER."
+        raise click.ClickException(msg)
+
     # Query server version from /health endpoint
     try:
         # /health is a public endpoint, so we create an unauthenticated client
@@ -182,8 +187,10 @@ def version(ctx: CLIContext, server_version: bool) -> None:
     except Exception as e:
         # Exit 1 when --server-version flag used but server unreachable (design decision)
         # See issue #343 for rationale
+        # Print version with error message before raising exception
         click.echo(f"magpie {__version__} (server: error - {e})", err=True)
-        raise click.Abort() from e
+        msg = f"Failed to fetch server version: {e}"
+        raise click.ClickException(msg) from e
 
 
 # Register subcommands
