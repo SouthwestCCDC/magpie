@@ -57,16 +57,21 @@ See [Production Checklist](production-checklist.md) for:
 - Security settings
 - Deployment validation steps
 
-### Key Environment Variables
+### Key Application Environment Variables
 
 | Variable | Required | Example |
 |----------|----------|---------|
-| `MAGPIE_DOMAIN` | Yes | `magpie.example.com` |
 | `MAGPIE_DATA_DIR` | No | `/mnt/nfs/magpie` (default: `./data`) |
 | `MAGPIE_RETENTION_DAYS` | No | `90` (default) |
 | `MAGPIE_DEBUG` | No | `false` (always false in production) |
 
 Full reference: [User Guide - Server Configuration](user-guide.md#server-environment-variables)
+
+#### Docker Compose / Caddy-specific variables
+
+The `MAGPIE_DOMAIN` environment variable is used only by `docker-compose.prod.yml` for Caddy TLS and
+virtual host configuration. The Magpie application itself does **not** read or require `MAGPIE_DOMAIN`;
+it is purely an infrastructure/runtime setting.
 
 ---
 
@@ -162,14 +167,14 @@ MAGPIE_RETENTION_DAYS=90  # Keep untagged artifacts for 90 days
 Recommended: Run GC on a schedule (e.g., weekly):
 ```bash
 # Crontab entry
-0 2 * * 0 cd /path/to/magpie && docker compose -f docker-compose.prod.yml exec magpie magpie-ctl gc
+0 2 * * 0 cd /path/to/magpie && docker compose -f docker-compose.prod.yml exec -T magpie magpie-ctl gc
 ```
 
 ### Storage Analysis
 
 **Check storage utilization:**
 ```bash
-docker compose -f docker-compose.prod.yml exec magpie magpie-ctl status
+docker compose -f docker-compose.prod.yml exec magpie magpie status
 ```
 
 Example output:
@@ -228,8 +233,13 @@ ls -la /path/to/MAGPIE_DATA_DIR/artifacts/.tmp/
 
 **Check upload size limits:**
 ```bash
-# View current limit
+# View current limit (admin-only; requires admin token and calls /api/v1/status, not /health)
 docker compose -f docker-compose.prod.yml exec magpie magpie status
+
+# Alternatively, check via environment/compose config
+grep '^MAGPIE_MAX_UPLOAD_SIZE' .env
+# or inspect rendered compose config:
+docker compose -f docker-compose.prod.yml config | grep MAGPIE_MAX_UPLOAD_SIZE
 
 # Increase if needed (set in .env)
 MAGPIE_MAX_UPLOAD_SIZE=10737418240  # 10GB
@@ -237,7 +247,7 @@ MAGPIE_MAX_UPLOAD_SIZE=10737418240  # 10GB
 
 **Check auth token validity:**
 ```bash
-magpie --server https://magpie.example.com --token YOUR_TOKEN info
+magpie --server https://magpie.example.com --token YOUR_TOKEN status
 ```
 
 ### Symlink Corruption
@@ -554,19 +564,19 @@ docker compose -f docker-compose.prod.yml logs magpie -f --tail 50
 
 **What to check first:**
 1. Health endpoint: `curl https://magpie.example.com/health`
-2. Recent logs: `docker compose logs magpie --tail 100`
+2. Recent logs: `docker compose -f docker-compose.prod.yml logs magpie --tail 100`
 3. Disk space: `df -h /path/to/MAGPIE_DATA_DIR`
-4. Container status: `docker compose ps`
+4. Container status: `docker compose -f docker-compose.prod.yml ps`
 
 **Escalation path:**
 - Check [Troubleshooting](#troubleshooting) section
 - Review [Monitoring Guide](monitoring.md)
 - Contact platform team if infrastructure issue (networking, storage, host)
-- Reference [Design Document](../docs/design.md) for architecture questions
+- Reference [User Guide](user-guide.md) for concepts and architecture questions
 
 **Common quick fixes:**
-- Restart service: `docker compose restart magpie`
-- Repair symlinks: `docker compose exec magpie magpie-ctl gc --reconcile-only`
+- Restart service: `docker compose -f docker-compose.prod.yml restart magpie`
+- Repair symlinks: `docker compose -f docker-compose.prod.yml exec magpie magpie-ctl gc --reconcile-only`
 - Clear temp files: `rm -rf /path/to/MAGPIE_DATA_DIR/artifacts/.tmp/*`
 
 ---
