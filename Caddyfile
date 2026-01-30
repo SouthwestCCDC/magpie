@@ -1,18 +1,60 @@
 # Magpie Artifact Storage - Caddy Configuration
 #
 # =============================================================================
+# DEPLOYMENT MODES
+# =============================================================================
+#
+# This configuration supports both development and production deployments:
+#
+# Development (docker-compose.yml):
+#   - Uses :80 (no domain, no TLS)
+#   - Minimal logging
+#   - Admin API enabled for debugging
+#
+# Production (docker-compose.prod.yml):
+#   - Uses MAGPIE_DOMAIN environment variable (REQUIRED)
+#   - Automatic TLS via Let's Encrypt
+#   - Enhanced security headers (HSTS, X-Frame-Options, etc.)
+#   - Structured logging to stdout
+#   - Admin API disabled
+#
+# Environment Variables:
+#   MAGPIE_DOMAIN - Domain name for production (e.g., magpie.swccdc.com)
+#                   When unset, defaults to :80 (development mode)
+#   MAGPIE_ALLOWED_CIDRS - Comma-separated CIDR ranges for IP allow-listing
+#                          (optional, for read-only access without auth)
+#   AUTHENTIK_HOST - Authentik server hostname for SSO (optional, production only)
+#                    See docs/authentik-setup.md for setup instructions
+#
+# =============================================================================
 # AUTHENTICATION FLOW (forward_auth)
 # =============================================================================
 #
-# Protected routes use Caddy's forward_auth to validate Bearer tokens:
+# Magpie supports two authentication methods:
 #
-# 1. Client sends request with "Authorization: Bearer <token>" header
-# 2. Caddy makes subrequest to /api/v1/auth/validate with the same headers
-# 3. Auth endpoint validates token and returns:
-#    - 200 OK with X-Magpie-User and X-Magpie-Scope headers (valid token)
-#    - 401 Unauthorized (invalid/missing token)
-# 4. If auth returns 200, Caddy copies identity headers to upstream request
-# 5. If auth returns 401, Caddy returns 401 to client (request blocked)
+# 1. BEARER TOKENS (for API access):
+#    Protected routes use Caddy's forward_auth to validate Bearer tokens:
+#
+#    a. Client sends request with "Authorization: Bearer <token>" header
+#    b. Caddy makes subrequest to /api/v1/auth/validate with the same headers
+#    c. Auth endpoint validates token and returns:
+#       - 200 OK with X-Magpie-User and X-Magpie-Scope headers (valid token)
+#       - 401 Unauthorized (invalid/missing token)
+#    d. If auth returns 200, Caddy copies identity headers to upstream request
+#    e. If auth returns 401, Caddy returns 401 to client (request blocked)
+#
+# 2. AUTHENTIK SSO (for browser access to /artifacts/*, production only):
+#    When AUTHENTIK_HOST is set in production, users browsing /artifacts/* are
+#    authenticated via Authentik SSO:
+#
+#    a. Browser requests /artifacts/*
+#    b. Caddy sends request to Authentik forward auth endpoint
+#    c. If no valid session, Authentik redirects browser to login page
+#    d. After login, Authentik validates session and returns user headers:
+#       - X-authentik-username, X-authentik-email, X-authentik-name
+#    e. Caddy forwards request with user identity headers
+#
+#    See docs/authentik-setup.md for complete setup instructions.
 #
 # =============================================================================
 # ROUTE PROTECTION SUMMARY
@@ -44,10 +86,17 @@
 # =============================================================================
 #
 # On successful authentication, these headers are copied to upstream:
+#
+# Bearer Token Authentication:
 #   - X-Magpie-User:  Token name (identifies the authenticated client)
 #   - X-Magpie-Scope: Permission level (read, write, or admin)
 #
-# The FastAPI backend can use these headers for authorization decisions.
+# Authentik SSO Authentication (when enabled in production):
+#   - X-authentik-username: Authentik username
+#   - X-authentik-email:    User's email address
+#   - X-authentik-name:     User's display name
+#
+# The FastAPI backend can use these headers for authorization decisions and logging.
 #
 # =============================================================================
 # IP ALLOW-LISTING (READ-ONLY ACCESS)
@@ -86,28 +135,48 @@
 
 # Global options block
 {
+	# Production logging (optional - enabled only when MAGPIE_ENABLE_LOGGING is set)
+	# Development: keep MAGPIE_ENABLE_LOGGING unset (no structured logging)
+	# Production: set MAGPIE_ENABLE_LOGGING=yes to enable JSON logging to stdout
+	{$MAGPIE_ENABLE_LOGGING}
+
+	# Admin API configuration (optional - disabled only when MAGPIE_DISABLE_ADMIN is set)
+	# Development: keep MAGPIE_DISABLE_ADMIN unset (admin API enabled for debugging)
+	# Production: set MAGPIE_DISABLE_ADMIN=yes to disable admin API for security
+	{$MAGPIE_DISABLE_ADMIN}
+
 	servers {
 		trusted_proxies static private_ranges
 	}
 }
 
-:80 {
+# Site address - uses environment variable for domain in production, :80 for dev
+# Development: MAGPIE_SITE_ADDRESS=":80"
+# Production: MAGPIE_SITE_ADDRESS="{$MAGPIE_DOMAIN}"
+{$MAGPIE_SITE_ADDRESS::80} {
 	# =========================================================================
-	# IP ALLOW-LISTING MATCHER
+	# TLS CONFIGURATION (Production only)
 	# =========================================================================
 	#
-	# Matches requests from allowed CIDR ranges (if MAGPIE_ALLOWED_CIDRS is set)
-	# Used to bypass bearer token authentication for trusted networks
-	@allowed_ip {
-		client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
-	}
+	# TLS is automatic via Let's Encrypt when MAGPIE_DOMAIN is set.
+	# For manual certificates, set MAGPIE_TLS_CONFIG:
+	#   MAGPIE_TLS_CONFIG="tls /path/to/cert.pem /path/to/key.pem"
+	#
+	# For internal CA (self-signed):
+	#   MAGPIE_TLS_CONFIG="tls internal"
+	{$MAGPIE_TLS_CONFIG}
 
 	# =========================================================================
 	# SECURITY HEADERS
 	# =========================================================================
 
 	header {
-		# Content Security Policy - restrict resource loading
+		# Production-only security headers (enabled when MAGPIE_PROD_SECURITY_HEADERS is set)
+		# Development: keep MAGPIE_PROD_SECURITY_HEADERS unset
+		# Production: set MAGPIE_PROD_SECURITY_HEADERS to multi-line header config
+		{$MAGPIE_PROD_SECURITY_HEADERS}
+
+		# Content Security Policy - restrict resource loading (always enabled)
 		# Note: 'unsafe-inline' is safe here because Content-Disposition: attachment
 		# prevents uploaded HTML from rendering, so only Caddy's browse template executes
 		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
@@ -154,7 +223,10 @@
 		path /api/v1/artifacts*
 	}
 	handle @artifacts_read {
-		# Define matcher for non-allowed IPs (allowed IPs use global @allowed_ip matcher)
+		# Define matchers for allowed vs non-allowed IPs
+		@allowed_ip {
+			client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
+		}
 		@require_auth {
 			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 		}
@@ -174,6 +246,31 @@
 	# Protected artifact downloads - requires valid Bearer token OR allowed IP
 	# Static files accessed via /artifacts/{artifact_path}/{ref} symlinks
 	# Directory browsing enabled for discovery and debugging
+	#
+	# SECURITY NOTE: Directory browsing exposes the artifact structure (paths,
+	# refs, filenames) to authenticated users. If you need to restrict
+	# browsing, remove the "browse" argument from file_server below.
+	#
+	# AUTHENTIK SSO INTEGRATION (OPTIONAL, PRODUCTION ONLY):
+	# To enable Authentik SSO for human browser access in addition to Bearer
+	# tokens, set this environment variable:
+	#   - AUTHENTIK_HOST: The Authentik server hostname (e.g., authentik.example.com)
+	#
+	# When enabled, users browsing /artifacts/* via web browser will be redirected
+	# to Authentik for authentication. Bearer token access via API continues to work.
+	#
+	# To enable Authentik SSO instead of Bearer auth, replace the forward_auth
+	# block below with:
+	#     # Strip client-provided auth headers (defense-in-depth)
+	#     request_header -X-authentik-username
+	#     request_header -X-authentik-email
+	#     request_header -X-authentik-name
+	#     request_header -X-authentik-groups
+	#
+	#     forward_auth {$AUTHENTIK_HOST} {
+	#         uri /outpost.goauthentik.io/auth/caddy
+	#         copy_headers X-authentik-username X-authentik-email X-authentik-name X-authentik-groups
+	#     }
 	handle /artifacts/* {
 		# Define matcher for non-allowed IPs (allowed IPs bypass auth check)
 		@require_auth {
@@ -240,7 +337,12 @@
 	}
 
 	# Flush tag endpoint - requires admin scope
-	handle /api/v1/tags/* {
+	# Matches: POST /api/v1/tags/{tag_name}/flush
+	@tags_flush {
+		method POST
+		path /api/v1/tags/*/flush
+	}
+	handle @tags_flush {
 		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate
 			copy_headers X-Magpie-User X-Magpie-Scope

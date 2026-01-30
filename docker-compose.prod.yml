@@ -3,7 +3,7 @@
 # Requires Docker Compose v2.1+ (for healthcheck 'condition' support)
 #
 # This configuration is intended for production deployments with:
-# - TLS/HTTPS enabled via Caddyfile.prod
+# - TLS/HTTPS enabled via consolidated Caddyfile with production env vars
 # - Security hardening settings
 # - Production-ready health checks
 #
@@ -28,28 +28,46 @@
 
 services:
   # Caddy reverse proxy - handles TLS, routing, and static file serving
-  # Uses Caddyfile.prod for production configuration
+  # Uses consolidated Caddyfile with production environment variables
   caddy:
     image: caddy:2-alpine
     ports:
       - "${MAGPIE_HTTP_PORT:-80}:80"    # HTTP (redirects to HTTPS)
       - "${MAGPIE_HTTPS_PORT:-443}:443"  # HTTPS
     volumes:
-      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ${MAGPIE_DATA_DIR:-./data}/artifacts:/data/artifacts:ro
       - caddy_data:/data      # TLS certificates and state
       - caddy_config:/config  # Caddy configuration
     environment:
+      # Production mode configuration
       # MAGPIE_DOMAIN is required - Let's Encrypt will fail without a valid domain
       - MAGPIE_DOMAIN=${MAGPIE_DOMAIN:?MAGPIE_DOMAIN must be set}
+      - MAGPIE_SITE_ADDRESS={$MAGPIE_DOMAIN}
+      # Production logging: structured JSON output to stdout
+      - |
+        MAGPIE_ENABLE_LOGGING=
+        log {
+          output stdout
+          format json
+          level INFO
+        }
+      # Production security: disable admin API
+      - MAGPIE_DISABLE_ADMIN=admin off
+      # Production security headers (HSTS, X-Frame-Options, etc.)
+      - |
+        MAGPIE_PROD_SECURITY_HEADERS=
+        Strict-Transport-Security "max-age=2592000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
       # Optional: IP allow-listing for read-only access without bearer tokens
-      - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-255.255.255.255/32}
+      - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-}
       # Optional: Authentik SSO integration for browser access to /artifacts/*
       # See docs/authentik-setup.md for setup instructions
       - AUTHENTIK_HOST=${AUTHENTIK_HOST:-}
-      # Optional: CIDR allow-list for read-only access without bearer token
-      # Example: MAGPIE_ALLOWED_CIDRS=10.0.0.0/8,192.168.1.0/24
-      - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-}
     depends_on:
       magpie:
         condition: service_healthy

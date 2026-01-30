@@ -73,23 +73,27 @@ docker compose -f docker-compose.prod.yml up -d
 services (e.g., nginx, Apache, another Caddy instance) are using these ports, either
 stop them first or customize the port bindings in `docker-compose.prod.yml`.
 
-The production configuration (`docker-compose.prod.yml` and `Caddyfile.prod`) includes:
+The production configuration (`docker-compose.prod.yml`) includes:
 - Automatic TLS via Let's Encrypt (or manual certificate configuration)
 - Security headers (HSTS, X-Frame-Options, CSP, etc.)
 - JSON access logging
 - Optional Authentik SSO integration for browser access (see [docs/authentik-setup.md](docs/authentik-setup.md))
 - Rate limiting must be configured at the infrastructure layer. See [issue #129](https://github.com/SouthwestCCDC/magpie/issues/129) for implementation options (custom Caddy build, FastAPI middleware, or load balancer).
 
-For manual TLS certificates, edit `Caddyfile.prod` and uncomment the `tls` directive
-with your certificate paths.
+The Caddyfile automatically adapts to development vs production mode based on environment
+variables set in docker-compose files. For manual TLS certificates, set the
+`MAGPIE_TLS_CONFIG` environment variable in `docker-compose.prod.yml`:
+
+```yaml
+- MAGPIE_TLS_CONFIG=tls /path/to/cert.pem /path/to/key.pem
+```
 
 **Let's Encrypt rate limits**: Let's Encrypt enforces a limit of 50 certificates per
 registered domain per week. For testing, use `tls internal` to generate self-signed
-certificates, or configure the Let's Encrypt staging environment in `Caddyfile.prod`:
-```
-tls {
-    ca https://acme-staging-v02.api.letsencrypt.org/directory
-}
+certificates by setting `MAGPIE_TLS_CONFIG=tls internal`, or configure the Let's Encrypt
+staging environment:
+```yaml
+- MAGPIE_TLS_CONFIG=tls { ca https://acme-staging-v02.api.letsencrypt.org/directory }
 ```
 The `caddy_data` volume stores issued certificates. Persist this volume across
 container recreations to avoid requesting duplicate certificates.
