@@ -146,40 +146,41 @@ def cli(
 
 @cli.command()
 @click.option(
-    "--server",
+    "--server-version",
     is_flag=True,
     default=False,
     help="Show server version in addition to client version.",
 )
 @pass_context
-def version(ctx: CLIContext, server: bool) -> None:
+def version(ctx: CLIContext, server_version: bool) -> None:
     """Show version.
 
     Exit code behavior:
-    - Without --server flag: Always exits 0 (shows client version only)
-    - With --server flag: Exits 1 if server unreachable (explicit server version request)
+    - Without --server-version flag: Always exits 0 (shows client version only)
+    - With --server-version flag: Exits 1 if server unreachable (explicit server version request)
 
-    This design treats --server as a strict requirement: if the user explicitly requests
+    This design treats --server-version as a strict requirement: if the user explicitly requests
     server version and it cannot be obtained, the command fails to indicate the requirement
     was not met. This is useful for automation/scripting where server connectivity is critical.
     """
     from magpie import __version__
 
-    if not server:
+    if not server_version:
         click.echo(f"magpie {__version__}")
         return
 
     # Query server version from /health endpoint
     try:
-        client = ctx.get_client()
-        # /health is a public endpoint, no auth needed, but we use the client for consistency
-        response = client.get("/health")
-        response.raise_for_status()
-        data = response.json()
-        server_version = data.get("version", "unknown")
-        click.echo(f"magpie {__version__} (server: {server_version})")
+        # /health is a public endpoint, so we create an unauthenticated client
+        # to avoid unnecessarily sending tokens
+        with get_client(ctx.server, token=None, timeout=ctx.timeout, ca_cert=ctx.ca_cert) as client:
+            response = client.get("/health")
+            response.raise_for_status()
+            data = response.json()
+            server_ver = data.get("version", "unknown")
+            click.echo(f"magpie {__version__} (server: {server_ver})")
     except Exception as e:
-        # Exit 1 when --server flag used but server unreachable (design decision)
+        # Exit 1 when --server-version flag used but server unreachable (design decision)
         # See issue #343 for rationale
         click.echo(f"magpie {__version__} (server: error - {e})", err=True)
         raise click.Abort() from e
