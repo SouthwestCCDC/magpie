@@ -24,7 +24,7 @@ GITHUB_BRANCH="default"
 GHCR_IMAGE="ghcr.io/southwestccdc/magpie"
 MAGPIE_VERSION=""  # Dynamically detected from pyproject.toml after cloning repo
 # For --version output before repo clone, display "dev" (cosmetic only).
-HARDCODED_VERSION="dev"
+HARDCODED_VERSION="0.1.1-rc1"
 
 # Default configuration
 DEFAULT_INSTALL_DIR="/opt/magpie"
