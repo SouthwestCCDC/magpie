@@ -28,7 +28,7 @@ services:
     environment:
       # Development mode - minimal logging, admin API enabled
       - MAGPIE_SITE_ADDRESS=:80
-      - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-}
+      - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-255.255.255.255/32}
     depends_on:
       - magpie
     restart: unless-stopped
