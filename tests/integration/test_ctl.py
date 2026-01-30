@@ -7,19 +7,21 @@ and database operations (no mocking of storage or database access).
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
+from typing import Generator
 
 import pytest
 from click.testing import CliRunner
 
-from magpie.auth.database import get_connection, list_tokens
+from magpie.auth.database import get_connection, init_database, list_tokens
 from magpie.auth.models import TokenScope
 from magpie.config import get_settings
 from magpie.ctl import cli as ctl_cli
 
 
 @pytest.fixture
-def ctl_runner(tmp_path: Path):
+def ctl_runner(tmp_path: Path) -> Generator[tuple[CliRunner, Path], None, None]:
     """Create CLI runner with isolated environment for magpie-ctl tests.
 
     Returns CliRunner configured to use tmp_path for storage.
@@ -184,8 +186,6 @@ class TestGC:
         runner, tmp_path = ctl_runner
         # Remove the storage path so it doesn't exist
         if tmp_path.exists():
-            import shutil
-
             shutil.rmtree(tmp_path)
 
         result = runner.invoke(ctl_cli, ["gc"])
@@ -367,7 +367,6 @@ class TestToken:
         """Token list with no tokens shows appropriate message."""
         runner, tmp_path = ctl_runner
         # Initialize database but don't create admin token
-        from magpie.auth.database import init_database
 
         tmp_path.mkdir(parents=True, exist_ok=True)
         init_database(tmp_path / "magpie.db")
