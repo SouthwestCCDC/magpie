@@ -43,11 +43,10 @@ services:
       # Production mode configuration
       # MAGPIE_DOMAIN is required - Let's Encrypt will fail without a valid domain
       - MAGPIE_DOMAIN=${MAGPIE_DOMAIN:?MAGPIE_DOMAIN must be set}
-      - MAGPIE_SITE_ADDRESS={$MAGPIE_DOMAIN}
+      - MAGPIE_SITE_ADDRESS=${MAGPIE_DOMAIN}
       # Production logging: structured JSON output to stdout
       - |
-        MAGPIE_ENABLE_LOGGING=
-        log {
+        MAGPIE_ENABLE_LOGGING=log {
           output stdout
           format json
           level INFO
@@ -56,8 +55,7 @@ services:
       - MAGPIE_DISABLE_ADMIN=admin off
       # Production security headers (HSTS, X-Frame-Options, etc.)
       - |
-        MAGPIE_PROD_SECURITY_HEADERS=
-        Strict-Transport-Security "max-age=2592000; includeSubDomains"
+        MAGPIE_PROD_SECURITY_HEADERS=Strict-Transport-Security "max-age=2592000; includeSubDomains"
         X-Content-Type-Options "nosniff"
         X-Frame-Options "DENY"
         X-XSS-Protection "1; mode=block"

@@ -12,7 +12,7 @@
 # For new deployments:
 # - Use docker-compose.yml for development (sets MAGPIE_SITE_ADDRESS=:80)
 # - Use docker-compose.prod.yml for production (sets MAGPIE_SITE_ADDRESS,
-#   MAGPIE_LOG_CONFIG, MAGPIE_ADMIN_CONFIG, and MAGPIE_SECURITY_HEADERS)
+#   MAGPIE_ENABLE_LOGGING, MAGPIE_DISABLE_ADMIN, and MAGPIE_PROD_SECURITY_HEADERS)
 #
 # See consolidated Caddyfile for the active configuration.
 #

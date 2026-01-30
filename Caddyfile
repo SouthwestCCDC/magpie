@@ -137,12 +137,12 @@
 {
 	# Production logging (optional - enabled only when MAGPIE_ENABLE_LOGGING is set)
 	# Development: keep MAGPIE_ENABLE_LOGGING unset (no structured logging)
-	# Production: set MAGPIE_ENABLE_LOGGING=yes to enable JSON logging to stdout
+	# Production: set MAGPIE_ENABLE_LOGGING to a Caddy log configuration block (e.g., JSON to stdout)
 	{$MAGPIE_ENABLE_LOGGING}
 
-	# Admin API configuration (optional - disabled only when MAGPIE_DISABLE_ADMIN is set)
+	# Admin API configuration (optional - injected as a Caddy directive when set)
 	# Development: keep MAGPIE_DISABLE_ADMIN unset (admin API enabled for debugging)
-	# Production: set MAGPIE_DISABLE_ADMIN=yes to disable admin API for security
+	# Production: set MAGPIE_DISABLE_ADMIN="admin off" to disable the admin API for security
 	{$MAGPIE_DISABLE_ADMIN}
 
 	servers {
@@ -150,9 +150,9 @@
 	}
 }
 
-# Site address - uses environment variable for domain in production, :80 for dev
+# Site address - controlled via MAGPIE_SITE_ADDRESS, defaults to :80 for dev
 # Development: MAGPIE_SITE_ADDRESS=":80"
-# Production: MAGPIE_SITE_ADDRESS="{$MAGPIE_DOMAIN}"
+# Production: MAGPIE_SITE_ADDRESS="magpie.example.com"
 {$MAGPIE_SITE_ADDRESS::80} {
 	# =========================================================================
 	# TLS CONFIGURATION (Production only)
