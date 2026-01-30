@@ -57,9 +57,8 @@ class TestVersionCommand:
 
         # Should exit with error
         assert result.exit_code == 1
-        # Should show client version and error message
-        assert f"magpie {__version__}" in result.output
-        assert "error" in result.output.lower()
+        # Should show error message with details
+        assert "Failed to fetch server version" in result.output
         assert "Connection refused" in result.output
 
     def test_version_with_server_flag_handles_missing_version_field(
@@ -85,3 +84,15 @@ class TestVersionCommand:
         assert result.exit_code == 0
         assert f"magpie {__version__}" in result.output
         assert "server: unknown" in result.output
+
+    def test_version_with_server_flag_no_server_configured(
+        self, cli_runner_no_config: CliRunner
+    ) -> None:
+        """Version command with --server-version flag fails when no server is configured."""
+        result = cli_runner_no_config.invoke(cli, ["version", "--server-version"])
+
+        # Should exit with error
+        assert result.exit_code == 1
+        # Should show error message about missing server configuration
+        assert "No server configured" in result.output
+        assert "MAGPIE_SERVER" in result.output

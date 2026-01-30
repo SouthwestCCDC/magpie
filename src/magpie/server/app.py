@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
+from pydantic import BaseModel
 
 from magpie import __version__
 from magpie.config import get_settings
@@ -54,7 +55,14 @@ app.include_router(gc_router)
 app.include_router(status_router)
 
 
+class HealthResponse(BaseModel):
+    """Response model for health check endpoint."""
+
+    status: str
+    version: str
+
+
 @app.get("/health")
-async def health() -> dict[str, str]:
+async def health() -> HealthResponse:
     """Health check endpoint."""
-    return {"status": "ok", "version": __version__}
+    return HealthResponse(status="ok", version=__version__)

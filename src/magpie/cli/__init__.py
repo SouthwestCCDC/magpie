@@ -187,8 +187,6 @@ def version(ctx: CLIContext, server_version: bool) -> None:
     except Exception as e:
         # Exit 1 when --server-version flag used but server unreachable (design decision)
         # See issue #343 for rationale
-        # Print version with error message before raising exception
-        click.echo(f"magpie {__version__} (server: error - {e})", err=True)
         msg = f"Failed to fetch server version: {e}"
         raise click.ClickException(msg) from e
 
