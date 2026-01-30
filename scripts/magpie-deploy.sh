@@ -336,11 +336,12 @@ load_existing_config() {
         # shellcheck source=/dev/null
         source "${INSTALL_DIR}/etc/.env"
 
-        # Map env vars to script variables
+        # Map env vars to script variables (only for MAGPIE_* prefixed vars)
         DATA_DIR="${MAGPIE_DATA_DIR:-$DATA_DIR}"
         HTTP_PORT="${MAGPIE_HTTP_PORT:-$HTTP_PORT}"
         HTTPS_PORT="${MAGPIE_HTTPS_PORT:-$HTTPS_PORT}"
         DOMAIN="${MAGPIE_DOMAIN:-$DOMAIN}"
+        # TLS_MODE and TRUSTED_PROXIES are loaded directly (no prefix mapping needed)
     fi
 }
 
@@ -420,7 +421,7 @@ MAGPIE_LOG_FORMAT=json
 MAGPIE_RETENTION_DAYS=90
 
 # TLS configuration (persisted for Caddyfile regeneration during updates)
-# See issue #344
+# See issues #340 and #344
 TLS_MODE=${TLS_MODE:-}
 DOMAIN=${DOMAIN:-}
 TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
@@ -1015,10 +1016,9 @@ cmd_update() {
     if [[ ! -f "${INSTALL_DIR}/repo/Caddyfile.prod" ]]; then
         log_warn "Caddyfile.prod not found in repo, skipping Caddyfile update"
     else
-        # Load existing environment (may include TLS_MODE, DOMAIN, TRUSTED_PROXIES if stored in .env)
-        # Note: Current installation only stores MAGPIE_* variables in .env (see generate_env_file).
-        # TLS_MODE and TRUSTED_PROXIES are not persisted, so this will only work if they were added
-        # manually or in a future version that persists them. See issue #340 for planned fix.
+        # Load existing environment (includes TLS_MODE, DOMAIN, TRUSTED_PROXIES from .env)
+        # These values are persisted during install by generate_env_file().
+        # See issues #340 and #344 for background.
         if [[ -f "${INSTALL_DIR}/etc/.env" ]]; then
             set -a
             # shellcheck disable=SC1091
