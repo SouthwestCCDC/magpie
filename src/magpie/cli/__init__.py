@@ -145,11 +145,50 @@ def cli(
 
 
 @cli.command()
-def version() -> None:
-    """Show version."""
+@click.option(
+    "--server-version",
+    is_flag=True,
+    default=False,
+    help="Show server version in addition to client version.",
+)
+@pass_context
+def version(ctx: CLIContext, server_version: bool) -> None:
+    """Show version.
+
+    Exit code behavior:
+    - Without --server-version flag: Always exits 0 (shows client version only)
+    - With --server-version flag: Exits 1 if server unreachable (explicit server version request)
+
+    This design treats --server-version as a strict requirement: if the user explicitly requests
+    server version and it cannot be obtained, the command fails to indicate the requirement
+    was not met. This is useful for automation/scripting where server connectivity is critical.
+    """
     from magpie import __version__
 
-    click.echo(f"magpie {__version__}")
+    if not server_version:
+        click.echo(f"magpie {__version__}")
+        return
+
+    # Check server configuration when --server-version flag is used
+    if not ctx.server:
+        msg = "No server configured. Use --server or set MAGPIE_SERVER."
+        raise click.ClickException(msg)
+
+    # Query server version from /health endpoint
+    try:
+        # /health is a public endpoint, so we create an unauthenticated client
+        # to avoid unnecessarily sending tokens
+        with get_client(ctx.server, token=None, timeout=ctx.timeout, ca_cert=ctx.ca_cert) as client:
+            response = client.get("/health")
+            response.raise_for_status()
+            data = response.json()
+            server_ver = data.get("version", "unknown")
+            click.echo(f"magpie {__version__} (server: {server_ver})")
+    except Exception as e:
+        # Exit 1 when --server-version flag used but server unreachable (design decision)
+        # See issue #343 for rationale
+        msg = f"Failed to fetch server version: {e}"
+        raise click.ClickException(msg) from e
 
 
 # Register subcommands

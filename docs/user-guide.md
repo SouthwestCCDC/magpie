@@ -137,10 +137,12 @@ magpie info images/ubuntu:@a1b2c3d4           # View metadata
 magpie amend images/ubuntu:latest --source-uri https://github.com/example/repo  # Update metadata
 ```
 
-**Server status:**
+**Server status and version:**
 ```bash
-magpie status              # Check connectivity and health
-magpie url images/ubuntu   # Get download URL for scripting
+magpie status                    # Check server status/health (requires admin token)
+magpie version                   # Show client version
+magpie version --server-version  # Check connectivity and show both client and server versions
+magpie url images/ubuntu         # Get download URL for scripting
 ```
 
 ## Server Initialization

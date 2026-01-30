@@ -6,7 +6,7 @@
 ```bash
 curl https://magpie.example.com/health
 ```
-Returns `{"status": "ok"}` if operational. Used by Docker health checks and load balancers.
+Returns `{"status": "ok", "version": "x.y.z"}` if operational. Used by Docker health checks and load balancers.
 
 **Admin status endpoint** (`GET /api/v1/status`, admin token required):
 ```json
