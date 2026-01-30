@@ -153,7 +153,16 @@ def cli(
 )
 @pass_context
 def version(ctx: CLIContext, server: bool) -> None:
-    """Show version."""
+    """Show version.
+
+    Exit code behavior:
+    - Without --server flag: Always exits 0 (shows client version only)
+    - With --server flag: Exits 1 if server unreachable (explicit server version request)
+
+    This design treats --server as a strict requirement: if the user explicitly requests
+    server version and it cannot be obtained, the command fails to indicate the requirement
+    was not met. This is useful for automation/scripting where server connectivity is critical.
+    """
     from magpie import __version__
 
     if not server:
@@ -170,6 +179,8 @@ def version(ctx: CLIContext, server: bool) -> None:
         server_version = data.get("version", "unknown")
         click.echo(f"magpie {__version__} (server: {server_version})")
     except Exception as e:
+        # Exit 1 when --server flag used but server unreachable (design decision)
+        # See issue #343 for rationale
         click.echo(f"magpie {__version__} (server: error - {e})", err=True)
         raise click.Abort() from e
 
