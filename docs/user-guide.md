@@ -139,9 +139,9 @@ magpie amend images/ubuntu:latest --source-uri https://github.com/example/repo  
 
 **Server status and version:**
 ```bash
-magpie status                    # Check connectivity and health
+magpie status                    # Check server status/health (requires admin token)
 magpie version                   # Show client version
-magpie version --server-version  # Show both client and server versions
+magpie version --server-version  # Check connectivity and show both client and server versions
 magpie url images/ubuntu         # Get download URL for scripting
 ```
 
