@@ -78,6 +78,13 @@ services:
       # IMPORTANT: Keep debug mode disabled in production. Enabling it exposes
       # detailed error messages and stack traces that could leak sensitive info.
       - MAGPIE_DEBUG=false
+      # S3/AWS configuration for magpie-ctl sync command
+      - MAGPIE_S3_BUCKET=${MAGPIE_S3_BUCKET:-}
+      - MAGPIE_S3_PREFIX=${MAGPIE_S3_PREFIX:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-}
     expose:
       - "8000"  # Internal only - accessed via Caddy
     restart: unless-stopped
