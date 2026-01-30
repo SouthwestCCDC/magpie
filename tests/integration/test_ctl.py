@@ -243,6 +243,8 @@ class TestGC:
         data = response["data"]
         assert "artifacts_scanned" in data
         assert "blobs_found" in data
+        assert "blobs_removed" in data
+        assert "bytes_reclaimed" in data
         assert "symlinks_checked" in data
 
     def test_gc_json_output_flag(self, ctl_runner: tuple[CliRunner, Path]) -> None:
