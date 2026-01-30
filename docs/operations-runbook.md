@@ -25,7 +25,7 @@ docker compose -f docker-compose.prod.yml logs magpie -f
 # Health check
 curl https://magpie.example.com/health
 
-# Admin status (requires token)
+# Admin status via magpie CLI (requires configured server URL + admin token)
 magpie status
 
 # Restart service
@@ -57,21 +57,25 @@ See [Production Checklist](production-checklist.md) for:
 - Security settings
 - Deployment validation steps
 
-### Key Application Environment Variables
+### Docker Compose Environment Variables
 
 | Variable | Required | Example |
 |----------|----------|---------|
 | `MAGPIE_DATA_DIR` | No | `/mnt/nfs/magpie` (default: `./data`) |
+| `MAGPIE_DOMAIN` | Yes (prod) | `magpie.example.com` |
+
+These are used by `docker-compose.prod.yml` for volume mounting and Caddy configuration.
+The Magpie application does not read these variables.
+
+### Application Environment Variables
+
+| Variable | Required | Example |
+|----------|----------|---------|
 | `MAGPIE_RETENTION_DAYS` | No | `90` (default) |
 | `MAGPIE_DEBUG` | No | `false` (always false in production) |
 
-Full reference: [User Guide - Server Configuration](user-guide.md#server-environment-variables)
+Full reference: [User Guide - Server Environment Variables](user-guide.md#server-environment-variables)
 
-#### Docker Compose / Caddy-specific variables
-
-The `MAGPIE_DOMAIN` environment variable is used only by `docker-compose.prod.yml` for Caddy TLS and
-virtual host configuration. The Magpie application itself does **not** read or require `MAGPIE_DOMAIN`;
-it is purely an infrastructure/runtime setting.
 
 ---
 
@@ -174,7 +178,8 @@ Recommended: Run GC on a schedule (e.g., weekly):
 
 **Check storage utilization:**
 ```bash
-docker compose -f docker-compose.prod.yml exec magpie magpie status
+# Using magpie CLI (requires admin token and server configuration)
+magpie --server https://magpie.example.com --token "$MAGPIE_ADMIN_TOKEN" status
 ```
 
 Example output:
@@ -233,12 +238,9 @@ ls -la /path/to/MAGPIE_DATA_DIR/artifacts/.tmp/
 
 **Check upload size limits:**
 ```bash
-# View current limit (admin-only; requires admin token and calls /api/v1/status, not /health)
-docker compose -f docker-compose.prod.yml exec magpie magpie status
-
-# Alternatively, check via environment/compose config
+# Check via environment/compose config
 grep '^MAGPIE_MAX_UPLOAD_SIZE' .env
-# or inspect rendered compose config:
+# Or inspect rendered compose config:
 docker compose -f docker-compose.prod.yml config | grep MAGPIE_MAX_UPLOAD_SIZE
 
 # Increase if needed (set in .env)
@@ -247,7 +249,8 @@ MAGPIE_MAX_UPLOAD_SIZE=10737418240  # 10GB
 
 **Check auth token validity:**
 ```bash
-magpie --server https://magpie.example.com --token YOUR_TOKEN status
+# Use an environment variable so the token is not exposed in `ps` output
+MAGPIE_TOKEN=YOUR_TOKEN magpie --server https://magpie.example.com status
 ```
 
 ### Symlink Corruption
@@ -354,7 +357,7 @@ docker compose -f docker-compose.prod.yml logs magpie | grep '"level":"error"'
 **Enable verbose logging (development only):**
 ```bash
 export MAGPIE_DEBUG=true
-docker compose -f docker-compose.prod.yml up -d magpie
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ### Critical Alerts (set up monitoring for these)
@@ -457,7 +460,7 @@ chown -R "$OWNER_UID:$OWNER_GID" "$MAGPIE_DATA_DIR"
 
 **4. Start service:**
 ```bash
-docker compose -f docker-compose.prod.yml up -d magpie && sleep 5
+docker compose -f docker-compose.prod.yml up -d && sleep 5
 ```
 
 **5. Reconcile symlinks:**
@@ -530,7 +533,7 @@ docker compose -f docker-compose.prod.yml stop magpie
 # 2. Perform maintenance (OS patching, dependency updates, etc.)
 
 # 3. Test
-docker compose -f docker-compose.prod.yml up -d magpie
+docker compose -f docker-compose.prod.yml up -d
 sleep 10
 curl https://magpie.example.com/health
 
@@ -552,7 +555,7 @@ docker compose -f docker-compose.prod.yml pull
 
 # Restart with new version
 docker compose -f docker-compose.prod.yml down
-docker compose -f docker-compose.prod.yml up -d magpie
+docker compose -f docker-compose.prod.yml up -d
 
 # Check logs for errors
 docker compose -f docker-compose.prod.yml logs magpie -f --tail 50
