@@ -21,7 +21,7 @@ For Authentik setup, see [authentik-setup.md](authentik-setup.md). For Ansible, 
 
 ```bash
 # With uv (recommended)
-uv pip install git+https://github.com/SouthwestCCDC/magpie.git@v0.1.0
+uv pip install git+https://github.com/SouthwestCCDC/magpie.git@v0.1.1
 ```
 
 ### Configuration
