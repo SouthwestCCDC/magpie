@@ -94,8 +94,17 @@ class TokenService:
         """
         self.config = config
         self.db_path = config.database_path
-        # Ensure database is initialized
-        init_database(self.db_path)
+        self._db_initialized = False
+
+    def _ensure_database_initialized(self) -> None:
+        """Ensure database is initialized (lazy initialization).
+
+        This method is called by all public methods that need database access.
+        The initialization happens only once per TokenService instance.
+        """
+        if not self._db_initialized:
+            init_database(self.db_path)
+            self._db_initialized = True
 
     def create_token(self, name: str, scope: TokenScope, plaintext_token: str | None = None) -> str:
         """Create a new token and return the plaintext (only visible once).
@@ -121,6 +130,9 @@ class TokenService:
             TokenFormatError: If provided token has incorrect format.
             ValidationError: If token name fails validation (invalid format/length).
         """
+        # Ensure database is initialized before any operations
+        self._ensure_database_initialized()
+
         # Validate token name (defense in depth - also validated at API layer)
         validate_token_name(name)
 
@@ -202,6 +214,9 @@ class TokenService:
         Returns:
             TokenInfo if valid and enabled, None otherwise.
         """
+        # Ensure database is initialized before any operations
+        self._ensure_database_initialized()
+
         # Hash the input token
         token_hash = self._hash_token(token)
 
@@ -240,6 +255,9 @@ class TokenService:
         Returns:
             True if token was revoked, False if not found.
         """
+        # Ensure database is initialized before any operations
+        self._ensure_database_initialized()
+
         conn = get_connection(self.db_path)
         try:
             return delete_token(conn, name)
@@ -269,6 +287,9 @@ class TokenService:
         Raises:
             TokenError: If hash collision occurs during token creation (extremely unlikely).
         """
+        # Ensure database is initialized before any operations
+        self._ensure_database_initialized()
+
         conn = get_connection(self.db_path)
         try:
             with conn:

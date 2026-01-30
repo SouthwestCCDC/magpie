@@ -384,13 +384,19 @@ class TestHasScope:
 class TestTokenServiceInitialization:
     """Tests for TokenService initialization."""
 
-    def test_service_initializes_database(self, test_config: MagpieSettings) -> None:
-        """TokenService should initialize database on creation."""
+    def test_service_initializes_database_lazily(self, test_config: MagpieSettings) -> None:
+        """TokenService should initialize database lazily on first use."""
         # Database should not exist yet
         assert not test_config.database_path.exists()
 
-        # Create service
-        TokenService(test_config)
+        # Create service (should NOT initialize database)
+        service = TokenService(test_config)
+
+        # Database should still not exist (lazy initialization)
+        assert not test_config.database_path.exists()
+
+        # Perform an operation that requires the database
+        service.create_token("test", TokenScope.READ)
 
         # Database should now exist
         assert test_config.database_path.exists()
