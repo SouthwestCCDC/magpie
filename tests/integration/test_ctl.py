@@ -199,15 +199,15 @@ class TestInit:
 
         # Required fields
         required_keys = {"admin_token", "storage_path", "database_path"}
-        assert required_keys.issubset(
-            data.keys()
-        ), f"data must contain required keys: {required_keys}"
+        assert required_keys.issubset(data.keys()), (
+            f"data must contain required keys: {required_keys}"
+        )
 
         # No unexpected fields (allow token_already_existed as optional)
         allowed_keys = required_keys | {"token_already_existed"}
-        assert set(data.keys()).issubset(
-            allowed_keys
-        ), f"data contains unexpected keys: {set(data.keys()) - allowed_keys}"
+        assert set(data.keys()).issubset(allowed_keys), (
+            f"data contains unexpected keys: {set(data.keys()) - allowed_keys}"
+        )
 
         # Validate required field types
         assert isinstance(data["admin_token"], str), "admin_token must be string"
@@ -217,9 +217,9 @@ class TestInit:
 
         # Validate optional field types if present
         if "token_already_existed" in data:
-            assert isinstance(
-                data["token_already_existed"], bool
-            ), "token_already_existed must be boolean"
+            assert isinstance(data["token_already_existed"], bool), (
+                "token_already_existed must be boolean"
+            )
 
     def test_init_concurrent_safety(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Init handles concurrent execution safely (only one admin token created).
@@ -271,9 +271,9 @@ class TestInit:
         try:
             tokens = list_tokens(conn)
             admin_tokens = [t for t in tokens if t.name == "admin"]
-            assert (
-                len(admin_tokens) == 1
-            ), "Concurrent token creation should result in exactly one admin token (race condition safety)"
+            assert len(admin_tokens) == 1, (
+                "Concurrent token creation should result in exactly one admin token (race condition safety)"
+            )
         finally:
             conn.close()
 
@@ -362,9 +362,9 @@ class TestGC:
 
         for field, expected_type in required_fields.items():
             assert field in data, f"Missing required field: {field}"
-            assert isinstance(
-                data[field], expected_type
-            ), f"{field} must be {expected_type.__name__}"
+            assert isinstance(data[field], expected_type), (
+                f"{field} must be {expected_type.__name__}"
+            )
 
         # Reject completely unexpected keys (but allow additional documented fields)
         known_fields = required_fields.keys() | {
@@ -593,9 +593,9 @@ class TestToken:
 
         # Critical security property: verify revoked token can no longer authenticate
         token_info_after_revoke = token_service.validate_token(plaintext_token)
-        assert (
-            token_info_after_revoke is None
-        ), "Revoked token should fail authentication (security requirement)"
+        assert token_info_after_revoke is None, (
+            "Revoked token should fail authentication (security requirement)"
+        )
 
     def test_token_revoke_nonexistent(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token revoke with nonexistent token shows error."""
@@ -673,9 +673,9 @@ class TestToken:
             tokens = list_tokens(conn)
             reader_tokens = [t for t in tokens if t.name == "reader"]
             assert len(reader_tokens) == 1
-            assert (
-                reader_tokens[0].scope == TokenScope.READ
-            ), "Rotating READ token should preserve READ scope"
+            assert reader_tokens[0].scope == TokenScope.READ, (
+                "Rotating READ token should preserve READ scope"
+            )
         finally:
             conn.close()
 
@@ -697,9 +697,9 @@ class TestToken:
             tokens = list_tokens(conn)
             writer_tokens = [t for t in tokens if t.name == "writer"]
             assert len(writer_tokens) == 1
-            assert (
-                writer_tokens[0].scope == TokenScope.WRITE
-            ), "Rotating WRITE token should preserve WRITE scope"
+            assert writer_tokens[0].scope == TokenScope.WRITE, (
+                "Rotating WRITE token should preserve WRITE scope"
+            )
         finally:
             conn.close()
 
@@ -721,9 +721,9 @@ class TestToken:
             tokens = list_tokens(conn)
             admin_tokens = [t for t in tokens if t.name == "ops-admin"]
             assert len(admin_tokens) == 1
-            assert (
-                admin_tokens[0].scope == TokenScope.ADMIN
-            ), "Rotating ADMIN token should preserve ADMIN scope"
+            assert admin_tokens[0].scope == TokenScope.ADMIN, (
+                "Rotating ADMIN token should preserve ADMIN scope"
+            )
         finally:
             conn.close()
 
