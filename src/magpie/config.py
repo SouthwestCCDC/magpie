@@ -54,8 +54,8 @@ class MagpieSettings(BaseSettings):
     otel_service_name: str = "magpie"  # MAGPIE_OTEL_SERVICE_NAME
 
     # IP allow-listing (used by Caddy via environment variable passthrough)
-    # Comma-separated list of CIDR ranges allowed to bypass bearer token authentication
-    # Example: "10.0.0.0/8,192.168.1.0/24"
+    # Space-separated list of CIDR ranges allowed to bypass bearer token authentication
+    # Example: "10.0.0.0/8 192.168.1.0/24"
     # NOTE: This setting is consumed by Caddy, not the Python application
     allowed_cidrs: str = ""  # MAGPIE_ALLOWED_CIDRS
 
@@ -65,7 +65,7 @@ class MagpieSettings(BaseSettings):
         """Validate CIDR notation for IP allow-listing.
 
         Args:
-            v: Comma-separated CIDR ranges (e.g., "10.0.0.0/8,192.168.1.0/24")
+            v: Space-separated CIDR ranges (e.g., "10.0.0.0/8 192.168.1.0/24")
 
         Returns:
             The validated CIDR string
@@ -76,7 +76,7 @@ class MagpieSettings(BaseSettings):
         if not v:
             return v
 
-        for cidr in v.split(","):
+        for cidr in v.split():
             cidr = cidr.strip()
             if not cidr:
                 continue

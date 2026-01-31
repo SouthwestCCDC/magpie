@@ -176,14 +176,14 @@ class TestMagpieSettingsCIDRValidation:
         assert settings.allowed_cidrs == "10.0.0.0/8"
 
     def test_valid_multiple_cidrs(self) -> None:
-        """Multiple valid CIDRs should be accepted."""
-        settings = MagpieSettings(allowed_cidrs="10.0.0.0/8,192.168.1.0/24")
-        assert settings.allowed_cidrs == "10.0.0.0/8,192.168.1.0/24"
+        """Multiple valid CIDRs should be accepted (space-separated)."""
+        settings = MagpieSettings(allowed_cidrs="10.0.0.0/8 192.168.1.0/24")
+        assert settings.allowed_cidrs == "10.0.0.0/8 192.168.1.0/24"
 
-    def test_valid_cidrs_with_spaces(self) -> None:
-        """CIDRs with spaces should be accepted (spaces are stripped during validation)."""
-        settings = MagpieSettings(allowed_cidrs="10.0.0.0/8, 192.168.1.0/24")
-        assert settings.allowed_cidrs == "10.0.0.0/8, 192.168.1.0/24"
+    def test_valid_cidrs_with_extra_spaces(self) -> None:
+        """CIDRs with extra spaces should be accepted (split handles multiple spaces)."""
+        settings = MagpieSettings(allowed_cidrs="10.0.0.0/8  192.168.1.0/24")
+        assert settings.allowed_cidrs == "10.0.0.0/8  192.168.1.0/24"
 
     def test_valid_ipv6_cidr(self) -> None:
         """IPv6 CIDRs should be accepted."""
@@ -191,9 +191,9 @@ class TestMagpieSettingsCIDRValidation:
         assert settings.allowed_cidrs == "2001:db8::/32"
 
     def test_valid_mixed_ipv4_ipv6(self) -> None:
-        """Mixed IPv4 and IPv6 CIDRs should be accepted."""
-        settings = MagpieSettings(allowed_cidrs="10.0.0.0/8,2001:db8::/32")
-        assert settings.allowed_cidrs == "10.0.0.0/8,2001:db8::/32"
+        """Mixed IPv4 and IPv6 CIDRs should be accepted (space-separated)."""
+        settings = MagpieSettings(allowed_cidrs="10.0.0.0/8 2001:db8::/32")
+        assert settings.allowed_cidrs == "10.0.0.0/8 2001:db8::/32"
 
     def test_invalid_cidr_notation_raises(self) -> None:
         """Invalid CIDR notation should raise ValidationError."""
@@ -211,10 +211,10 @@ class TestMagpieSettingsCIDRValidation:
             MagpieSettings(allowed_cidrs="not-a-cidr")
 
     def test_cidr_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """MAGPIE_ALLOWED_CIDRS env var should override default."""
-        monkeypatch.setenv("MAGPIE_ALLOWED_CIDRS", "10.0.0.0/8,192.168.1.0/24")
+        """MAGPIE_ALLOWED_CIDRS env var should override default (space-separated)."""
+        monkeypatch.setenv("MAGPIE_ALLOWED_CIDRS", "10.0.0.0/8 192.168.1.0/24")
         settings = MagpieSettings()
-        assert settings.allowed_cidrs == "10.0.0.0/8,192.168.1.0/24"
+        assert settings.allowed_cidrs == "10.0.0.0/8 192.168.1.0/24"
 
     def test_cidr_env_override_validates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Invalid CIDR in env var should raise ValidationError."""
