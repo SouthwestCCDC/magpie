@@ -415,6 +415,88 @@ class TestTokenServiceInitialization:
         assert result is not None
         assert result.name == "shared"
 
+    def test_concurrent_lazy_initialization_is_safe(self, test_config: MagpieSettings) -> None:
+        """Multiple threads calling methods simultaneously should safely initialize once.
+
+        This test verifies the fix for the thread safety race condition in
+        _ensure_database_initialized(). Without proper locking, concurrent
+        calls could cause multiple init_database() calls or database corruption.
+        """
+        import threading
+
+        service = TokenService(test_config)
+        results = []
+        errors = []
+
+        def create_token(i: int) -> None:
+            try:
+                token = service.create_token(f"concurrent-token-{i}", TokenScope.READ)
+                results.append((i, token))
+            except Exception as e:
+                errors.append(f"Thread {i}: {str(e)}")
+
+        # Create 10 threads that all call create_token simultaneously
+        threads = [threading.Thread(target=create_token, args=(i,)) for i in range(10)]
+
+        # Start all threads
+        for t in threads:
+            t.start()
+
+        # Wait for all threads to complete
+        for t in threads:
+            t.join()
+
+        # Verify no errors occurred
+        assert len(errors) == 0, f"Errors during concurrent init: {errors}"
+
+        # Verify all 10 tokens were created successfully
+        assert len(results) == 10
+
+        # Verify all tokens are unique and valid
+        tokens_seen = set()
+        for i, token in results:
+            assert token not in tokens_seen, f"Duplicate token generated: {token}"
+            tokens_seen.add(token)
+
+            # Verify the token validates correctly
+            token_info = service.validate_token(token)
+            assert token_info is not None
+            assert token_info.name == f"concurrent-token-{i}"
+            assert token_info.scope == TokenScope.READ
+
+    def test_database_reinitializes_if_deleted(self, test_config: MagpieSettings) -> None:
+        """Database should reinitialize if file is deleted after initialization.
+
+        This test verifies that the database existence check in
+        _ensure_database_initialized() properly handles the case where
+        the database file is deleted externally.
+        """
+        service = TokenService(test_config)
+
+        # Create a token (this initializes the database)
+        token1 = service.create_token("token-before-delete", TokenScope.READ)
+        assert test_config.database_path.exists()
+
+        # Verify the token works
+        assert service.validate_token(token1) is not None
+
+        # Delete the database file
+        test_config.database_path.unlink()
+        assert not test_config.database_path.exists()
+
+        # Force re-initialization by resetting the flag
+        service._db_initialized = False
+
+        # Create another token (should reinitialize database)
+        token2 = service.create_token("token-after-delete", TokenScope.WRITE)
+        assert test_config.database_path.exists()
+
+        # The new token should work
+        assert service.validate_token(token2) is not None
+
+        # The old token should not work (new database)
+        assert service.validate_token(token1) is None
+
 
 class TestTokenNameValidation:
     """Tests for token name validation in TokenService.create_token.

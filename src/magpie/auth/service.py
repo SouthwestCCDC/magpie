@@ -7,6 +7,7 @@ import hmac
 import logging
 import secrets
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -86,6 +87,9 @@ class TokenService:
         - Admin tokens: mgp_ADMIN_ prefix
     """
 
+    # Class-level lock for thread-safe initialization
+    _init_lock = threading.Lock()
+
     def __init__(self, config: MagpieSettings) -> None:
         """Initialize the token service.
 
@@ -101,10 +105,20 @@ class TokenService:
 
         This method is called by all public methods that need database access.
         The initialization happens only once per TokenService instance.
+
+        Thread-safe: Uses double-checked locking to prevent race conditions
+        when multiple threads call methods simultaneously.
         """
-        if not self._db_initialized:
-            init_database(self.db_path)
-            self._db_initialized = True
+        # Fast path: check without lock
+        if self._db_initialized and self.db_path.exists():
+            return
+
+        # Slow path: acquire lock and re-check
+        with self._init_lock:
+            # Double-check after acquiring lock
+            if not self._db_initialized or not self.db_path.exists():
+                init_database(self.db_path)
+                self._db_initialized = True
 
     def create_token(self, name: str, scope: TokenScope, plaintext_token: str | None = None) -> str:
         """Create a new token and return the plaintext (only visible once).

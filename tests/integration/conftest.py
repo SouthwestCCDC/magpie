@@ -423,6 +423,21 @@ def override_auth_dependencies(request):
     app.dependency_overrides.pop(require_read_scope, None)
 
 
+@pytest.fixture(autouse=True)
+def clear_token_service_cache():
+    """Clear the lru_cache on get_token_service between tests.
+
+    The get_token_service dependency uses @functools.lru_cache(maxsize=1)
+    to create a singleton. Without clearing this cache between tests, a
+    TokenService instance from one test could leak into another test,
+    breaking test isolation.
+
+    This fixture runs after each test to ensure the cache is cleared.
+    """
+    yield
+    get_token_service.cache_clear()
+
+
 # =============================================================================
 # Helper Functions (not fixtures, but commonly used across tests)
 # =============================================================================
