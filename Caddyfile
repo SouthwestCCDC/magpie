@@ -23,8 +23,9 @@
 #                         Defaults to :80 for development (e.g., ":80")
 #                         Set to your domain in production (e.g., "magpie.example.com")
 #                         In production, docker-compose.prod.yml sets this from MAGPIE_DOMAIN
-#   MAGPIE_ALLOWED_CIDRS - Comma-separated CIDR ranges for IP allow-listing
+#   MAGPIE_ALLOWED_CIDRS - Space-separated CIDR ranges for IP allow-listing
 #                          (optional, for read-only access without auth)
+#                          Example: "10.0.0.0/8 192.168.1.0/24"
 #   AUTHENTIK_HOST - Authentik server hostname for SSO (optional, production only)
 #                    See docs/authentik-setup.md for setup instructions
 #   MAGPIE_ENABLE_LOGGING - Optional Caddy logging configuration block
@@ -118,9 +119,9 @@
 # =============================================================================
 #
 # Environment variable configuration:
-#   MAGPIE_ALLOWED_CIDRS - Comma-separated list of CIDR ranges allowed to bypass
+#   MAGPIE_ALLOWED_CIDRS - Space-separated list of CIDR ranges allowed to bypass
 #                          bearer token authentication for READ-ONLY operations
-#                          (e.g., "10.0.0.0/8,192.168.1.0/24")
+#                          (e.g., "10.0.0.0/8 192.168.1.0/24")
 #                          Default: empty (no IP exemptions)
 #
 # When MAGPIE_ALLOWED_CIDRS is set, requests from these IP ranges can access

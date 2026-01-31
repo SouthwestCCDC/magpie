@@ -78,7 +78,7 @@ X-Frame-Options "DENY"
 X-XSS-Protection "1; mode=block"
 Referrer-Policy "strict-origin-when-cross-origin"
 -Server""",
-            "MAGPIE_ALLOWED_CIDRS": "10.0.0.0/8,192.168.1.0/24",
+            "MAGPIE_ALLOWED_CIDRS": "10.0.0.0/8 192.168.1.0/24",  # Space-separated, not comma
         }
         success, stderr = validate_caddyfile_with_env(env_vars)
         assert success, f"Production Caddyfile validation failed:\n{stderr}"
@@ -123,12 +123,16 @@ Referrer-Policy "strict-origin-when-cross-origin"
         "cidr_value",
         [
             "10.0.0.0/8",
-            "192.168.1.0/24,172.16.0.0/12",
+            "192.168.1.0/24 172.16.0.0/12",  # Space-separated, not comma
             "255.255.255.255/32",  # Default value used in docker-compose.prod.yml
         ],
     )
     def test_various_cidr_formats_validate(self, cidr_value: str):
-        """Verify various CIDR format values parse correctly."""
+        """Verify various CIDR format values parse correctly.
+
+        Note: Caddy's client_ip matcher expects space-separated CIDR ranges,
+        not comma-separated.
+        """
         env_vars = {
             "MAGPIE_SITE_ADDRESS": ":80",
             "MAGPIE_ALLOWED_CIDRS": cidr_value,
