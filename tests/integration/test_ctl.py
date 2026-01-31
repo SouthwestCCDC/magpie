@@ -105,7 +105,7 @@ class TestInit:
         result1 = runner.invoke(ctl_cli, ["init"])
         assert result1.exit_code == 0
         # Extract token from output using regex
-        match1 = re.search(r'mgp_ADMIN_\w+', result1.output)
+        match1 = re.search(r"mgp_ADMIN_\w+", result1.output)
         assert match1 is not None, "Failed to find admin token in output"
         token1 = match1.group(0)
         assert token1.startswith("mgp_ADMIN_")
@@ -117,7 +117,7 @@ class TestInit:
         assert "NEW ADMIN TOKEN" in result2.output
 
         # Extract new token using regex
-        match2 = re.search(r'mgp_ADMIN_\w+', result2.output)
+        match2 = re.search(r"mgp_ADMIN_\w+", result2.output)
         assert match2 is not None, "Failed to find new admin token in output"
         token2 = match2.group(0)
         assert token2.startswith("mgp_ADMIN_")
@@ -411,7 +411,7 @@ class TestToken:
         )
         assert result1.exit_code == 0
         # Extract original token using regex
-        match1 = re.search(r'mgp_\w+', result1.output)
+        match1 = re.search(r"mgp_\w+", result1.output)
         assert match1 is not None, "Failed to find token in create output"
         token1 = match1.group(0)
 
@@ -421,7 +421,7 @@ class TestToken:
         assert "TOKEN ROTATED: rotate-test" in result2.output
 
         # Extract new token using regex
-        match2 = re.search(r'mgp_\w+', result2.output)
+        match2 = re.search(r"mgp_\w+", result2.output)
         assert match2 is not None, "Failed to find token in rotate output"
         token2 = match2.group(0)
 
