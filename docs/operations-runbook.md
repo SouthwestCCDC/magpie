@@ -144,7 +144,7 @@ magpie untag team/artifact-name:latest
 magpie info team/artifact-name
 ```
 
-Full reference: [User Guide - Client Commands](user-guide.md)
+Full reference: [User Guide - Basic Usage](user-guide.md#basic-usage)
 
 ### Garbage Collection
 
