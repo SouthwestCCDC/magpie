@@ -7,6 +7,7 @@ and database operations (no mocking of storage or database access).
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Generator
@@ -103,15 +104,10 @@ class TestInit:
         # First init
         result1 = runner.invoke(ctl_cli, ["init"])
         assert result1.exit_code == 0
-        # Extract token from output
-        lines = result1.output.split("\n")
-        token1 = None
-        for i, line in enumerate(lines):
-            if "ADMIN TOKEN" in line:
-                # Token should be a few lines after the header
-                token1 = lines[i + 1].strip()
-                break
-        assert token1 is not None
+        # Extract token from output using regex
+        match1 = re.search(r'mgp_ADMIN_\w+', result1.output)
+        assert match1 is not None, "Failed to find admin token in output"
+        token1 = match1.group(0)
         assert token1.startswith("mgp_ADMIN_")
 
         # Reset admin token
@@ -120,14 +116,10 @@ class TestInit:
         assert "Revoked existing admin token" in result2.output
         assert "NEW ADMIN TOKEN" in result2.output
 
-        # Extract new token
-        lines = result2.output.split("\n")
-        token2 = None
-        for i, line in enumerate(lines):
-            if "NEW ADMIN TOKEN" in line:
-                token2 = lines[i + 1].strip()
-                break
-        assert token2 is not None
+        # Extract new token using regex
+        match2 = re.search(r'mgp_ADMIN_\w+', result2.output)
+        assert match2 is not None, "Failed to find new admin token in output"
+        token2 = match2.group(0)
         assert token2.startswith("mgp_ADMIN_")
         assert token1 != token2
 
@@ -344,7 +336,7 @@ class TestToken:
             ctl_cli, ["token", "create", "--name", "duplicate", "--scope", "read"]
         )
         assert result2.exit_code != 0
-        assert "already exists" in result2.output.lower() or "duplicate" in result2.output.lower()
+        assert "already exists" in result2.output or "duplicate" in result2.output
 
     def test_token_list(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token list shows all tokens."""
@@ -387,7 +379,7 @@ class TestToken:
         result = runner.invoke(ctl_cli, ["token", "revoke", "to-revoke"])
 
         assert result.exit_code == 0
-        assert "revoked" in result.output.lower()
+        assert "revoked" in result.output
 
         # Verify token was removed from database
         conn = get_connection(tmp_path / "magpie.db")
@@ -406,7 +398,7 @@ class TestToken:
         result = runner.invoke(ctl_cli, ["token", "revoke", "nonexistent"])
 
         assert result.exit_code != 0
-        assert "not found" in result.output.lower()
+        assert "not found" in result.output
 
     def test_token_rotate(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token rotate generates new token with same name and scope."""
@@ -418,28 +410,20 @@ class TestToken:
             ctl_cli, ["token", "create", "--name", "rotate-test", "--scope", "write"]
         )
         assert result1.exit_code == 0
-        # Extract original token
-        lines1 = result1.output.split("\n")
-        token1 = None
-        for line in lines1:
-            if line.strip().startswith("mgp_"):
-                token1 = line.strip()
-                break
-        assert token1 is not None
+        # Extract original token using regex
+        match1 = re.search(r'mgp_\w+', result1.output)
+        assert match1 is not None, "Failed to find token in create output"
+        token1 = match1.group(0)
 
         # Rotate token
         result2 = runner.invoke(ctl_cli, ["token", "rotate", "rotate-test"])
         assert result2.exit_code == 0
         assert "TOKEN ROTATED: rotate-test" in result2.output
 
-        # Extract new token
-        lines2 = result2.output.split("\n")
-        token2 = None
-        for line in lines2:
-            if line.strip().startswith("mgp_"):
-                token2 = line.strip()
-                break
-        assert token2 is not None
+        # Extract new token using regex
+        match2 = re.search(r'mgp_\w+', result2.output)
+        assert match2 is not None, "Failed to find token in rotate output"
+        token2 = match2.group(0)
 
         # Verify tokens are different
         assert token1 != token2
@@ -462,7 +446,7 @@ class TestToken:
         result = runner.invoke(ctl_cli, ["token", "rotate", "nonexistent"])
 
         assert result.exit_code != 0
-        assert "not found" in result.output.lower()
+        assert "not found" in result.output
 
     def test_token_create_json_output(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token create with --format json outputs structured JSON."""
