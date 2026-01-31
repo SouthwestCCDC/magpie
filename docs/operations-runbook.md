@@ -25,8 +25,16 @@ docker compose -f docker-compose.prod.yml logs magpie -f
 # Health check
 curl https://magpie.example.com/health
 
-# Admin status via magpie CLI (requires configured server URL + admin token)
-MAGPIE_TOKEN="$MAGPIE_ADMIN_TOKEN" magpie --server https://magpie.example.com status
+# Admin status via magpie CLI (requires server URL + admin token)
+# Option 1: Use environment variable (recommended for security)
+MAGPIE_TOKEN="your-admin-token-here" magpie --server https://magpie.example.com status
+
+# Option 2: Use explicit flags
+magpie --server https://magpie.example.com --token your-admin-token-here status
+
+# Option 3: Configure once, use repeatedly (see user-guide.md "Client Configuration")
+# magpie config --server https://magpie.example.com --token your-admin-token-here
+# magpie status
 
 # Restart service
 docker compose -f docker-compose.prod.yml restart magpie
@@ -178,14 +186,31 @@ Recommended: Run GC on a schedule (e.g., weekly):
 
 **Check storage utilization:**
 ```bash
-# Using magpie CLI (requires admin token and server configuration)
-MAGPIE_TOKEN="$MAGPIE_ADMIN_TOKEN" magpie --server https://magpie.example.com status
+# Using magpie CLI (requires admin token and server URL)
+MAGPIE_TOKEN="your-admin-token-here" magpie --server https://magpie.example.com status
 ```
 
-Example output:
+Example output (human-readable format, default):
+```
+Server:    https://magpie.example.com
+Status:    OK
+Version:   0.1.0
+Storage:   1.15 GB used
+Artifacts: 42 total
+Blobs:     156 total
+```
+
+**JSON output** (for scripting/monitoring):
+```bash
+MAGPIE_TOKEN="your-admin-token-here" magpie --server https://magpie.example.com status --format json
+```
+
+Example JSON output:
 ```json
 {
+  "server": "https://magpie.example.com",
   "status": "ok",
+  "version": "0.1.0",
   "storage": {
     "total_size_bytes": 1234567890,
     "artifact_count": 42,
@@ -238,20 +263,27 @@ ls -la /path/to/MAGPIE_DATA_DIR/artifacts/.tmp/
 
 **Check upload size limits:**
 ```bash
+# Navigate to the docker-compose directory first
+cd /path/to/magpie-deployment
+
 # Check via environment/compose config
 grep '^MAGPIE_MAX_UPLOAD_SIZE' .env
 # Or inspect rendered compose config:
 docker compose -f docker-compose.prod.yml config | grep MAGPIE_MAX_UPLOAD_SIZE
 
-# Increase if needed (set in .env)
+# Increase if needed (edit .env in the docker-compose directory)
 MAGPIE_MAX_UPLOAD_SIZE=10737418240  # 10GB
 ```
 
 **Check auth token validity:**
 ```bash
 # Use an environment variable so the token is not exposed in `ps` output
-MAGPIE_TOKEN=YOUR_TOKEN magpie --server https://magpie.example.com status
+MAGPIE_TOKEN=your-token-here magpie --server https://magpie.example.com status
 ```
+
+**Where to get tokens:**
+- Admin token: Created during `magpie-ctl init` (see "Token Management" section)
+- User tokens: Created via `magpie-ctl token create` (see "Token Management" section)
 
 ### Symlink Corruption
 
@@ -421,7 +453,7 @@ BACKUP_PATH="/backups/magpie/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_PATH"
 
 # Backup artifacts (exclude temp files)
-rsync -av --exclude='artifacts/.tmp/' "$MAGPIE_DATA_DIR/artifacts/" "$BACKUP_PATH/artifacts/"
+rsync -av --exclude='.tmp/' "$MAGPIE_DATA_DIR/artifacts/" "$BACKUP_PATH/artifacts/"
 
 # Backup token database
 sqlite3 "$MAGPIE_DATA_DIR/magpie.db" ".backup '$BACKUP_PATH/magpie.db'"
@@ -447,7 +479,12 @@ BACKUP_PATH="/backups/magpie/20260115-103000"
 MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data}"
 
 mkdir -p "$MAGPIE_DATA_DIR"
+
+# WARNING: --delete will remove files not in backup. Run with --dry-run first!
+rsync -av --delete --dry-run "$BACKUP_PATH/artifacts/" "$MAGPIE_DATA_DIR/artifacts/"
+# Verify the dry-run output, then run without --dry-run:
 rsync -av --delete "$BACKUP_PATH/artifacts/" "$MAGPIE_DATA_DIR/artifacts/"
+
 rsync -av --delete "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/"
 ```
 
@@ -561,6 +598,29 @@ docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml logs magpie -f --tail 50
 ```
 
+**Rollback procedure** (if upgrade fails):
+```bash
+# 1. Stop the service
+docker compose -f docker-compose.prod.yml down
+
+# 2. Identify the previous image version
+docker images | grep magpie
+
+# 3. Edit docker-compose.prod.yml to pin the previous version
+# Change: image: ghcr.io/southwestccdc/magpie:latest
+# To:     image: ghcr.io/southwestccdc/magpie:v0.X.Y
+
+# 4. Start with the previous version
+docker compose -f docker-compose.prod.yml up -d
+
+# 5. Verify rollback succeeded
+curl https://magpie.example.com/health
+docker compose -f docker-compose.prod.yml logs magpie --tail 50
+
+# 6. If database migration ran during failed upgrade, restore from backup
+# (See "Full Restore Procedure" in Disaster Recovery section)
+```
+
 ---
 
 ## On-Call Playbook
@@ -581,6 +641,102 @@ docker compose -f docker-compose.prod.yml logs magpie -f --tail 50
 - Restart service: `docker compose -f docker-compose.prod.yml restart magpie`
 - Repair symlinks: `docker compose -f docker-compose.prod.yml exec magpie magpie-ctl gc --reconcile-only`
 - Clear temp files: `rm -rf /path/to/MAGPIE_DATA_DIR/artifacts/.tmp/*`
+
+---
+
+## Automation
+
+### Scheduled Tasks (Cron Examples)
+
+**Daily garbage collection** (remove old untagged artifacts):
+```bash
+# Add to crontab (crontab -e)
+# Run GC every day at 2 AM
+0 2 * * * cd /path/to/magpie && docker compose -f docker-compose.prod.yml exec -T magpie magpie-ctl gc >> /var/log/magpie-gc.log 2>&1
+```
+
+**Weekly backups**:
+```bash
+# Run full backup every Sunday at 3 AM
+0 3 * * 0 /usr/local/bin/magpie-backup.sh >> /var/log/magpie-backup.log 2>&1
+```
+
+Example backup script (`/usr/local/bin/magpie-backup.sh`):
+```bash
+#!/bin/bash
+set -euo pipefail
+
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/var/lib/magpie}"
+BACKUP_ROOT="/backups/magpie"
+BACKUP_PATH="$BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)"
+RETENTION_DAYS=30
+
+mkdir -p "$BACKUP_PATH"
+
+# Backup artifacts (exclude temp files)
+rsync -av --exclude='.tmp/' "$MAGPIE_DATA_DIR/artifacts/" "$BACKUP_PATH/artifacts/"
+
+# Backup token database
+sqlite3 "$MAGPIE_DATA_DIR/magpie.db" ".backup '$BACKUP_PATH/magpie.db'"
+
+# Clean up old backups
+find "$BACKUP_ROOT" -maxdepth 1 -type d -mtime +$RETENTION_DAYS -exec rm -rf {} \;
+
+echo "Backup completed: $BACKUP_PATH"
+```
+
+**Health check monitoring** (every 5 minutes):
+```bash
+# Add to crontab
+*/5 * * * * curl -sf https://magpie.example.com/health || echo "Magpie health check failed at $(date)" | mail -s "ALERT: Magpie Down" ops@example.com
+```
+
+**Disk space monitoring** (hourly):
+```bash
+# Add to crontab
+0 * * * * /usr/local/bin/magpie-disk-check.sh
+```
+
+Example disk check script (`/usr/local/bin/magpie-disk-check.sh`):
+```bash
+#!/bin/bash
+MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-/var/lib/magpie}"
+THRESHOLD=80  # Alert if usage exceeds 80%
+
+USAGE=$(df -h "$MAGPIE_DATA_DIR" | awk 'NR==2 {print $5}' | sed 's/%//')
+
+if [ "$USAGE" -gt "$THRESHOLD" ]; then
+    echo "WARNING: Magpie storage at ${USAGE}% capacity" | \
+        mail -s "ALERT: Magpie Disk Space Low" ops@example.com
+fi
+```
+
+### Ansible Integration
+
+For automating Magpie operations in Ansible playbooks, see [Ansible Integration Guide](ansible-integration.md).
+
+**Common playbook tasks:**
+- Token creation and distribution
+- Artifact deployment during provisioning
+- Health check verification in deployment pipelines
+- Automated backups with vault integration
+
+**Example playbook snippet:**
+```yaml
+- name: Run garbage collection
+  community.docker.docker_container_exec:
+    container: magpie
+    command: magpie-ctl gc
+  when: inventory_hostname == groups['magpie_server'][0]
+
+- name: Verify magpie health
+  uri:
+    url: "https://{{ magpie_domain }}/health"
+    status_code: 200
+  register: health_check
+  retries: 3
+  delay: 5
+```
 
 ---
 
