@@ -26,14 +26,14 @@ docker compose -f docker-compose.prod.yml logs magpie -f
 curl https://magpie.example.com/health
 
 # Admin status via magpie CLI (requires configured server URL + admin token)
-magpie status
+MAGPIE_TOKEN="$MAGPIE_ADMIN_TOKEN" magpie --server https://magpie.example.com status
 
 # Restart service
 docker compose -f docker-compose.prod.yml restart magpie
 
 # Stop for maintenance
-docker compose -f docker-compose.prod.yml stop magpie
-docker compose -f docker-compose.prod.yml start magpie
+docker compose -f docker-compose.prod.yml stop
+docker compose -f docker-compose.prod.yml start
 
 # Emergency: reset admin token
 docker compose -f docker-compose.prod.yml exec magpie magpie-ctl init --reset-admin-token
