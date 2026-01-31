@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
@@ -31,11 +32,12 @@ def get_storage_service() -> StorageService:
     return StorageService(settings)
 
 
+@functools.lru_cache(maxsize=1)
 def get_token_service() -> TokenService:
-    """Get TokenService instance configured from settings.
+    """Get TokenService instance configured from settings (cached singleton).
 
     Returns:
-        TokenService instance using current application settings.
+        Cached TokenService instance using current application settings.
     """
     settings = get_settings()
     return TokenService(settings)
