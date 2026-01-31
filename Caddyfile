@@ -12,19 +12,34 @@
 #   - Admin API enabled for debugging
 #
 # Production (docker-compose.prod.yml):
-#   - Uses MAGPIE_DOMAIN environment variable (REQUIRED)
+#   - Sets MAGPIE_SITE_ADDRESS from MAGPIE_DOMAIN environment variable
 #   - Automatic TLS via Let's Encrypt
 #   - Enhanced security headers (HSTS, X-Frame-Options, etc.)
 #   - Structured logging to stdout
 #   - Admin API disabled
 #
 # Environment Variables:
-#   MAGPIE_DOMAIN - Domain name for production (e.g., magpie.swccdc.com)
-#                   When unset, defaults to :80 (development mode)
+#   MAGPIE_SITE_ADDRESS - Site address for Caddy (host[:port])
+#                         Defaults to :80 for development (e.g., ":80")
+#                         Set to your domain in production (e.g., "magpie.example.com")
+#                         In production, docker-compose.prod.yml sets this from MAGPIE_DOMAIN
 #   MAGPIE_ALLOWED_CIDRS - Comma-separated CIDR ranges for IP allow-listing
 #                          (optional, for read-only access without auth)
 #   AUTHENTIK_HOST - Authentik server hostname for SSO (optional, production only)
 #                    See docs/authentik-setup.md for setup instructions
+#   MAGPIE_ENABLE_LOGGING - Optional Caddy logging configuration block
+#                           Production: set to a structured log config (e.g., JSON to stdout)
+#                           Development: leave unset for minimal logging
+#   MAGPIE_DISABLE_ADMIN - Optional admin API configuration directive
+#                          Production: set to "admin off" to disable Caddy's admin API
+#                          Development: leave unset to keep admin API enabled for debugging
+#   MAGPIE_PROD_SECURITY_HEADERS - Optional production-only security headers block
+#                                  Development: leave unset
+#                                  Production: set to a multi-line header configuration
+#   MAGPIE_TLS_CONFIG - Optional TLS configuration directive
+#                       Defaults to automatic Let's Encrypt when using a domain
+#                       For manual certs: e.g., "tls /path/to/cert.pem /path/to/key.pem"
+#                       For internal CA: e.g., "tls internal"
 #
 # =============================================================================
 # AUTHENTICATION FLOW (forward_auth)
@@ -158,7 +173,9 @@
 	# TLS CONFIGURATION (Production only)
 	# =========================================================================
 	#
-	# TLS is automatic via Let's Encrypt when MAGPIE_DOMAIN is set.
+	# TLS is automatic via Let's Encrypt when MAGPIE_SITE_ADDRESS is a domain name
+	# (e.g., magpie.example.com). In production, MAGPIE_SITE_ADDRESS is typically
+	# set from MAGPIE_DOMAIN.
 	# For manual certificates, set MAGPIE_TLS_CONFIG:
 	#   MAGPIE_TLS_CONFIG="tls /path/to/cert.pem /path/to/key.pem"
 	#
