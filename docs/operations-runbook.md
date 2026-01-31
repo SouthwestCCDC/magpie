@@ -179,7 +179,7 @@ Recommended: Run GC on a schedule (e.g., weekly):
 **Check storage utilization:**
 ```bash
 # Using magpie CLI (requires admin token and server configuration)
-magpie --server https://magpie.example.com --token "$MAGPIE_ADMIN_TOKEN" status
+MAGPIE_TOKEN="$MAGPIE_ADMIN_TOKEN" magpie --server https://magpie.example.com status
 ```
 
 Example output:
