@@ -28,11 +28,6 @@ class TestMagpieSettingsDefaults:
         settings = MagpieSettings()
         assert settings.debug is False
 
-    def test_default_gc_lock_path(self) -> None:
-        """Default gc_lock_path should be /var/run/magpie-gc.lock."""
-        settings = MagpieSettings()
-        assert settings.gc_lock_path == Path("/var/run/magpie-gc.lock")
-
     def test_default_max_upload_size_none(self) -> None:
         """Default max_upload_size should be None (no limit)."""
         settings = MagpieSettings()
@@ -124,12 +119,6 @@ class TestMagpieSettingsEnvironmentOverride:
         assert settings.temp_path == Path("/env/storage/.tmp")
         # database_path has its own default, not derived from storage_path
         assert settings.database_path == Path("/data/magpie.db")
-
-    def test_gc_lock_path_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """MAGPIE_GC_LOCK_PATH env var should override default."""
-        monkeypatch.setenv("MAGPIE_GC_LOCK_PATH", "/custom/gc.lock")
-        settings = MagpieSettings()
-        assert settings.gc_lock_path == Path("/custom/gc.lock")
 
     def test_max_upload_size_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """MAGPIE_MAX_UPLOAD_SIZE env var should override default."""

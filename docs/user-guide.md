@@ -58,8 +58,6 @@ Server configuration uses environment variables with the `MAGPIE_` prefix. See `
 | `MAGPIE_DATABASE_PATH` | `/data/magpie.db` | SQLite database path for token storage |
 | `MAGPIE_RETENTION_DAYS` | `90` | Days before untagged blobs are eligible for GC |
 | `MAGPIE_MAX_UPLOAD_SIZE` | *(none)* | Maximum upload size in bytes (leave empty for unlimited) |
-| **Garbage Collection** | | |
-| `MAGPIE_GC_LOCK_PATH` | `/var/run/magpie-gc.lock` | Lock file path to prevent concurrent GC runs |
 | **S3 Backup** | | |
 | `MAGPIE_S3_BUCKET` | *(none)* | S3 bucket name for artifact backup (leave empty to disable) |
 | `MAGPIE_S3_PREFIX` | *(empty)* | Optional S3 key prefix (e.g., `magpie/backups`) |

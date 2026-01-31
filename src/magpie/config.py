@@ -31,9 +31,6 @@ class MagpieSettings(BaseSettings):
     retention_days: int = 90
     debug: bool = False
 
-    # GC settings
-    gc_lock_path: Path = Path("/var/run/magpie-gc.lock")  # MAGPIE_GC_LOCK_PATH
-
     # Upload limits - enforced in two places for defense-in-depth:
     # 1. Content-Length header check: Includes multipart overhead (~200 bytes), provides early rejection
     # 2. SizeLimitedReader: Counts actual file content bytes during streaming, catches malicious clients
