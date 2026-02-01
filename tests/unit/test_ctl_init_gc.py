@@ -253,6 +253,24 @@ class TestInitCommand:
         assert token_info is not None
         assert token_info.name == "admin"
 
+    def test_init_with_custom_token_when_token_exists(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Init --admin-token fails when admin token already exists."""
+        custom_token = "mgp_ADMIN_custom_token_789"
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            # First init creates an admin token
+            result1 = cli_runner.invoke(cli, ["init"])
+            assert result1.exit_code == 0
+
+            # Second init with custom token should fail (token exists)
+            result2 = cli_runner.invoke(cli, ["init", "--admin-token", custom_token])
+            assert result2.exit_code == 0, "init should succeed but report token exists"
+            assert "already exists" in result2.output, "Should report token already exists"
+            # Custom token should NOT be created or displayed
+            assert custom_token not in result2.output, "Custom token should not be shown"
+
 
 class TestInitJsonOutput:
     """Tests for init command JSON output with --admin-token."""
@@ -273,6 +291,8 @@ class TestInitJsonOutput:
         # JSON output wraps in {"status": "ok", "data": {...}}
         assert output["status"] == "ok"
         data = output["data"]
+        # admin_token should be a string when first created
+        assert isinstance(data["admin_token"], str), "admin_token should be string on first init"
         assert data["admin_token"] == custom_token
         assert "storage_path" in data
         assert "database_path" in data

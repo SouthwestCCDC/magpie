@@ -444,6 +444,12 @@ class TestGC:
         assert "GC Summary:" in result.output, (
             "GC should complete and show summary even with corrupt artifacts"
         )
+        # Verify corrupt artifact was actually skipped during processing
+        # (artifacts are counted in scan, but corrupt ones yield 0 blobs found)
+        assert "Artifacts scanned: 1" in result.output, "Corrupt artifact should be counted in scan"
+        assert "Blobs found: 0" in result.output, (
+            "Corrupt artifact should be skipped and yield 0 blobs found"
+        )
 
 
 class TestToken:
