@@ -93,7 +93,10 @@ registered domain per week. For testing, use `tls internal` to generate self-sig
 certificates by setting `MAGPIE_TLS_CONFIG=tls internal`, or configure the Let's Encrypt
 staging environment:
 ```yaml
-- MAGPIE_TLS_CONFIG=tls { ca https://acme-staging-v02.api.letsencrypt.org/directory }
+- |
+  MAGPIE_TLS_CONFIG=tls {
+    ca https://acme-staging-v02.api.letsencrypt.org/directory
+  }
 ```
 The `caddy_data` volume stores issued certificates. Persist this volume across
 container recreations to avoid requesting duplicate certificates.
