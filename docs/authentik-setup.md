@@ -20,7 +20,7 @@ Optional browser-based SSO for human access to artifacts. Bearer tokens remain t
 AUTHENTIK_HOST=authentik.example.com
 ```
 
-5. In `Caddyfile.prod`, replace Bearer auth in `/artifacts/*` handler with:
+5. In the consolidated `Caddyfile`, replace Bearer auth in `/artifacts/*` handler with:
 ```Caddy
 handle /artifacts/* {
     request_header -X-authentik-username
