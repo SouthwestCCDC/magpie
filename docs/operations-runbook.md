@@ -32,7 +32,7 @@ curl https://magpie.example.com/health
 # Option 1: Use environment variable (recommended for security)
 MAGPIE_TOKEN="your-admin-token-here" magpie --server https://magpie.example.com status
 
-# Option 2: Configure once, use repeatedly (see user-guide.md "Client Configuration")
+# Option 2: Configure once, use repeatedly (see [user-guide.md#configuration](user-guide.md#configuration))
 # magpie config --server https://magpie.example.com --token your-admin-token-here
 # magpie status
 
@@ -278,7 +278,7 @@ MAGPIE_MAX_UPLOAD_SIZE=10737418240  # 10GB
 **Check auth token validity:**
 ```bash
 # Use an environment variable so the token is not exposed in `ps` output
-MAGPIE_TOKEN=your-token-here magpie --server https://magpie.example.com status
+MAGPIE_TOKEN="your-token-here" magpie --server https://magpie.example.com status
 ```
 
 **Where to get tokens:**
@@ -310,7 +310,7 @@ ls -la /path/to/MAGPIE_DATA_DIR
 
 **Fix permissions (container runs as uid:gid from volume owner):**
 ```bash
-sudo chown -R $UID:$GID /path/to/MAGPIE_DATA_DIR
+sudo chown -R "${UID}:${GID}" /path/to/MAGPIE_DATA_DIR
 chmod -R u+rwX,g+rX,o-rwx /path/to/MAGPIE_DATA_DIR
 ```
 
