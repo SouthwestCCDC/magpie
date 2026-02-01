@@ -434,22 +434,16 @@ class TestGC:
         # Write invalid JSON to manifest
         manifest_file.write_text("{ this is not valid JSON }", encoding="utf-8")
 
-        # GC should handle this gracefully (either skip or report error, but not crash)
+        # GC should handle this gracefully and continue (skip corrupt artifacts)
         result = runner.invoke(ctl_cli, ["gc", "--dry-run"])
 
-        # Should not crash - either succeeds with error handling or reports error gracefully
-        # We accept either exit code 0 (graceful skip) or non-zero (reported error)
-        # but must not raise unhandled exception
-        assert result.exit_code in (
-            0,
-            1,
-        ), f"GC should handle corrupt manifest gracefully, got: {result.output}"
-
-        # If it succeeded, verify it logged/reported the issue
-        if result.exit_code == 0:
-            # Should either mention the error in output or silently skip
-            # We just verify it didn't crash
-            assert "GC Summary:" in result.output or "error" in result.output.lower()
+        # GC should complete successfully even with corrupt manifests (graceful skip)
+        assert result.exit_code == 0, (
+            f"GC should skip corrupt manifest gracefully, got exit {result.exit_code}: {result.output}"
+        )
+        assert "GC Summary:" in result.output, (
+            "GC should complete and show summary even with corrupt artifacts"
+        )
 
 
 class TestToken:
@@ -644,6 +638,40 @@ class TestToken:
             assert rotate_tokens[0].scope == TokenScope.WRITE
         finally:
             conn.close()
+
+    def test_token_rotate_invalidates_old_token(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Token rotate invalidates the old token (security requirement)."""
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        # Create token and extract plaintext
+        create_result = runner.invoke(
+            ctl_cli, ["token", "create", "--name", "rotate-security-test", "--scope", "read"]
+        )
+        assert create_result.exit_code == 0
+        match = re.search(r"mgp_[A-Za-z0-9_-]+", create_result.output)
+        assert match is not None
+        old_token = match.group(0)
+
+        # Verify old token works before rotation
+        from magpie.auth.service import TokenService
+        from magpie.config import get_settings
+
+        settings = get_settings()
+        token_service = TokenService(settings)
+        assert token_service.validate_token(old_token) is not None, (
+            "Old token should work before rotation"
+        )
+
+        # Rotate token
+        rotate_result = runner.invoke(ctl_cli, ["token", "rotate", "rotate-security-test"])
+        assert rotate_result.exit_code == 0
+
+        # Critical: old token must fail authentication after rotation
+        token_info = token_service.validate_token(old_token)
+        assert token_info is None, (
+            "Rotated token should fail authentication - old token must be invalidated"
+        )
 
     def test_token_rotate_nonexistent(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token rotate with nonexistent token shows error."""
