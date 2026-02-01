@@ -346,7 +346,7 @@ If database is corrupted, restore from backup (see [Disaster Recovery](#disaster
 
 **Verify AWS credentials:**
 ```bash
-docker compose -f docker-compose.prod.yml exec magpie env | grep AWS_
+docker compose -f docker-compose.prod.yml exec magpie aws sts get-caller-identity
 ```
 
 **Test S3 access:**
@@ -485,7 +485,7 @@ rsync -av --delete --dry-run "$BACKUP_PATH/artifacts/" "$MAGPIE_DATA_DIR/artifac
 # Verify the dry-run output, then run without --dry-run:
 rsync -av --delete "$BACKUP_PATH/artifacts/" "$MAGPIE_DATA_DIR/artifacts/"
 
-rsync -av --delete "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/"
+cp "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/magpie.db"
 ```
 
 **3. Fix permissions:**
