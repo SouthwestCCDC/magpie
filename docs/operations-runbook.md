@@ -10,6 +10,9 @@ Quick reference guide for deploying, maintaining, troubleshooting, and monitorin
 4. [Troubleshooting](#troubleshooting)
 5. [Monitoring & Alerts](#monitoring--alerts)
 6. [Disaster Recovery](#disaster-recovery)
+7. [Maintenance Windows](#maintenance-windows)
+8. [On-Call Playbook](#on-call-playbook)
+9. [Automation](#automation)
 
 ---
 
@@ -29,10 +32,7 @@ curl https://magpie.example.com/health
 # Option 1: Use environment variable (recommended for security)
 MAGPIE_TOKEN="your-admin-token-here" magpie --server https://magpie.example.com status
 
-# Option 2: Use explicit flags
-magpie --server https://magpie.example.com --token your-admin-token-here status
-
-# Option 3: Configure once, use repeatedly (see user-guide.md "Client Configuration")
+# Option 2: Configure once, use repeatedly (see user-guide.md "Client Configuration")
 # magpie config --server https://magpie.example.com --token your-admin-token-here
 # magpie status
 
@@ -751,4 +751,4 @@ For automating Magpie operations in Ansible playbooks, see [Ansible Integration 
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5)*
+*(AI-generated via Claude Code w/ Opus 4.5)*
