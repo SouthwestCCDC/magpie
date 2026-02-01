@@ -8,7 +8,6 @@ multiline environment variable syntax and ensuring production configurations wor
 from __future__ import annotations
 
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -26,30 +25,24 @@ def validate_caddyfile_with_env(env_vars: dict[str, str]) -> tuple[bool, str]:
     Returns:
         Tuple of (success: bool, stderr: str).
     """
-    # Create a temporary directory for Caddy to use as working directory
-    with tempfile.TemporaryDirectory() as temp_dir:
-        result = subprocess.run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "-v",
-                f"{PROJECT_ROOT / 'Caddyfile'}:/etc/caddy/Caddyfile:ro",
-                "-w",
-                temp_dir,
-                *[f"-e{k}={v}" for k, v in env_vars.items()],
-                "caddy:2-alpine",
-                "caddy",
-                "validate",
-                "--config",
-                "/etc/caddy/Caddyfile",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        return result.returncode == 0, result.stderr
-
-
+    result = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{PROJECT_ROOT / 'Caddyfile'}:/etc/caddy/Caddyfile:ro",
+            *[f"-e{k}={v}" for k, v in env_vars.items()],
+            "caddy:2-alpine",
+            "caddy",
+            "validate",
+            "--config",
+            "/etc/caddy/Caddyfile",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0, result.stderr
 class TestCaddyfileValidation:
     """Test Caddyfile configuration validation."""
 

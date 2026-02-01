@@ -426,9 +426,13 @@ TLS_MODE=${TLS_MODE:-}
 DOMAIN=${DOMAIN:-}
 TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
 
-# Note: Caddy environment variables (MAGPIE_ENABLE_LOGGING, MAGPIE_PROD_SECURITY_HEADERS, etc.)
-# are configured directly in docker-compose.prod.yml using YAML multiline syntax.
-# The .env file cannot support multiline values. Use docker-compose.prod.yml for production deployments.
+# Caddy configuration (consolidated Caddyfile)
+# Simple single-line environment variables are set here.
+# Complex multiline variables (MAGPIE_ENABLE_LOGGING, MAGPIE_PROD_SECURITY_HEADERS)
+# must be set manually in docker-compose.prod.yml or systemd service override.
+# See issue #232 for the consolidated Caddyfile design.
+MAGPIE_SITE_ADDRESS=${DOMAIN:-:80}
+MAGPIE_DISABLE_ADMIN=admin off
 MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-255.255.255.255/32}
 EOF
 
@@ -472,7 +476,8 @@ generate_caddyfile() {
     fi
 
     log "Caddyfile copied to ${dest_caddyfile}"
-    log "Configuration is controlled via MAGPIE_* environment variables in ${INSTALL_DIR}/etc/.env"
+    log "Basic Caddy configuration via MAGPIE_SITE_ADDRESS and MAGPIE_DISABLE_ADMIN in ${INSTALL_DIR}/etc/.env"
+    log "For multiline production config (logging, security headers), edit docker-compose.prod.yml or systemd override"
 }
 
 generate_systemd_service() {
