@@ -516,9 +516,6 @@ class TestTokenServiceInitialization:
         test_config.database_path.unlink()
         assert not test_config.database_path.exists()
 
-        # Force re-initialization by clearing the class-level tracking
-        TokenService._initialized_paths.discard(test_config.database_path)
-
         # Create another token (should reinitialize database)
         token2 = service.create_token("token-after-delete", TokenScope.WRITE)
         assert test_config.database_path.exists()
