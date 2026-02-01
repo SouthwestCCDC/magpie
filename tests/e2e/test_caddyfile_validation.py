@@ -43,6 +43,8 @@ def validate_caddyfile_with_env(env_vars: dict[str, str]) -> tuple[bool, str]:
         text=True,
     )
     return result.returncode == 0, result.stderr
+
+
 class TestCaddyfileValidation:
     """Test Caddyfile configuration validation."""
 
