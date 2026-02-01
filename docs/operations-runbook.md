@@ -621,6 +621,30 @@ docker compose -f docker-compose.prod.yml logs magpie --tail 50
 # (See "Full Restore Procedure" in Disaster Recovery section)
 ```
 
+### Certificate Renewal
+
+Caddy automatically renews Let's Encrypt certificates 30 days before expiration.
+
+**Verify certificate status:**
+```bash
+# Check certificate expiration
+echo | openssl s_client -connect magpie.example.com:443 2>/dev/null | \
+  openssl x509 -noout -dates
+```
+
+**Check Caddy renewal logs:**
+```bash
+docker compose -f docker-compose.prod.yml logs caddy | grep -i "renew\|certificate"
+```
+
+**If auto-renewal fails:**
+1. Check Caddy logs for errors
+2. Verify DNS is resolving correctly: `dig magpie.example.com`
+3. Verify port 80 is accessible (Let's Encrypt HTTP challenge)
+4. Restart Caddy to trigger retry: `docker compose -f docker-compose.prod.yml restart caddy`
+5. If still failing, check [Caddy documentation](https://caddyserver.com/docs/automatic-https)
+
+
 ---
 
 ## On-Call Playbook
