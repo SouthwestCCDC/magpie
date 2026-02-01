@@ -10,6 +10,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from magpie.auth.database import (
@@ -87,7 +88,8 @@ class TokenService:
         - Admin tokens: mgp_ADMIN_ prefix
     """
 
-    # Class-level lock for thread-safe initialization
+    # Class-level tracking of initialized database paths
+    _initialized_paths: set[Path] = set()
     _init_lock = threading.Lock()
 
     def __init__(self, config: MagpieSettings) -> None:
@@ -98,27 +100,26 @@ class TokenService:
         """
         self.config = config
         self.db_path = config.database_path
-        self._db_initialized = False
 
     def _ensure_database_initialized(self) -> None:
         """Ensure database is initialized (lazy initialization).
 
         This method is called by all public methods that need database access.
-        The initialization happens only once per TokenService instance.
+        The initialization happens only once per database path, not per instance.
 
         Thread-safe: Uses double-checked locking to prevent race conditions
         when multiple threads call methods simultaneously.
         """
         # Fast path: check without lock
-        if self._db_initialized and self.db_path.exists():
+        if self.db_path in self._initialized_paths and self.db_path.exists():
             return
 
         # Slow path: acquire lock and re-check
         with self._init_lock:
             # Double-check after acquiring lock
-            if not self._db_initialized or not self.db_path.exists():
+            if self.db_path not in self._initialized_paths or not self.db_path.exists():
                 init_database(self.db_path)
-                self._db_initialized = True
+                self._initialized_paths.add(self.db_path)
 
     def create_token(self, name: str, scope: TokenScope, plaintext_token: str | None = None) -> str:
         """Create a new token and return the plaintext (only visible once).

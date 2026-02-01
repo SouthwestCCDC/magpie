@@ -432,10 +432,15 @@ def clear_token_service_cache():
     TokenService instance from one test could leak into another test,
     breaking test isolation.
 
-    This fixture runs after each test to ensure the cache is cleared.
+    This fixture clears both before and after each test to ensure:
+    1. Clean state at test start (clear class-level _initialized_paths)
+    2. Clean state after test end (clear both cache and _initialized_paths)
     """
+    get_token_service.cache_clear()
+    TokenService._initialized_paths.clear()
     yield
     get_token_service.cache_clear()
+    TokenService._initialized_paths.clear()
 
 
 # =============================================================================

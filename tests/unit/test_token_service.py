@@ -33,6 +33,19 @@ def token_service(test_config: MagpieSettings) -> TokenService:
     return TokenService(test_config)
 
 
+@pytest.fixture(autouse=True)
+def clear_token_service_state():
+    """Clear TokenService class-level state between tests.
+
+    This ensures test isolation by clearing the _initialized_paths set
+    before and after each test. This prevents one test's initialization
+    state from affecting another test.
+    """
+    TokenService._initialized_paths.clear()
+    yield
+    TokenService._initialized_paths.clear()
+
+
 class TestCreateToken:
     """Tests for TokenService.create_token method."""
 
@@ -402,18 +415,37 @@ class TestTokenServiceInitialization:
         assert test_config.database_path.exists()
 
     def test_service_can_be_created_multiple_times(self, test_config: MagpieSettings) -> None:
-        """Multiple TokenService instances should work correctly."""
+        """Multiple TokenService instances should work correctly.
+
+        This test verifies that multiple instances pointing to the same database
+        path only initialize the database once (class-level tracking) and can
+        share tokens correctly.
+        """
+        # Verify database doesn't exist yet
+        assert not test_config.database_path.exists()
+
+        # Create two instances with the same database path
         service1 = TokenService(test_config)
         service2 = TokenService(test_config)
 
-        # Create token with one service
+        # Verify both have the same db_path
+        assert service1.db_path == service2.db_path
+
+        # Create token with first service (initializes database)
         plaintext = service1.create_token("shared", TokenScope.READ)
 
-        # Validate with another service
+        # Verify database exists and path is tracked
+        assert test_config.database_path.exists()
+        assert test_config.database_path in TokenService._initialized_paths
+
+        # Validate with second service (should not reinitialize)
         result = service2.validate_token(plaintext)
 
         assert result is not None
         assert result.name == "shared"
+
+        # Both instances should recognize the database as initialized
+        assert test_config.database_path in TokenService._initialized_paths
 
     def test_concurrent_lazy_initialization_is_safe(self, test_config: MagpieSettings) -> None:
         """Multiple threads calling methods simultaneously should safely initialize once.
@@ -484,8 +516,8 @@ class TestTokenServiceInitialization:
         test_config.database_path.unlink()
         assert not test_config.database_path.exists()
 
-        # Force re-initialization by resetting the flag
-        service._db_initialized = False
+        # Force re-initialization by clearing the class-level tracking
+        TokenService._initialized_paths.discard(test_config.database_path)
 
         # Create another token (should reinitialize database)
         token2 = service.create_token("token-after-delete", TokenScope.WRITE)
