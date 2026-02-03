@@ -446,3 +446,27 @@ def e2e_services(base_url: str, admin_token: str) -> E2EServices:
         Dictionary with base_url and admin_token for E2E testing.
     """
     return {"base_url": base_url, "admin_token": admin_token}
+
+
+@pytest.fixture
+def cleanup_after_upload(authenticated_client: httpx.Client) -> Generator[list[str], None, None]:
+    """Track and clean up uploaded artifacts after test completes.
+
+    Use for large upload tests to prevent disk exhaustion on self-hosted runners.
+    Tests should append artifact paths to the returned list, and this fixture
+    will delete them via API after the test completes.
+
+    Yields:
+        List that tests can append artifact paths to for cleanup.
+    """
+    uploaded_paths: list[str] = []
+
+    yield uploaded_paths
+
+    # Cleanup: delete all tracked uploads via API (best effort)
+    for path in uploaded_paths:
+        try:
+            authenticated_client.delete(f"/api/v1/artifacts/{path}")
+        except Exception:
+            # Best-effort cleanup - ignore errors
+            pass

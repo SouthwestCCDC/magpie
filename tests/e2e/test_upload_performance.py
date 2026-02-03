@@ -269,3 +269,57 @@ class TestE2EMemoryBounded:
             assert response.status_code == 200, f"Concurrent upload {i} failed: {response.text}"
 
         print("\nAll concurrent uploads completed successfully (memory bounded)")
+
+
+@pytest.mark.e2e
+@pytest.mark.large_upload
+@pytest.mark.skipif(
+    os.environ.get("MAGPIE_SKIP_LARGE_TESTS", "1") == "1",
+    reason="XL tests skipped (set MAGPIE_SKIP_LARGE_TESTS=0 to enable)",
+)
+def test_extra_large_upload_10gb(
+    e2e_services: E2EServices,
+    cleanup_after_upload: list[str],
+) -> None:
+    """Test 10GB upload to catch buffer exhaustion issues.
+
+    This test requires a self-hosted runner with sufficient disk space.
+    Skipped on GitHub-hosted runners.
+
+    Uses cleanup_after_upload fixture to immediately delete the artifact
+    after test completes, preventing disk exhaustion on self-hosted runners.
+    """
+    size_bytes = 10 * 1024 * 1024 * 1024  # 10 GB
+    upload_file = StreamingUploadFile(size_bytes, chunk_size=1024 * 1024)  # 1MB chunks
+
+    base_url = e2e_services["base_url"]
+    admin_token = e2e_services["admin_token"]
+
+    artifact_path = "e2e/xl-perf-test"
+    files = {"file": ("e2e_xl_10gb.bin", upload_file, "application/octet-stream")}
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    # Track for cleanup
+    cleanup_after_upload.append(artifact_path)
+
+    start_time = time.time()
+    response = httpx.post(
+        f"{base_url}/api/v1/upload/{artifact_path}",
+        files=files,
+        headers=headers,
+        params={"uploaded_by": "e2e-xl-test"},
+        timeout=1800.0,  # 30 minute timeout
+    )
+    elapsed = time.time() - start_time
+
+    assert response.status_code == 200, f"XL E2E upload failed: {response.text}"
+
+    # Should complete within 30 minutes
+    assert elapsed < 1800, f"XL E2E upload took {elapsed:.2f}s"
+
+    # Verify streaming behavior (10GB with 1MB chunks = ~10,000 chunks)
+    assert len(upload_file.chunk_times) > 100, "XL file not properly streamed through full stack"
+
+    throughput_mbps = (size_bytes / (1024 * 1024)) / elapsed
+    print(f"\nE2E 10GB: {elapsed:.2f}s ({throughput_mbps:.2f} MB/s)")
+    print(f"Chunks read: {len(upload_file.chunk_times)}")

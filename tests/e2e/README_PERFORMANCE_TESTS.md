@@ -23,7 +23,7 @@ These tests verify upload behavior through the complete deployment stack, catchi
 ## Running E2E Performance Tests
 
 ```bash
-# All E2E performance tests (requires docker-compose)
+# All E2E performance tests (requires docker-compose, excludes XL by default)
 uv run pytest tests/e2e/test_upload_performance.py -v
 
 # Small/medium tests only (skip large)
@@ -31,6 +31,9 @@ uv run pytest tests/e2e/test_upload_performance.py -m "e2e and not slow" -v
 
 # Include large (500 MB) tests
 MAGPIE_SKIP_LARGE_TESTS=0 uv run pytest tests/e2e/test_upload_performance.py -v
+
+# Include extra-large (10 GB) tests - requires self-hosted runner with large disk
+MAGPIE_SKIP_LARGE_TESTS=0 uv run pytest tests/e2e/test_upload_performance.py -m large_upload -v
 ```
 
 ## Test Coverage
@@ -40,11 +43,14 @@ MAGPIE_SKIP_LARGE_TESTS=0 uv run pytest tests/e2e/test_upload_performance.py -v
 - **1 MB** - Basic proxy + API streaming
 - **50 MB** - Medium file through full stack
 - **500 MB** - Large file (skipped by default)
+- **10 GB** - Extra-large file (self-hosted runners only, marker: `large_upload`)
 
 Each test verifies:
 - Upload completes successfully
 - Throughput is acceptable
 - File is read in chunks (streaming, not buffering)
+
+The 10GB test includes immediate cleanup via the `cleanup_after_upload` fixture to prevent disk exhaustion on self-hosted runners.
 
 ### Stability Tests
 
@@ -113,7 +119,12 @@ E2E performance tests (excluding large) run on every PR (`.github/workflows/e2e.
 
 ### Post-Merge Builds
 
-E2E tests currently skip large tests even after merge. If comprehensive E2E testing is needed, a separate workflow can be added to run with `MAGPIE_SKIP_LARGE_TESTS=0`.
+Post-merge builds (`.github/workflows/post-merge.yml`) run two jobs:
+
+1. **full-test-suite** - Unit and integration tests with large tests enabled
+2. **test-extra-large** - 10GB E2E upload test on self-hosted runner with `large-disk` label
+
+The XL test only runs on self-hosted runners to ensure sufficient disk space and avoid issues on GitHub-hosted runners. It uses the `cleanup_after_upload` fixture to immediately delete artifacts after each test, preventing disk exhaustion.
 
 ### Timing Estimates
 
@@ -124,10 +135,19 @@ E2E tests take longer than integration tests due to docker-compose overhead:
 | Docker startup | ~10-15s |
 | Small/medium tests | ~5-10s |
 | Large test (if enabled) | ~10-15s |
+| **XL test (10GB, self-hosted only)** | ~5-30 minutes (depends on disk/network) |
 | **Total (no large)** | ~15-30s |
 | **Total (with large)** | ~25-40s |
 
 Note: Integration tests (`tests/integration/test_upload_performance.py`) provide faster feedback for performance verification without the docker-compose overhead.
+
+### Self-Hosted Runner Requirements
+
+The XL upload test requires:
+- Self-hosted runner with `linux` and `large-disk` labels
+- At least 20GB free disk space (10GB for upload + overhead)
+- Docker and docker-compose installed
+- Access to the repository (for GitHub Actions)
 
 ## Related Tests
 
