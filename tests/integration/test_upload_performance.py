@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-class FakeStreamingFile(io.BytesIO):
+class FakeStreamingFile:
     """File-like object that tracks read patterns to detect buffering issues."""
 
     def __init__(self, size: int, chunk_size: int = 8192):
@@ -206,7 +206,7 @@ class TestUploadThroughputStability:
         # (inverse relationship: slower read times = lower throughput)
         degradation_factor = avg_last / avg_first if avg_first > 0 else 1.0
 
-        assert degradation_factor < 2.5, (
+        assert degradation_factor < 1.5, (
             f"Upload throughput degraded significantly: "
             f"last quartile {degradation_factor:.1f}x slower than first quartile. "
             f"This suggests buffering issues."
