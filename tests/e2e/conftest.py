@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Generator
+from typing import Generator, TypedDict
 
 import httpx
 import pytest
@@ -424,3 +424,25 @@ def cidr_outside_http_client(cidr_base_url: str) -> Generator[httpx.Client, None
 
     with httpx.Client(base_url=cidr_base_url, timeout=30.0) as client:
         yield client
+
+
+# =============================================================================
+# PERFORMANCE TESTING FIXTURES
+# =============================================================================
+
+
+class E2EServices(TypedDict):
+    """Type for E2E services configuration."""
+
+    base_url: str
+    admin_token: str
+
+
+@pytest.fixture(scope="session")
+def e2e_services(base_url: str, admin_token: str) -> E2EServices:
+    """Provide combined E2E services configuration for performance tests.
+
+    Returns:
+        Dictionary with base_url and admin_token for E2E testing.
+    """
+    return {"base_url": base_url, "admin_token": admin_token}
