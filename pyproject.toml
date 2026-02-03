@@ -1,6 +1,6 @@
 [project]
 name = "magpie"
-version = "0.1.1rc1"
+version = "0.1.1-rc2"
 description = "Content-addressed artifact storage with mutable tags"
 authors = [{ name = "SWCCDC Team" }]
 readme = "README.md"
