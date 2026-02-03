@@ -5,7 +5,6 @@ These tests verify that uploads stream correctly without buffering issues.
 
 from __future__ import annotations
 
-import io
 import os
 import time
 
