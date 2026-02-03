@@ -12,19 +12,23 @@ These tests verify that:
 
 ## Test Tiers
 
-### Always Run (CI)
+### Always Run (PRs)
 
-- **1 MB uploads** - Basic streaming verification
-- **50 MB uploads** - Medium file handling
-- **Throughput stability** - Detects degradation patterns
+- **1 MB uploads** - Basic streaming verification (~0.1s)
+- **50 MB uploads** - Medium file handling (~0.2s)
+- **Throughput stability** - Detects degradation patterns (~0.1s)
 
-These run in CI and local development by default.
+**Total time: ~1.5 seconds**
 
-### Large Tests (Manual/Nightly)
+These run in CI on every PR by default to provide fast feedback.
 
-- **500 MB uploads** - Buffer exhaustion detection
+### Large Tests (Post-Merge/Manual)
 
-Large tests are skipped by default to keep CI fast. Enable them with:
+- **500 MB uploads** - Buffer exhaustion detection (~5 seconds)
+
+Large tests are skipped in PRs to keep CI fast. They run automatically after merge to `default` branch.
+
+Enable manually with:
 
 ```bash
 MAGPIE_SKIP_LARGE_TESTS=0 uv run pytest tests/integration/test_upload_performance.py -v
@@ -76,6 +80,28 @@ For full-stack testing through Caddy proxy, see:
 
 ## CI Configuration
 
-In CI, large tests are skipped automatically (default `MAGPIE_SKIP_LARGE_TESTS=1`).
+### PR Builds
 
-For nightly jobs, set `MAGPIE_SKIP_LARGE_TESTS=0` to enable comprehensive testing.
+Small and medium tests run on every PR (`.github/workflows/ci.yml`):
+- Default: `MAGPIE_SKIP_LARGE_TESTS=1` (large tests skipped)
+- Duration: ~1.5 seconds
+- Fast feedback for streaming and basic performance verification
+
+### Post-Merge Builds
+
+Full test suite including large tests runs after merge to `default` (`.github/workflows/post-merge.yml`):
+- Setting: `MAGPIE_SKIP_LARGE_TESTS=0` (all tests run)
+- Duration: ~6 seconds total
+- Comprehensive verification including 500MB upload test
+
+### Timing Estimates
+
+Based on local testing (development machine):
+
+| Test | Size | Time | Throughput |
+|------|------|------|------------|
+| Small | 1 MB | 0.1s | N/A |
+| Medium | 50 MB | 0.2s | N/A |
+| Large | 500 MB | 5s | ~120 MB/s |
+
+Actual CI times may vary based on runner performance.

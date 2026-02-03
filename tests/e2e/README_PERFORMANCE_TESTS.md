@@ -103,12 +103,31 @@ If E2E tests fail but integration tests pass:
 
 ## CI Configuration
 
-E2E performance tests run in CI with:
-- `pytest -m e2e` flag
-- Default skipping of large (500 MB) tests
-- Docker-compose service startup
+### PR Builds
 
-For nightly jobs, enable large tests with `MAGPIE_SKIP_LARGE_TESTS=0`.
+E2E performance tests (excluding large) run on every PR (`.github/workflows/e2e.yml`):
+- Tests: 1 MB, 50 MB uploads through full stack
+- Large tests skipped: `MAGPIE_SKIP_LARGE_TESTS=1` (default)
+- Duration: ~15-30 seconds (includes docker-compose startup)
+- Marker: `pytest -m e2e`
+
+### Post-Merge Builds
+
+E2E tests currently skip large tests even after merge. If comprehensive E2E testing is needed, a separate workflow can be added to run with `MAGPIE_SKIP_LARGE_TESTS=0`.
+
+### Timing Estimates
+
+E2E tests take longer than integration tests due to docker-compose overhead:
+
+| Phase | Time |
+|-------|------|
+| Docker startup | ~10-15s |
+| Small/medium tests | ~5-10s |
+| Large test (if enabled) | ~10-15s |
+| **Total (no large)** | ~15-30s |
+| **Total (with large)** | ~25-40s |
+
+Note: Integration tests (`tests/integration/test_upload_performance.py`) provide faster feedback for performance verification without the docker-compose overhead.
 
 ## Related Tests
 
