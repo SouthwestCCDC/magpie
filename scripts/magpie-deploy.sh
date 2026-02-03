@@ -431,10 +431,40 @@ TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
 # Complex multiline variables (MAGPIE_ENABLE_LOGGING, MAGPIE_PROD_SECURITY_HEADERS)
 # must be set manually in docker-compose.prod.yml or systemd service override.
 # See issue #232 for the consolidated Caddyfile design.
-MAGPIE_SITE_ADDRESS=${DOMAIN:-:80}
-MAGPIE_DISABLE_ADMIN=admin off
-MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-255.255.255.255/32}
 EOF
+
+    # Set MAGPIE_SITE_ADDRESS based on TLS_MODE to prevent automatic TLS when TLS_MODE=off
+    # Issue: When TLS_MODE=off but DOMAIN is set, Caddy must bind to :80, not the domain
+    if [[ "$TLS_MODE" == "off" ]]; then
+        echo "MAGPIE_SITE_ADDRESS=:80" >> "${INSTALL_DIR}/etc/.env"
+    elif [[ -n "$DOMAIN" ]]; then
+        echo "MAGPIE_SITE_ADDRESS=${DOMAIN}" >> "${INSTALL_DIR}/etc/.env"
+    else
+        echo "MAGPIE_SITE_ADDRESS=:80" >> "${INSTALL_DIR}/etc/.env"
+    fi
+
+    # Set MAGPIE_DISABLE_ADMIN (single-line production security setting)
+    echo "MAGPIE_DISABLE_ADMIN=admin off" >> "${INSTALL_DIR}/etc/.env"
+
+    # Set allowed CIDRs for admin endpoint access control
+    echo "MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-255.255.255.255/32}" >> "${INSTALL_DIR}/etc/.env"
+
+    # Warn about multiline production security variables
+    if [[ "$TLS_MODE" != "off" ]]; then
+        cat >> "${INSTALL_DIR}/etc/.env" << 'EOF'
+
+# IMPORTANT: Production security features require manual configuration
+# The following multiline environment variables cannot be set in this .env file:
+#   - MAGPIE_ENABLE_LOGGING (JSON access logs)
+#   - MAGPIE_PROD_SECURITY_HEADERS (HSTS, X-Frame-Options, etc.)
+#
+# To enable these features, either:
+#   1. Add them to docker-compose.prod.yml (recommended)
+#   2. Set them in a systemd service override file
+#
+# See docker-compose.prod.yml for examples of the required YAML syntax.
+EOF
+    fi
 
     # Add trusted_proxies to global options for HTTP-only mode
     if [[ "$TLS_MODE" == "off" && -n "$TRUSTED_PROXIES" ]]; then
