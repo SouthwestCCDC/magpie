@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from click.testing import CliRunner
 
 from magpie.cli.errors import (
     format_network_error,
