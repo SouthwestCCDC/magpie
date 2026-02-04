@@ -246,7 +246,7 @@ class TestE2EMemoryBounded:
         headers = {"Authorization": f"Bearer {admin_token}"}
 
         # Upload 3 files concurrently (using httpx client)
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(base_url=base_url, headers=headers, timeout=60.0) as client:
             upload_file1 = StreamingUploadFile(file_size)
             upload_file2 = StreamingUploadFile(file_size)
             upload_file3 = StreamingUploadFile(file_size)
@@ -257,9 +257,8 @@ class TestE2EMemoryBounded:
             for i, upload_file in enumerate([upload_file1, upload_file2, upload_file3], 1):
                 files = {"file": (f"concurrent_{i}.bin", upload_file, "application/octet-stream")}
                 response = client.post(
-                    f"{base_url}/api/v1/upload/e2e/concurrent-{i}",
+                    f"/api/v1/upload/e2e/concurrent-{i}",
                     files=files,
-                    headers=headers,
                     params={"uploaded_by": "concurrent-test"},
                 )
                 responses.append(response)
