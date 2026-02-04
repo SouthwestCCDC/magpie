@@ -7,12 +7,17 @@ consistent error messages and exit codes across the application.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+import socket
+from functools import wraps
+from typing import TYPE_CHECKING, Callable, TypeVar
 
 import click
+import httpx
 
 if TYPE_CHECKING:
-    import httpx
+    pass
+
+F = TypeVar("F", bound=Callable[..., object])
 
 # Standard mask for hiding sensitive token values
 TOKEN_MASK = "********"  # nosec B105 - display placeholder, not a real password
@@ -73,7 +78,7 @@ def handle_http_error(
     operation: str,
     token: str | None = None,
 ) -> None:
-    """Handle HTTP error responses, raising ClickException.
+    """Handle HTTP error responses, raising ClickException with appropriate exit code.
 
     This is the unified error handler for all CLI commands. It extracts
     error details from HTTP responses and formats them consistently.
@@ -88,8 +93,19 @@ def handle_http_error(
 
     Raises:
         click.ClickException: Always raised with formatted error message.
+        SystemExit: Exits with appropriate error code.
     """
-    raise click.ClickException(format_auth_error(response, operation, token))
+    # Import here to avoid circular imports
+    from magpie.cli.formatting import http_status_to_exit_code
+
+    error_msg = format_auth_error(response, operation, token)
+    exit_code = http_status_to_exit_code(response.status_code)
+
+    # ClickException defaults to exit code 1, but we want specific codes
+    # So we raise ClickException (which formats the error) then exit with our code
+    exc = click.ClickException(error_msg)
+    exc.exit_code = exit_code
+    raise exc
 
 
 def handle_response_error(
@@ -117,6 +133,7 @@ def handle_response_error(
     # Import here to avoid circular imports
     from magpie.cli.formatting import (
         http_status_to_error_code,
+        http_status_to_exit_code,
         is_json_output,
         output_error,
     )
@@ -126,8 +143,126 @@ def handle_response_error(
             detail = response.json().get("detail", response.text)
         except (json.JSONDecodeError, ValueError, KeyError):
             detail = response.text
-        output_error(http_status_to_error_code(response.status_code), detail)
+        output_error(
+            http_status_to_error_code(response.status_code),
+            detail,
+            exit_code=http_status_to_exit_code(response.status_code),
+        )
         # output_error never returns (calls sys.exit), but this makes it explicit
         return  # pragma: no cover
 
     handle_http_error(response, operation, token)
+
+
+def format_network_error(exc: Exception, server: str | None = None) -> str:
+    """Format a network exception into a user-friendly error message.
+
+    Args:
+        exc: The network exception to format.
+        server: Optional server URL for context.
+
+    Returns:
+        User-friendly error message with optional hint.
+    """
+    # Extract hostname from server URL for clearer messages
+    hostname = server if server else "server"
+    if server and "://" in server:
+        hostname = server.split("://", 1)[1].split("/", 1)[0]
+
+    # Handle different network error types
+    if isinstance(exc, httpx.ConnectError):
+        # Check if it's a DNS resolution error
+        if isinstance(exc.__cause__, socket.gaierror):
+            msg = f"Could not connect to server '{hostname}': DNS resolution failed"
+            hint = "Check that the server hostname is correct and your network is connected."
+            return f"{msg}\nHint: {hint}"
+
+        # Connection refused or similar
+        msg = f"Could not connect to server '{hostname}': Connection refused"
+        hint = "Check that the server is running and the URL is correct."
+        return f"{msg}\nHint: {hint}"
+
+    if isinstance(exc, httpx.TimeoutException):
+        msg = f"Request to server '{hostname}' timed out"
+        hint = "Check your network connection or try increasing the timeout with --timeout."
+        return f"{msg}\nHint: {hint}"
+
+    if isinstance(exc, httpx.RequestError):
+        # Generic request error
+        msg = f"Network error connecting to '{hostname}': {exc}"
+        hint = "Check your network connection and server configuration."
+        return f"{msg}\nHint: {hint}"
+
+    # Fallback for unexpected network errors
+    return f"Network error: {exc}"
+
+
+def handle_network_error(exc: Exception, operation: str, server: str | None = None) -> None:
+    """Handle network exceptions with user-friendly messages and appropriate exit codes.
+
+    Args:
+        exc: The network exception to handle.
+        operation: Description of the operation that failed.
+        server: Optional server URL for context in error messages.
+
+    Raises:
+        click.ClickException: Always raised with formatted error message.
+        SystemExit: Exits with appropriate network error code.
+    """
+    # Import here to avoid circular imports
+    from magpie.cli.formatting import ErrorCode, ExitCode, is_json_output, output_error
+
+    error_msg = format_network_error(exc, server)
+
+    if is_json_output():
+        output_error(ErrorCode.NETWORK_ERROR, error_msg, exit_code=ExitCode.NETWORK_ERROR)
+        return  # pragma: no cover - output_error never returns
+
+    # For human output, raise ClickException which will be caught by Click
+    # and will exit with the code we specify
+    raise click.ClickException(error_msg)
+
+
+def with_network_error_handling(func: F) -> F:
+    """Decorator to wrap CLI commands with network error handling.
+
+    This decorator catches network-related exceptions (ConnectError, TimeoutException,
+    RequestError, etc.) and converts them to user-friendly error messages with
+    appropriate exit codes.
+
+    Usage:
+        @click.command()
+        @with_network_error_handling
+        def my_command(ctx):
+            # Command implementation that makes HTTP calls
+            ...
+    """
+
+    @wraps(func)
+    def wrapper(*args: object, **kwargs: object) -> object:
+        # Import here to avoid circular imports
+        from magpie.cli.formatting import ExitCode
+
+        try:
+            return func(*args, **kwargs)
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError) as exc:
+            # Extract server from context if available
+            ctx = click.get_current_context(silent=True)
+            server = None
+            if ctx and ctx.obj and hasattr(ctx.obj, "server"):
+                server = ctx.obj.server
+
+            handle_network_error(exc, operation=func.__name__, server=server)
+            # handle_network_error raises ClickException, but for type checker:
+            raise SystemExit(ExitCode.NETWORK_ERROR)  # pragma: no cover
+        except socket.gaierror as exc:
+            # DNS resolution errors can occur outside of httpx
+            ctx = click.get_current_context(silent=True)
+            server = None
+            if ctx and ctx.obj and hasattr(ctx.obj, "server"):
+                server = ctx.obj.server
+
+            handle_network_error(exc, operation=func.__name__, server=server)
+            raise SystemExit(ExitCode.NETWORK_ERROR)  # pragma: no cover
+
+    return wrapper  # type: ignore[return-value]

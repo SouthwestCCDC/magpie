@@ -5,7 +5,7 @@ from __future__ import annotations
 import click
 
 from magpie.cli import CLIContext
-from magpie.cli.errors import handle_response_error
+from magpie.cli.errors import handle_response_error, with_network_error_handling
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -21,6 +21,7 @@ from magpie.storage.paths import normalize_artifact_path
 @click.argument("artifact_path")
 @click.argument("tag_name")
 @click.pass_obj
+@with_network_error_handling
 def untag(ctx: CLIContext, artifact_path: str, tag_name: str) -> None:
     """Remove a tag from an artifact.
 

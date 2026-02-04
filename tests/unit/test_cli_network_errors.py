@@ -1,0 +1,225 @@
+"""Unit tests for CLI network error handling."""
+
+from __future__ import annotations
+
+import socket
+from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+from click.testing import CliRunner
+
+from magpie.cli.errors import (
+    format_network_error,
+    handle_network_error,
+    with_network_error_handling,
+)
+from magpie.cli.formatting import ExitCode
+
+
+class TestFormatNetworkError:
+    """Tests for format_network_error function."""
+
+    def test_dns_resolution_failure(self) -> None:
+        """DNS resolution failure produces helpful error message."""
+        # Create ConnectError with DNS failure as cause
+        dns_error = socket.gaierror("Name or service not known")
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        connect_error.__cause__ = dns_error
+
+        result = format_network_error(connect_error, server="https://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "DNS resolution failed" in result
+        assert "Hint:" in result
+        assert "hostname is correct" in result
+
+    def test_connection_refused(self) -> None:
+        """Connection refused produces helpful error message."""
+        connect_error = httpx.ConnectError("Connection refused", request=MagicMock())
+
+        result = format_network_error(connect_error, server="https://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "Connection refused" in result
+        assert "Hint:" in result
+        assert "server is running" in result
+
+    def test_timeout_error(self) -> None:
+        """Timeout error produces helpful error message."""
+        timeout_error = httpx.TimeoutException("Request timed out", request=MagicMock())
+
+        result = format_network_error(timeout_error, server="https://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "timed out" in result
+        assert "Hint:" in result
+        assert "timeout" in result
+
+    def test_generic_request_error(self) -> None:
+        """Generic request error produces error message."""
+        request_error = httpx.RequestError("Network error", request=MagicMock())
+
+        result = format_network_error(request_error, server="https://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "Network error" in result
+        assert "Hint:" in result
+
+    def test_hostname_extraction_from_url(self) -> None:
+        """Hostname is extracted correctly from server URL."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        connect_error.__cause__ = socket.gaierror("Name or service not known")
+
+        result = format_network_error(
+            connect_error, server="https://artifacts.example.com:8443/api"
+        )
+
+        assert "artifacts.example.com:8443" in result
+        assert "https://" not in result
+
+    def test_no_server_url_provided(self) -> None:
+        """Error message uses 'server' when no URL provided."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+
+        result = format_network_error(connect_error, server=None)
+
+        assert "server" in result
+
+
+class TestHandleNetworkError:
+    """Tests for handle_network_error function."""
+
+    def test_raises_click_exception(self) -> None:
+        """handle_network_error raises ClickException with formatted message."""
+        from click.exceptions import ClickException
+
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        connect_error.__cause__ = socket.gaierror("Name or service not known")
+
+        with pytest.raises(ClickException) as exc_info:
+            handle_network_error(
+                connect_error, operation="push", server="https://magpie.example.com"
+            )
+
+        assert "DNS resolution failed" in str(exc_info.value)
+        assert "magpie.example.com" in str(exc_info.value)
+
+    @patch("magpie.cli.formatting.is_json_output")
+    @patch("magpie.cli.formatting.output_error")
+    def test_json_output_mode(self, mock_output_error: MagicMock, mock_is_json: MagicMock) -> None:
+        """In JSON mode, calls output_error with network error code."""
+        mock_is_json.return_value = True
+        mock_output_error.side_effect = SystemExit(ExitCode.NETWORK_ERROR)
+
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+
+        with pytest.raises(SystemExit) as exc_info:
+            handle_network_error(
+                connect_error, operation="push", server="https://magpie.example.com"
+            )
+
+        assert exc_info.value.code == ExitCode.NETWORK_ERROR
+        mock_output_error.assert_called_once()
+        call_args = mock_output_error.call_args
+        assert call_args[0][0] == "NETWORK_ERROR"
+        assert call_args[1]["exit_code"] == ExitCode.NETWORK_ERROR
+
+
+class TestWithNetworkErrorHandlingDecorator:
+    """Tests for with_network_error_handling decorator."""
+
+    def test_catches_connect_error(self) -> None:
+        """Decorator catches ConnectError and converts to user-friendly error."""
+        from click.exceptions import ClickException
+
+        @with_network_error_handling
+        def failing_command() -> None:
+            raise httpx.ConnectError("Connection failed", request=MagicMock())
+
+        with pytest.raises(ClickException) as exc_info:
+            failing_command()
+
+        assert "Connection refused" in str(exc_info.value)
+
+    def test_catches_timeout_error(self) -> None:
+        """Decorator catches TimeoutException and converts to user-friendly error."""
+        from click.exceptions import ClickException
+
+        @with_network_error_handling
+        def failing_command() -> None:
+            raise httpx.TimeoutException("Timeout", request=MagicMock())
+
+        with pytest.raises(ClickException) as exc_info:
+            failing_command()
+
+        assert "timed out" in str(exc_info.value)
+
+    def test_catches_socket_gaierror(self) -> None:
+        """Decorator catches socket.gaierror (DNS errors outside httpx)."""
+        from click.exceptions import ClickException
+
+        @with_network_error_handling
+        def failing_command() -> None:
+            raise socket.gaierror("Name or service not known")
+
+        with pytest.raises(ClickException):
+            failing_command()
+
+    def test_passes_through_non_network_errors(self) -> None:
+        """Decorator doesn't catch non-network exceptions."""
+
+        @with_network_error_handling
+        def failing_command() -> None:
+            raise ValueError("Not a network error")
+
+        with pytest.raises(ValueError) as exc_info:
+            failing_command()
+
+        assert "Not a network error" in str(exc_info.value)
+
+    def test_successful_execution(self) -> None:
+        """Decorator allows successful execution."""
+
+        @with_network_error_handling
+        def successful_command() -> str:
+            return "success"
+
+        result = successful_command()
+        assert result == "success"
+
+
+class TestExitCodes:
+    """Tests for exit codes in error scenarios."""
+
+    def test_http_status_to_exit_code_mapping(self) -> None:
+        """HTTP status codes map to appropriate exit codes."""
+        from magpie.cli.formatting import http_status_to_exit_code
+
+        # Auth errors should map to AUTH_ERROR exit code
+        assert http_status_to_exit_code(401) == ExitCode.AUTH_ERROR
+        assert http_status_to_exit_code(403) == ExitCode.AUTH_ERROR
+
+        # Not found should map to NOT_FOUND exit code
+        assert http_status_to_exit_code(404) == ExitCode.NOT_FOUND
+
+        # Other errors should map to GENERAL_ERROR
+        assert http_status_to_exit_code(400) == ExitCode.GENERAL_ERROR
+        assert http_status_to_exit_code(500) == ExitCode.GENERAL_ERROR
+
+    def test_click_exception_exit_code_assignment(self) -> None:
+        """ClickException objects get appropriate exit codes assigned."""
+        from click.exceptions import ClickException
+
+        from magpie.cli.errors import handle_http_error
+
+        # Mock response with 404 status
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.json.return_value = {"detail": "Not found"}
+
+        with pytest.raises(ClickException) as exc_info:
+            handle_http_error(mock_response, "Test operation")
+
+        # Check that the exception has the correct exit code
+        assert exc_info.value.exit_code == ExitCode.NOT_FOUND

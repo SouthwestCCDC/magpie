@@ -6,7 +6,7 @@ import click
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
-from magpie.cli.errors import handle_response_error
+from magpie.cli.errors import handle_response_error, with_network_error_handling
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -19,6 +19,7 @@ from magpie.cli.formatting import (
 @click.command()
 @click.argument("artifact_ref")
 @click.pass_obj
+@with_network_error_handling
 def url(ctx: CLIContext, artifact_ref: str) -> None:
     """Output download URL for scripting (curl/wget).
 

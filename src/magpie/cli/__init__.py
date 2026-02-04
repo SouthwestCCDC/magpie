@@ -152,6 +152,7 @@ def cli(
     help="Show server version in addition to client version.",
 )
 @pass_context
+@sentry_wrapper
 def version(ctx: CLIContext, server_version: bool) -> None:
     """Show version.
 

@@ -6,7 +6,7 @@ import click
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
-from magpie.cli.errors import handle_response_error
+from magpie.cli.errors import handle_response_error, with_network_error_handling
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -20,6 +20,7 @@ from magpie.cli.formatting import (
 @click.argument("artifact_ref")
 @click.option("--source-uri", help="Update source URI (use empty string to clear).")
 @click.pass_obj
+@with_network_error_handling
 def amend(ctx: CLIContext, artifact_ref: str, source_uri: str | None) -> None:
     """Amend metadata for an artifact.
 

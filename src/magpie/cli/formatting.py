@@ -188,6 +188,25 @@ def output_error(code: str, message: str, exit_code: int = 1) -> NoReturn:
     sys.exit(exit_code)
 
 
+# Exit codes for CLI commands
+class ExitCode:
+    """Standard exit codes for consistent CLI behavior.
+
+    These exit codes allow scripts to differentiate between error types:
+    - 0: Success
+    - 1: General/unspecified error
+    - 2: Network/connection error (DNS, connection refused, timeout)
+    - 3: Not found (artifact doesn't exist)
+    - 4: Authentication error (invalid/expired token)
+    """
+
+    SUCCESS = 0
+    GENERAL_ERROR = 1
+    NETWORK_ERROR = 2
+    NOT_FOUND = 3
+    AUTH_ERROR = 4
+
+
 # Standard error codes for consistency across commands
 class ErrorCode:
     """Standard error codes for JSON output."""
@@ -224,3 +243,20 @@ def http_status_to_error_code(status_code: int) -> str:
     if status_code >= 500:
         return ErrorCode.SERVER_ERROR
     return ErrorCode.VALIDATION_ERROR
+
+
+def http_status_to_exit_code(status_code: int) -> int:
+    """Map HTTP status code to CLI exit code.
+
+    Args:
+        status_code: HTTP response status code.
+
+    Returns:
+        Corresponding exit code.
+    """
+    mapping: Mapping[int, int] = {
+        401: ExitCode.AUTH_ERROR,
+        403: ExitCode.AUTH_ERROR,
+        404: ExitCode.NOT_FOUND,
+    }
+    return mapping.get(status_code, ExitCode.GENERAL_ERROR)

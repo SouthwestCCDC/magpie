@@ -7,7 +7,7 @@ import json
 import click
 
 from magpie.cli import CLIContext
-from magpie.cli.errors import handle_http_error
+from magpie.cli.errors import handle_http_error, with_network_error_handling
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -21,6 +21,7 @@ from magpie.utils.formatting import format_size
 
 @click.command()
 @click.pass_obj
+@with_network_error_handling
 def status(ctx: CLIContext) -> None:
     """Check server health, connectivity, and status (admin only).
 
