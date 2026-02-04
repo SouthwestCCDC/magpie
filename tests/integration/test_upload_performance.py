@@ -166,55 +166,151 @@ class TestUploadStreamingPerformance:
         print(f"\n500MB upload: {elapsed:.2f}s ({throughput_mbps:.2f} MB/s)")
 
 
+class ThroughputTrackingFile:
+    """File-like object that tracks throughput over time windows."""
+
+    def __init__(self, size: int, chunk_size: int = 1024 * 1024):
+        """Create a file that tracks throughput during uploads.
+
+        Args:
+            size: Total size in bytes
+            chunk_size: Size of chunks to return on each read
+        """
+        self.size = size
+        self.chunk_size = chunk_size
+        self.position = 0
+        self.bytes_transferred: list[tuple[float, int]] = []  # (timestamp, bytes)
+        self.start_time = time.time()
+
+    def read(self, size: int = -1) -> bytes:
+        """Read data from the fake file, tracking bytes transferred."""
+        if self.position >= self.size:
+            return b""
+
+        # Determine how much to read
+        if size == -1 or size > self.chunk_size:
+            to_read = min(self.chunk_size, self.size - self.position)
+        else:
+            to_read = min(size, self.size - self.position)
+
+        # Generate fake data (zeros for efficiency)
+        data = b"\x00" * to_read
+        self.position += to_read
+
+        # Track bytes transferred with timestamp
+        self.bytes_transferred.append((time.time() - self.start_time, to_read))
+
+        return data
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        """Seek to position in fake file."""
+        if whence == 0:  # SEEK_SET
+            self.position = offset
+        elif whence == 1:  # SEEK_CUR
+            self.position += offset
+        elif whence == 2:  # SEEK_END
+            self.position = self.size + offset
+        return self.position
+
+    def tell(self) -> int:
+        """Return current position."""
+        return self.position
+
+    @property
+    def name(self) -> str:
+        """Return fake filename."""
+        return f"throughput_{self.size}.bin"
+
+    def calculate_throughput_mbps(self, start_idx: int, end_idx: int) -> float:
+        """Calculate throughput in MB/s for a range of transfer events.
+
+        Args:
+            start_idx: Starting index in bytes_transferred list
+            end_idx: Ending index (exclusive) in bytes_transferred list
+
+        Returns:
+            Throughput in MB/s for the specified range
+        """
+        if start_idx >= end_idx or end_idx > len(self.bytes_transferred):
+            return 0.0
+
+        # Sum bytes transferred in this range
+        total_bytes = sum(chunk[1] for chunk in self.bytes_transferred[start_idx:end_idx])
+
+        # Calculate time window
+        start_time = self.bytes_transferred[start_idx][0] if start_idx > 0 else 0.0
+        end_time = self.bytes_transferred[end_idx - 1][0]
+        elapsed = end_time - start_time
+
+        if elapsed <= 0:
+            return 0.0
+
+        # Convert to MB/s
+        return (total_bytes / (1024 * 1024)) / elapsed
+
+
 class TestUploadThroughputStability:
     """Tests that upload throughput doesn't degrade significantly."""
 
     def test_throughput_does_not_degrade(self, client: TestClient) -> None:
-        """Test that upload speed remains stable throughout the upload.
+        """Test that upload throughput remains stable throughout the transfer.
 
-        This detects issues where uploads start fast but slow down
-        significantly, which indicates buffering problems.
+        Measures bytes/second throughput for first half vs second half of upload.
+        Catches buffering issues that cause progressive slowdown.
+
+        The production issue showed 20-40x degradation (40+ MB/s dropping to 1-2 MB/s).
+        We use a 50% threshold (2x degradation) to catch severe issues while tolerating
+        normal system variability.
         """
-        # Use a medium-sized file to observe throughput patterns
-        file_size = 10 * 1024 * 1024  # 10 MB
-        fake_file = FakeStreamingFile(file_size, chunk_size=256 * 1024)  # 256KB chunks
+        file_size = 50 * 1024 * 1024  # 50 MB for meaningful measurement
+        fake_file = ThroughputTrackingFile(file_size, chunk_size=1024 * 1024)  # 1 MB chunks
 
         files = {"file": ("throughput.bin", fake_file, "application/octet-stream")}
 
+        start_time = time.time()
         response = client.post(
             "/api/v1/upload/perf/throughput",
             files=files,
             params={"uploaded_by": "throughput-test"},
         )
+        elapsed = time.time() - start_time
 
         assert response.status_code == 200
 
-        # Analyze read patterns
-        # Compare first quartile timing vs last quartile timing
-        if len(fake_file.read_times) < 4:
-            pytest.skip("Not enough read operations to analyze throughput")
+        # Need enough transfer events to measure throughput
+        if len(fake_file.bytes_transferred) < 4:
+            pytest.skip("Not enough transfer events to analyze throughput")
 
-        quartile_size = len(fake_file.read_times) // 4
-        first_quartile = fake_file.read_times[:quartile_size]
-        last_quartile = fake_file.read_times[-quartile_size:]
-
-        avg_first = sum(first_quartile) / len(first_quartile)
-        avg_last = sum(last_quartile) / len(last_quartile)
-
-        # Throughput shouldn't degrade drastically
-        # (inverse relationship: slower read times = lower throughput)
-        # Note: Individual read operation timings are highly variable due to
-        # OS scheduling, system load, etc. We use a generous threshold to
-        # detect major buffering issues while tolerating normal variability.
-        degradation_factor = avg_last / avg_first if avg_first > 0 else 1.0
-
-        assert degradation_factor < 10.0, (
-            f"Upload throughput degraded drastically: "
-            f"last quartile {degradation_factor:.1f}x slower than first quartile. "
-            f"This suggests severe buffering issues."
+        # Split into first half and second half
+        midpoint = len(fake_file.bytes_transferred) // 2
+        first_half_throughput = fake_file.calculate_throughput_mbps(0, midpoint)
+        second_half_throughput = fake_file.calculate_throughput_mbps(
+            midpoint, len(fake_file.bytes_transferred)
         )
 
+        # Calculate overall throughput for reporting
+        overall_throughput = (file_size / (1024 * 1024)) / elapsed
+
+        # Assert second half throughput is at least 50% of first half
+        # This catches 2x+ degradation while tolerating normal variance
+        min_acceptable_throughput = first_half_throughput * 0.5
+
+        assert second_half_throughput >= min_acceptable_throughput, (
+            f"Upload throughput degraded significantly: "
+            f"first half = {first_half_throughput:.2f} MB/s, "
+            f"second half = {second_half_throughput:.2f} MB/s. "
+            f"Second half throughput dropped below 50% of first half, "
+            f"suggesting buffering issues."
+        )
+
+        # Report throughput metrics
+        degradation_ratio = (
+            second_half_throughput / first_half_throughput if first_half_throughput > 0 else 1.0
+        )
         print(
-            f"\nThroughput stability: first quartile avg={avg_first * 1000:.2f}ms, "
-            f"last quartile avg={avg_last * 1000:.2f}ms, ratio={degradation_factor:.2f}x"
+            f"\nThroughput stability for 50MB upload ({elapsed:.2f}s):\n"
+            f"  Overall: {overall_throughput:.2f} MB/s\n"
+            f"  First half: {first_half_throughput:.2f} MB/s\n"
+            f"  Second half: {second_half_throughput:.2f} MB/s\n"
+            f"  Ratio: {degradation_ratio:.2f}x (threshold: 0.50x)"
         )
