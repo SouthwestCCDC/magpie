@@ -64,10 +64,10 @@ If large uploads fail near completion:
 
 ```bash
 # Only 1 MB tests
-uv run pytest tests/integration/test_upload_performance.py -k "1-10" -v
+uv run pytest tests/integration/test_upload_performance.py -k "test_upload_streaming[1-10]" -v
 
 # Only 50 MB tests
-uv run pytest tests/integration/test_upload_performance.py -k "50-60" -v
+uv run pytest tests/integration/test_upload_performance.py -k "test_upload_streaming[50-60]" -v
 
 # All except large (default)
 uv run pytest tests/integration/test_upload_performance.py -m "not slow" -v

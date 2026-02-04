@@ -124,7 +124,7 @@ Post-merge builds (`.github/workflows/post-merge.yml`) run two jobs:
 1. **full-test-suite** - Unit and integration tests with large tests enabled
 2. **test-extra-large** - 10GB E2E upload test on self-hosted runner with `large-disk` label
 
-The XL test only runs on self-hosted runners to ensure sufficient disk space and avoid issues on GitHub-hosted runners. It uses the `cleanup_after_upload` fixture to immediately delete artifacts after each test, preventing disk exhaustion.
+The XL test only runs on self-hosted runners to ensure sufficient disk space. Note that artifacts from these tests are not automatically deleted (no DELETE endpoint exists), so self-hosted runners must have enough disk space for multiple 10GB test runs or use separate cleanup processes. See issue #441.
 
 ### Timing Estimates
 

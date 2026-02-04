@@ -232,12 +232,12 @@ class TestE2EUploadStability:
 class TestE2EMemoryBounded:
     """E2E tests to verify memory usage remains bounded during uploads."""
 
-    def test_concurrent_uploads_no_memory_spike(self, e2e_services: E2EServices) -> None:
-        """Test that concurrent uploads don't cause unbounded memory growth.
+    def test_sequential_uploads_no_memory_accumulation(self, e2e_services: E2EServices) -> None:
+        """Test that sequential uploads don't cause memory accumulation.
 
         This is a basic test - for more detailed memory profiling, use external tools.
-        Here we just verify that multiple concurrent uploads complete successfully,
-        which would fail if memory was being exhausted.
+        Here we just verify that multiple sequential uploads complete successfully,
+        which would fail if memory was accumulating between requests.
         """
         file_size = 10 * 1024 * 1024  # 10 MB each
 
@@ -285,8 +285,10 @@ def test_extra_large_upload_10gb(
     This test requires a self-hosted runner with sufficient disk space.
     Skipped on GitHub-hosted runners.
 
-    Uses cleanup_after_upload fixture to immediately delete the artifact
-    after test completes, preventing disk exhaustion on self-hosted runners.
+    Note: The cleanup_after_upload fixture attempts to delete artifacts but
+    may fail silently (no DELETE endpoint exists). Repeated runs may accumulate
+    10GB artifacts on disk. Ensure self-hosted runners have sufficient space.
+    See issue #441 for artifact deletion implementation.
     """
     size_bytes = 10 * 1024 * 1024 * 1024  # 10 GB
     upload_file = StreamingUploadFile(size_bytes, chunk_size=1024 * 1024)  # 1MB chunks
