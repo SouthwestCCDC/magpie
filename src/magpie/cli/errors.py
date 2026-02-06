@@ -220,7 +220,9 @@ def handle_network_error(exc: Exception, operation: str, server: str | None = No
 
     # For human output, raise ClickException which will be caught by Click
     # and will exit with the code we specify
-    raise click.ClickException(error_msg)
+    exc = click.ClickException(error_msg)
+    exc.exit_code = ExitCode.NETWORK_ERROR
+    raise exc
 
 
 def with_network_error_handling(func: F) -> F:

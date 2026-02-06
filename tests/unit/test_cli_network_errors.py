@@ -5,8 +5,10 @@ from __future__ import annotations
 import socket
 from unittest.mock import MagicMock, patch
 
+import click
 import httpx
 import pytest
+from click.testing import CliRunner
 
 from magpie.cli.errors import (
     format_network_error,
@@ -222,3 +224,73 @@ class TestExitCodes:
 
         # Check that the exception has the correct exit code
         assert exc_info.value.exit_code == ExitCode.NOT_FOUND
+
+
+class TestCliRunnerIntegration:
+    """Integration tests using Click's CliRunner to verify exit codes end-to-end."""
+
+    def test_network_error_exit_code_with_runner(self) -> None:
+        """Network error in human mode produces exit code 2 (NETWORK_ERROR)."""
+
+        @click.command()
+        @with_network_error_handling
+        def test_command() -> None:
+            """Test command that raises a network error."""
+            raise httpx.ConnectError("Connection failed", request=MagicMock())
+
+        runner = CliRunner()
+        result = runner.invoke(test_command)
+
+        # Verify exit code is NETWORK_ERROR (2), not GENERAL_ERROR (1)
+        assert result.exit_code == ExitCode.NETWORK_ERROR
+        assert "Connection refused" in result.output
+
+    def test_timeout_error_exit_code_with_runner(self) -> None:
+        """Timeout error in human mode produces exit code 2 (NETWORK_ERROR)."""
+
+        @click.command()
+        @with_network_error_handling
+        def test_command() -> None:
+            """Test command that raises a timeout error."""
+            raise httpx.TimeoutException("Request timed out", request=MagicMock())
+
+        runner = CliRunner()
+        result = runner.invoke(test_command)
+
+        # Verify exit code is NETWORK_ERROR (2)
+        assert result.exit_code == ExitCode.NETWORK_ERROR
+        assert "timed out" in result.output
+
+    def test_dns_error_exit_code_with_runner(self) -> None:
+        """DNS error in human mode produces exit code 2 (NETWORK_ERROR)."""
+
+        @click.command()
+        @with_network_error_handling
+        def test_command() -> None:
+            """Test command that raises a DNS error."""
+            dns_error = socket.gaierror("Name or service not known")
+            connect_error = httpx.ConnectError("DNS failed", request=MagicMock())
+            connect_error.__cause__ = dns_error
+            raise connect_error
+
+        runner = CliRunner()
+        result = runner.invoke(test_command)
+
+        # Verify exit code is NETWORK_ERROR (2)
+        assert result.exit_code == ExitCode.NETWORK_ERROR
+        assert "DNS resolution failed" in result.output
+
+    def test_non_network_error_exit_code_with_runner(self) -> None:
+        """Non-network errors still exit with code 1 (GENERAL_ERROR)."""
+
+        @click.command()
+        @with_network_error_handling
+        def test_command() -> None:
+            """Test command that raises a non-network error."""
+            raise ValueError("Not a network error")
+
+        runner = CliRunner()
+        result = runner.invoke(test_command)
+
+        # Verify exit code is GENERAL_ERROR (1) for unhandled exceptions
+        assert result.exit_code == ExitCode.GENERAL_ERROR

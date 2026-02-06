@@ -52,14 +52,7 @@ def status(ctx: CLIContext) -> None:
         if ctx.debug:
             click.echo(f"Checking status of {ctx.server}...", err=True)
 
-        try:
-            response = client.get("/api/v1/status")
-        except Exception as e:
-            msg = f"Failed to connect to server: {e}"
-            if is_json_output():
-                output_error(ErrorCode.NETWORK_ERROR, msg)
-                return
-            raise click.ClickException(msg)
+        response = client.get("/api/v1/status")
 
         if response.status_code != 200:
             if is_json_output():
