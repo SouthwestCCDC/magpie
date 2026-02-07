@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import re
@@ -50,7 +51,7 @@ class StreamingMultipartHandler:
         self._boundary = boundary
         self._temp_path = temp_path
         self._max_size = max_size
-        self._temp_file_fd: int | None = None
+        self._temp_file = None  # Buffered file object (handles partial writes internally)
         self._temp_file_path: Path | None = None
         self._hasher = hashlib.sha256()
         self._current_field_name: str | None = None
@@ -121,10 +122,13 @@ class StreamingMultipartHandler:
                     self._file_part_found = True
                     self._filename = self._extract_filename(header_value)
                     # Create temp file on data volume (not /tmp)
-                    self._temp_file_fd, temp_path = tempfile.mkstemp(
+                    # Use os.fdopen to get a buffered file object that handles partial writes
+                    temp_fd, temp_path = tempfile.mkstemp(
                         dir=self._temp_path, prefix="upload_", suffix=".tmp"
                     )
                     self._temp_file_path = Path(temp_path)
+                    # fdopen takes ownership of the fd, so we don't need to track it separately
+                    self._temp_file = os.fdopen(temp_fd, "wb")
 
         # Reset for next header
         self._current_header_name = b""
@@ -132,15 +136,10 @@ class StreamingMultipartHandler:
 
     def _on_part_data(self, data: bytes, start: int, end: int) -> None:
         """Called for part data (file content or form field value)."""
-        if self._in_file_field and self._temp_file_fd is not None:
+        if self._in_file_field and self._temp_file is not None:
             chunk = data[start:end]
-            # Write directly to temp file, handling partial writes
-            # os.write() may return less than len(chunk) on full disk or signal interrupts
-            bytes_written = os.write(self._temp_file_fd, chunk)
-            if bytes_written != len(chunk):
-                raise IOError(
-                    f"Partial write to temp file: expected {len(chunk)} bytes, wrote {bytes_written}"
-                )
+            # Write to buffered file object (handles partial writes internally)
+            self._temp_file.write(chunk)
             # Update hasher incrementally
             self._hasher.update(chunk)
             self._total_bytes += len(chunk)
@@ -161,23 +160,23 @@ class StreamingMultipartHandler:
         }
 
     def finalize(self) -> None:
-        """Close temp file descriptor after parsing is complete."""
-        if self._temp_file_fd is not None:
-            os.close(self._temp_file_fd)
-            self._temp_file_fd = None
+        """Close temp file after parsing is complete."""
+        if self._temp_file is not None:
+            self._temp_file.close()
+            self._temp_file = None
 
     def cleanup(self) -> None:
         """Clean up temp file on error."""
-        if self._temp_file_fd is not None:
+        if self._temp_file is not None:
             try:
-                os.close(self._temp_file_fd)
+                self._temp_file.close()
             except OSError as exc:
                 # Best-effort cleanup: log and continue even if closing fails.
                 logger.warning(
-                    "Failed to close temporary upload file descriptor during cleanup",
+                    "Failed to close temporary upload file during cleanup",
                     exc_info=exc,
                 )
-            self._temp_file_fd = None
+            self._temp_file = None
         if self._temp_file_path is not None and self._temp_file_path.exists():
             self._temp_file_path.unlink(missing_ok=True)
 
@@ -332,11 +331,14 @@ async def upload_artifact(
 
     # Stream request body through multipart parser
     # This writes chunks directly to temp file while computing hash
+    # Offload synchronous parsing/hashing/writing to thread pool to keep event loop responsive
     try:
         async for chunk in request.stream():
-            parser.write(chunk)
-        parser.finalize()
-        handler.finalize()
+            # Run synchronous parser.write() in thread pool to avoid blocking event loop
+            # parser.write() triggers _on_part_data() which does os.write() + hash update
+            await asyncio.to_thread(parser.write, chunk)
+        await asyncio.to_thread(parser.finalize)
+        await asyncio.to_thread(handler.finalize)
     except UploadSizeExceededError:
         handler.cleanup()
         raise HTTPException(
@@ -356,6 +358,14 @@ async def upload_artifact(
         )
 
     temp_file_path, full_hash, bytes_written = result
+
+    # Reject zero-byte uploads
+    if bytes_written == 0:
+        temp_file_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty (0 bytes)",
+        )
 
     # Track upload timing
     start_time = time.perf_counter()
