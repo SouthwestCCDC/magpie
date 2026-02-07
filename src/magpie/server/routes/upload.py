@@ -329,16 +329,43 @@ async def upload_artifact(
     handler = StreamingMultipartHandler(boundary, temp_dir, max_size)
     parser = MultipartParser(boundary, handler.get_callbacks())
 
-    # Stream request body through multipart parser
-    # This writes chunks directly to temp file while computing hash
-    # Offload synchronous parsing/hashing/writing to thread pool to keep event loop responsive
+    # Stream request body through multipart parser in a single background thread
+    # Bridge async stream → sync parser using a queue (avoids per-chunk thread overhead)
+    chunk_queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=10)
+    loop = asyncio.get_event_loop()
+
+    async def stream_producer():
+        """Read chunks from request stream and put them into queue."""
+        try:
+            async for chunk in request.stream():
+                await chunk_queue.put(chunk)
+        finally:
+            # Signal end of stream with sentinel value
+            await chunk_queue.put(None)
+
+    def parser_worker():
+        """Background thread: consume chunks from queue and write to disk."""
+        try:
+            while True:
+                # Blocking get from async queue (loop captured from async context)
+                chunk = asyncio.run_coroutine_threadsafe(chunk_queue.get(), loop).result()
+                if chunk is None:
+                    # End-of-stream sentinel
+                    break
+                parser.write(chunk)
+            parser.finalize()
+            handler.finalize()
+        except Exception:
+            # Re-raise for asyncio.to_thread to propagate to main task
+            raise
+
     try:
-        async for chunk in request.stream():
-            # Run synchronous parser.write() in thread pool to avoid blocking event loop
-            # parser.write() triggers _on_part_data() which does os.write() + hash update
-            await asyncio.to_thread(parser.write, chunk)
-        await asyncio.to_thread(parser.finalize)
-        await asyncio.to_thread(handler.finalize)
+        # Start producer task and worker thread concurrently
+        producer_task = asyncio.create_task(stream_producer())
+        # Run entire parsing loop in single background thread
+        await asyncio.to_thread(parser_worker)
+        # Wait for producer to finish (should already be done)
+        await producer_task
     except UploadSizeExceededError:
         handler.cleanup()
         raise HTTPException(
@@ -379,6 +406,11 @@ async def upload_artifact(
             source_uri=source_uri,
             no_latest=no_latest,
         )
+    except InvalidArtifactPathError:
+        # Clean up temp file on invalid artifact path
+        # Let exception propagate to global handler for proper error formatting
+        temp_file_path.unlink(missing_ok=True)
+        raise
     except Exception:
         # Clean up temp file on error
         temp_file_path.unlink(missing_ok=True)
