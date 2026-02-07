@@ -133,6 +133,42 @@ def read_blob(artifact_dir: Path, hash_ref: str) -> Path:
     return path
 
 
+def store_blob_from_temp(
+    artifact_dir: Path, temp_file_path: Path, full_hash: str, config: MagpieSettings
+) -> tuple[str, bool]:
+    """Store blob from pre-written temp file with pre-computed hash.
+
+    This function is used when the temp file has already been written and the
+    hash has been computed incrementally during streaming. It handles duplicate
+    detection and atomic move to the final blob location.
+
+    Args:
+        artifact_dir: Path to artifact directory.
+        temp_file_path: Path to pre-written temp file (will be moved or deleted).
+        full_hash: Pre-computed SHA-256 hex digest (64 chars).
+        config: MagpieSettings instance (unused, kept for consistency with store_blob).
+
+    Returns:
+        Tuple of (hash_ref, is_duplicate):
+        - hash_ref: Short hash reference like '@abc12345'
+        - is_duplicate: True if blob already existed, False if newly stored
+    """
+    hash_ref = short_hash(full_hash)
+
+    # Check if blob already exists (use short hash for storage path)
+    dest_path = blob_path(artifact_dir, hash_ref)
+
+    if dest_path.exists():
+        # Duplicate detected - clean up temp file
+        temp_file_path.unlink(missing_ok=True)
+        return (hash_ref, True)
+
+    # New blob - atomic move to destination
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(temp_file_path), dest_path)
+    return (hash_ref, False)
+
+
 def check_blob_exists(artifact_dir: Path, hash_ref: str) -> bool:
     """Check if a blob exists.
 

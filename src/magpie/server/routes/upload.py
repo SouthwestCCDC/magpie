@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-import io
+import hashlib
+import os
 import re
+import tempfile
 import time
+from pathlib import Path
 from typing import IO, Annotated
 
 import structlog
@@ -121,29 +124,32 @@ class StreamingMultipartHandler:
     """Handler for streaming multipart/form-data without buffering.
 
     This class uses python-multipart's streaming parser to extract file content
-    directly from the request stream without the intermediate SpooledTemporaryFile
-    that FastAPI's UploadFile parameter creates.
-
-    The file content is written to a BytesIO buffer that can be wrapped in
-    SizeLimitedReader for size enforcement.
+    directly from the request stream, writing chunks directly to a temp file on
+    the data volume while computing the SHA-256 hash incrementally. This achieves
+    true single-pass streaming: network → parse → hash → temp file.
     """
 
-    def __init__(self, boundary: bytes, max_size: int | None = None) -> None:
+    def __init__(self, boundary: bytes, temp_path: Path, max_size: int | None = None) -> None:
         """Initialize streaming multipart handler.
 
         Args:
             boundary: Multipart boundary from Content-Type header.
+            temp_path: Directory for temporary files (on data volume).
             max_size: Maximum allowed upload size (for early rejection).
         """
         self._boundary = boundary
+        self._temp_path = temp_path
         self._max_size = max_size
-        self._file_data = io.BytesIO()
+        self._temp_file_fd: int | None = None
+        self._temp_file_path: Path | None = None
+        self._hasher = hashlib.sha256()
         self._current_field_name: str | None = None
         self._current_header_name: bytes = b""
         self._current_header_value: bytes = b""
         self._filename: str | None = None
         self._in_file_field = False
         self._total_bytes = 0
+        self._file_part_found = False
 
     def _extract_filename(self, content_disposition: bytes) -> str | None:
         """Extract filename from Content-Disposition header."""
@@ -158,8 +164,11 @@ class StreamingMultipartHandler:
             if match:
                 return match.group(1)
         except (UnicodeDecodeError, re.error):  # nosec B110 - Graceful degradation for malformed headers
-            # If header is malformed, return None - filename extraction is optional
-            pass
+            # Malformed Content-Disposition header: log and skip filename extraction.
+            logger.debug(
+                "Failed to parse Content-Disposition header for filename extraction",
+            )
+            return None
         return None
 
     def _on_part_begin(self) -> None:
@@ -191,7 +200,13 @@ class StreamingMultipartHandler:
                 # Check if this is the file field
                 if self._current_field_name == "file":
                     self._in_file_field = True
+                    self._file_part_found = True
                     self._filename = self._extract_filename(header_value)
+                    # Create temp file on data volume (not /tmp)
+                    self._temp_file_fd, temp_path = tempfile.mkstemp(
+                        dir=self._temp_path, prefix="upload_", suffix=".tmp"
+                    )
+                    self._temp_file_path = Path(temp_path)
 
         # Reset for next header
         self._current_header_name = b""
@@ -199,9 +214,12 @@ class StreamingMultipartHandler:
 
     def _on_part_data(self, data: bytes, start: int, end: int) -> None:
         """Called for part data (file content or form field value)."""
-        if self._in_file_field:
+        if self._in_file_field and self._temp_file_fd is not None:
             chunk = data[start:end]
-            self._file_data.write(chunk)
+            # Write directly to temp file
+            os.write(self._temp_file_fd, chunk)
+            # Update hasher incrementally
+            self._hasher.update(chunk)
             self._total_bytes += len(chunk)
             # Early size check
             if self._max_size is not None and self._total_bytes > self._max_size:
@@ -219,14 +237,35 @@ class StreamingMultipartHandler:
             "on_part_data": self._on_part_data,
         }
 
-    def get_file_stream(self) -> io.BytesIO:
-        """Get the file content stream.
+    def finalize(self) -> None:
+        """Close temp file descriptor after parsing is complete."""
+        if self._temp_file_fd is not None:
+            os.close(self._temp_file_fd)
+            self._temp_file_fd = None
+
+    def cleanup(self) -> None:
+        """Clean up temp file on error."""
+        if self._temp_file_fd is not None:
+            try:
+                os.close(self._temp_file_fd)
+            except OSError:
+                pass
+            self._temp_file_fd = None
+        if self._temp_file_path is not None and self._temp_file_path.exists():
+            self._temp_file_path.unlink(missing_ok=True)
+
+    def get_result(self) -> tuple[Path, str, int] | None:
+        """Get the uploaded file result.
 
         Returns:
-            BytesIO containing the uploaded file content.
+            Tuple of (temp_file_path, hash, bytes_written) if file was uploaded,
+            None if no file part was found.
         """
-        self._file_data.seek(0)
-        return self._file_data
+        if not self._file_part_found:
+            return None
+        if self._temp_file_path is None:
+            return None
+        return (self._temp_file_path, self._hasher.hexdigest(), self._total_bytes)
 
     @property
     def filename(self) -> str | None:
@@ -322,8 +361,19 @@ async def upload_artifact(
             detail="Content-Type header is required for multipart upload",
         )
 
+    # Verify Content-Type is multipart/form-data
+    if not content_type.lower().startswith("multipart/form-data"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Content-Type must be multipart/form-data",
+        )
+
     # Parse boundary from Content-Type: multipart/form-data; boundary=----WebKitFormBoundary...
-    boundary_match = re.search(r"boundary=([^;\s]+)", content_type)
+    # Handle both quoted and unquoted boundaries per RFC 2046
+    boundary_match = re.search(r'boundary="([^"]+)"', content_type)
+    if not boundary_match:
+        # Try unquoted format
+        boundary_match = re.search(r"boundary=([^;\s]+)", content_type)
     if not boundary_match:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -344,50 +394,60 @@ async def upload_artifact(
                 message="Upload without X-Magpie-User header and no uploaded_by param",
             )
 
+    # Ensure temp directory exists
+    temp_dir = settings.temp_path
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
     # Set up streaming multipart handler
-    handler = StreamingMultipartHandler(boundary, max_size)
+    handler = StreamingMultipartHandler(boundary, temp_dir, max_size)
     parser = MultipartParser(boundary, handler.get_callbacks())
 
     # Stream request body through multipart parser
-    # This avoids Starlette's SpooledTemporaryFile buffering
+    # This writes chunks directly to temp file while computing hash
     try:
         async for chunk in request.stream():
             parser.write(chunk)
         parser.finalize()
+        handler.finalize()
     except UploadSizeExceededError:
+        handler.cleanup()
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Upload exceeds maximum size of {max_size} bytes",
         )
+    except Exception:
+        handler.cleanup()
+        raise
 
-    # Get the parsed file stream
-    file_stream = handler.get_file_stream()
+    # Get the parsed file result
+    result = handler.get_result()
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing 'file' part in multipart upload",
+        )
 
-    # Wrap with SizeLimitedReader for consistency (size already checked, but this provides bytes_read tracking)
-    file_stream = SizeLimitedReader(file_stream, max_size)
+    temp_file_path, full_hash, bytes_written = result
 
     # Track upload timing
     start_time = time.perf_counter()
 
     try:
-        info, is_duplicate = storage_service.store_artifact(
+        info, is_duplicate = storage_service.store_artifact_from_temp(
             artifact_path=path,
-            file_stream=file_stream,
+            temp_file_path=temp_file_path,
+            full_hash=full_hash,
             uploaded_by=effective_user,
             source_uri=source_uri,
             no_latest=no_latest,
         )
-    except UploadSizeExceededError as e:
-        raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail=str(e),
-        )
+    except Exception:
+        # Clean up temp file on error
+        temp_file_path.unlink(missing_ok=True)
+        raise
 
     # Calculate upload duration
     duration_ms = (time.perf_counter() - start_time) * 1000
-
-    # Get actual bytes read from stream
-    actual_size = file_stream.bytes_read
 
     # Use blobs/ path for hash-based downloads (info.hash_ref has @ prefix)
     blob_name = info.hash_ref.lstrip("@")
@@ -399,7 +459,7 @@ async def upload_artifact(
         artifact_path=path,
         hash=info.hash,
         hash_ref=info.hash_ref,
-        size_bytes=actual_size,  # Actual file size, not including multipart overhead
+        size_bytes=bytes_written,  # Actual file size, not including multipart overhead
         duration_ms=round(duration_ms, 2),
         uploaded_by=effective_user,
         is_duplicate=is_duplicate,
