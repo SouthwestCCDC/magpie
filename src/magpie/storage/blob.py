@@ -134,7 +134,7 @@ def read_blob(artifact_dir: Path, hash_ref: str) -> Path:
 
 
 def store_blob_from_temp(
-    artifact_dir: Path, temp_file_path: Path, full_hash: str, config: MagpieSettings
+    artifact_dir: Path, temp_file_path: Path, full_hash: str
 ) -> tuple[str, bool]:
     """Store blob from pre-written temp file with pre-computed hash.
 
@@ -146,7 +146,6 @@ def store_blob_from_temp(
         artifact_dir: Path to artifact directory.
         temp_file_path: Path to pre-written temp file (will be moved or deleted).
         full_hash: Pre-computed SHA-256 hex digest (64 chars).
-        config: MagpieSettings instance (unused, kept for consistency with store_blob).
 
     Returns:
         Tuple of (hash_ref, is_duplicate):

@@ -190,9 +190,7 @@ class StorageService:
 
         # Store blob from temp file (handles atomic move)
         # Returns full hash for metadata, short hash ref for display
-        hash_ref, is_duplicate = store_blob_from_temp(
-            artifact_dir, temp_file_path, full_hash, self.config
-        )
+        hash_ref, is_duplicate = store_blob_from_temp(artifact_dir, temp_file_path, full_hash)
 
         # Write metadata sidecar (only for new blobs, write_metadata is write-once)
         # Use hash_ref (short hash) for filename, but store full_hash inside

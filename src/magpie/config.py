@@ -33,7 +33,7 @@ class MagpieSettings(BaseSettings):
 
     # Upload limits - enforced in two places for defense-in-depth:
     # 1. Content-Length header check: Includes multipart overhead (~200 bytes), provides early rejection
-    # 2. SizeLimitedReader: Counts actual file content bytes during streaming, catches malicious clients
+    # 2. StreamingMultipartHandler: Counts actual file content bytes during streaming, catches malicious clients
     # Some valid uploads near the limit may be rejected early due to multipart overhead.
     max_upload_size: int | None = None  # MAGPIE_MAX_UPLOAD_SIZE (bytes, None = unlimited)
 

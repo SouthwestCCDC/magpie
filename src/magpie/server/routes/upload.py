@@ -8,7 +8,7 @@ import re
 import tempfile
 import time
 from pathlib import Path
-from typing import IO, Annotated
+from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -28,96 +28,6 @@ router = APIRouter()
 
 class UploadSizeExceededError(Exception):
     """Raised when upload exceeds configured max_upload_size."""
-
-
-class SizeLimitedReader:
-    """Wrapper around a file stream that enforces a maximum size limit.
-
-    This wrapper tracks bytes read from the underlying stream and raises
-    UploadSizeExceededError if the limit is exceeded during streaming.
-
-    SECURITY: The _high_water_mark tracks the maximum position ever reached,
-    preventing bypass via seek operations. Even if a caller seeks backward
-    and re-reads data, _high_water_mark ensures we never allow reading
-    beyond max_size bytes from the start of the stream.
-    """
-
-    def __init__(self, stream: IO[bytes], max_size: int | None = None) -> None:
-        """Initialize size-limited reader.
-
-        Args:
-            stream: Underlying file stream to wrap.
-            max_size: Maximum allowed bytes to read (None = no limit).
-                     When None, reader tracks bytes but doesn't enforce a limit.
-                     This is backward compatible - existing callers that pass
-                     a concrete max_size continue to work unchanged.
-        """
-        self._stream = stream
-        self._max_size = max_size
-        self._bytes_read = 0
-        self._high_water_mark = 0  # Maximum position ever reached
-
-    @property
-    def bytes_read(self) -> int:
-        """Get total bytes read from stream."""
-        return self._high_water_mark
-
-    def read(self, size: int = -1) -> bytes:
-        """Read from stream, enforcing size limit.
-
-        Args:
-            size: Number of bytes to read (-1 for all).
-
-        Returns:
-            Bytes read from stream.
-
-        Raises:
-            UploadSizeExceededError: If cumulative read exceeds max_size.
-
-        NOTE: The check happens AFTER reading to simplify the code. This means we may
-        temporarily hold up to one chunk more than max_size in memory before raising.
-        This is acceptable because:
-        1. The exceeded bytes are never persisted - the exception aborts processing
-        2. The overage is bounded by the read chunk size (typically 8KB-64KB)
-        3. Pre-checking when size=-1 is impossible (we don't know how much will be read)
-        4. Memory is already allocated by the underlying stream.read() call regardless
-
-        SECURITY: We track both current position (_bytes_read) and the maximum position
-        ever reached (_high_water_mark). The limit is enforced against _high_water_mark,
-        preventing bypass via seek operations that try to re-read data.
-        """
-        data = self._stream.read(size)
-        self._bytes_read += len(data)
-        # Update high water mark - this never decreases, preventing seek bypass attacks
-        self._high_water_mark = max(self._high_water_mark, self._bytes_read)
-        if self._max_size is not None and self._high_water_mark > self._max_size:
-            # NOTE: Revealing the exact limit is intentional - it helps legitimate users
-            # understand the constraint. The limit is not security-sensitive information;
-            # it's a configuration value that would be documented anyway.
-            raise UploadSizeExceededError(f"Upload exceeds maximum size of {self._max_size} bytes")
-        return data
-
-    def seek(self, pos: int, whence: int = 0) -> int:
-        """Seek in stream and update bytes_read counter appropriately.
-
-        SECURITY: The _high_water_mark is never decreased by seek operations,
-        preventing bypass attacks. Even if a caller seeks backward (or uses
-        SEEK_END then SEEK_SET to return to the start), they cannot read more
-        than max_size bytes from the beginning of the stream.
-
-        For all seek modes, we use the resulting absolute position from the
-        underlying stream's seek() to track _bytes_read. The _high_water_mark
-        preserves the maximum position ever reached.
-        """
-        result = self._stream.seek(pos, whence)
-        # Update _bytes_read to current position; _high_water_mark is preserved
-        # and only updated in read() when we actually advance past it
-        self._bytes_read = result
-        return result
-
-    def tell(self) -> int:
-        """Get current position in stream (pass-through)."""
-        return self._stream.tell()
 
 
 class StreamingMultipartHandler:
@@ -192,11 +102,13 @@ class StreamingMultipartHandler:
         header_value = self._current_header_value
 
         if header_name == b"content-disposition":
-            # Extract field name
+            # Extract field name (RFC 7578 allows both quoted and unquoted values)
             cd_str = header_value.decode("utf-8", errors="replace")
-            name_match = re.search(r'name="([^"]+)"', cd_str)
+            # Match: name="value" (quoted) or name=value (unquoted)
+            name_match = re.search(r'name=(?:"([^"]+)"|([^;\s]+))', cd_str)
             if name_match:
-                self._current_field_name = name_match.group(1)
+                # Group 1 for quoted, group 2 for unquoted
+                self._current_field_name = (name_match.group(1) or name_match.group(2)).strip()
                 # Check if this is the file field
                 if self._current_field_name == "file":
                     # Reject multiple file parts to prevent resource leaks and ambiguity
@@ -222,8 +134,13 @@ class StreamingMultipartHandler:
         """Called for part data (file content or form field value)."""
         if self._in_file_field and self._temp_file_fd is not None:
             chunk = data[start:end]
-            # Write directly to temp file
-            os.write(self._temp_file_fd, chunk)
+            # Write directly to temp file, handling partial writes
+            # os.write() may return less than len(chunk) on full disk or signal interrupts
+            bytes_written = os.write(self._temp_file_fd, chunk)
+            if bytes_written != len(chunk):
+                raise IOError(
+                    f"Partial write to temp file: expected {len(chunk)} bytes, wrote {bytes_written}"
+                )
             # Update hasher incrementally
             self._hasher.update(chunk)
             self._total_bytes += len(chunk)
@@ -380,10 +297,11 @@ async def upload_artifact(
 
     # Parse boundary from Content-Type: multipart/form-data; boundary=----WebKitFormBoundary...
     # Handle both quoted and unquoted boundaries per RFC 2046
-    boundary_match = re.search(r'boundary="([^"]+)"', content_type)
+    # Parameter names are case-insensitive per RFC 2046
+    boundary_match = re.search(r'boundary\s*=\s*"([^"]+)"', content_type, flags=re.IGNORECASE)
     if not boundary_match:
         # Try unquoted format
-        boundary_match = re.search(r"boundary=([^;\s]+)", content_type)
+        boundary_match = re.search(r"boundary\s*=\s*([^;\s]+)", content_type, flags=re.IGNORECASE)
     if not boundary_match:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
