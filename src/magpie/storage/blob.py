@@ -163,10 +163,15 @@ def store_blob_from_temp(
         temp_file_path.unlink(missing_ok=True)
         return (hash_ref, True)
 
-    # New blob - atomic move to destination
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(temp_file_path), dest_path)
-    return (hash_ref, False)
+    # New blob - ensure destination directory exists, then atomic move
+    try:
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(temp_file_path), dest_path)
+        return (hash_ref, False)
+    except Exception:
+        # Clean up temp file if move fails (permissions, disk full, etc.)
+        temp_file_path.unlink(missing_ok=True)
+        raise
 
 
 def check_blob_exists(artifact_dir: Path, hash_ref: str) -> bool:

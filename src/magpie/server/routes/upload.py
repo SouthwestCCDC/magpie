@@ -199,6 +199,12 @@ class StreamingMultipartHandler:
                 self._current_field_name = name_match.group(1)
                 # Check if this is the file field
                 if self._current_field_name == "file":
+                    # Reject multiple file parts to prevent resource leaks and ambiguity
+                    if self._file_part_found:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Multiple 'file' parts not allowed in multipart upload",
+                        )
                     self._in_file_field = True
                     self._file_part_found = True
                     self._filename = self._extract_filename(header_value)
@@ -248,8 +254,12 @@ class StreamingMultipartHandler:
         if self._temp_file_fd is not None:
             try:
                 os.close(self._temp_file_fd)
-            except OSError:
-                pass
+            except OSError as exc:
+                # Best-effort cleanup: log and continue even if closing fails.
+                logger.warning(
+                    "Failed to close temporary upload file descriptor during cleanup",
+                    exc_info=exc,
+                )
             self._temp_file_fd = None
         if self._temp_file_path is not None and self._temp_file_path.exists():
             self._temp_file_path.unlink(missing_ok=True)
