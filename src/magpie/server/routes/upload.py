@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import io
+import re
 import time
 from typing import IO, Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel
+from python_multipart.multipart import MultipartParser
 
 from magpie.config import MagpieSettings
 from magpie.server.deps import get_magpie_settings, get_storage_service, require_write_scope
@@ -114,6 +117,122 @@ class SizeLimitedReader:
         return self._stream.tell()
 
 
+class StreamingMultipartHandler:
+    """Handler for streaming multipart/form-data without buffering.
+
+    This class uses python-multipart's streaming parser to extract file content
+    directly from the request stream without the intermediate SpooledTemporaryFile
+    that FastAPI's UploadFile parameter creates.
+
+    The file content is written to a BytesIO buffer that can be wrapped in
+    SizeLimitedReader for size enforcement.
+    """
+
+    def __init__(self, boundary: bytes, max_size: int | None = None) -> None:
+        """Initialize streaming multipart handler.
+
+        Args:
+            boundary: Multipart boundary from Content-Type header.
+            max_size: Maximum allowed upload size (for early rejection).
+        """
+        self._boundary = boundary
+        self._max_size = max_size
+        self._file_data = io.BytesIO()
+        self._current_field_name: str | None = None
+        self._current_header_name: bytes = b""
+        self._current_header_value: bytes = b""
+        self._filename: str | None = None
+        self._in_file_field = False
+        self._total_bytes = 0
+
+    def _extract_filename(self, content_disposition: bytes) -> str | None:
+        """Extract filename from Content-Disposition header."""
+        # Parse: Content-Disposition: form-data; name="file"; filename="artifact.bin"
+        try:
+            cd_str = content_disposition.decode("utf-8", errors="replace")
+            # Look for filename="..." or filename*=...
+            match = re.search(r'filename="([^"]+)"', cd_str)
+            if match:
+                return match.group(1)
+            match = re.search(r"filename=([^;\s]+)", cd_str)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+        return None
+
+    def _on_part_begin(self) -> None:
+        """Called when a new part begins."""
+        self._current_field_name = None
+        self._current_header_name = b""
+        self._current_header_value = b""
+        self._in_file_field = False
+
+    def _on_header_field(self, data: bytes, start: int, end: int) -> None:
+        """Called for header field data (header name)."""
+        self._current_header_name += data[start:end]
+
+    def _on_header_value(self, data: bytes, start: int, end: int) -> None:
+        """Called for header value data."""
+        self._current_header_value += data[start:end]
+
+    def _on_header_end(self) -> None:
+        """Called when a header is complete."""
+        header_name = self._current_header_name.lower()
+        header_value = self._current_header_value
+
+        if header_name == b"content-disposition":
+            # Extract field name
+            cd_str = header_value.decode("utf-8", errors="replace")
+            name_match = re.search(r'name="([^"]+)"', cd_str)
+            if name_match:
+                self._current_field_name = name_match.group(1)
+                # Check if this is the file field
+                if self._current_field_name == "file":
+                    self._in_file_field = True
+                    self._filename = self._extract_filename(header_value)
+
+        # Reset for next header
+        self._current_header_name = b""
+        self._current_header_value = b""
+
+    def _on_part_data(self, data: bytes, start: int, end: int) -> None:
+        """Called for part data (file content or form field value)."""
+        if self._in_file_field:
+            chunk = data[start:end]
+            self._file_data.write(chunk)
+            self._total_bytes += len(chunk)
+            # Early size check
+            if self._max_size is not None and self._total_bytes > self._max_size:
+                raise UploadSizeExceededError(
+                    f"Upload exceeds maximum size of {self._max_size} bytes"
+                )
+
+    def get_callbacks(self) -> dict:
+        """Get callback dictionary for MultipartParser."""
+        return {
+            "on_part_begin": self._on_part_begin,
+            "on_header_field": self._on_header_field,
+            "on_header_value": self._on_header_value,
+            "on_header_end": self._on_header_end,
+            "on_part_data": self._on_part_data,
+        }
+
+    def get_file_stream(self) -> io.BytesIO:
+        """Get the file content stream.
+
+        Returns:
+            BytesIO containing the uploaded file content.
+        """
+        self._file_data.seek(0)
+        return self._file_data
+
+    @property
+    def filename(self) -> str | None:
+        """Get the uploaded filename."""
+        return self._filename
+
+
 class UploadResponse(BaseModel):
     """Response model for successful artifact upload."""
 
@@ -127,7 +246,7 @@ class UploadResponse(BaseModel):
 @router.post("/api/v1/upload/{path:path}")
 async def upload_artifact(
     path: str,
-    file: UploadFile,
+    request: Request,
     storage_service: Annotated[StorageService, Depends(get_storage_service)],
     settings: Annotated[MagpieSettings, Depends(get_magpie_settings)],
     _write_scope_check: Annotated[None, Depends(require_write_scope)] = None,
@@ -135,6 +254,7 @@ async def upload_artifact(
     no_latest: Annotated[bool, Query()] = False,
     uploaded_by: str = "anonymous",
     x_magpie_user: Annotated[str | None, Header(alias="X-Magpie-User")] = None,
+    content_type: Annotated[str | None, Header(alias="Content-Type")] = None,
     content_length: Annotated[int | None, Header(alias="Content-Length")] = None,
 ) -> UploadResponse:
     """Upload an artifact to the storage system.
@@ -151,12 +271,13 @@ async def upload_artifact(
 
     Args:
         path: Logical path for the artifact (e.g., "project/component").
-        file: File content to upload (streamed).
+        request: FastAPI Request object for streaming body access.
         settings: Application settings for size limit configuration.
         source_uri: Optional source URI for provenance tracking.
         no_latest: If True, skip creating/updating the "latest" tag (default: False).
         uploaded_by: Identity of the uploader (fallback, default: "anonymous").
         x_magpie_user: Authenticated user from Caddy forward_auth header.
+        content_type: Content-Type header containing multipart boundary.
         content_length: Content-Length header for early size validation.
 
     Returns:
@@ -164,6 +285,7 @@ async def upload_artifact(
         and duplicate detection status.
 
     Raises:
+        HTTPException 400: If Content-Type is missing or boundary cannot be extracted.
         HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
         HTTPException 403: If token has read scope (insufficient permissions).
         HTTPException 413: If upload exceeds max_upload_size configuration.
@@ -176,7 +298,7 @@ async def upload_artifact(
     #    is stricter than the file content limit. Some valid uploads near the limit
     #    may be rejected early. This is intentional - we prefer DoS protection over
     #    allowing the last ~200 bytes of capacity.
-    # 2. SizeLimitedReader (later): Enforces limit during streaming on file content only.
+    # 2. StreamingMultipartHandler: Enforces limit during parsing on file content only.
     #    Catches malicious clients that lie about Content-Length or omit it.
     max_size = settings.max_upload_size
     if max_size is not None and content_length is not None:
@@ -192,6 +314,22 @@ async def upload_artifact(
     except InvalidArtifactPathError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
+    # Extract multipart boundary from Content-Type header
+    if not content_type:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Content-Type header is required for multipart upload",
+        )
+
+    # Parse boundary from Content-Type: multipart/form-data; boundary=----WebKitFormBoundary...
+    boundary_match = re.search(r"boundary=([^;\s]+)", content_type)
+    if not boundary_match:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not extract boundary from Content-Type header",
+        )
+    boundary = boundary_match.group(1).encode("utf-8")
+
     # Use X-Magpie-User header if present (authenticated via Caddy)
     # Fall back to query parameter for direct API access
     if x_magpie_user is not None:
@@ -205,9 +343,27 @@ async def upload_artifact(
                 message="Upload without X-Magpie-User header and no uploaded_by param",
             )
 
-    # Wrap file stream with size tracker/limiter
-    # Always wrap to track actual bytes read; enforces limit if max_size is set
-    file_stream = SizeLimitedReader(file.file, max_size)
+    # Set up streaming multipart handler
+    handler = StreamingMultipartHandler(boundary, max_size)
+    parser = MultipartParser(boundary, handler.get_callbacks())
+
+    # Stream request body through multipart parser
+    # This avoids Starlette's SpooledTemporaryFile buffering
+    try:
+        async for chunk in request.stream():
+            parser.write(chunk)
+        parser.finalize()
+    except UploadSizeExceededError:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Upload exceeds maximum size of {max_size} bytes",
+        )
+
+    # Get the parsed file stream
+    file_stream = handler.get_file_stream()
+
+    # Wrap with SizeLimitedReader for consistency (size already checked, but this provides bytes_read tracking)
+    file_stream = SizeLimitedReader(file_stream, max_size)
 
     # Track upload timing
     start_time = time.perf_counter()
