@@ -157,7 +157,8 @@ class StreamingMultipartHandler:
             match = re.search(r"filename=([^;\s]+)", cd_str)
             if match:
                 return match.group(1)
-        except Exception:
+        except (UnicodeDecodeError, re.error):  # nosec B110 - Graceful degradation for malformed headers
+            # If header is malformed, return None - filename extraction is optional
             pass
         return None
 
