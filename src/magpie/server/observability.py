@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import structlog
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
     from magpie.config import MagpieSettings
+
+logger = structlog.get_logger()
 
 
 def setup_sentry(app: "FastAPI", settings: "MagpieSettings") -> None:
@@ -18,11 +22,14 @@ def setup_sentry(app: "FastAPI", settings: "MagpieSettings") -> None:
         settings: MagpieSettings with sentry_dsn configuration.
     """
     if not settings.sentry_dsn:
+        logger.info("Sentry error tracking disabled (no DSN configured)")
         return
 
     import sentry_sdk
     from sentry_sdk.integrations.fastapi import FastApiIntegration
     from sentry_sdk.integrations.starlette import StarletteIntegration
+
+    environment = "development" if settings.debug else "production"
 
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
@@ -30,10 +37,12 @@ def setup_sentry(app: "FastAPI", settings: "MagpieSettings") -> None:
             StarletteIntegration(),
             FastApiIntegration(),
         ],
-        environment="development" if settings.debug else "production",
+        environment=environment,
         traces_sample_rate=1.0 if settings.debug else 0.1,
         send_default_pii=False,
     )
+
+    logger.info("Sentry error tracking enabled", environment=environment)
 
 
 def setup_opentelemetry(app: "FastAPI", settings: "MagpieSettings") -> None:
@@ -44,6 +53,7 @@ def setup_opentelemetry(app: "FastAPI", settings: "MagpieSettings") -> None:
         settings: MagpieSettings with otel configuration.
     """
     if not settings.otel_enabled:
+        logger.info("OpenTelemetry tracing disabled")
         return
 
     from opentelemetry import trace
@@ -69,6 +79,12 @@ def setup_opentelemetry(app: "FastAPI", settings: "MagpieSettings") -> None:
 
     # Instrument FastAPI
     FastAPIInstrumentor.instrument_app(app)
+
+    logger.info(
+        "OpenTelemetry tracing enabled",
+        service_name=settings.otel_service_name,
+        endpoint=settings.otel_endpoint or "console",
+    )
 
 
 def setup_observability(app: "FastAPI", settings: "MagpieSettings") -> None:
