@@ -806,19 +806,28 @@ class TestAsyncClientConcurrency:
     """Tests using httpx.AsyncClient for HTTP-level concurrency testing."""
 
     @pytest.fixture
-    async def http_client(self, test_storage_service: StorageService) -> httpx.AsyncClient:
+    async def http_client(
+        self, test_storage_service: StorageService, test_config: MagpieSettings
+    ) -> httpx.AsyncClient:
         """Create async HTTP client for testing.
 
         Note: This fixture modifies global FastAPI app state by adding a
-        dependency override for get_storage_service. The override is cleaned
-        up after the test by removing only the key we added, preserving any
-        other overrides that may exist (e.g., from conftest.py auth overrides).
+        dependency override for get_storage_service and get_magpie_settings.
+        The overrides are cleaned up after the test by removing only the keys
+        we added, preserving any other overrides that may exist (e.g., from
+        conftest.py auth overrides).
         """
 
         def override_storage_service() -> StorageService:
             return test_storage_service
 
+        def override_settings() -> MagpieSettings:
+            return test_config
+
+        from magpie.server.deps import get_magpie_settings
+
         app.dependency_overrides[get_storage_service] = override_storage_service
+        app.dependency_overrides[get_magpie_settings] = override_settings
 
         # Use ASGI transport for async testing
         from httpx import ASGITransport
@@ -830,8 +839,9 @@ class TestAsyncClientConcurrency:
             yield client
         finally:
             await client.aclose()
-            # Only remove the override we added, not all overrides
+            # Only remove the overrides we added, not all overrides
             app.dependency_overrides.pop(get_storage_service, None)
+            app.dependency_overrides.pop(get_magpie_settings, None)
 
     async def test_concurrent_http_uploads(
         self, http_client: httpx.AsyncClient, test_storage_service: StorageService

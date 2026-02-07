@@ -257,7 +257,9 @@ def client(test_storage_service: StorageService, test_config: MagpieSettings) ->
 
 
 @pytest.fixture
-def client_no_raise(test_storage_service: StorageService, test_config: MagpieSettings) -> TestClient:
+def client_no_raise(
+    test_storage_service: StorageService, test_config: MagpieSettings
+) -> TestClient:
     """Create test client that doesn't raise server exceptions.
 
     Used for tests that need to check HTTP error responses without

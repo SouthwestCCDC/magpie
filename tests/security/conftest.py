@@ -59,11 +59,12 @@ def test_storage_service(test_config: MagpieSettings) -> StorageService:
 
 
 @pytest.fixture
-def client(test_storage_service: StorageService) -> TestClient:
+def client(test_storage_service: StorageService, test_config: MagpieSettings) -> TestClient:
     """Create test client with overridden dependencies.
 
     This fixture overrides:
     - Storage service to use temporary paths
+    - Magpie settings to use test config (for temp_path, etc.)
     - Auth dependencies to allow unauthenticated access (security tests
       focus on input validation, not authentication)
 
@@ -73,10 +74,13 @@ def client(test_storage_service: StorageService) -> TestClient:
     vs security) and may evolve independently. Issue #113 tracks consolidating
     shared fixtures across the test suite.
     """
+    from magpie.server.deps import get_magpie_settings
+
     # Save existing overrides to restore them after test (defensive against
     # any global state from other test modules if tests are run together)
     saved_overrides = {
         get_storage_service: app.dependency_overrides.get(get_storage_service),
+        get_magpie_settings: app.dependency_overrides.get(get_magpie_settings),
         require_admin_scope: app.dependency_overrides.get(require_admin_scope),
         require_admin_scope_header: app.dependency_overrides.get(require_admin_scope_header),
         require_write_scope: app.dependency_overrides.get(require_write_scope),
@@ -86,7 +90,11 @@ def client(test_storage_service: StorageService) -> TestClient:
     def override_storage_service() -> StorageService:
         return test_storage_service
 
+    def override_settings() -> MagpieSettings:
+        return test_config
+
     app.dependency_overrides[get_storage_service] = override_storage_service
+    app.dependency_overrides[get_magpie_settings] = override_settings
     app.dependency_overrides[require_admin_scope] = _noop_require_admin_scope
     app.dependency_overrides[require_admin_scope_header] = _noop_require_admin_scope_header
     app.dependency_overrides[require_write_scope] = _noop_require_write_scope
