@@ -47,14 +47,19 @@ def test_storage_service(test_config: MagpieSettings) -> StorageService:
 
 
 @pytest.fixture
-def client_with_write_auth(test_storage_service: StorageService) -> TestClient:
+def client_with_write_auth(
+    test_storage_service: StorageService, test_config: MagpieSettings
+) -> TestClient:
     """Create test client that overrides ONLY write auth (not read auth).
 
     This fixture allows us to test read endpoints without authentication
     while still bypassing write auth for setup operations.
     """
+    from magpie.server.deps import get_magpie_settings
+
     saved_overrides = {
         get_storage_service: app.dependency_overrides.get(get_storage_service),
+        get_magpie_settings: app.dependency_overrides.get(get_magpie_settings),
         require_admin_scope: app.dependency_overrides.get(require_admin_scope),
         require_admin_scope_header: app.dependency_overrides.get(require_admin_scope_header),
         require_write_scope: app.dependency_overrides.get(require_write_scope),
@@ -63,14 +68,18 @@ def client_with_write_auth(test_storage_service: StorageService) -> TestClient:
     def override_storage_service() -> StorageService:
         return test_storage_service
 
+    def override_settings() -> MagpieSettings:
+        return test_config
+
     def _noop_require_write_scope() -> None:
         """No-op override for require_write_scope in tests."""
 
     def _noop_require_admin_scope_header() -> None:
         """No-op override for require_admin_scope_header in tests."""
 
-    # Override storage and write auth, but NOT read auth
+    # Override storage, settings, and write auth, but NOT read auth
     app.dependency_overrides[get_storage_service] = override_storage_service
+    app.dependency_overrides[get_magpie_settings] = override_settings
     app.dependency_overrides[require_write_scope] = _noop_require_write_scope
     app.dependency_overrides[require_admin_scope_header] = _noop_require_admin_scope_header
 
