@@ -47,6 +47,9 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
       - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-}
+      - MAGPIE_SENTRY_DSN=${MAGPIE_SENTRY_DSN:-}
+      - MAGPIE_OTEL_ENABLED=${MAGPIE_OTEL_ENABLED:-false}
+      - MAGPIE_OTEL_ENDPOINT=${MAGPIE_OTEL_ENDPOINT:-}
     expose:
       - "8000"  # Internal only - accessed via Caddy
     restart: unless-stopped
