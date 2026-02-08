@@ -38,7 +38,7 @@ def setup_sentry(app: "FastAPI", settings: "MagpieSettings") -> None:
             FastApiIntegration(),
         ],
         environment=environment,
-        traces_sample_rate=1.0 if settings.debug else 0.1,
+        traces_sample_rate=settings.sentry_traces_sample_rate,
         send_default_pii=False,
     )
 

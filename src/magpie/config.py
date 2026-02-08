@@ -46,6 +46,7 @@ class MagpieSettings(BaseSettings):
 
     # Observability settings
     sentry_dsn: str | None = None  # MAGPIE_SENTRY_DSN
+    sentry_traces_sample_rate: float = 1.0  # MAGPIE_SENTRY_TRACES_SAMPLE_RATE
     otel_enabled: bool = False  # MAGPIE_OTEL_ENABLED
     otel_endpoint: str | None = None  # MAGPIE_OTEL_ENDPOINT
     otel_service_name: str = "magpie"  # MAGPIE_OTEL_SERVICE_NAME
