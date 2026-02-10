@@ -1175,9 +1175,7 @@ class TestSync:
         assert "--execute" in result.output
         assert "dry-run" in result.output.lower() or "preview" in result.output.lower()
 
-    def test_sync_to_s3_nonexistent_storage_path(
-        self, ctl_runner: tuple[CliRunner, Path]
-    ) -> None:
+    def test_sync_to_s3_nonexistent_storage_path(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Sync to-s3 with nonexistent storage path shows error."""
         runner, tmp_path = ctl_runner
 
