@@ -11,8 +11,6 @@ if TYPE_CHECKING:
 
     from magpie.config import MagpieSettings
 
-logger = structlog.get_logger()
-
 
 def setup_sentry(app: "FastAPI", settings: "MagpieSettings") -> None:
     """Initialize Sentry error tracking if configured.
@@ -21,6 +19,8 @@ def setup_sentry(app: "FastAPI", settings: "MagpieSettings") -> None:
         app: FastAPI application instance.
         settings: MagpieSettings with sentry_dsn configuration.
     """
+    logger = structlog.get_logger()
+
     if not settings.sentry_dsn:
         logger.info("sentry_disabled", reason="no_dsn")
         return
@@ -52,6 +52,8 @@ def setup_opentelemetry(app: "FastAPI", settings: "MagpieSettings") -> None:
         app: FastAPI application instance.
         settings: MagpieSettings with otel configuration.
     """
+    logger = structlog.get_logger()
+
     if not settings.otel_enabled:
         logger.info("otel_disabled")
         return

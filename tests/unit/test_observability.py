@@ -35,6 +35,12 @@ def reset_logging_for_observability():
     root_logger.setLevel(logging.WARNING)
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
+
+    # Configure logging with a minimal setup to prevent logger caching issues
+    # This ensures that when setup_sentry()/setup_opentelemetry() call logger.info(),
+    # the logger is properly configured and can be captured by monkeypatch tests
+    configure_logging(MagpieSettings(log_format="json"))
+
     yield
     # Reset after test
     structlog.reset_defaults()
