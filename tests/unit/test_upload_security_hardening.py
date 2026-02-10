@@ -8,7 +8,6 @@ Tests for the adversarial review fixes including:
 
 from __future__ import annotations
 
-import io
 from pathlib import Path
 
 import pytest
@@ -52,11 +51,11 @@ class TestBoundaryValidation:
         """Valid RFC 2046 boundary should be accepted."""
         boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
         body = (
-            f'------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n'
-            f'Content-Disposition: form-data; name="file"; filename="test.bin"\r\n'
-            f'\r\n'
-            f'test content\r\n'
-            f'------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n'
+            "------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n"
+            'Content-Disposition: form-data; name="file"; filename="test.bin"\r\n'
+            "\r\n"
+            "test content\r\n"
+            "------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n"
         ).encode()
 
         response = client.post(
@@ -70,11 +69,11 @@ class TestBoundaryValidation:
         """Quoted boundary per RFC 2046 should be accepted."""
         boundary = "simple-boundary"
         body = (
-            f'--simple-boundary\r\n'
-            f'Content-Disposition: form-data; name="file"; filename="test.bin"\r\n'
-            f'\r\n'
-            f'test content\r\n'
-            f'--simple-boundary--\r\n'
+            "--simple-boundary\r\n"
+            'Content-Disposition: form-data; name="file"; filename="test.bin"\r\n'
+            "\r\n"
+            "test content\r\n"
+            "--simple-boundary--\r\n"
         ).encode()
 
         response = client.post(
@@ -88,7 +87,7 @@ class TestBoundaryValidation:
         """Boundary longer than 70 characters should be rejected per RFC 2046."""
         # 71 characters - exceeds RFC 2046 limit
         boundary = "a" * 71
-        body = b'test content'
+        body = b"test content"
 
         response = client.post(
             "/api/v1/upload/test/long-boundary",
@@ -102,7 +101,7 @@ class TestBoundaryValidation:
         """Empty boundary should be rejected."""
         response = client.post(
             "/api/v1/upload/test/empty-boundary",
-            content=b'test',
+            content=b"test",
             headers={"Content-Type": "multipart/form-data; boundary="},
         )
         assert response.status_code == 400
@@ -135,12 +134,7 @@ class TestContentDispositionValidation:
         """Multipart part without Content-Disposition should be rejected."""
         boundary = "test-boundary"
         # Part with no Content-Disposition header
-        body = (
-            f'--test-boundary\r\n'
-            f'\r\n'
-            f'test content\r\n'
-            f'--test-boundary--\r\n'
-        ).encode()
+        body = ("--test-boundary\r\n\r\ntest content\r\n--test-boundary--\r\n").encode()
 
         response = client.post(
             "/api/v1/upload/test/no-cd",
@@ -155,11 +149,11 @@ class TestContentDispositionValidation:
         boundary = "test-boundary"
         # Content-Disposition without name parameter
         body = (
-            f'--test-boundary\r\n'
-            f'Content-Disposition: form-data; filename="test.bin"\r\n'
-            f'\r\n'
-            f'test content\r\n'
-            f'--test-boundary--\r\n'
+            "--test-boundary\r\n"
+            'Content-Disposition: form-data; filename="test.bin"\r\n'
+            "\r\n"
+            "test content\r\n"
+            "--test-boundary--\r\n"
         ).encode()
 
         response = client.post(
@@ -203,11 +197,11 @@ class TestHeaderSizeLimits:
         # Create a header value that exceeds 16KB (16384 bytes)
         huge_value = "x" * 20000
         body = (
-            f'--test-boundary\r\n'
+            f"--test-boundary\r\n"
             f'Content-Disposition: form-data; name="file"; filename="{huge_value}"\r\n'
-            f'\r\n'
-            f'test content\r\n'
-            f'--test-boundary--\r\n'
+            f"\r\n"
+            f"test content\r\n"
+            f"--test-boundary--\r\n"
         ).encode()
 
         response = client.post(
@@ -223,12 +217,12 @@ class TestHeaderSizeLimits:
         boundary = "test-boundary"
         # Normal-sized header (well under 16KB)
         body = (
-            f'--test-boundary\r\n'
-            f'Content-Disposition: form-data; name="file"; filename="test.bin"\r\n'
-            f'Content-Type: application/octet-stream\r\n'
-            f'\r\n'
-            f'test content\r\n'
-            f'--test-boundary--\r\n'
+            "--test-boundary\r\n"
+            'Content-Disposition: form-data; name="file"; filename="test.bin"\r\n'
+            "Content-Type: application/octet-stream\r\n"
+            "\r\n"
+            "test content\r\n"
+            "--test-boundary--\r\n"
         ).encode()
 
         response = client.post(
