@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import sqlite3
 import threading
 from pathlib import Path
 from typing import Generator
@@ -18,6 +19,7 @@ from click.testing import CliRunner
 
 from magpie.auth.database import get_connection, init_database, list_tokens
 from magpie.auth.models import TokenScope
+from magpie.auth.service import TokenExistsError
 from magpie.config import get_settings
 from magpie.ctl import cli as ctl_cli
 
@@ -274,6 +276,12 @@ class TestInit:
         # Exactly one should succeed, one should fail with IntegrityError/TokenExistsError
         assert len(successes) == 1, f"Exactly one thread should succeed, got {len(successes)}"
         assert len(failures) == 1, f"Exactly one thread should fail, got {len(failures)}"
+
+        # Verify the failure is the expected duplicate-token error
+        failure = failures[0]
+        assert isinstance(
+            failure, (TokenExistsError, sqlite3.IntegrityError)
+        ), f"Expected TokenExistsError or IntegrityError, got {type(failure).__name__}: {failure}"
 
         # Critical: verify only ONE admin token exists in database
         conn = get_connection(tmp_path / "magpie.db")
