@@ -109,12 +109,18 @@ class TokenService:
 
         Thread-safe: Uses double-checked locking to prevent race conditions
         when multiple threads call methods simultaneously.
+
+        Double-checked locking conditions (intentionally asymmetric):
+        - Fast path: Conservative - only skip if BOTH tracked AND exists on disk.
+          This avoids acquiring the lock when we're certain the DB is ready.
+        - Slow path: Liberal - reinitialize if EITHER not tracked OR file deleted.
+          This handles external deletion or missed initialization without risk.
         """
-        # Fast path: check without lock
+        # Fast path: check without lock (only skip if we're CERTAIN it's initialized)
         if self.db_path in self._initialized_paths and self.db_path.exists():
             return
 
-        # Slow path: acquire lock and re-check
+        # Slow path: acquire lock and re-check (reinitialize if there's ANY doubt)
         with self._init_lock:
             # Double-check after acquiring lock
             if self.db_path not in self._initialized_paths or not self.db_path.exists():
