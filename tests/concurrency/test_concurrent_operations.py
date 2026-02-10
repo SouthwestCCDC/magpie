@@ -686,9 +686,11 @@ class TestGCLockContention:
     ) -> None:
         """Multiple GC processes running simultaneously.
 
-        Characterizes behavior under concurrent GC execution. All processes
-        should complete (possibly with FileNotFoundError for already-deleted
-        blobs) and tagged artifacts should be preserved.
+        Verifies thread safety by checking that concurrent GC runs don't corrupt
+        state or double-delete blobs. Tests that:
+        1. Tagged artifacts are preserved
+        2. Total deletions don't exceed available untagged blobs
+        3. Final state matches expected cleanup (untagged blobs removed)
         """
         # Create artifacts with tagged and untagged blobs
         for i in range(5):
@@ -700,16 +702,20 @@ class TestGCLockContention:
                 uploaded_by="setup",
             )
 
+        # Track hashes of old versions that should be deleted
+        expected_deletable_hashes = []
+
         # Create some untagged blobs by uploading and then uploading different content
         for i in range(3):
             # First upload (will become untagged)
             content1 = f"old version {i}".encode()
             file_stream1 = io.BytesIO(content1)
-            test_storage_service.store_artifact(
+            info1, _ = test_storage_service.store_artifact(
                 artifact_path=f"gc-contention/updated-{i}",
                 file_stream=file_stream1,
                 uploaded_by="setup",
             )
+            expected_deletable_hashes.append(info1.hash[:8])
 
             # Second upload (becomes "latest", old becomes untagged)
             content2 = f"new version {i}".encode()
@@ -737,6 +743,17 @@ class TestGCLockContention:
         successful_results = [r for r in results if not isinstance(r, Exception)]
         assert len(successful_results) >= 1, "At least one GC process should succeed"
 
+        # Verify total deletions don't exceed available untagged blobs.
+        # Each GC process may delete some or all untagged blobs, but the total
+        # deletions across all processes should not exceed the number of untagged
+        # blobs (3 in this case). Due to race conditions, one GC might delete a blob
+        # while another is scanning, so we verify the upper bound.
+        total_deleted = sum(deleted for _, deleted in successful_results)
+        assert total_deleted <= len(expected_deletable_hashes), (
+            f"Total deletions ({total_deleted}) should not exceed untagged blobs "
+            f"({len(expected_deletable_hashes)})"
+        )
+
         # Verify storage is consistent - all tagged artifacts should still exist
         for i in range(5):
             info = test_storage_service.get_artifact_info(f"gc-contention/tagged-{i}", "latest")
@@ -745,6 +762,21 @@ class TestGCLockContention:
         for i in range(3):
             info = test_storage_service.get_artifact_info(f"gc-contention/updated-{i}", "latest")
             assert info is not None, f"Updated artifact {i} should still exist"
+
+        # Verify untagged blobs were actually deleted (final state check).
+        # After concurrent GC runs, all untagged blobs should be gone.
+        for i in range(3):
+            artifact_dir = test_config.storage_path / "gc-contention" / f"updated-{i}"
+            blobs_dir = artifact_dir / "blobs"
+            if blobs_dir.exists():
+                remaining_blobs = list(blobs_dir.iterdir())
+                # Filter to only blobs (not symlinks or directories)
+                remaining_blob_files = [b for b in remaining_blobs if b.is_file()]
+                # Only the "latest" tagged blob should remain (1 blob per artifact)
+                assert len(remaining_blob_files) == 1, (
+                    f"Artifact {i} should have only 1 blob remaining after GC, "
+                    f"found {len(remaining_blob_files)}"
+                )
 
     async def test_gc_with_concurrent_uploads(
         self, test_config: MagpieSettings, test_storage_service: StorageService
