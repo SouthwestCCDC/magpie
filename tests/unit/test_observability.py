@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from io import StringIO
 from unittest.mock import patch
 
 import pytest
+import structlog
 from fastapi import FastAPI
 
 from magpie.config import MagpieSettings
+from magpie.logging_config import configure_logging
 from magpie.server.observability import (
     setup_observability,
     setup_opentelemetry,
@@ -19,6 +22,26 @@ from magpie.server.observability import (
 def test_app() -> FastAPI:
     """Create a test FastAPI app."""
     return FastAPI()
+
+
+@pytest.fixture(autouse=True)
+def reset_logging_for_observability():
+    """Reset structlog and logging state between tests."""
+    import logging
+
+    # Reset before test
+    structlog.reset_defaults()
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.WARNING)
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    yield
+    # Reset after test
+    structlog.reset_defaults()
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.WARNING)
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
 
 
 class TestSentrySetup:
@@ -173,3 +196,99 @@ class TestConfigToggles:
         assert settings.otel_enabled is False
         assert settings.otel_endpoint is None
         assert settings.otel_service_name == "magpie"
+
+
+class TestLogging:
+    """Tests for logging behavior."""
+
+    def test_sentry_disabled_logs_message(self, test_app: FastAPI, monkeypatch) -> None:
+        """Should log when Sentry is disabled."""
+        settings = MagpieSettings(sentry_dsn=None, log_format="json")
+
+        # Capture logging output
+        log_stream = StringIO()
+        monkeypatch.setattr("sys.stderr", log_stream)
+
+        configure_logging(settings)
+        setup_sentry(test_app, settings)
+
+        output = log_stream.getvalue()
+        assert "Sentry error tracking disabled" in output
+
+    def test_sentry_enabled_logs_message(self, test_app: FastAPI, monkeypatch) -> None:
+        """Should log when Sentry is enabled."""
+        settings = MagpieSettings(sentry_dsn="https://test@sentry.io/123", log_format="json")
+
+        # Capture logging output
+        log_stream = StringIO()
+        monkeypatch.setattr("sys.stderr", log_stream)
+
+        configure_logging(settings)
+
+        with patch("sentry_sdk.init"):
+            setup_sentry(test_app, settings)
+
+        output = log_stream.getvalue()
+        assert "Sentry error tracking enabled" in output
+
+    def test_otel_disabled_logs_message(self, test_app: FastAPI, monkeypatch) -> None:
+        """Should log when OpenTelemetry is disabled."""
+        settings = MagpieSettings(otel_enabled=False, log_format="json")
+
+        # Capture logging output
+        log_stream = StringIO()
+        monkeypatch.setattr("sys.stderr", log_stream)
+
+        configure_logging(settings)
+        setup_opentelemetry(test_app, settings)
+
+        output = log_stream.getvalue()
+        assert "OpenTelemetry tracing disabled" in output
+
+    def test_otel_enabled_logs_message(self, test_app: FastAPI, monkeypatch) -> None:
+        """Should log when OpenTelemetry is enabled."""
+        settings = MagpieSettings(otel_enabled=True, log_format="json")
+
+        # Capture logging output
+        log_stream = StringIO()
+        monkeypatch.setattr("sys.stderr", log_stream)
+
+        configure_logging(settings)
+
+        with (
+            patch("opentelemetry.trace.set_tracer_provider"),
+            patch("opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"),
+        ):
+            setup_opentelemetry(test_app, settings)
+
+        output = log_stream.getvalue()
+        assert "OpenTelemetry tracing enabled" in output
+
+    def test_otel_endpoint_not_logged_verbatim(self, test_app: FastAPI, monkeypatch) -> None:
+        """OTEL endpoint URL should not be logged verbatim (security concern)."""
+        sensitive_endpoint = (
+            "http://user:password@otel-collector.internal:4317/v1/traces?key=secret"
+        )
+        settings = MagpieSettings(
+            otel_enabled=True, otel_endpoint=sensitive_endpoint, log_format="json"
+        )
+
+        # Capture logging output
+        log_stream = StringIO()
+        monkeypatch.setattr("sys.stderr", log_stream)
+
+        configure_logging(settings)
+
+        with (
+            patch("opentelemetry.trace.set_tracer_provider"),
+            patch("opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter"),
+            patch("opentelemetry.sdk.trace.export.BatchSpanProcessor"),
+            patch("opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"),
+        ):
+            setup_opentelemetry(test_app, settings)
+
+        # Verify endpoint URL is not present in any log output
+        log_output = log_stream.getvalue()
+        assert sensitive_endpoint not in log_output
+        assert "user:password" not in log_output
+        assert "key=secret" not in log_output

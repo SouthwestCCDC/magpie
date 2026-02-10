@@ -90,6 +90,7 @@ services:
       - MAGPIE_SENTRY_TRACES_SAMPLE_RATE=${MAGPIE_SENTRY_TRACES_SAMPLE_RATE:-1.0}
       - MAGPIE_OTEL_ENABLED=${MAGPIE_OTEL_ENABLED:-false}
       - MAGPIE_OTEL_ENDPOINT=${MAGPIE_OTEL_ENDPOINT:-}
+      - MAGPIE_OTEL_SERVICE_NAME=${MAGPIE_OTEL_SERVICE_NAME:-magpie}
     expose:
       - "8000"  # Internal only - accessed via Caddy
     restart: unless-stopped

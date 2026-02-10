@@ -83,7 +83,6 @@ def setup_opentelemetry(app: "FastAPI", settings: "MagpieSettings") -> None:
     logger.info(
         "OpenTelemetry tracing enabled",
         service_name=settings.otel_service_name,
-        endpoint=settings.otel_endpoint,
         exporter_configured=bool(settings.otel_endpoint),
     )
 
