@@ -332,7 +332,7 @@ async def upload_artifact(
     # Stream request body through multipart parser in a single background thread
     # Bridge async stream → sync parser using a queue (avoids per-chunk thread overhead)
     chunk_queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=10)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     async def stream_producer():
         """Read chunks from request stream and put them into queue."""
