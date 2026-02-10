@@ -238,7 +238,7 @@ class ThroughputTrackingFile:
         total_bytes = sum(chunk[1] for chunk in self.bytes_transferred[start_idx:end_idx])
 
         # Calculate time window
-        start_time = self.bytes_transferred[start_idx][0] if start_idx > 0 else 0.0
+        start_time = self.bytes_transferred[start_idx][0]
         end_time = self.bytes_transferred[end_idx - 1][0]
         elapsed = end_time - start_time
 

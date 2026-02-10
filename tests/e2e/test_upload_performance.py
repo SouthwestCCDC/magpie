@@ -197,8 +197,9 @@ class TestE2EUploadStability:
         assert response.status_code == 200
 
         # Analyze chunk timing to detect buffering
-        if len(upload_file.chunk_times) < 4:
-            pytest.skip("Not enough chunks to analyze")
+        # Need at least 8 chunks to get meaningful quartiles (7 intervals -> quartile_size >= 1)
+        if len(upload_file.chunk_times) < 8:
+            pytest.skip("Not enough chunks to analyze quartiles")
 
         # Calculate time between chunks
         chunk_intervals = []
@@ -208,6 +209,9 @@ class TestE2EUploadStability:
 
         # Compare first and last quartiles
         quartile_size = len(chunk_intervals) // 4
+        if quartile_size == 0:
+            pytest.skip("Not enough intervals for quartile analysis")
+
         first_quartile = chunk_intervals[:quartile_size]
         last_quartile = chunk_intervals[-quartile_size:]
 
