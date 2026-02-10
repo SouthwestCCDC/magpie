@@ -22,7 +22,7 @@ def setup_sentry(app: "FastAPI", settings: "MagpieSettings") -> None:
         settings: MagpieSettings with sentry_dsn configuration.
     """
     if not settings.sentry_dsn:
-        logger.info("Sentry error tracking disabled (no DSN configured)")
+        logger.info("sentry_disabled", reason="no_dsn")
         return
 
     import sentry_sdk
@@ -42,7 +42,7 @@ def setup_sentry(app: "FastAPI", settings: "MagpieSettings") -> None:
         send_default_pii=False,
     )
 
-    logger.info("Sentry error tracking enabled", environment=environment)
+    logger.info("sentry_enabled", environment=environment)
 
 
 def setup_opentelemetry(app: "FastAPI", settings: "MagpieSettings") -> None:
@@ -53,7 +53,7 @@ def setup_opentelemetry(app: "FastAPI", settings: "MagpieSettings") -> None:
         settings: MagpieSettings with otel configuration.
     """
     if not settings.otel_enabled:
-        logger.info("OpenTelemetry tracing disabled")
+        logger.info("otel_disabled")
         return
 
     from opentelemetry import trace
@@ -81,7 +81,7 @@ def setup_opentelemetry(app: "FastAPI", settings: "MagpieSettings") -> None:
     FastAPIInstrumentor.instrument_app(app)
 
     logger.info(
-        "OpenTelemetry tracing enabled",
+        "otel_enabled",
         service_name=settings.otel_service_name,
         exporter_configured=bool(settings.otel_endpoint),
     )

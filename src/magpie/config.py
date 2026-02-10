@@ -7,7 +7,7 @@ import ipaddress
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,7 +46,9 @@ class MagpieSettings(BaseSettings):
 
     # Observability settings
     sentry_dsn: str | None = None  # MAGPIE_SENTRY_DSN
-    sentry_traces_sample_rate: float = 1.0  # MAGPIE_SENTRY_TRACES_SAMPLE_RATE
+    sentry_traces_sample_rate: float = Field(
+        default=1.0, ge=0.0, le=1.0
+    )  # MAGPIE_SENTRY_TRACES_SAMPLE_RATE
     otel_enabled: bool = False  # MAGPIE_OTEL_ENABLED
     otel_endpoint: str | None = None  # MAGPIE_OTEL_ENDPOINT
     otel_service_name: str = "magpie"  # MAGPIE_OTEL_SERVICE_NAME

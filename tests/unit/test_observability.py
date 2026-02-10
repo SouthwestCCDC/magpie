@@ -213,7 +213,7 @@ class TestLogging:
         setup_sentry(test_app, settings)
 
         output = log_stream.getvalue()
-        assert "Sentry error tracking disabled" in output
+        assert "sentry_disabled" in output
 
     def test_sentry_enabled_logs_message(self, test_app: FastAPI, monkeypatch) -> None:
         """Should log when Sentry is enabled."""
@@ -229,7 +229,7 @@ class TestLogging:
             setup_sentry(test_app, settings)
 
         output = log_stream.getvalue()
-        assert "Sentry error tracking enabled" in output
+        assert "sentry_enabled" in output
 
     def test_otel_disabled_logs_message(self, test_app: FastAPI, monkeypatch) -> None:
         """Should log when OpenTelemetry is disabled."""
@@ -243,7 +243,7 @@ class TestLogging:
         setup_opentelemetry(test_app, settings)
 
         output = log_stream.getvalue()
-        assert "OpenTelemetry tracing disabled" in output
+        assert "otel_disabled" in output
 
     def test_otel_enabled_logs_message(self, test_app: FastAPI, monkeypatch) -> None:
         """Should log when OpenTelemetry is enabled."""
@@ -262,7 +262,7 @@ class TestLogging:
             setup_opentelemetry(test_app, settings)
 
         output = log_stream.getvalue()
-        assert "OpenTelemetry tracing enabled" in output
+        assert "otel_enabled" in output
 
     def test_otel_endpoint_not_logged_verbatim(self, test_app: FastAPI, monkeypatch) -> None:
         """OTEL endpoint URL should not be logged verbatim (security concern)."""
