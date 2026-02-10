@@ -87,6 +87,17 @@ class TestFormatNetworkError:
 
         assert "server" in result
 
+    def test_standalone_socket_gaierror(self) -> None:
+        """Standalone socket.gaierror produces helpful DNS error message."""
+        dns_error = socket.gaierror("Name or service not known")
+
+        result = format_network_error(dns_error, server="https://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "DNS resolution failed" in result
+        assert "Hint:" in result
+        assert "hostname is correct" in result
+
 
 class TestHandleNetworkError:
     """Tests for handle_network_error function."""
@@ -294,3 +305,60 @@ class TestCliRunnerIntegration:
 
         # Verify exit code is GENERAL_ERROR (1) for unhandled exceptions
         assert result.exit_code == ExitCode.GENERAL_ERROR
+
+    def test_http_404_error_exit_code_with_runner(self) -> None:
+        """HTTP 404 error in human mode produces exit code 3 (NOT_FOUND)."""
+        from magpie.cli.errors import handle_http_error
+
+        @click.command()
+        def test_command() -> None:
+            """Test command that raises an HTTP 404 error."""
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            mock_response.json.return_value = {"detail": "Not found"}
+            handle_http_error(mock_response, "Test operation")
+
+        runner = CliRunner()
+        result = runner.invoke(test_command)
+
+        # Verify exit code is NOT_FOUND (3)
+        assert result.exit_code == ExitCode.NOT_FOUND
+        assert "Test operation failed (404)" in result.output
+
+    def test_http_401_error_exit_code_with_runner(self) -> None:
+        """HTTP 401 error in human mode produces exit code 4 (AUTH_ERROR)."""
+        from magpie.cli.errors import handle_http_error
+
+        @click.command()
+        def test_command() -> None:
+            """Test command that raises an HTTP 401 error."""
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+            mock_response.json.return_value = {"detail": "Unauthorized"}
+            handle_http_error(mock_response, "Test operation")
+
+        runner = CliRunner()
+        result = runner.invoke(test_command)
+
+        # Verify exit code is AUTH_ERROR (4)
+        assert result.exit_code == ExitCode.AUTH_ERROR
+        assert "Test operation failed (401)" in result.output
+
+    def test_http_500_error_exit_code_with_runner(self) -> None:
+        """HTTP 500 error in human mode produces exit code 1 (GENERAL_ERROR)."""
+        from magpie.cli.errors import handle_http_error
+
+        @click.command()
+        def test_command() -> None:
+            """Test command that raises an HTTP 500 error."""
+            mock_response = MagicMock()
+            mock_response.status_code = 500
+            mock_response.json.return_value = {"detail": "Internal server error"}
+            handle_http_error(mock_response, "Test operation")
+
+        runner = CliRunner()
+        result = runner.invoke(test_command)
+
+        # Verify exit code is GENERAL_ERROR (1)
+        assert result.exit_code == ExitCode.GENERAL_ERROR
+        assert "Test operation failed (500)" in result.output

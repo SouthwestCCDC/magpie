@@ -9,13 +9,10 @@ from __future__ import annotations
 import json
 import socket
 from functools import wraps
-from typing import TYPE_CHECKING, Callable, TypeVar
+from typing import Callable, TypeVar
 
 import click
 import httpx
-
-if TYPE_CHECKING:
-    pass
 
 F = TypeVar("F", bound=Callable[..., object])
 
@@ -191,6 +188,12 @@ def format_network_error(exc: Exception, server: str | None = None) -> str:
         # Generic request error
         msg = f"Network error connecting to '{hostname}': {exc}"
         hint = "Check your network connection and server configuration."
+        return f"{msg}\nHint: {hint}"
+
+    if isinstance(exc, socket.gaierror):
+        # Standalone DNS resolution error (not wrapped in httpx exception)
+        msg = f"Could not connect to server '{hostname}': DNS resolution failed"
+        hint = "Check that the server hostname is correct and your network is connected."
         return f"{msg}\nHint: {hint}"
 
     # Fallback for unexpected network errors
