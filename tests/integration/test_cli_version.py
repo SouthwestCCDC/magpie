@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from unittest.mock import Mock, patch
 
+import httpx
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
 from magpie import __version__
 from magpie.cli import cli
+from magpie.cli.formatting import ExitCode
 
 
 class TestVersionCommand:
@@ -40,10 +42,12 @@ class TestVersionCommand:
         assert "server:" in result.output
         assert f"server: {__version__}" in result.output
 
-    def test_version_with_server_flag_handles_connection_error(self, cli_runner: CliRunner) -> None:
-        """Version command with --server-version flag handles connection errors gracefully."""
+    def test_version_with_server_flag_handles_network_error(self, cli_runner: CliRunner) -> None:
+        """Version command with --server-version flag handles network errors with exit code 2."""
         mock_client = Mock()
-        mock_client.get.side_effect = Exception("Connection refused")
+        # Raise httpx.ConnectError to test network error handling
+        mock_request = Mock()
+        mock_client.get.side_effect = httpx.ConnectError("Connection refused", request=mock_request)
         mock_client.__enter__ = Mock(return_value=mock_client)
         mock_client.__exit__ = Mock(return_value=False)
 
@@ -55,11 +59,55 @@ class TestVersionCommand:
                 ["--server", "http://test", "version", "--server-version"],
             )
 
-        # Should exit with error
-        assert result.exit_code == 1
-        # Should show error message with details
-        assert "Failed to fetch server version" in result.output
-        assert "Connection refused" in result.output
+        # Should exit with NETWORK_ERROR code (2), not generic error (1)
+        assert result.exit_code == ExitCode.NETWORK_ERROR
+        # Should show user-friendly network error message
+        assert (
+            "Could not connect to server" in result.output or "Connection refused" in result.output
+        )
+
+    def test_version_with_server_flag_handles_timeout_error(self, cli_runner: CliRunner) -> None:
+        """Version command with --server-version flag handles timeout errors with exit code 2."""
+        mock_client = Mock()
+        mock_request = Mock()
+        mock_client.get.side_effect = httpx.TimeoutException(
+            "Request timed out", request=mock_request
+        )
+        mock_client.__enter__ = Mock(return_value=mock_client)
+        mock_client.__exit__ = Mock(return_value=False)
+
+        with patch("magpie.cli.get_client") as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "version", "--server-version"],
+            )
+
+        # Should exit with NETWORK_ERROR code (2)
+        assert result.exit_code == ExitCode.NETWORK_ERROR
+        # Should show timeout-specific message
+        assert "timed out" in result.output
+
+    def test_version_with_server_flag_handles_proxy_error(self, cli_runner: CliRunner) -> None:
+        """Version command with --server-version flag handles proxy errors with exit code 2."""
+        mock_client = Mock()
+        mock_client.get.side_effect = httpx.ProxyError("Proxy connection failed")
+        mock_client.__enter__ = Mock(return_value=mock_client)
+        mock_client.__exit__ = Mock(return_value=False)
+
+        with patch("magpie.cli.get_client") as mock_get_client:
+            mock_get_client.return_value = mock_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "version", "--server-version"],
+            )
+
+        # Should exit with NETWORK_ERROR code (2)
+        assert result.exit_code == ExitCode.NETWORK_ERROR
+        # Should show proxy-specific message
+        assert "Proxy error" in result.output
 
     def test_version_with_server_flag_handles_missing_version_field(
         self, cli_runner: CliRunner

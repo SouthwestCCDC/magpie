@@ -9,6 +9,7 @@ import click
 
 from magpie.cli.client import get_client
 from magpie.cli.config import get_ca_cert, get_server, get_timeout, get_token
+from magpie.cli.errors import with_network_error_handling
 from magpie.cli.formatting import OutputFormat
 from magpie.config import get_settings
 
@@ -152,13 +153,18 @@ def cli(
     help="Show server version in addition to client version.",
 )
 @pass_context
+@with_network_error_handling
 @sentry_wrapper
 def version(ctx: CLIContext, server_version: bool) -> None:
     """Show version.
 
     Exit code behavior:
     - Without --server-version flag: Always exits 0 (shows client version only)
-    - With --server-version flag: Exits 1 if server unreachable (explicit server version request)
+    - With --server-version flag: Exits with appropriate error code if server unreachable
+
+    Network errors (connection failures, timeouts, etc.) are handled by the
+    with_network_error_handling decorator, which provides consistent error messages
+    and exit codes (exit code 2) across all CLI commands.
 
     This design treats --server-version as a strict requirement: if the user explicitly requests
     server version and it cannot be obtained, the command fails to indicate the requirement
@@ -176,20 +182,15 @@ def version(ctx: CLIContext, server_version: bool) -> None:
         raise click.ClickException(msg)
 
     # Query server version from /health endpoint
-    try:
-        # /health is a public endpoint, so we create an unauthenticated client
-        # to avoid unnecessarily sending tokens
-        with get_client(ctx.server, token=None, timeout=ctx.timeout, ca_cert=ctx.ca_cert) as client:
-            response = client.get("/health")
-            response.raise_for_status()
-            data = response.json()
-            server_ver = data.get("version", "unknown")
-            click.echo(f"magpie {__version__} (server: {server_ver})")
-    except Exception as e:
-        # Exit 1 when --server-version flag used but server unreachable (design decision)
-        # See issue #343 for rationale
-        msg = f"Failed to fetch server version: {e}"
-        raise click.ClickException(msg) from e
+    # Network errors will be caught by @with_network_error_handling decorator
+    # /health is a public endpoint, so we create an unauthenticated client
+    # to avoid unnecessarily sending tokens
+    with get_client(ctx.server, token=None, timeout=ctx.timeout, ca_cert=ctx.ca_cert) as client:
+        response = client.get("/health")
+        response.raise_for_status()
+        data = response.json()
+        server_ver = data.get("version", "unknown")
+        click.echo(f"magpie {__version__} (server: {server_ver})")
 
 
 # Register subcommands
