@@ -279,9 +279,9 @@ class TestInit:
 
         # Verify the failure is the expected duplicate-token error
         failure = failures[0]
-        assert isinstance(
-            failure, (TokenExistsError, sqlite3.IntegrityError)
-        ), f"Expected TokenExistsError or IntegrityError, got {type(failure).__name__}: {failure}"
+        assert isinstance(failure, (TokenExistsError, sqlite3.IntegrityError)), (
+            f"Expected TokenExistsError or IntegrityError, got {type(failure).__name__}: {failure}"
+        )
 
         # Critical: verify only ONE admin token exists in database
         conn = get_connection(tmp_path / "magpie.db")
