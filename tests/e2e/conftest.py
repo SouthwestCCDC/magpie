@@ -450,23 +450,23 @@ def e2e_services(base_url: str, admin_token: str) -> E2EServices:
 
 @pytest.fixture
 def cleanup_after_upload(authenticated_client: httpx.Client) -> Generator[list[str], None, None]:
-    """Track and clean up uploaded artifacts after test completes.
+    """Track uploaded artifacts after test completes.
 
-    Use for large upload tests to prevent disk exhaustion on self-hosted runners.
-    Tests should append artifact paths to the returned list, and this fixture
-    will delete them via API after the test completes.
+    Use for large upload tests to document artifacts created on self-hosted runners.
+    Tests should append artifact paths to the returned list for tracking purposes.
+
+    NOTE: Automatic cleanup is not currently supported. The API does not provide
+    a DELETE endpoint for artifacts (only for tags). Large test artifacts will
+    accumulate on disk and require manual cleanup or a future magpie-ctl gc command.
+    See issue #441 for artifact deletion implementation.
 
     Yields:
-        List that tests can append artifact paths to for cleanup.
+        List that tests can append artifact paths to for tracking.
     """
     uploaded_paths: list[str] = []
 
     yield uploaded_paths
 
-    # Cleanup: delete all tracked uploads via API (best effort)
-    for path in uploaded_paths:
-        try:
-            authenticated_client.delete(f"/api/v1/artifacts/{path}")
-        except Exception:
-            # Best-effort cleanup - ignore errors
-            pass
+    # NOTE: No automatic cleanup - DELETE /api/v1/artifacts/{path} doesn't exist.
+    # Artifacts will persist on disk until manual cleanup or garbage collection.
+    # See issue #441 for artifact deletion endpoint implementation.

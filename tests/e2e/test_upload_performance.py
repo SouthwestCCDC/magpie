@@ -245,7 +245,7 @@ class TestE2EMemoryBounded:
         admin_token = e2e_services["admin_token"]
         headers = {"Authorization": f"Bearer {admin_token}"}
 
-        # Upload 3 files concurrently (using httpx client)
+        # Upload 3 files sequentially to test for memory accumulation between requests
         with httpx.Client(base_url=base_url, headers=headers, timeout=60.0) as client:
             upload_file1 = StreamingUploadFile(file_size)
             upload_file2 = StreamingUploadFile(file_size)

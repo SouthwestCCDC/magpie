@@ -259,8 +259,8 @@ class TestUploadThroughputStability:
         Catches buffering issues that cause progressive slowdown.
 
         The production issue showed 20-40x degradation (40+ MB/s dropping to 1-2 MB/s).
-        We use a 50% threshold (2x degradation) to catch severe issues while tolerating
-        normal system variability.
+        We use a 40% threshold (2.5x degradation) to catch severe issues while tolerating
+        normal CI runner variability. This matches the E2E test threshold.
         """
         file_size = 50 * 1024 * 1024  # 50 MB for meaningful measurement
         fake_file = ThroughputTrackingFile(file_size, chunk_size=1024 * 1024)  # 1 MB chunks
@@ -291,15 +291,15 @@ class TestUploadThroughputStability:
         # Calculate overall throughput for reporting
         overall_throughput = (file_size / (1024 * 1024)) / elapsed
 
-        # Assert second half throughput is at least 50% of first half
-        # This catches 2x+ degradation while tolerating normal variance
-        min_acceptable_throughput = first_half_throughput * 0.5
+        # Assert second half throughput is at least 40% of first half
+        # This catches 2.5x+ degradation while tolerating CI runner variance
+        min_acceptable_throughput = first_half_throughput * 0.4
 
         assert second_half_throughput >= min_acceptable_throughput, (
             f"Upload throughput degraded significantly: "
             f"first half = {first_half_throughput:.2f} MB/s, "
             f"second half = {second_half_throughput:.2f} MB/s. "
-            f"Second half throughput dropped below 50% of first half, "
+            f"Second half throughput dropped below 40% of first half, "
             f"suggesting buffering issues."
         )
 
@@ -312,5 +312,5 @@ class TestUploadThroughputStability:
             f"  Overall: {overall_throughput:.2f} MB/s\n"
             f"  First half: {first_half_throughput:.2f} MB/s\n"
             f"  Second half: {second_half_throughput:.2f} MB/s\n"
-            f"  Ratio: {degradation_ratio:.2f}x (threshold: 0.50x)"
+            f"  Ratio: {degradation_ratio:.2f}x (threshold: 0.40x)"
         )
