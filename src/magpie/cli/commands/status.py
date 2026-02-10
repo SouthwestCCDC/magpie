@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
-
 import click
 
 from magpie.cli import CLIContext
-from magpie.cli.errors import handle_http_error, with_network_error_handling
+from magpie.cli.errors import handle_response_error, with_network_error_handling
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
-    http_status_to_error_code,
     is_json_output,
     output_error,
     output_result,
@@ -55,14 +52,7 @@ def status(ctx: CLIContext) -> None:
         response = client.get("/api/v1/status")
 
         if response.status_code != 200:
-            if is_json_output():
-                try:
-                    detail = response.json().get("detail", response.text)
-                except (json.JSONDecodeError, ValueError, KeyError):
-                    detail = response.text
-                output_error(http_status_to_error_code(response.status_code), detail)
-                return
-            handle_http_error(response, "Status check", ctx.token)
+            handle_response_error(response, "Status check", ctx.token)
 
         data = response.json()
 
