@@ -31,6 +31,14 @@ class UploadSizeExceededError(Exception):
     """Raised when upload exceeds configured max_upload_size."""
 
 
+class HeaderLimitExceededError(Exception):
+    """Raised when multipart headers exceed safety limits."""
+
+
+class MalformedMultipartError(Exception):
+    """Raised when multipart payload is malformed or missing required headers."""
+
+
 class StreamingMultipartHandler:
     """Handler for streaming multipart/form-data without buffering.
 
@@ -39,6 +47,10 @@ class StreamingMultipartHandler:
     the data volume while computing the SHA-256 hash incrementally. This achieves
     true single-pass streaming: network → parse → hash → temp file.
     """
+
+    # Safety limits for malicious multipart payloads (DoS prevention)
+    MAX_HEADER_SIZE = 16 * 1024  # 16KB per header (name + value)
+    MAX_HEADERS_PER_PART = 50  # Maximum headers per multipart part
 
     def __init__(self, boundary: bytes, temp_path: Path, max_size: int | None = None) -> None:
         """Initialize streaming multipart handler.
@@ -61,6 +73,8 @@ class StreamingMultipartHandler:
         self._in_file_field = False
         self._total_bytes = 0
         self._file_part_found = False
+        self._current_part_header_count = 0
+        self._current_part_has_content_disposition = False
 
     def _extract_filename(self, content_disposition: bytes) -> str | None:
         """Extract filename from Content-Disposition header."""
@@ -88,47 +102,71 @@ class StreamingMultipartHandler:
         self._current_header_name = b""
         self._current_header_value = b""
         self._in_file_field = False
+        self._current_part_header_count = 0
+        self._current_part_has_content_disposition = False
 
     def _on_header_field(self, data: bytes, start: int, end: int) -> None:
         """Called for header field data (header name)."""
         self._current_header_name += data[start:end]
+        # Enforce header size limit (DoS prevention)
+        if len(self._current_header_name) > self.MAX_HEADER_SIZE:
+            raise HeaderLimitExceededError(
+                f"Multipart header name exceeds maximum size of {self.MAX_HEADER_SIZE} bytes"
+            )
 
     def _on_header_value(self, data: bytes, start: int, end: int) -> None:
         """Called for header value data."""
         self._current_header_value += data[start:end]
+        # Enforce header size limit (DoS prevention)
+        if len(self._current_header_value) > self.MAX_HEADER_SIZE:
+            raise HeaderLimitExceededError(
+                f"Multipart header value exceeds maximum size of {self.MAX_HEADER_SIZE} bytes"
+            )
 
     def _on_header_end(self) -> None:
         """Called when a header is complete."""
+        # Enforce header count limit per part (DoS prevention)
+        self._current_part_header_count += 1
+        if self._current_part_header_count > self.MAX_HEADERS_PER_PART:
+            raise HeaderLimitExceededError(
+                f"Multipart part has more than {self.MAX_HEADERS_PER_PART} headers"
+            )
+
         header_name = self._current_header_name.lower()
         header_value = self._current_header_value
 
         if header_name == b"content-disposition":
+            self._current_part_has_content_disposition = True
             # Extract field name (RFC 7578 allows both quoted and unquoted values)
             cd_str = header_value.decode("utf-8", errors="replace")
             # Match: name="value" (quoted) or name=value (unquoted)
             name_match = re.search(r'name=(?:"([^"]+)"|([^;\s]+))', cd_str)
-            if name_match:
-                # Group 1 for quoted, group 2 for unquoted
-                self._current_field_name = (name_match.group(1) or name_match.group(2)).strip()
-                # Check if this is the file field
-                if self._current_field_name == "file":
-                    # Reject multiple file parts to prevent resource leaks and ambiguity
-                    if self._file_part_found:
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="Multiple 'file' parts not allowed in multipart upload",
-                        )
-                    self._in_file_field = True
-                    self._file_part_found = True
-                    self._filename = self._extract_filename(header_value)
-                    # Create temp file on data volume (not /tmp)
-                    # Use os.fdopen to get a buffered file object that handles partial writes
-                    temp_fd, temp_path = tempfile.mkstemp(
-                        dir=self._temp_path, prefix="upload_", suffix=".tmp"
+            if not name_match:
+                # Content-Disposition present but no field name - malformed
+                raise MalformedMultipartError(
+                    "Content-Disposition header missing required 'name' parameter"
+                )
+            # Group 1 for quoted, group 2 for unquoted
+            self._current_field_name = (name_match.group(1) or name_match.group(2)).strip()
+            # Check if this is the file field
+            if self._current_field_name == "file":
+                # Reject multiple file parts to prevent resource leaks and ambiguity
+                if self._file_part_found:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Multiple 'file' parts not allowed in multipart upload",
                     )
-                    self._temp_file_path = Path(temp_path)
-                    # fdopen takes ownership of the fd, so we don't need to track it separately
-                    self._temp_file = os.fdopen(temp_fd, "wb")
+                self._in_file_field = True
+                self._file_part_found = True
+                self._filename = self._extract_filename(header_value)
+                # Create temp file on data volume (not /tmp)
+                # Use os.fdopen to get a buffered file object that handles partial writes
+                temp_fd, temp_path = tempfile.mkstemp(
+                    dir=self._temp_path, prefix="upload_", suffix=".tmp"
+                )
+                self._temp_file_path = Path(temp_path)
+                # fdopen takes ownership of the fd, so we don't need to track it separately
+                self._temp_file = os.fdopen(temp_fd, "wb")
 
         # Reset for next header
         self._current_header_name = b""
@@ -136,6 +174,11 @@ class StreamingMultipartHandler:
 
     def _on_part_data(self, data: bytes, start: int, end: int) -> None:
         """Called for part data (file content or form field value)."""
+        # Validate that Content-Disposition header was present before processing data
+        if not self._current_part_has_content_disposition:
+            raise MalformedMultipartError(
+                "Multipart part missing required Content-Disposition header"
+            )
         if self._in_file_field and self._temp_file is not None:
             chunk = data[start:end]
             # Write to buffered file object (handles partial writes internally)
@@ -297,16 +340,30 @@ async def upload_artifact(
     # Parse boundary from Content-Type: multipart/form-data; boundary=----WebKitFormBoundary...
     # Handle both quoted and unquoted boundaries per RFC 2046
     # Parameter names are case-insensitive per RFC 2046
-    boundary_match = re.search(r'boundary\s*=\s*"([^"]+)"', content_type, flags=re.IGNORECASE)
+    # RFC 2046 allows boundaries up to 70 characters, consisting of alphanumeric and certain special chars
+    # Quoted boundaries can contain spaces and special characters, unquoted cannot
+    boundary_match = re.search(
+        r'boundary\s*=\s*"([^"]+)"', content_type, flags=re.IGNORECASE
+    )  # Quoted format
     if not boundary_match:
-        # Try unquoted format
-        boundary_match = re.search(r"boundary\s*=\s*([^;\s]+)", content_type, flags=re.IGNORECASE)
+        # Try unquoted format: RFC 2046 says unquoted boundaries use token syntax
+        # (alphanumeric plus certain special chars, no spaces)
+        boundary_match = re.search(
+            r"boundary\s*=\s*([!#$%&'*+.0-9A-Z^_`a-z|~-]+)", content_type, flags=re.IGNORECASE
+        )
     if not boundary_match:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Could not extract boundary from Content-Type header",
         )
-    boundary = boundary_match.group(1).encode("utf-8")
+    boundary_str = boundary_match.group(1)
+    # RFC 2046: boundary must be 1-70 characters
+    if not boundary_str or len(boundary_str) > 70:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Boundary must be 1-70 characters per RFC 2046",
+        )
+    boundary = boundary_str.encode("utf-8")
 
     # Use X-Magpie-User header if present (authenticated via Caddy)
     # Fall back to query parameter for direct API access
@@ -359,6 +416,7 @@ async def upload_artifact(
             # Re-raise for asyncio.to_thread to propagate to main task
             raise
 
+    producer_task = None
     try:
         # Start producer task and worker thread concurrently
         producer_task = asyncio.create_task(stream_producer())
@@ -372,9 +430,31 @@ async def upload_artifact(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Upload exceeds maximum size of {max_size} bytes",
         )
+    except HeaderLimitExceededError as e:
+        handler.cleanup()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except MalformedMultipartError as e:
+        handler.cleanup()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
     except Exception:
         handler.cleanup()
         raise
+    finally:
+        # Ensure producer task is cancelled if still running (DoS prevention)
+        # This handles cases where parser_worker() raises before consuming all chunks
+        if producer_task is not None and not producer_task.done():
+            producer_task.cancel()
+            try:
+                await producer_task
+            except asyncio.CancelledError:
+                # Expected when cancelling - suppress
+                pass
 
     # Get the parsed file result
     result = handler.get_result()
