@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from magpie.config import MagpieSettings
 from magpie.logging_config import configure_logging
 from magpie.server.observability import (
+    reset_observability_state,
     setup_observability,
     setup_opentelemetry,
     setup_sentry,
@@ -41,6 +42,9 @@ def reset_logging_for_observability():
     # the logger is properly configured and can be captured by monkeypatch tests
     configure_logging(MagpieSettings(log_format="json"))
 
+    # Reset observability state to allow each test to initialize cleanly
+    reset_observability_state()
+
     yield
     # Reset after test
     structlog.reset_defaults()
@@ -48,6 +52,7 @@ def reset_logging_for_observability():
     root_logger.setLevel(logging.WARNING)
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
+    reset_observability_state()
 
 
 class TestSentrySetup:
@@ -298,3 +303,90 @@ class TestLogging:
         assert sensitive_endpoint not in log_output
         assert "user:password" not in log_output
         assert "key=secret" not in log_output
+
+
+class TestIdempotency:
+    """Tests for idempotency of setup functions."""
+
+    def test_setup_sentry_is_idempotent(self, test_app: FastAPI) -> None:
+        """Calling setup_sentry twice should only initialize Sentry once."""
+        settings = MagpieSettings(sentry_dsn="https://test@sentry.io/123")
+
+        with patch("sentry_sdk.init") as mock_init:
+            # First call should initialize
+            setup_sentry(test_app, settings)
+            assert mock_init.call_count == 1
+
+            # Second call should be a no-op
+            setup_sentry(test_app, settings)
+            assert mock_init.call_count == 1  # Still 1, not 2
+
+    def test_setup_opentelemetry_is_idempotent(self, test_app: FastAPI) -> None:
+        """Calling setup_opentelemetry twice should only initialize once."""
+        settings = MagpieSettings(otel_enabled=True)
+
+        with (
+            patch("opentelemetry.trace.set_tracer_provider") as mock_set_provider,
+            patch(
+                "opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"
+            ) as mock_instrument,
+        ):
+            # First call should initialize
+            setup_opentelemetry(test_app, settings)
+            assert mock_set_provider.call_count == 1
+            assert mock_instrument.call_count == 1
+
+            # Second call should be a no-op
+            setup_opentelemetry(test_app, settings)
+            assert mock_set_provider.call_count == 1  # Still 1, not 2
+            assert mock_instrument.call_count == 1  # Still 1, not 2
+
+    def test_setup_observability_is_idempotent(self, test_app: FastAPI) -> None:
+        """Calling setup_observability twice should only initialize once."""
+        settings = MagpieSettings(sentry_dsn="https://test@sentry.io/123", otel_enabled=True)
+
+        with (
+            patch("sentry_sdk.init") as mock_sentry_init,
+            patch("opentelemetry.trace.set_tracer_provider"),
+            patch(
+                "opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"
+            ) as mock_instrument,
+        ):
+            # First call should initialize both
+            setup_observability(test_app, settings)
+            assert mock_sentry_init.call_count == 1
+            assert mock_instrument.call_count == 1
+
+            # Second call should be a no-op for both
+            setup_observability(test_app, settings)
+            assert mock_sentry_init.call_count == 1  # Still 1, not 2
+            assert mock_instrument.call_count == 1  # Still 1, not 2
+
+    def test_reset_observability_state_allows_reinitialization(self, test_app: FastAPI) -> None:
+        """reset_observability_state should allow re-initialization."""
+        settings = MagpieSettings(sentry_dsn="https://test@sentry.io/123", otel_enabled=True)
+
+        with (
+            patch("sentry_sdk.init") as mock_sentry_init,
+            patch("opentelemetry.trace.set_tracer_provider"),
+            patch(
+                "opentelemetry.instrumentation.fastapi.FastAPIInstrumentor.instrument_app"
+            ) as mock_instrument,
+        ):
+            # First initialization
+            setup_observability(test_app, settings)
+            assert mock_sentry_init.call_count == 1
+            assert mock_instrument.call_count == 1
+
+            # Second call without reset should be no-op
+            setup_observability(test_app, settings)
+            assert mock_sentry_init.call_count == 1
+            assert mock_instrument.call_count == 1
+
+            # Reset state
+            reset_observability_state()
+
+            # Third call after reset should initialize again
+            setup_observability(test_app, settings)
+            assert mock_sentry_init.call_count == 2
+            assert mock_instrument.call_count == 2
