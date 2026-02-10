@@ -863,6 +863,199 @@ class TestDebugFlag:
         assert "Database path:" in result.output
 
 
+class TestFlushTag:
+    """Integration tests for magpie-ctl flush-tag command."""
+
+    def test_flush_tag_single_artifact(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Flush-tag removes tag from a single artifact."""
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        # Create test artifact with v1 tag
+        artifact_dir = tmp_path / "test-artifact"
+        artifact_dir.mkdir()
+        (artifact_dir / "blobs").mkdir()
+        test_blob = artifact_dir / "blobs" / "abc12345"
+        test_blob.write_bytes(b"test content")
+
+        # Create manifest with tag
+        from magpie.storage.manifest import Manifest, write_manifest
+
+        manifest = Manifest(tags={"v1": "@abc12345"})
+        write_manifest(artifact_dir, manifest)
+
+        # Flush the tag
+        result = runner.invoke(ctl_cli, ["flush-tag", "v1"])
+
+        assert result.exit_code == 0
+        assert "Removed tag 'v1' from 1 artifact(s)" in result.output
+        assert "test-artifact" in result.output
+
+        # Verify tag was removed from manifest
+        from magpie.storage.manifest import read_manifest
+
+        updated_manifest = read_manifest(artifact_dir)
+        assert "v1" not in updated_manifest.tags
+
+    def test_flush_tag_multiple_artifacts(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Flush-tag removes tag from multiple artifacts."""
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        # Create multiple artifacts with the same tag
+        from magpie.storage.manifest import Manifest, write_manifest
+
+        for i in range(3):
+            artifact_dir = tmp_path / f"artifact-{i}"
+            artifact_dir.mkdir()
+            (artifact_dir / "blobs").mkdir()
+            blob = artifact_dir / "blobs" / f"blob{i:04d}"
+            blob.write_bytes(f"content {i}".encode())
+
+            manifest = Manifest(tags={"old-tag": f"@blob{i:04d}"})
+            write_manifest(artifact_dir, manifest)
+
+        # Flush the tag
+        result = runner.invoke(ctl_cli, ["flush-tag", "old-tag"])
+
+        assert result.exit_code == 0
+        assert "Removed tag 'old-tag' from 3 artifact(s)" in result.output
+
+        # Verify tag was removed from all artifacts
+        from magpie.storage.manifest import read_manifest
+
+        for i in range(3):
+            artifact_dir = tmp_path / f"artifact-{i}"
+            manifest = read_manifest(artifact_dir)
+            assert "old-tag" not in manifest.tags
+
+    def test_flush_tag_nonexistent_tag(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Flush-tag handles non-existent tag gracefully."""
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        # Create artifact with different tag
+        from magpie.storage.manifest import Manifest, write_manifest
+
+        artifact_dir = tmp_path / "test-artifact"
+        artifact_dir.mkdir()
+        (artifact_dir / "blobs").mkdir()
+        blob = artifact_dir / "blobs" / "abc12345"
+        blob.write_bytes(b"test")
+
+        manifest = Manifest(tags={"v1": "@abc12345"})
+        write_manifest(artifact_dir, manifest)
+
+        # Try to flush non-existent tag
+        result = runner.invoke(ctl_cli, ["flush-tag", "v2"])
+
+        assert result.exit_code == 0
+        assert "Removed tag 'v2' from 0 artifact(s)" in result.output
+
+        # Verify original tag still exists
+        from magpie.storage.manifest import read_manifest
+
+        manifest_after = read_manifest(artifact_dir)
+        assert "v1" in manifest_after.tags
+
+    def test_flush_tag_artifact_remains_after_tag_removal(
+        self, ctl_runner: tuple[CliRunner, Path]
+    ) -> None:
+        """Flush-tag only removes tag, not the artifact itself."""
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        # Create artifact with multiple tags
+        from magpie.storage.manifest import Manifest, write_manifest
+
+        artifact_dir = tmp_path / "test-artifact"
+        artifact_dir.mkdir()
+        (artifact_dir / "blobs").mkdir()
+        blob = artifact_dir / "blobs" / "abc12345"
+        blob.write_bytes(b"important data")
+
+        manifest = Manifest(tags={"v1": "@abc12345", "latest": "@abc12345"})
+        write_manifest(artifact_dir, manifest)
+
+        # Flush only v1 tag
+        result = runner.invoke(ctl_cli, ["flush-tag", "v1"])
+
+        assert result.exit_code == 0
+
+        # Verify artifact still exists with latest tag
+        assert artifact_dir.exists()
+        assert blob.exists()
+
+        from magpie.storage.manifest import read_manifest
+
+        manifest_after = read_manifest(artifact_dir)
+        assert "v1" not in manifest_after.tags
+        assert "latest" in manifest_after.tags
+        assert manifest_after.tags["latest"] == "@abc12345"
+
+    def test_flush_tag_json_output(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Flush-tag with --json-output outputs structured JSON."""
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        # Create artifact with tag
+        from magpie.storage.manifest import Manifest, write_manifest
+
+        artifact_dir = tmp_path / "test-artifact"
+        artifact_dir.mkdir()
+        (artifact_dir / "blobs").mkdir()
+        blob = artifact_dir / "blobs" / "abc12345"
+        blob.write_bytes(b"test")
+
+        manifest = Manifest(tags={"temp": "@abc12345"})
+        write_manifest(artifact_dir, manifest)
+
+        # Flush with JSON output
+        result = runner.invoke(ctl_cli, ["flush-tag", "temp", "--json-output"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+
+        assert "tag_name" in data
+        assert data["tag_name"] == "temp"
+        assert "count" in data
+        assert data["count"] == 1
+        assert "affected_artifacts" in data
+        assert len(data["affected_artifacts"]) == 1
+        assert "test-artifact" in data["affected_artifacts"][0]
+        assert "dry_run" in data
+        assert data["dry_run"] is False
+
+    def test_flush_tag_dry_run(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Flush-tag --dry-run shows what would be affected without removing."""
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        # Create artifact with tag
+        from magpie.storage.manifest import Manifest, write_manifest
+
+        artifact_dir = tmp_path / "test-artifact"
+        artifact_dir.mkdir()
+        (artifact_dir / "blobs").mkdir()
+        blob = artifact_dir / "blobs" / "abc12345"
+        blob.write_bytes(b"test")
+
+        manifest = Manifest(tags={"preserve": "@abc12345"})
+        write_manifest(artifact_dir, manifest)
+
+        # Dry run
+        result = runner.invoke(ctl_cli, ["flush-tag", "preserve", "--dry-run"])
+
+        assert result.exit_code == 0
+        assert "Would remove tag 'preserve' from 1 artifact(s)" in result.output
+
+        # Verify tag was NOT actually removed
+        from magpie.storage.manifest import read_manifest
+
+        manifest_after = read_manifest(artifact_dir)
+        assert "preserve" in manifest_after.tags
+
+
 class TestVersion:
     """Integration tests for version command."""
 
