@@ -184,8 +184,23 @@ def format_network_error(exc: Exception, server: str | None = None) -> str:
         hint = "Check your network connection or try increasing the timeout with --timeout."
         return f"{msg}\nHint: {hint}"
 
+    if isinstance(exc, httpx.ProxyError):
+        msg = f"Proxy error connecting to '{hostname}': {exc}"
+        hint = "Check your proxy configuration and that the proxy is accessible."
+        return f"{msg}\nHint: {hint}"
+
+    if isinstance(exc, httpx.UnsupportedProtocol):
+        msg = f"Unsupported protocol connecting to '{hostname}': {exc}"
+        hint = "Check that the server URL uses a supported protocol (http/https)."
+        return f"{msg}\nHint: {hint}"
+
+    if isinstance(exc, httpx.ProtocolError):
+        msg = f"Protocol error connecting to '{hostname}': {exc}"
+        hint = "The server sent an invalid response. Check server logs or try again."
+        return f"{msg}\nHint: {hint}"
+
     if isinstance(exc, httpx.RequestError):
-        # Generic request error
+        # Generic request error (catches all other RequestError subclasses)
         msg = f"Network error connecting to '{hostname}': {exc}"
         hint = "Check your network connection and server configuration."
         return f"{msg}\nHint: {hint}"
@@ -231,9 +246,21 @@ def handle_network_error(exc: Exception, operation: str, server: str | None = No
 def with_network_error_handling(func: F) -> F:
     """Decorator to wrap CLI commands with network error handling.
 
-    This decorator catches network-related exceptions (ConnectError, TimeoutException,
-    RequestError, etc.) and converts them to user-friendly error messages with
-    appropriate exit codes.
+    This decorator catches network-related exceptions (RequestError and all subclasses
+    including ConnectError, TimeoutException, ProxyError, ProtocolError, etc.) and
+    converts them to user-friendly error messages with appropriate exit codes.
+
+    Coverage includes:
+    - httpx.RequestError: Base class for all request errors
+      - httpx.TransportError: All transport-level errors
+        - httpx.ConnectError: Connection failures, DNS errors
+        - httpx.TimeoutException: Request timeouts
+        - httpx.ProxyError: Proxy configuration or connectivity issues
+        - httpx.UnsupportedProtocol: Invalid protocol in URL
+        - httpx.ProtocolError: HTTP protocol violations
+      - httpx.DecodingError: Response decoding failures
+      - httpx.TooManyRedirects: Redirect loop detection
+    - socket.gaierror: DNS errors that occur outside httpx
 
     Usage:
         @click.command()
@@ -250,8 +277,9 @@ def with_network_error_handling(func: F) -> F:
 
         try:
             return func(*args, **kwargs)
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError) as exc:
-            # Extract server from context if available
+        except httpx.RequestError as exc:
+            # Catch all RequestError subclasses (TransportError, DecodingError, TooManyRedirects, etc.)
+            # format_network_error() handles specific types with custom messages
             ctx = click.get_current_context(silent=True)
             server = None
             if ctx and ctx.obj and hasattr(ctx.obj, "server"):

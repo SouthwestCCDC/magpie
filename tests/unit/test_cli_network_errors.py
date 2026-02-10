@@ -98,6 +98,39 @@ class TestFormatNetworkError:
         assert "Hint:" in result
         assert "hostname is correct" in result
 
+    def test_proxy_error(self) -> None:
+        """ProxyError produces helpful error message."""
+        proxy_error = httpx.ProxyError("Proxy connection failed")
+
+        result = format_network_error(proxy_error, server="https://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "Proxy error" in result
+        assert "Hint:" in result
+        assert "proxy configuration" in result
+
+    def test_unsupported_protocol_error(self) -> None:
+        """UnsupportedProtocol produces helpful error message."""
+        protocol_error = httpx.UnsupportedProtocol("Unsupported protocol 'ftp'")
+
+        result = format_network_error(protocol_error, server="ftp://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "Unsupported protocol" in result
+        assert "Hint:" in result
+        assert "supported protocol" in result
+
+    def test_protocol_error(self) -> None:
+        """ProtocolError produces helpful error message."""
+        protocol_error = httpx.ProtocolError("Invalid HTTP response")
+
+        result = format_network_error(protocol_error, server="https://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "Protocol error" in result
+        assert "Hint:" in result
+        assert "invalid response" in result
+
 
 class TestHandleNetworkError:
     """Tests for handle_network_error function."""
@@ -199,6 +232,45 @@ class TestWithNetworkErrorHandlingDecorator:
 
         result = successful_command()
         assert result == "success"
+
+    def test_catches_proxy_error(self) -> None:
+        """Decorator catches ProxyError and converts to user-friendly error."""
+        from click.exceptions import ClickException
+
+        @with_network_error_handling
+        def failing_command() -> None:
+            raise httpx.ProxyError("Proxy connection failed")
+
+        with pytest.raises(ClickException) as exc_info:
+            failing_command()
+
+        assert "Proxy error" in str(exc_info.value)
+
+    def test_catches_unsupported_protocol_error(self) -> None:
+        """Decorator catches UnsupportedProtocol and converts to user-friendly error."""
+        from click.exceptions import ClickException
+
+        @with_network_error_handling
+        def failing_command() -> None:
+            raise httpx.UnsupportedProtocol("Unsupported protocol")
+
+        with pytest.raises(ClickException) as exc_info:
+            failing_command()
+
+        assert "Unsupported protocol" in str(exc_info.value)
+
+    def test_catches_protocol_error(self) -> None:
+        """Decorator catches ProtocolError and converts to user-friendly error."""
+        from click.exceptions import ClickException
+
+        @with_network_error_handling
+        def failing_command() -> None:
+            raise httpx.ProtocolError("Invalid response")
+
+        with pytest.raises(ClickException) as exc_info:
+            failing_command()
+
+        assert "Protocol error" in str(exc_info.value)
 
 
 class TestExitCodes:
