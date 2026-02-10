@@ -453,22 +453,32 @@ class TestTokenServiceInitialization:
         This test verifies the fix for the thread safety race condition in
         _ensure_database_initialized(). Without proper locking, concurrent
         calls could cause multiple init_database() calls or database corruption.
+
+        Uses barrier synchronization to maximize the chance of exposing races.
         """
         import threading
 
         service = TokenService(test_config)
         results = []
         errors = []
+        num_threads = 20
+
+        # Create barrier to synchronize thread starts
+        barrier = threading.Barrier(num_threads)
 
         def create_token(i: int) -> None:
             try:
+                # Wait for all threads to reach this point before proceeding
+                barrier.wait()
+
+                # All threads hit this simultaneously
                 token = service.create_token(f"concurrent-token-{i}", TokenScope.READ)
                 results.append((i, token))
             except Exception as e:
                 errors.append(f"Thread {i}: {str(e)}")
 
-        # Create 10 threads that all call create_token simultaneously
-        threads = [threading.Thread(target=create_token, args=(i,)) for i in range(10)]
+        # Create threads that will all hit _ensure_initialized() simultaneously
+        threads = [threading.Thread(target=create_token, args=(i,)) for i in range(num_threads)]
 
         # Start all threads
         for t in threads:
@@ -481,8 +491,8 @@ class TestTokenServiceInitialization:
         # Verify no errors occurred
         assert len(errors) == 0, f"Errors during concurrent init: {errors}"
 
-        # Verify all 10 tokens were created successfully
-        assert len(results) == 10
+        # Verify all tokens were created successfully
+        assert len(results) == num_threads
 
         # Verify all tokens are unique and valid
         tokens_seen = set()
@@ -495,6 +505,56 @@ class TestTokenServiceInitialization:
             assert token_info is not None
             assert token_info.name == f"concurrent-token-{i}"
             assert token_info.scope == TokenScope.READ
+
+    def test_multiple_instances_with_different_paths(self, tmp_path: Path) -> None:
+        """Multiple TokenService instances with different database paths should initialize independently.
+
+        This test verifies that the class-level _initialized_paths set correctly tracks
+        each database path separately, allowing multiple TokenService instances with
+        different database paths to coexist without interference.
+        """
+        # Create two different database paths
+        config1 = MagpieSettings(
+            storage_path=tmp_path / "storage1",
+            database_path=tmp_path / "db1" / "magpie.db",
+        )
+        config2 = MagpieSettings(
+            storage_path=tmp_path / "storage2",
+            database_path=tmp_path / "db2" / "magpie.db",
+        )
+
+        # Create two services with different database paths
+        service1 = TokenService(config1)
+        service2 = TokenService(config2)
+
+        # Verify they have different database paths
+        assert service1.db_path != service2.db_path
+
+        # Neither database should exist yet (lazy initialization)
+        assert not config1.database_path.exists()
+        assert not config2.database_path.exists()
+
+        # Create a token with service1 (initializes db1)
+        token1 = service1.create_token("token-in-db1", TokenScope.READ)
+        assert config1.database_path.exists()
+        assert not config2.database_path.exists()
+
+        # Create a token with service2 (initializes db2)
+        token2 = service2.create_token("token-in-db2", TokenScope.WRITE)
+        assert config1.database_path.exists()
+        assert config2.database_path.exists()
+
+        # Both paths should be tracked as initialized
+        assert config1.database_path in TokenService._initialized_paths
+        assert config2.database_path in TokenService._initialized_paths
+
+        # Tokens should validate with their respective services
+        assert service1.validate_token(token1) is not None
+        assert service2.validate_token(token2) is not None
+
+        # Tokens should NOT cross-validate (different databases)
+        assert service1.validate_token(token2) is None
+        assert service2.validate_token(token1) is None
 
     def test_database_reinitializes_if_deleted(self, test_config: MagpieSettings) -> None:
         """Database should reinitialize if file is deleted after initialization.

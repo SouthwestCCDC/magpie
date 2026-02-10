@@ -86,9 +86,23 @@ class TokenService:
     Token Prefix Convention:
         - Regular tokens (read/write): mgp_ prefix
         - Admin tokens: mgp_ADMIN_ prefix
+
+    Instance Isolation:
+        Multiple TokenService instances can coexist with different database paths.
+        Each database path is initialized independently and tracked in the class-level
+        _initialized_paths set. This allows:
+        - Multiple instances pointing to the SAME path share initialization (efficient)
+        - Multiple instances pointing to DIFFERENT paths initialize separately (isolated)
+
+        Example:
+            >>> service1 = TokenService(config_with_db1)
+            >>> service2 = TokenService(config_with_db2)
+            >>> # Each service operates on its own database independently
     """
 
     # Class-level tracking of initialized database paths
+    # Each unique Path is tracked separately, allowing multiple instances with
+    # different paths to coexist without interference.
     _initialized_paths: set[Path] = set()
     _init_lock = threading.Lock()
 
@@ -115,6 +129,15 @@ class TokenService:
           This avoids acquiring the lock when we're certain the DB is ready.
         - Slow path: Liberal - reinitialize if EITHER not tracked OR file deleted.
           This handles external deletion or missed initialization without risk.
+
+        Thread safety notes:
+        - The outer check reads from _initialized_paths (a set) without holding the lock.
+          In CPython, set membership checks ('in' operator) and Path.exists() are atomic
+          operations protected by the GIL, making the fast-path read safe.
+        - The lock ensures that only one thread can perform initialization, even if
+          multiple threads pass the fast-path check simultaneously.
+        - After acquiring the lock, we re-check the condition to handle the case where
+          another thread completed initialization while we were waiting for the lock.
         """
         # Fast path: check without lock (only skip if we're CERTAIN it's initialized)
         if self.db_path in self._initialized_paths and self.db_path.exists():

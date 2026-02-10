@@ -36,11 +36,34 @@ def get_storage_service() -> StorageService:
 def get_token_service() -> TokenService:
     """Get TokenService instance configured from settings (cached singleton).
 
+    The TokenService is cached to avoid recreating it on every request.
+    This means that changes to MagpieSettings after the first call will
+    not be reflected in the TokenService. In production, settings should
+    be configured once at application startup.
+
+    For testing scenarios where settings change, use clear_token_service_cache()
+    to invalidate the cache before creating a new TokenService with different settings.
+
     Returns:
         Cached TokenService instance using current application settings.
     """
     settings = get_settings()
     return TokenService(settings)
+
+
+def clear_token_service_cache() -> None:
+    """Clear the cached TokenService instance.
+
+    This is primarily useful in testing scenarios where settings change
+    and a fresh TokenService instance is needed. In production, settings
+    should be configured once at application startup, so this should not
+    be necessary.
+
+    Example:
+        >>> clear_token_service_cache()
+        >>> service = get_token_service()  # Creates new instance with current settings
+    """
+    get_token_service.cache_clear()
 
 
 def _validate_scope_header(x_magpie_scope: str | None) -> str:
