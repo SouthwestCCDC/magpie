@@ -142,6 +142,13 @@ def store_blob_from_temp(
     hash has been computed incrementally during streaming. It handles duplicate
     detection and atomic move to the final blob location.
 
+    Security note: Uses 8-char hash prefix for filenames (storage efficiency).
+    While content-addressable storage makes hash collisions safe (identical content
+    → identical hash), this function verifies the full hash of existing blobs to
+    detect the astronomically unlikely case of 8-char prefix collision between
+    different files (2^32 hash space). This provides defense-in-depth against
+    malicious hash collision attacks or implementation bugs.
+
     Args:
         artifact_dir: Path to artifact directory.
         temp_file_path: Path to pre-written temp file (will be moved or deleted).
@@ -151,14 +158,40 @@ def store_blob_from_temp(
         Tuple of (hash_ref, is_duplicate):
         - hash_ref: Short hash reference like '@abc12345'
         - is_duplicate: True if blob already existed, False if newly stored
+
+    Raises:
+        ValueError: If an existing blob at the same short-hash path has a different
+            full hash (indicates hash prefix collision - should never happen with
+            SHA-256 in practice).
     """
+    import hashlib
+
     hash_ref = short_hash(full_hash)
 
     # Check if blob already exists (use short hash for storage path)
     dest_path = blob_path(artifact_dir, hash_ref)
 
     if dest_path.exists():
-        # Duplicate detected - clean up temp file
+        # Defense-in-depth: Verify full hash of existing blob matches
+        # This catches the astronomically unlikely case of 8-char prefix collision
+        # between different files (2^32 hash space ≈ 4 billion possibilities)
+        with dest_path.open("rb") as f:
+            hasher = hashlib.sha256()
+            while chunk := f.read(CHUNK_SIZE):
+                hasher.update(chunk)
+            existing_hash = hasher.hexdigest()
+
+        if existing_hash != full_hash:
+            # Hash prefix collision detected - this should NEVER happen with SHA-256
+            # Log critical error and raise to prevent data corruption
+            temp_file_path.unlink(missing_ok=True)
+            raise ValueError(
+                f"Hash prefix collision detected: {hash_ref} (existing: {existing_hash[:16]}..., "
+                f"new: {full_hash[:16]}...). This indicates a severe issue - "
+                f"contact system administrator."
+            )
+
+        # Hashes match - true duplicate, clean up temp file
         temp_file_path.unlink(missing_ok=True)
         return (hash_ref, True)
 
