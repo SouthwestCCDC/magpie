@@ -1,4 +1,9 @@
-"""Unit tests for upload size limit enforcement."""
+"""Unit tests for upload size limit enforcement.
+
+These tests validate the streaming multipart upload endpoint's size limit enforcement.
+Size limits are enforced incrementally during streaming in StreamingMultipartHandler._on_part_data()
+by tracking total bytes written and comparing against max_upload_size.
+"""
 
 from __future__ import annotations
 
@@ -171,17 +176,15 @@ class TestUploadSizeLimitEndpoint:
     def test_upload_exactly_at_limit_succeeds(self, client_with_large_limit: TestClient) -> None:
         """Upload with file content exactly at size limit should succeed.
 
-        This tests the exact boundary condition for the SizeLimitedReader:
+        This tests the exact boundary condition for streaming size enforcement:
         file content size == max_upload_size. We use a 2000 byte limit and
         1800 byte content to account for ~200 bytes of multipart overhead
-        in the Content-Length header, then test exact boundary with separate
-        unit tests on SizeLimitedReader directly.
+        in the Content-Length header.
 
-        The SizeLimitedReader class tests (test_read_exactly_at_limit) verify
-        the exact boundary behavior without HTTP overhead concerns.
+        The streaming handler enforces the limit incrementally during upload
+        by tracking bytes written in StreamingMultipartHandler._on_part_data().
         """
         # With 2000 byte limit, 1800 byte content leaves room for ~200 byte overhead
-        # The unit tests for SizeLimitedReader verify the exact boundary
         content = b"x" * 1800
         files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
 
@@ -199,13 +202,12 @@ class TestUploadSizeLimitEndpoint:
         NOTE: This test validates the defense-in-depth strategy. With 2001 bytes of
         content plus ~200 bytes of multipart overhead, the Content-Length (~2201 bytes)
         exceeds the 2000 byte limit. This means the early Content-Length check rejects
-        the request before SizeLimitedReader runs. This is the intended behavior -
+        the request before streaming begins. This is the intended behavior -
         the Content-Length check provides fast early rejection for well-behaved clients.
 
-        The SizeLimitedReader unit tests (test_read_exceeds_limit, test_incremental_read_exceeds_limit)
-        verify the streaming enforcement without HTTP overhead. The endpoint test
-        test_upload_without_content_length_still_enforced verifies SizeLimitedReader
-        catches oversized uploads even when Content-Length passes.
+        The streaming handler also enforces the limit incrementally during upload,
+        so oversized uploads are caught even when Content-Length is missing or incorrect.
+        See test_upload_without_content_length_still_enforced for that scenario.
         """
         content = b"x" * 2001  # One byte over the 2000 byte limit
         files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
@@ -220,19 +222,19 @@ class TestUploadSizeLimitEndpoint:
     ) -> None:
         """Upload without Content-Length header should still be size-limited.
 
-        When Content-Length header is missing or stripped, the SizeLimitedReader
+        When Content-Length header is missing or stripped, the streaming handler
         provides defense-in-depth by enforcing the limit during streaming.
         """
         # Content exceeds limit - should be rejected even without Content-Length
         content = b"x" * 1500
         # Use a custom request without Content-Length by using streaming
-        # Note: TestClient always sends Content-Length, but the SizeLimitedReader
-        # still enforces the limit during streaming regardless
+        # Note: TestClient always sends Content-Length, but the streaming handler
+        # still enforces the limit during upload regardless
         files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}
 
         response = client_with_limit.post("/api/v1/upload/test/no-length", files=files)
 
-        # Should be rejected by SizeLimitedReader during streaming
+        # Should be rejected by streaming handler during upload
         assert response.status_code == 413
         assert "exceeds maximum" in response.json()["detail"]
 
@@ -243,7 +245,7 @@ class TestUploadSizeLimitEndpoint:
         not testing the exact boundary, this verifies that file content smaller
         than the limit passes through successfully. Multipart form encoding adds
         ~200 bytes of overhead (headers, boundaries), so the Content-Length will
-        be ~1000 bytes. The SizeLimitedReader only counts file content bytes,
+        be ~1000 bytes. The streaming handler only counts file content bytes,
         not the multipart envelope, which is the correct behavior.
         """
         content = b"x" * 800
