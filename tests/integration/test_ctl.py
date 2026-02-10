@@ -227,6 +227,9 @@ class TestInit:
         This test uses the service layer directly (not CLI) to test concurrent token
         creation with the same name. Database constraints should prevent duplicate
         tokens even with concurrent attempts.
+
+        Uses threading.Barrier to synchronize thread execution and maximize the
+        likelihood of a true race condition occurring.
         """
         runner, tmp_path = ctl_runner
 
@@ -243,9 +246,15 @@ class TestInit:
         successes = []
         failures = []
 
+        # Barrier ensures both threads start at approximately the same time
+        barrier = threading.Barrier(2)
+
         def try_create_admin_token():
             """Attempt to create admin token named 'admin'."""
             try:
+                # Wait for both threads to reach this point
+                barrier.wait()
+                # Now both threads will execute this at approximately the same time
                 token_service = TokenService(settings)
                 token = token_service.create_token("admin", TokenScope.ADMIN)
                 successes.append(token)
