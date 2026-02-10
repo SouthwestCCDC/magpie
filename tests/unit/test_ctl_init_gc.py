@@ -256,7 +256,7 @@ class TestInitCommand:
     def test_init_with_custom_token_when_token_exists(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
-        """Init --admin-token fails when admin token already exists."""
+        """Init --admin-token succeeds but reports when admin token already exists."""
         custom_token = "mgp_ADMIN_custom_token_789"
 
         with patch("magpie.ctl.get_settings", return_value=test_settings):
