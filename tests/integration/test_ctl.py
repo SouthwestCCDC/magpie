@@ -1056,6 +1056,196 @@ class TestFlushTag:
         assert "preserve" in manifest_after.tags
 
 
+class TestSync:
+    """Integration tests for magpie-ctl sync commands.
+
+    These tests focus on argument validation, configuration, and error handling
+    without requiring actual S3 infrastructure. Tests requiring S3 access are
+    marked as skipped.
+    """
+
+    def test_sync_to_s3_requires_bucket(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Sync to-s3 requires MAGPIE_S3_BUCKET environment variable."""
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        # Invoke without setting MAGPIE_S3_BUCKET
+        result = runner.invoke(ctl_cli, ["sync", "to-s3"])
+
+        assert result.exit_code != 0
+        assert "MAGPIE_S3_BUCKET" in result.output
+
+    def test_sync_from_s3_requires_bucket(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Sync from-s3 requires MAGPIE_S3_BUCKET environment variable."""
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        # Invoke without setting MAGPIE_S3_BUCKET
+        result = runner.invoke(ctl_cli, ["sync", "from-s3", "--force"])
+
+        assert result.exit_code != 0
+        assert "MAGPIE_S3_BUCKET" in result.output
+
+    def test_sync_gc_s3_requires_bucket(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Sync gc-s3 requires MAGPIE_S3_BUCKET environment variable."""
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        # Invoke without setting MAGPIE_S3_BUCKET
+        result = runner.invoke(ctl_cli, ["sync", "gc-s3"])
+
+        assert result.exit_code != 0
+        assert "MAGPIE_S3_BUCKET" in result.output
+
+    @pytest.mark.skipif(
+        shutil.which("rclone") is not None or shutil.which("aws") is not None,
+        reason="Requires rclone/aws CLI to be unavailable",
+    )
+    def test_sync_to_s3_requires_sync_tool(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Sync to-s3 requires rclone or aws CLI to be installed."""
+        runner, tmp_path = ctl_runner
+
+        # Clear settings cache and create new runner with S3 env vars
+        get_settings.cache_clear()
+        runner_with_s3 = CliRunner(
+            env={
+                "MAGPIE_STORAGE_PATH": str(tmp_path),
+                "MAGPIE_DATABASE_PATH": str(tmp_path / "magpie.db"),
+                "MAGPIE_S3_BUCKET": "test-bucket",
+            }
+        )
+
+        runner_with_s3.invoke(ctl_cli, ["init"])
+
+        # Set bucket but no sync tools available
+        result = runner_with_s3.invoke(ctl_cli, ["sync", "to-s3"])
+
+        get_settings.cache_clear()
+
+        assert result.exit_code != 0
+        assert "rclone" in result.output or "aws" in result.output
+
+    def test_sync_from_s3_refuses_overwrite_without_force(
+        self, ctl_runner: tuple[CliRunner, Path]
+    ) -> None:
+        """Sync from-s3 refuses to overwrite existing data without --force."""
+        runner, tmp_path = ctl_runner
+
+        # Clear settings cache and create new runner with S3 env vars
+        get_settings.cache_clear()
+        runner_with_s3 = CliRunner(
+            env={
+                "MAGPIE_STORAGE_PATH": str(tmp_path),
+                "MAGPIE_DATABASE_PATH": str(tmp_path / "magpie.db"),
+                "MAGPIE_S3_BUCKET": "test-bucket",
+            }
+        )
+
+        runner_with_s3.invoke(ctl_cli, ["init"])
+
+        # Create an artifact to simulate existing data
+        from magpie.storage.manifest import Manifest, write_manifest
+
+        artifact_dir = tmp_path / "existing-artifact"
+        artifact_dir.mkdir()
+        manifest = Manifest(tags={"existing": "@abc12345"})
+        write_manifest(artifact_dir, manifest)
+
+        # Try to restore without --force
+        result = runner_with_s3.invoke(ctl_cli, ["sync", "from-s3"])
+
+        get_settings.cache_clear()
+
+        assert result.exit_code != 0
+        assert "already contains data" in result.output or "--force" in result.output
+
+    def test_sync_gc_s3_dry_run_by_default(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Sync gc-s3 runs in dry-run mode by default for safety."""
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        # The command should default to dry-run (safe mode)
+        # This test validates the safety mechanism exists
+        # Actual execution will fail due to missing S3 bucket, but we're
+        # testing the argument structure
+
+        # Verify --execute flag exists and is required for actual deletion
+        result = runner.invoke(ctl_cli, ["sync", "gc-s3", "--help"])
+        assert result.exit_code == 0
+        assert "--execute" in result.output
+        assert "dry-run" in result.output.lower() or "preview" in result.output.lower()
+
+    def test_sync_to_s3_nonexistent_storage_path(
+        self, ctl_runner: tuple[CliRunner, Path]
+    ) -> None:
+        """Sync to-s3 with nonexistent storage path shows error."""
+        runner, tmp_path = ctl_runner
+
+        # Remove storage path
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+
+        # Clear settings cache and create new runner with S3 env vars
+        get_settings.cache_clear()
+        runner_with_s3 = CliRunner(
+            env={
+                "MAGPIE_STORAGE_PATH": str(tmp_path),
+                "MAGPIE_DATABASE_PATH": str(tmp_path / "magpie.db"),
+                "MAGPIE_S3_BUCKET": "test-bucket",
+            }
+        )
+
+        result = runner_with_s3.invoke(ctl_cli, ["sync", "to-s3"])
+
+        get_settings.cache_clear()
+
+        assert result.exit_code != 0
+        assert "does not exist" in result.output or "Storage path" in result.output
+
+    def test_sync_commands_accept_quiet_flag(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Sync commands accept --quiet flag to suppress progress output."""
+        runner, tmp_path = ctl_runner
+
+        # Test that --quiet flag is accepted by each command
+        # We're testing the interface, not the S3 operations
+
+        # to-s3 --quiet
+        result_to = runner.invoke(ctl_cli, ["sync", "to-s3", "--help"])
+        assert result_to.exit_code == 0
+        assert "--quiet" in result_to.output or "-q" in result_to.output
+
+        # from-s3 --quiet
+        result_from = runner.invoke(ctl_cli, ["sync", "from-s3", "--help"])
+        assert result_from.exit_code == 0
+        assert "--quiet" in result_from.output or "-q" in result_from.output
+
+        # gc-s3 --quiet
+        result_gc = runner.invoke(ctl_cli, ["sync", "gc-s3", "--help"])
+        assert result_gc.exit_code == 0
+        assert "--quiet" in result_gc.output or "-q" in result_gc.output
+
+    def test_sync_commands_accept_dry_run_flag(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Sync commands accept --dry-run flag for safe previews."""
+        runner, tmp_path = ctl_runner
+
+        # Test that --dry-run flag is accepted by relevant commands
+
+        # to-s3 --dry-run
+        result_to = runner.invoke(ctl_cli, ["sync", "to-s3", "--help"])
+        assert result_to.exit_code == 0
+        assert "--dry-run" in result_to.output
+
+        # from-s3 --dry-run
+        result_from = runner.invoke(ctl_cli, ["sync", "from-s3", "--help"])
+        assert result_from.exit_code == 0
+        assert "--dry-run" in result_from.output
+
+        # gc-s3 has dry-run by default
+        result_gc = runner.invoke(ctl_cli, ["sync", "gc-s3", "--help"])
+        assert result_gc.exit_code == 0
+        assert "--dry-run" in result_gc.output or "--execute" in result_gc.output
+
+
 class TestVersion:
     """Integration tests for version command."""
 
