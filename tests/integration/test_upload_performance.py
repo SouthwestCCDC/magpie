@@ -36,7 +36,10 @@ class FakeStreamingFile:
             return b""
 
         # Determine how much to read
-        if size == -1 or size > self.chunk_size:
+        if size == -1:
+            # read(-1) or read() should return ALL remaining bytes
+            to_read = self.size - self.position
+        elif size > self.chunk_size:
             to_read = min(self.chunk_size, self.size - self.position)
         else:
             to_read = min(size, self.size - self.position)
@@ -188,7 +191,10 @@ class ThroughputTrackingFile:
             return b""
 
         # Determine how much to read
-        if size == -1 or size > self.chunk_size:
+        if size == -1:
+            # read(-1) or read() should return ALL remaining bytes
+            to_read = self.size - self.position
+        elif size > self.chunk_size:
             to_read = min(self.chunk_size, self.size - self.position)
         else:
             to_read = min(size, self.size - self.position)

@@ -28,7 +28,7 @@ jobs:
         run: uv sync --all-groups
 
       - name: Run full test suite including large performance tests
-        run: uv run pytest tests/unit/ tests/integration/ -v --tb=short
+        run: uv run pytest tests/unit/ tests/integration/ -v --tb=short --junitxml=test-results.xml
         env:
           MAGPIE_SKIP_LARGE_TESTS: "0"
 

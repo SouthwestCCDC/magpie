@@ -14,7 +14,7 @@ These tests verify upload behavior through the complete deployment stack, catchi
 ## Difference from Integration Tests
 
 | Aspect | Integration Tests | E2E Tests |
-|--------|------------------|-----------|
+|--------|-------------------|-----------|
 | Stack | FastAPI only | Caddy + FastAPI + Storage |
 | Speed | Fast (< 1s) | Slower (starts docker-compose) |
 | Catches | API/storage issues | Proxy buffering, full-stack issues |

@@ -99,7 +99,7 @@ Full test suite including large tests runs after merge to `default` (`.github/wo
 Based on local testing (development machine):
 
 | Test | Size | Time | Throughput |
-|------|------|------|------------|
+|--------|------|------|------------|
 | Small | 1 MB | 0.1s | N/A |
 | Medium | 50 MB | 0.2s | N/A |
 | Large | 500 MB | 5s | ~120 MB/s |

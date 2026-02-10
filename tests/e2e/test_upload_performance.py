@@ -41,9 +41,14 @@ class StreamingUploadFile:
         if self.position >= self.size:
             return b""
 
-        to_read = min(self.chunk_size, self.size - self.position)
-        if size != -1 and size < to_read:
-            to_read = size
+        # Determine how much to read
+        if size == -1:
+            # read(-1) or read() should return ALL remaining bytes
+            to_read = self.size - self.position
+        elif size < self.chunk_size:
+            to_read = min(size, self.size - self.position)
+        else:
+            to_read = min(self.chunk_size, self.size - self.position)
 
         data = b"\x00" * to_read
         self.position += to_read
