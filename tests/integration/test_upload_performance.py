@@ -89,7 +89,11 @@ class TestUploadStreamingPerformance:
         file_size_mb: int,
         timeout: int,
     ) -> None:
-        """Test that uploads complete without excessive buffering.
+        """Test that uploads complete and client-side multipart encoding streams correctly.
+
+        Verifies the httpx client reads the file object incrementally during multipart
+        encoding rather than buffering the entire file before sending. Does not directly
+        verify server-side streaming behavior.
 
         Args:
             client: FastAPI test client
@@ -120,10 +124,10 @@ class TestUploadStreamingPerformance:
             f"Upload took {elapsed:.2f}s, expected < {timeout}s for {file_size_mb}MB file"
         )
 
-        # File should have been read in chunks (streaming behavior)
-        # If buffering occurred, we'd see one large read
+        # File should have been read in chunks by the multipart encoder
+        # If client-side buffering occurred, we'd see one large read
         assert len(fake_file.bytes_read) > 1, (
-            "File was read in a single operation, indicating full buffering"
+            "File was read in a single operation, indicating client-side buffering"
         )
 
         # Calculate throughput
@@ -136,10 +140,11 @@ class TestUploadStreamingPerformance:
         reason="Large tests skipped (set MAGPIE_SKIP_LARGE_TESTS=0 to enable)",
     )
     def test_large_upload_streaming(self, client: TestClient) -> None:
-        """Test 500MB upload to detect buffer exhaustion issues.
+        """Test 500MB upload to verify client-side multipart encoding streams correctly.
 
-        This test is skipped by default in CI but can be run manually
-        or in nightly jobs by setting MAGPIE_SKIP_LARGE_TESTS=0.
+        Verifies the httpx client reads the file object incrementally during multipart
+        encoding for large files. This test is skipped by default in CI but can be run
+        manually or in nightly jobs by setting MAGPIE_SKIP_LARGE_TESTS=0.
         """
         file_size = 500 * 1024 * 1024  # 500 MB
         fake_file = FakeStreamingFile(file_size)
@@ -160,9 +165,9 @@ class TestUploadStreamingPerformance:
         # Should complete within 5 minutes (generous timeout)
         assert elapsed < 300, f"Large upload took {elapsed:.2f}s, expected < 300s"
 
-        # Verify streaming behavior
+        # Verify client-side streaming behavior
         assert len(fake_file.bytes_read) > 100, (
-            "Large file was not properly streamed (too few read operations)"
+            "Large file was not properly streamed by multipart encoder (too few read operations)"
         )
 
         throughput_mbps = (file_size / (1024 * 1024)) / elapsed
@@ -259,10 +264,11 @@ class TestUploadThroughputStability:
     """Tests that upload throughput doesn't degrade significantly."""
 
     def test_throughput_does_not_degrade(self, client: TestClient) -> None:
-        """Test that upload throughput remains stable throughout the transfer.
+        """Test that client-side multipart encoding throughput remains stable.
 
-        Measures bytes/second throughput for first half vs second half of upload.
-        Catches buffering issues that cause progressive slowdown.
+        Measures how quickly the multipart encoder reads from the file object during
+        first half vs second half of upload. Catches client-side buffering issues that
+        cause progressive slowdown as the encoder processes the file.
 
         The production issue showed 20-40x degradation (40+ MB/s dropping to 1-2 MB/s).
         We use a 40% threshold (2.5x degradation) to catch severe issues while tolerating

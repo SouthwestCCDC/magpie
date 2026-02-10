@@ -42,17 +42,22 @@ MAGPIE_SKIP_LARGE_TESTS=0 uv run pytest tests/integration/test_upload_performanc
 
 ## What These Tests Catch
 
-### Buffering Issues
+### Client-Side Buffering Issues
 
-If the API or storage layer buffers the entire file in memory before processing:
-- Read operations will be single large blocks instead of streaming
-- Tests will fail with assertion: "File was read in a single operation"
+These tests instrument read operations on the client-provided file object used for multipart
+uploads. If the httpx client's multipart encoder buffers the entire file instead of streaming:
+- The client-side file object will be read in a single large block rather than incrementally
+- Tests will fail with an assertion similar to: "File was read in a single operation"
+
+Note: These tests measure client-side behavior only. They do not directly verify that the
+FastAPI server or storage layer streams the upload without buffering.
 
 ### Throughput Degradation
 
-If upload speed degrades significantly during transfer (e.g., starts at 40 MB/s, drops to 1-2 MB/s):
-- Throughput stability tests will fail
-- Indicates buffering/backpressure issues
+If client-side multipart encoding speed degrades significantly during transfer (e.g., starts
+reading at 40 MB/s, drops to 1-2 MB/s):
+- Throughput stability tests will fail if second half drops below 40% of first half (2.5x degradation)
+- Indicates client-side buffering or backpressure issues in the multipart encoder
 
 ### Timeout Failures
 

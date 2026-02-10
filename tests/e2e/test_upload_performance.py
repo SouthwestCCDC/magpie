@@ -260,23 +260,22 @@ class TestE2EMemoryBounded:
             upload_file2 = StreamingUploadFile(file_size)
             upload_file3 = StreamingUploadFile(file_size)
 
-            # Sequential for now (httpx Client doesn't do parallel easily)
-            # If memory is unbounded, even sequential would accumulate
+            # Sequential uploads - if memory is unbounded, even sequential would accumulate
             responses = []
             for i, upload_file in enumerate([upload_file1, upload_file2, upload_file3], 1):
-                files = {"file": (f"concurrent_{i}.bin", upload_file, "application/octet-stream")}
+                files = {"file": (f"sequential_{i}.bin", upload_file, "application/octet-stream")}
                 response = client.post(
-                    f"/api/v1/upload/e2e/concurrent-{i}",
+                    f"/api/v1/upload/e2e/sequential-{i}",
                     files=files,
-                    params={"uploaded_by": "concurrent-test"},
+                    params={"uploaded_by": "sequential-test"},
                 )
                 responses.append(response)
 
         # All uploads should succeed
         for i, response in enumerate(responses, 1):
-            assert response.status_code == 200, f"Concurrent upload {i} failed: {response.text}"
+            assert response.status_code == 200, f"Sequential upload {i} failed: {response.text}"
 
-        print("\nAll concurrent uploads completed successfully (memory bounded)")
+        print("\nAll sequential uploads completed successfully (memory bounded)")
 
 
 @pytest.mark.e2e
@@ -294,10 +293,11 @@ def test_extra_large_upload_10gb(
     This test requires a self-hosted runner with sufficient disk space.
     Skipped on GitHub-hosted runners.
 
-    Note: The cleanup_after_upload fixture attempts to delete artifacts but
-    may fail silently (no DELETE endpoint exists). Repeated runs may accumulate
-    10GB artifacts on disk. Ensure self-hosted runners have sufficient space.
-    See issue #441 for artifact deletion implementation.
+    Note: The cleanup_after_upload fixture only records artifact paths for
+    potential cleanup; it does not perform any deletion itself. Because no
+    DELETE endpoint exists yet, repeated runs may accumulate 10GB artifacts
+    on disk. Ensure self-hosted runners have sufficient space. See issue #441
+    for artifact deletion implementation.
     """
     size_bytes = 10 * 1024 * 1024 * 1024  # 10 GB
     upload_file = StreamingUploadFile(size_bytes, chunk_size=1024 * 1024)  # 1MB chunks

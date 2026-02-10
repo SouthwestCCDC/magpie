@@ -56,7 +56,7 @@ The 10GB test includes immediate cleanup via the `cleanup_after_upload` fixture 
 
 **Caddy No-Buffering Test** - Verifies Caddy doesn't buffer uploads by checking that throughput doesn't degrade significantly between start and end of upload.
 
-**Memory Bounded Test** - Verifies concurrent uploads don't cause unbounded memory growth.
+**Memory Bounded Test** - Verifies sequential uploads do not cause unbounded memory growth or accumulation between requests.
 
 ## What These Tests Catch
 
