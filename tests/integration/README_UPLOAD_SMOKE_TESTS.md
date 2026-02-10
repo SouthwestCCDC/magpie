@@ -64,7 +64,7 @@ All smoke tests run in CI on every PR:
 ## What About Performance Testing?
 
 Server-side performance validation requires instrumentation that these smoke tests
-do not provide. For server-side streaming validation, see issue #TBD which tracks:
+do not provide. For server-side streaming validation, see issue #466 which tracks:
 
 - `tracemalloc` or equivalent memory measurement during uploads
 - Server-side logging of chunk/buffer state
