@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 import truststore
 
+from magpie import __version__
 from magpie.cli.config import DEFAULT_TIMEOUT
 
 # Short timeout for connection establishment (30 seconds)
@@ -64,7 +65,7 @@ def get_client(
     Returns:
         Configured httpx.Client instance.
     """
-    headers: dict[str, str] = {}
+    headers: dict[str, str] = {"User-Agent": f"magpie-cli/{__version__}"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     # Use short connect timeout, long read/write timeout for file transfers
