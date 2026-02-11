@@ -7,7 +7,6 @@ memory usage.
 
 from __future__ import annotations
 
-import io
 import time
 from typing import TYPE_CHECKING
 
@@ -74,92 +73,45 @@ class TestE2EUploadCompletion:
 
 
 @pytest.mark.e2e
-class TestE2ECaddyLatency:
-    """E2E test for Caddy proxy latency characteristics."""
+class TestE2ECaddyLargeUpload:
+    """E2E test for large uploads through Caddy proxy."""
 
-    def test_caddy_upload_no_excessive_latency(self, e2e_services: E2EServices) -> None:
-        """Verify upload chunk timing doesn't degrade excessively through Caddy.
+    def test_caddy_large_upload_succeeds(self, e2e_services: E2EServices) -> None:
+        """Verify large uploads complete successfully through Caddy reverse proxy.
 
-        This measures chunk inter-arrival timing from the client side as an indirect
-        indicator of proxy buffering. If Caddy buffers excessively, we'd expect to
-        see degraded timing characteristics.
+        This is a straightforward smoke test that verifies the full stack
+        (Caddy + FastAPI) can handle moderately large uploads without errors.
 
-        Note: This test measures client-side observable behavior only. It cannot
-        directly verify server-side streaming or memory usage. Server-side
-        instrumentation (tracemalloc, logging) is needed for that.
+        It does NOT measure:
+        - Server-side streaming behavior or memory usage
+        - Actual upload latency or chunk timing
+        - Proxy buffering characteristics
+
+        For server-side validation, see issue #438 which tracks instrumentation
+        for memory profiling and streaming verification.
         """
         file_size = 20 * 1024 * 1024  # 20 MB
-
-        # Generate chunks and track timing
-        chunk_size = 512 * 1024  # 512KB chunks
-        chunks = []
-        chunk_times = []
-        position = 0
-
-        # Pre-generate chunks
-        while position < file_size:
-            to_read = min(chunk_size, file_size - position)
-            chunks.append(b"\x00" * to_read)
-            position += to_read
+        content = b"\x00" * file_size
 
         base_url = e2e_services["base_url"]
         admin_token = e2e_services["admin_token"]
-
-        # Build file content while tracking chunk timing
-        content_buffer = io.BytesIO()
-        for chunk in chunks:
-            chunk_times.append(time.time())
-            content_buffer.write(chunk)
-        content_buffer.seek(0)  # Reset to beginning for reading
 
         headers = {"Authorization": f"Bearer {admin_token}"}
 
         start_time = time.time()
         response = httpx.post(
-            f"{base_url}/api/v1/upload/e2e/latency-test",
-            files={"file": ("latency.bin", content_buffer, "application/octet-stream")},
+            f"{base_url}/api/v1/upload/e2e/large-upload-test",
+            files={"file": ("large.bin", content, "application/octet-stream")},
             headers=headers,
-            params={"uploaded_by": "latency-test"},
+            params={"uploaded_by": "large-upload-test"},
             timeout=60.0,
         )
         elapsed = time.time() - start_time
 
-        assert response.status_code == 200
+        # Upload should succeed
+        assert response.status_code == 200, f"Large upload through Caddy failed: {response.text}"
+        data = response.json()
+        assert "hash" in data
 
-        # Need enough chunks to analyze timing
-        if len(chunk_times) < 8:
-            pytest.skip("Not enough chunks to analyze timing")
-
-        # Calculate inter-chunk intervals
-        intervals = []
-        for i in range(1, len(chunk_times)):
-            interval = chunk_times[i] - chunk_times[i - 1]
-            intervals.append(interval)
-
-        # Compare first and last quartiles
-        quartile_size = len(intervals) // 4
-        if quartile_size == 0:
-            pytest.skip("Not enough intervals for quartile analysis")
-
-        first_quartile = intervals[:quartile_size]
-        last_quartile = intervals[-quartile_size:]
-
-        avg_first = sum(first_quartile) / len(first_quartile)
-        avg_last = sum(last_quartile) / len(last_quartile)
-
-        # Check for excessive degradation
-        # Using 3.0x threshold to catch severe buffering issues while tolerating
-        # normal variance in CI environments
-        slowdown = avg_last / avg_first if avg_first > 0 else 1.0
-
-        assert slowdown < 3.0, (
-            f"Upload chunk timing degraded {slowdown:.1f}x between start and end. "
-            f"This may indicate excessive buffering in Caddy or the network stack."
-        )
-
-        print(
-            f"\nE2E latency test ({elapsed:.2f}s): "
-            f"first quartile={avg_first * 1000:.2f}ms/chunk, "
-            f"last quartile={avg_last * 1000:.2f}ms/chunk, "
-            f"slowdown={slowdown:.2f}x"
-        )
+        throughput_mbps = (file_size / (1024 * 1024)) / elapsed
+        print(f"\nE2E 20MB upload: {elapsed:.2f}s ({throughput_mbps:.2f} MB/s)")

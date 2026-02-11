@@ -52,7 +52,6 @@ asyncio_mode = "auto"
 markers = [
     "e2e: End-to-end tests requiring docker-compose",
     "slow: Slow tests that take significant time to run",
-    "large_upload: Extra-large upload tests (10GB+), requires self-hosted runner with large disk",
 ]
 
 [build-system]

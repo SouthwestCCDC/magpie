@@ -32,7 +32,7 @@ Tests against FastAPI TestClient (no reverse proxy):
 Tests through docker-compose stack (Caddy + FastAPI):
 
 - **Basic uploads (1MB, 50MB)** - Verify full stack upload completion
-- **Caddy latency test** - Measures chunk timing as indirect proxy buffering indicator
+- **Large upload test (20MB)** - Verify large uploads complete through Caddy proxy
 
 ## Running Tests
 
@@ -42,17 +42,16 @@ Tests through docker-compose stack (Caddy + FastAPI):
 uv run pytest tests/integration/test_upload_smoke.py -v
 ```
 
-### E2E tests (requires docker-compose)
+### E2E tests (managed automatically by pytest fixtures)
+
+E2E tests require Docker and docker-compose to be available, but you should not
+start or stop the stack manually. The pytest `docker_services` fixture in
+`tests/e2e/conftest.py` manages the docker-compose stack automatically.
+
+Run the E2E upload smoke tests with:
 
 ```bash
-# Start services
-docker compose up -d
-
-# Run tests
-uv run pytest tests/e2e/test_upload_smoke.py -v
-
-# Cleanup
-docker compose down -v
+uv run pytest -m e2e tests/e2e/test_upload_smoke.py -v
 ```
 
 ### CI Behavior
@@ -64,16 +63,11 @@ All smoke tests run in CI on every PR:
 ## What About Performance Testing?
 
 Server-side performance validation requires instrumentation that these smoke tests
-do not provide. For server-side streaming validation, see issue #466 which tracks:
+do not provide. For server-side streaming validation, see issue #438 which tracks:
 
 - `tracemalloc` or equivalent memory measurement during uploads
 - Server-side logging of chunk/buffer state
-- Realistic concurrent upload testing
 - Caddy proxy buffering verification via logs
-
-The E2E latency test provides some indirect evidence of buffering issues through
-client-side timing measurements, but cannot definitively prove server-side streaming
-behavior.
 
 ## Limitations
 
@@ -98,8 +92,7 @@ E2E tests use `httpx.Client` against docker-compose services, which:
 To properly validate server-side streaming behavior and memory usage, we need:
 - Server-side memory profiling (tracemalloc)
 - Server-side logging of upload handler state
-- Realistic concurrent upload testing
 - Analysis of Caddy logs during large uploads
 - Meaningful performance thresholds based on production requirements
 
-These capabilities are tracked in a separate issue for future implementation.
+These capabilities are tracked in issue #438 for future implementation.
