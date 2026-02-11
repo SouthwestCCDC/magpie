@@ -45,7 +45,10 @@ class TestBoundaryValidation:
         app.dependency_overrides[get_storage_service] = lambda: storage_service
         app.dependency_overrides[require_write_scope] = _noop_require_write_scope
 
-        return TestClient(app)
+        try:
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides.clear()
 
     def test_valid_boundary_accepted(self, client: TestClient) -> None:
         """Valid RFC 2046 boundary should be accepted."""
@@ -128,7 +131,10 @@ class TestContentDispositionValidation:
         app.dependency_overrides[get_storage_service] = lambda: storage_service
         app.dependency_overrides[require_write_scope] = _noop_require_write_scope
 
-        return TestClient(app)
+        try:
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides.clear()
 
     def test_missing_content_disposition_rejected(self, client: TestClient) -> None:
         """Multipart part without Content-Disposition should be rejected."""
@@ -189,7 +195,10 @@ class TestHeaderSizeLimits:
         app.dependency_overrides[get_storage_service] = lambda: storage_service
         app.dependency_overrides[require_write_scope] = _noop_require_write_scope
 
-        return TestClient(app)
+        try:
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides.clear()
 
     def test_oversized_header_rejected(self, client: TestClient) -> None:
         """Header exceeding 16KB limit should be rejected."""
