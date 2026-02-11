@@ -264,7 +264,7 @@ class TestInitCommand:
             result1 = cli_runner.invoke(cli, ["init"])
             assert result1.exit_code == 0
 
-            # Second init with custom token should fail (token exists)
+            # Second init with custom token should succeed but report existing admin token
             result2 = cli_runner.invoke(cli, ["init", "--admin-token", custom_token])
             assert result2.exit_code == 0, "init should succeed but report token exists"
             assert "already exists" in result2.output, "Should report token already exists"

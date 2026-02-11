@@ -12,10 +12,10 @@ import shutil
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator
 
 import pytest
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
 
 from magpie.auth.database import get_connection, init_database, list_tokens
 from magpie.auth.models import TokenScope
@@ -24,13 +24,43 @@ from magpie.config import get_settings
 from magpie.ctl import cli as ctl_cli
 
 
+class EnvCliRunner(CliRunner):
+    """CliRunner that automatically applies environment overrides to all invoke() calls.
+
+    This wrapper ensures environment variables are passed via invoke()'s env parameter
+    (the documented Click API) rather than the constructor's env parameter.
+    """
+
+    def __init__(self, env_overrides: dict[str, str] | None = None, **kwargs: Any) -> None:
+        """Initialize runner with environment overrides to apply on each invoke().
+
+        Args:
+            env_overrides: Environment variables to pass to every invoke() call
+            **kwargs: Other arguments to pass to CliRunner constructor
+        """
+        super().__init__(**kwargs)
+        self._env_overrides = env_overrides or {}
+
+    def invoke(self, *args: Any, **kwargs: Any) -> Result:
+        """Invoke command with automatic environment override application.
+
+        Merges the runner's env_overrides with any env dict passed to invoke(),
+        with invoke()'s env taking precedence.
+        """
+        # Merge runner's env with invoke's env (invoke wins on conflicts)
+        invoke_env = kwargs.get("env", {})
+        merged_env = {**self._env_overrides, **invoke_env}
+        kwargs["env"] = merged_env
+        return super().invoke(*args, **kwargs)
+
+
 @pytest.fixture
 def ctl_runner(tmp_path: Path) -> Generator[tuple[CliRunner, Path], None, None]:
     """Create CLI runner with isolated environment for magpie-ctl tests.
 
-    Returns CliRunner configured to use tmp_path for storage.
-    The runner will set MAGPIE_STORAGE_PATH and MAGPIE_DATABASE_PATH environment
-    variables to point to the temporary directory.
+    Returns EnvCliRunner configured to use tmp_path for storage.
+    The runner automatically passes MAGPIE_STORAGE_PATH and MAGPIE_DATABASE_PATH
+    environment variables to all invoke() calls.
 
     Clears the get_settings() cache before and after each test to ensure
     environment variables are properly read. Uses try/finally to guarantee
@@ -39,8 +69,8 @@ def ctl_runner(tmp_path: Path) -> Generator[tuple[CliRunner, Path], None, None]:
     # Clear settings cache before test
     get_settings.cache_clear()
 
-    runner = CliRunner(
-        env={
+    runner = EnvCliRunner(
+        env_overrides={
             "MAGPIE_STORAGE_PATH": str(tmp_path),
             "MAGPIE_DATABASE_PATH": str(tmp_path / "magpie.db"),
         }
@@ -148,7 +178,7 @@ class TestInit:
 
     def test_init_custom_admin_token(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Init --admin-token uses provided token."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         custom_token = "mgp_ADMIN_custom_test_token"
 
         result = runner.invoke(ctl_cli, ["init", "--admin-token", custom_token])
@@ -160,7 +190,7 @@ class TestInit:
         self, ctl_runner: tuple[CliRunner, Path]
     ) -> None:
         """Init --admin-token rejects tokens without admin prefix."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         invalid_token = "mgp_READ_invalid_scope"
 
         result = runner.invoke(ctl_cli, ["init", "--admin-token", invalid_token])
@@ -170,7 +200,7 @@ class TestInit:
 
     def test_init_custom_admin_token_too_short(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Init --admin-token rejects tokens that are too short."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         short_token = "mgp_ADMIN_"
 
         result = runner.invoke(ctl_cli, ["init", "--admin-token", short_token])
@@ -180,7 +210,7 @@ class TestInit:
 
     def test_init_json_output(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Init with --format json outputs structured JSON with correct types."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         result = runner.invoke(ctl_cli, ["--format", "json", "init"])
 
         assert result.exit_code == 0
@@ -312,7 +342,7 @@ class TestGC:
 
     def test_gc_dry_run_with_no_artifacts(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """GC --dry-run with empty storage shows zero stats."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         # Initialize storage
         runner.invoke(ctl_cli, ["init"])
 
@@ -324,7 +354,7 @@ class TestGC:
 
     def test_gc_reconcile_only(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """GC --reconcile-only fixes symlinks without deleting blobs."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         # Initialize storage
         runner.invoke(ctl_cli, ["init"])
 
@@ -337,7 +367,7 @@ class TestGC:
 
     def test_gc_retention_days_override(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """GC --retention-days overrides config value."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         # Initialize storage
         runner.invoke(ctl_cli, ["init"])
 
@@ -348,7 +378,7 @@ class TestGC:
 
     def test_gc_json_output(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """GC with --format json outputs structured JSON with correct types."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         # Initialize storage
         runner.invoke(ctl_cli, ["init"])
 
@@ -408,7 +438,7 @@ class TestGC:
 
     def test_gc_json_output_flag(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """GC --json-output outputs JSON (for subprocess integration)."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         # Initialize storage
         runner.invoke(ctl_cli, ["init"])
 
@@ -427,7 +457,7 @@ class TestGC:
 
     def test_gc_quiet_suppresses_progress(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """GC --quiet suppresses progress output."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         # Initialize storage
         runner.invoke(ctl_cli, ["init"])
 
@@ -498,7 +528,7 @@ class TestToken:
 
     def test_token_create_all_scopes(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token create works with all scope types."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         runner.invoke(ctl_cli, ["init"])
 
         # Create read token
@@ -520,7 +550,7 @@ class TestToken:
 
     def test_token_create_duplicate_name(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token create rejects duplicate names."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         runner.invoke(ctl_cli, ["init"])
 
         # Create first token
@@ -538,7 +568,7 @@ class TestToken:
 
     def test_token_list(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token list shows all tokens."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         runner.invoke(ctl_cli, ["init"])
         runner.invoke(ctl_cli, ["token", "create", "--name", "reader1", "--scope", "read"])
         runner.invoke(ctl_cli, ["token", "create", "--name", "writer1", "--scope", "write"])
@@ -616,7 +646,7 @@ class TestToken:
 
     def test_token_revoke_nonexistent(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token revoke with nonexistent token shows error."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         runner.invoke(ctl_cli, ["init"])
 
         result = runner.invoke(ctl_cli, ["token", "revoke", "nonexistent"])
@@ -664,7 +694,7 @@ class TestToken:
 
     def test_token_rotate_invalidates_old_token(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token rotate invalidates the old token (security requirement)."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         runner.invoke(ctl_cli, ["init"])
 
         # Create token and extract plaintext
@@ -698,7 +728,7 @@ class TestToken:
 
     def test_token_rotate_nonexistent(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token rotate with nonexistent token shows error."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         runner.invoke(ctl_cli, ["init"])
 
         result = runner.invoke(ctl_cli, ["token", "rotate", "nonexistent"])
@@ -780,7 +810,7 @@ class TestToken:
 
     def test_token_create_json_output(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token create with --format json outputs structured JSON with correct types."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         runner.invoke(ctl_cli, ["init"])
 
         result = runner.invoke(
@@ -817,7 +847,7 @@ class TestToken:
 
     def test_token_list_json_output(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Token list with --format json outputs structured JSON with correct types."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         runner.invoke(ctl_cli, ["init"])
         runner.invoke(ctl_cli, ["token", "create", "--name", "list-test", "--scope", "read"])
 
@@ -862,7 +892,7 @@ class TestDebugFlag:
 
     def test_debug_flag_shows_paths(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Debug flag shows storage and database paths."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
 
         result = runner.invoke(ctl_cli, ["--debug", "init"])
 
@@ -1074,7 +1104,7 @@ class TestSync:
 
     def test_sync_to_s3_requires_bucket(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Sync to-s3 requires MAGPIE_S3_BUCKET environment variable."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         runner.invoke(ctl_cli, ["init"])
 
         # Invoke without setting MAGPIE_S3_BUCKET
@@ -1085,7 +1115,7 @@ class TestSync:
 
     def test_sync_from_s3_requires_bucket(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Sync from-s3 requires MAGPIE_S3_BUCKET environment variable."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         runner.invoke(ctl_cli, ["init"])
 
         # Invoke without setting MAGPIE_S3_BUCKET
@@ -1096,7 +1126,7 @@ class TestSync:
 
     def test_sync_gc_s3_requires_bucket(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Sync gc-s3 requires MAGPIE_S3_BUCKET environment variable."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         runner.invoke(ctl_cli, ["init"])
 
         # Invoke without setting MAGPIE_S3_BUCKET
@@ -1115,8 +1145,8 @@ class TestSync:
 
         # Clear settings cache and create new runner with S3 env vars
         get_settings.cache_clear()
-        runner_with_s3 = CliRunner(
-            env={
+        runner_with_s3 = EnvCliRunner(
+            env_overrides={
                 "MAGPIE_STORAGE_PATH": str(tmp_path),
                 "MAGPIE_DATABASE_PATH": str(tmp_path / "magpie.db"),
                 "MAGPIE_S3_BUCKET": "test-bucket",
@@ -1141,8 +1171,8 @@ class TestSync:
 
         # Clear settings cache and create new runner with S3 env vars
         get_settings.cache_clear()
-        runner_with_s3 = CliRunner(
-            env={
+        runner_with_s3 = EnvCliRunner(
+            env_overrides={
                 "MAGPIE_STORAGE_PATH": str(tmp_path),
                 "MAGPIE_DATABASE_PATH": str(tmp_path / "magpie.db"),
                 "MAGPIE_S3_BUCKET": "test-bucket",
@@ -1169,7 +1199,7 @@ class TestSync:
 
     def test_sync_gc_s3_dry_run_by_default(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Sync gc-s3 runs in dry-run mode by default for safety."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
         runner.invoke(ctl_cli, ["init"])
 
         # The command should default to dry-run (safe mode)
@@ -1193,8 +1223,8 @@ class TestSync:
 
         # Clear settings cache and create new runner with S3 env vars
         get_settings.cache_clear()
-        runner_with_s3 = CliRunner(
-            env={
+        runner_with_s3 = EnvCliRunner(
+            env_overrides={
                 "MAGPIE_STORAGE_PATH": str(tmp_path),
                 "MAGPIE_DATABASE_PATH": str(tmp_path / "magpie.db"),
                 "MAGPIE_S3_BUCKET": "test-bucket",
@@ -1210,7 +1240,7 @@ class TestSync:
 
     def test_sync_commands_accept_quiet_flag(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Sync commands accept --quiet flag to suppress progress output."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
 
         # Test that --quiet flag is accepted by each command
         # We're testing the interface, not the S3 operations
@@ -1232,7 +1262,7 @@ class TestSync:
 
     def test_sync_commands_accept_dry_run_flag(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Sync commands accept --dry-run flag for safe previews."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
 
         # Test that --dry-run flag is accepted by relevant commands
 
@@ -1257,7 +1287,7 @@ class TestVersion:
 
     def test_version_command(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Version command shows magpie-ctl version."""
-        runner, tmp_path = ctl_runner
+        runner, _ = ctl_runner
 
         result = runner.invoke(ctl_cli, ["version"])
 
