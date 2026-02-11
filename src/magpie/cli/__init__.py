@@ -9,7 +9,7 @@ import click
 
 from magpie.cli.client import get_client
 from magpie.cli.config import get_ca_cert, get_server, get_timeout, get_token
-from magpie.cli.errors import with_network_error_handling
+from magpie.cli.errors import handle_response_error, with_network_error_handling
 from magpie.cli.formatting import OutputFormat
 from magpie.config import get_settings
 
@@ -187,7 +187,10 @@ def version(ctx: CLIContext, server_version: bool) -> None:
     # to avoid unnecessarily sending tokens
     with get_client(ctx.server, token=None, timeout=ctx.timeout, ca_cert=ctx.ca_cert) as client:
         response = client.get("/health")
-        response.raise_for_status()
+
+        if response.status_code != 200:
+            handle_response_error(response, "Version check")
+
         data = response.json()
         server_ver = data.get("version", "unknown")
         click.echo(f"magpie {__version__} (server: {server_ver})")

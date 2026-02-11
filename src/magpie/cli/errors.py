@@ -90,7 +90,6 @@ def handle_http_error(
 
     Raises:
         click.ClickException: Always raised with formatted error message.
-        SystemExit: Exits with appropriate error code.
     """
     # Import here to avoid circular imports
     from magpie.cli.formatting import http_status_to_exit_code
