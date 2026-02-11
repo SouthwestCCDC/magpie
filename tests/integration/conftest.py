@@ -26,6 +26,7 @@ from magpie.auth.service import TokenInfo, TokenService
 from magpie.config import MagpieSettings
 from magpie.server.app import app
 from magpie.server.deps import (
+    clear_token_service_cache,
     get_storage_service,
     get_token_service,
     require_admin_scope,
@@ -424,7 +425,7 @@ def override_auth_dependencies(request):
 
 
 @pytest.fixture(autouse=True)
-def clear_token_service_cache():
+def _clear_token_service_cache_fixture():
     """Clear the lru_cache on get_token_service between tests.
 
     The get_token_service dependency uses @functools.lru_cache(maxsize=1)
@@ -432,9 +433,9 @@ def clear_token_service_cache():
     TokenService instance from one test could leak into another test,
     breaking test isolation.
     """
-    get_token_service.cache_clear()
+    clear_token_service_cache()
     yield
-    get_token_service.cache_clear()
+    clear_token_service_cache()
 
 
 # =============================================================================

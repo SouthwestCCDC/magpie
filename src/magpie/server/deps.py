@@ -59,6 +59,10 @@ def clear_token_service_cache() -> None:
     should be configured once at application startup, so this should not
     be necessary.
 
+    Note: This only clears the TokenService cache. If you've changed environment
+    variables and need to pick up new settings, you'll also need to clear the
+    get_settings() cache separately (which is managed by Pydantic Settings).
+
     Example:
         >>> clear_token_service_cache()
         >>> service = get_token_service()  # Creates new instance with current settings
