@@ -186,7 +186,7 @@ def _scan_artifacts(
                 progress_callback("scan", idx + 1, total_manifests)
             continue
 
-        tagged_hashes = {h[:8] for h in manifest.tags.values()}
+        tagged_hashes = {h.lstrip("@")[:8] for h in manifest.tags.values()}
 
         # Track artifact directory for cleanup pass
         artifact_dirs_to_cleanup.append(artifact_dir)

@@ -48,7 +48,7 @@ class EnvCliRunner(CliRunner):
         with invoke()'s env taking precedence.
         """
         # Merge runner's env with invoke's env (invoke wins on conflicts)
-        invoke_env = kwargs.get("env", {})
+        invoke_env = kwargs.get("env") or {}
         merged_env = {**self._env_overrides, **invoke_env}
         kwargs["env"] = merged_env
         return super().invoke(*args, **kwargs)
@@ -285,7 +285,7 @@ class TestInit:
             """Attempt to create admin token named 'admin'."""
             try:
                 # Wait for both threads to reach this point
-                barrier.wait()
+                barrier.wait(timeout=10)
                 # Now both threads will execute this at approximately the same time
                 token_service = TokenService(settings)
                 token = token_service.create_token("admin", TokenScope.ADMIN)
@@ -300,8 +300,12 @@ class TestInit:
         thread1.start()
         thread2.start()
 
-        thread1.join()
-        thread2.join()
+        thread1.join(timeout=10)
+        thread2.join(timeout=10)
+
+        # Verify threads completed
+        assert not thread1.is_alive(), "Thread 1 did not complete within timeout"
+        assert not thread2.is_alive(), "Thread 2 did not complete within timeout"
 
         # Exactly one should succeed, one should fail with IntegrityError/TokenExistsError
         assert len(successes) == 1, f"Exactly one thread should succeed, got {len(successes)}"
@@ -1140,7 +1144,7 @@ class TestSync:
         reason="Requires rclone/aws CLI to be unavailable",
     )
     def test_sync_to_s3_requires_sync_tool(self, ctl_runner: tuple[CliRunner, Path]) -> None:
-        """Sync to-s3 requires rclone or aws CLI to be installed."""
+        """Sync to-s3 fails when neither rclone nor aws CLI is available."""
         runner, tmp_path = ctl_runner
 
         # Clear settings cache and create new runner with S3 env vars
