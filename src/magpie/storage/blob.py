@@ -183,7 +183,7 @@ def store_blob_from_temp(
 
         if existing_hash != full_hash:
             # Hash prefix collision detected - this should NEVER happen with SHA-256
-            # Log critical error and raise to prevent data corruption
+            # Raise ValueError to prevent data corruption
             temp_file_path.unlink(missing_ok=True)
             raise ValueError(
                 f"Hash prefix collision detected: {hash_ref} (existing: {existing_hash[:16]}..., "

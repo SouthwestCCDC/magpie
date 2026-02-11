@@ -60,7 +60,6 @@ class StreamingMultipartHandler:
             temp_path: Directory for temporary files (on data volume).
             max_size: Maximum allowed upload size (for early rejection).
         """
-        self._boundary = boundary
         self._temp_path = temp_path
         self._max_size = max_size
         self._temp_file = None  # Buffered file object (handles partial writes internally)
@@ -81,7 +80,7 @@ class StreamingMultipartHandler:
         # Parse: Content-Disposition: form-data; name="file"; filename="artifact.bin"
         try:
             cd_str = content_disposition.decode("utf-8", errors="replace")
-            # Look for filename="..." or filename*=...
+            # Look for filename="..." (quoted) or filename=... (unquoted)
             match = re.search(r'filename="([^"]+)"', cd_str)
             if match:
                 return match.group(1)
