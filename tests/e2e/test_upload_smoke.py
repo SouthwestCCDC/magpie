@@ -7,6 +7,7 @@ memory usage.
 
 from __future__ import annotations
 
+import io
 import time
 from typing import TYPE_CHECKING
 
@@ -104,18 +105,19 @@ class TestE2ECaddyLatency:
         base_url = e2e_services["base_url"]
         admin_token = e2e_services["admin_token"]
 
-        # Create a generator that yields chunks with timing
-        def chunked_content():
-            for chunk in chunks:
-                chunk_times.append(time.time())
-                yield chunk
+        # Build file content while tracking chunk timing
+        content_buffer = io.BytesIO()
+        for chunk in chunks:
+            chunk_times.append(time.time())
+            content_buffer.write(chunk)
+        content_buffer.seek(0)  # Reset to beginning for reading
 
         headers = {"Authorization": f"Bearer {admin_token}"}
 
         start_time = time.time()
         response = httpx.post(
             f"{base_url}/api/v1/upload/e2e/latency-test",
-            files={"file": ("latency.bin", chunked_content(), "application/octet-stream")},
+            files={"file": ("latency.bin", content_buffer, "application/octet-stream")},
             headers=headers,
             params={"uploaded_by": "latency-test"},
             timeout=60.0,
