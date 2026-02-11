@@ -115,7 +115,7 @@ class TestVersionCommand:
         """Version command with --server-version flag handles missing version field."""
         mock_client = Mock()
         mock_response = Mock()
-        mock_response.raise_for_status = Mock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {"status": "ok"}  # No version field
         mock_client.get.return_value = mock_response
         mock_client.__enter__ = Mock(return_value=mock_client)
