@@ -9,6 +9,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
+from magpie import __version__
 from magpie.cli.client import (
     DEFAULT_CONNECT_TIMEOUT,
     _create_ssl_context,
@@ -57,6 +58,23 @@ class TestGetClient:
         client = get_client("http://localhost:8000", token="")
         try:
             assert "Authorization" not in client.headers
+        finally:
+            client.close()
+
+    def test_sets_user_agent_header(self) -> None:
+        """Test that User-Agent header is set with CLI version."""
+        client = get_client("http://localhost:8000")
+        try:
+            assert client.headers.get("User-Agent") == f"magpie-cli/{__version__}"
+        finally:
+            client.close()
+
+    def test_user_agent_header_with_token(self) -> None:
+        """Test that User-Agent header is set when token is also provided."""
+        client = get_client("http://localhost:8000", token="mgp_testtoken")
+        try:
+            assert client.headers.get("User-Agent") == f"magpie-cli/{__version__}"
+            assert client.headers.get("Authorization") == "Bearer mgp_testtoken"
         finally:
             client.close()
 
