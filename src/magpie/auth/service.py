@@ -7,10 +7,8 @@ import hmac
 import logging
 import secrets
 import sqlite3
-import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from magpie.auth.database import (
@@ -86,69 +84,17 @@ class TokenService:
     Token Prefix Convention:
         - Regular tokens (read/write): mgp_ prefix
         - Admin tokens: mgp_ADMIN_ prefix
-
-    Instance Isolation:
-        Multiple TokenService instances can coexist with different database paths.
-        Each database path is initialized independently and tracked in the class-level
-        _initialized_paths set. This allows:
-        - Multiple instances pointing to the SAME path share initialization (efficient)
-        - Multiple instances pointing to DIFFERENT paths initialize separately (isolated)
-
-        Example:
-            >>> service1 = TokenService(config_with_db1)
-            >>> service2 = TokenService(config_with_db2)
-            >>> # Each service operates on its own database independently
     """
 
-    # Class-level tracking of initialized database paths
-    # Each unique Path is tracked separately, allowing multiple instances with
-    # different paths to coexist without interference.
-    _initialized_paths: set[Path] = set()
-    _init_lock = threading.Lock()
-
     def __init__(self, config: MagpieSettings) -> None:
-        """Initialize the token service.
+        """Initialize the token service and database.
 
         Args:
             config: MagpieSettings instance with database_path configuration.
         """
         self.config = config
         self.db_path = config.database_path
-
-    def _ensure_database_initialized(self) -> None:
-        """Ensure database is initialized (lazy initialization).
-
-        This method is called by all public methods that need database access.
-        The initialization happens only once per database path, not per instance.
-
-        Thread-safe: Uses double-checked locking to prevent race conditions
-        when multiple threads call methods simultaneously.
-
-        Double-checked locking conditions (intentionally asymmetric):
-        - Fast path: Conservative - only skip if BOTH tracked AND exists on disk.
-          This avoids acquiring the lock when we're certain the DB is ready.
-        - Slow path: Liberal - reinitialize if EITHER not tracked OR file deleted.
-          This handles external deletion or missed initialization without risk.
-
-        Thread safety notes:
-        - The outer check reads from _initialized_paths (a set) without holding the lock.
-          In CPython, set membership checks ('in' operator) and Path.exists() are atomic
-          operations protected by the GIL, making the fast-path read safe.
-        - The lock ensures that only one thread can perform initialization, even if
-          multiple threads pass the fast-path check simultaneously.
-        - After acquiring the lock, we re-check the condition to handle the case where
-          another thread completed initialization while we were waiting for the lock.
-        """
-        # Fast path: check without lock (only skip if we're CERTAIN it's initialized)
-        if self.db_path in self._initialized_paths and self.db_path.exists():
-            return
-
-        # Slow path: acquire lock and re-check (reinitialize if there's ANY doubt)
-        with self._init_lock:
-            # Double-check after acquiring lock
-            if self.db_path not in self._initialized_paths or not self.db_path.exists():
-                init_database(self.db_path)
-                self._initialized_paths.add(self.db_path)
+        init_database(self.db_path)
 
     def create_token(self, name: str, scope: TokenScope, plaintext_token: str | None = None) -> str:
         """Create a new token and return the plaintext (only visible once).
@@ -174,9 +120,6 @@ class TokenService:
             TokenFormatError: If provided token has incorrect format.
             ValidationError: If token name fails validation (invalid format/length).
         """
-        # Ensure database is initialized before any operations
-        self._ensure_database_initialized()
-
         # Validate token name (defense in depth - also validated at API layer)
         validate_token_name(name)
 
@@ -258,9 +201,6 @@ class TokenService:
         Returns:
             TokenInfo if valid and enabled, None otherwise.
         """
-        # Ensure database is initialized before any operations
-        self._ensure_database_initialized()
-
         # Hash the input token
         token_hash = self._hash_token(token)
 
@@ -299,9 +239,6 @@ class TokenService:
         Returns:
             True if token was revoked, False if not found.
         """
-        # Ensure database is initialized before any operations
-        self._ensure_database_initialized()
-
         conn = get_connection(self.db_path)
         try:
             return delete_token(conn, name)
@@ -331,9 +268,6 @@ class TokenService:
         Raises:
             TokenError: If hash collision occurs during token creation (extremely unlikely).
         """
-        # Ensure database is initialized before any operations
-        self._ensure_database_initialized()
-
         conn = get_connection(self.db_path)
         try:
             with conn:
