@@ -245,8 +245,9 @@ class TestUploadSizeLimitEndpoint:
         not testing the exact boundary, this verifies that file content smaller
         than the limit passes through successfully. Multipart form encoding adds
         ~200 bytes of overhead (headers, boundaries), so the Content-Length will
-        be ~1000 bytes. The streaming handler only counts file content bytes,
-        not the multipart envelope, which is the correct behavior.
+        be ~1000 bytes. The streaming handler counts all bytes in the multipart
+        payload (file content, other form fields, headers, boundaries), not just
+        the file content bytes.
         """
         content = b"x" * 800
         files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}

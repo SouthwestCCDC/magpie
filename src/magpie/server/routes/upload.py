@@ -402,22 +402,10 @@ async def upload_artifact(
         """Read chunks from request stream and put them into queue."""
         try:
             async for chunk in request.stream():
-                # Use timeout on put to allow cancellation if parser fails
-                # This prevents deadlock when queue is full and parser has raised
-                try:
-                    await asyncio.wait_for(chunk_queue.put(chunk), timeout=5.0)
-                except asyncio.TimeoutError:
-                    # Queue still full after 5s - parser likely failed
-                    # Break out and let finally block send sentinel
-                    break
+                await chunk_queue.put(chunk)
         finally:
             # Signal end of stream with sentinel value
-            # Use wait_for here too in case queue is still full
-            try:
-                await asyncio.wait_for(chunk_queue.put(None), timeout=1.0)
-            except asyncio.TimeoutError:
-                # Can't send sentinel, but parser is likely dead anyway
-                pass
+            await chunk_queue.put(None)
 
     def parser_worker():
         """Background thread: consume chunks from queue and write to disk."""
