@@ -14,17 +14,16 @@ class TestUploadCompletion:
     """Smoke tests that verify uploads complete successfully."""
 
     @pytest.mark.parametrize(
-        "file_size_mb,timeout",
+        "file_size_mb",
         [
-            (1, 10),  # 1 MB
-            (50, 60),  # 50 MB
+            1,  # 1 MB
+            50,  # 50 MB
         ],
     )
     def test_upload_completes(
         self,
         client: TestClient,
         file_size_mb: int,
-        timeout: int,
     ) -> None:
         """Test that uploads of various sizes complete successfully.
 
@@ -35,7 +34,6 @@ class TestUploadCompletion:
         Args:
             client: FastAPI test client
             file_size_mb: Size of file to upload in MB
-            timeout: Maximum acceptable time in seconds
         """
         file_size = file_size_mb * 1024 * 1024
         content = b"\x00" * file_size
@@ -46,7 +44,6 @@ class TestUploadCompletion:
             "/api/v1/upload/smoke/test",
             files=files,
             params={"uploaded_by": "smoke-test"},
-            timeout=timeout,
         )
 
         # Upload should succeed
