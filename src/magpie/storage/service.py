@@ -71,27 +71,14 @@ class StorageService:
         """
         self.config = config
 
-    def store_artifact(
-        self,
-        artifact_path: str,
-        file_stream: BinaryIO,
-        uploaded_by: str,
-        source_uri: str | None = None,
-        no_latest: bool = False,
-    ) -> tuple[ArtifactInfo, bool]:
-        """Store an artifact with optional automatic tagging as 'latest'.
+    def _validate_and_prepare_artifact_path(self, artifact_path: str) -> Path:
+        """Validate artifact path and return the artifact directory.
 
         Args:
-            artifact_path: Logical path for the artifact (e.g., "project/component").
-            file_stream: Binary stream of artifact content.
-            uploaded_by: Identity of uploader.
-            source_uri: Optional source URI for provenance.
-            no_latest: If True, skip creating/updating the "latest" tag (default: False).
+            artifact_path: Logical path for the artifact.
 
         Returns:
-            Tuple of (ArtifactInfo, is_duplicate):
-            - ArtifactInfo with full artifact details
-            - is_duplicate: True if blob already existed
+            Path to artifact directory.
 
         Raises:
             InvalidArtifactPathError: If path contains reserved names or conflicts
@@ -106,12 +93,36 @@ class StorageService:
         check_artifact_nesting(self.config.storage_path, artifact_path, verify_security=False)
 
         # Security verification happens here via verify_path_is_descendant
-        artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
+        return artifact_dir_path(self.config.storage_path, artifact_path)
 
-        # Store blob (handles streaming and hashing)
-        # Returns full hash for metadata, short hash ref for display
-        full_hash, hash_ref, is_duplicate = store_blob(artifact_dir, file_stream, self.config)
+    def _finalize_artifact_storage(
+        self,
+        artifact_dir: Path,
+        full_hash: str,
+        hash_ref: str,
+        is_duplicate: bool,
+        uploaded_by: str,
+        source_uri: str | None,
+        no_latest: bool,
+    ) -> tuple[ArtifactInfo, bool]:
+        """Finalize artifact storage after blob is written.
 
+        This helper handles the common post-blob logic shared by store_artifact
+        and store_artifact_from_temp: metadata writing, tag updates, and
+        ArtifactInfo construction.
+
+        Args:
+            artifact_dir: Path to artifact directory.
+            full_hash: Full SHA-256 hash of the blob.
+            hash_ref: Short hash reference (e.g., "@abc12345").
+            is_duplicate: Whether the blob already existed.
+            uploaded_by: Identity of uploader.
+            source_uri: Optional source URI for provenance.
+            no_latest: If True, skip creating/updating the "latest" tag.
+
+        Returns:
+            Tuple of (ArtifactInfo, is_duplicate).
+        """
         # Write metadata sidecar (only for new blobs, write_metadata is write-once)
         # Use hash_ref (short hash) for filename, but store full_hash inside
         metadata = BlobMetadata(
@@ -145,6 +156,50 @@ class StorageService:
         )
 
         return (info, is_duplicate)
+
+    def store_artifact(
+        self,
+        artifact_path: str,
+        file_stream: BinaryIO,
+        uploaded_by: str,
+        source_uri: str | None = None,
+        no_latest: bool = False,
+    ) -> tuple[ArtifactInfo, bool]:
+        """Store an artifact with optional automatic tagging as 'latest'.
+
+        Args:
+            artifact_path: Logical path for the artifact (e.g., "project/component").
+            file_stream: Binary stream of artifact content.
+            uploaded_by: Identity of uploader.
+            source_uri: Optional source URI for provenance.
+            no_latest: If True, skip creating/updating the "latest" tag (default: False).
+
+        Returns:
+            Tuple of (ArtifactInfo, is_duplicate):
+            - ArtifactInfo with full artifact details
+            - is_duplicate: True if blob already existed
+
+        Raises:
+            InvalidArtifactPathError: If path contains reserved names or conflicts
+                with existing artifacts.
+        """
+        # Validate artifact path and check for nesting conflicts
+        artifact_dir = self._validate_and_prepare_artifact_path(artifact_path)
+
+        # Store blob (handles streaming and hashing)
+        # Returns full hash for metadata, short hash ref for display
+        full_hash, hash_ref, is_duplicate = store_blob(artifact_dir, file_stream, self.config)
+
+        # Finalize storage (metadata, tags, info construction)
+        return self._finalize_artifact_storage(
+            artifact_dir=artifact_dir,
+            full_hash=full_hash,
+            hash_ref=hash_ref,
+            is_duplicate=is_duplicate,
+            uploaded_by=uploaded_by,
+            source_uri=source_uri,
+            no_latest=no_latest,
+        )
 
     def store_artifact_from_temp(
         self,
@@ -177,54 +232,23 @@ class StorageService:
             InvalidArtifactPathError: If path contains reserved names or conflicts
                 with existing artifacts.
         """
-        # Validate artifact path for reserved names
-        validate_artifact_path(artifact_path)
-
-        # Check for nesting conflicts with existing artifacts.
-        # Skip security verification here since artifact_dir_path below will
-        # perform it; this avoids redundant segment-by-segment symlink resolution.
-        check_artifact_nesting(self.config.storage_path, artifact_path, verify_security=False)
-
-        # Security verification happens here via verify_path_is_descendant
-        artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
+        # Validate artifact path and check for nesting conflicts
+        artifact_dir = self._validate_and_prepare_artifact_path(artifact_path)
 
         # Store blob from temp file (handles atomic move)
-        # Returns full hash for metadata, short hash ref for display
+        # Returns short hash ref for display
         hash_ref, is_duplicate = store_blob_from_temp(artifact_dir, temp_file_path, full_hash)
 
-        # Write metadata sidecar (only for new blobs, write_metadata is write-once)
-        # Use hash_ref (short hash) for filename, but store full_hash inside
-        metadata = BlobMetadata(
-            hash=full_hash,
-            uploaded_by=uploaded_by,
-            uploaded_at=datetime.now(timezone.utc),
-            source_uri=source_uri,
-        )
-        write_metadata(artifact_dir, hash_ref, metadata)
-
-        # Conditionally update manifest with "latest" tag
-        if not no_latest:
-            # Store full hash for verification, symlinks will extract first 8 chars
-            manifest = update_tag(artifact_dir, "latest", full_hash)
-            # Reconcile symlinks to match manifest
-            reconcile_symlinks(artifact_dir, manifest)
-
-        # Build artifact info
-        tags = self._get_tags_for_hash(artifact_dir, full_hash)
-
-        # Re-read metadata to get actual stored values (in case it was duplicate)
-        stored_metadata = read_metadata(artifact_dir, hash_ref)
-
-        info = ArtifactInfo(
-            hash=full_hash,
+        # Finalize storage (metadata, tags, info construction)
+        return self._finalize_artifact_storage(
+            artifact_dir=artifact_dir,
+            full_hash=full_hash,
             hash_ref=hash_ref,
-            tags=tags,
-            uploaded_by=stored_metadata.uploaded_by,
-            uploaded_at=stored_metadata.uploaded_at,
-            source_uri=stored_metadata.source_uri,
+            is_duplicate=is_duplicate,
+            uploaded_by=uploaded_by,
+            source_uri=source_uri,
+            no_latest=no_latest,
         )
-
-        return (info, is_duplicate)
 
     def list_artifacts(self, artifact_path: str) -> list[ArtifactInfo]:
         """List all artifact versions at a path.
