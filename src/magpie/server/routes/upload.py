@@ -482,7 +482,9 @@ async def upload_artifact(
         # Defensive cleanup for missing file part (temp file may still exist)
         try:
             handler.cleanup()
-        except Exception:
+        except Exception:  # nosec B110 - Best-effort cleanup, failure is non-critical
+            # Cleanup failure is non-critical since we're already raising an error
+            # for missing file part. Log it but don't let it mask the real error.
             pass
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
