@@ -96,3 +96,7 @@ To properly validate server-side streaming behavior and memory usage, we need:
 - Meaningful performance thresholds based on production requirements
 
 These capabilities are tracked in issue #438 for future implementation.
+
+---
+
+*This documentation was generated with AI assistance (Claude Code w/ Sonnet 4.5).*
