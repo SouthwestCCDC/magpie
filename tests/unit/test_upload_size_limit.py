@@ -2,7 +2,8 @@
 
 These tests validate the streaming multipart upload endpoint's size limit enforcement.
 Size limits are enforced incrementally during streaming in StreamingMultipartHandler._on_part_data()
-by tracking total bytes written and comparing against max_upload_size.
+by tracking part data bytes (file content + form field values) and comparing against max_upload_size.
+Headers and boundaries are NOT counted toward the limit.
 """
 
 from __future__ import annotations
@@ -245,9 +246,9 @@ class TestUploadSizeLimitEndpoint:
         not testing the exact boundary, this verifies that file content smaller
         than the limit passes through successfully. Multipart form encoding adds
         ~200 bytes of overhead (headers, boundaries), so the Content-Length will
-        be ~1000 bytes. The streaming handler counts all bytes in the multipart
-        payload (file content, other form fields, headers, boundaries), not just
-        the file content bytes.
+        be ~1000 bytes. The streaming handler counts only part data bytes (file
+        content + form field values) via _on_part_data(), not headers or boundaries.
+        Headers have separate limits (MAX_HEADER_SIZE, MAX_HEADERS_PER_PART).
         """
         content = b"x" * 800
         files = {"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")}

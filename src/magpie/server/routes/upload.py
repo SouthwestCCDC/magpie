@@ -52,11 +52,10 @@ class StreamingMultipartHandler:
     MAX_HEADER_SIZE = 16 * 1024  # 16KB per header (combined name + value)
     MAX_HEADERS_PER_PART = 50  # Maximum headers per multipart part
 
-    def __init__(self, boundary: bytes, temp_path: Path, max_size: int | None = None) -> None:
+    def __init__(self, temp_path: Path, max_size: int | None = None) -> None:
         """Initialize streaming multipart handler.
 
         Args:
-            boundary: Multipart boundary from Content-Type header.
             temp_path: Directory for temporary files (on data volume).
             max_size: Maximum allowed upload size (for early rejection).
         """
@@ -390,7 +389,7 @@ async def upload_artifact(
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     # Set up streaming multipart handler
-    handler = StreamingMultipartHandler(boundary, temp_dir, max_size)
+    handler = StreamingMultipartHandler(temp_dir, max_size)
     parser = MultipartParser(boundary, handler.get_callbacks())
 
     # Stream request body through multipart parser in a single background thread
@@ -405,7 +404,11 @@ async def upload_artifact(
                 await chunk_queue.put(chunk)
         finally:
             # Signal end of stream with sentinel value
-            await chunk_queue.put(None)
+            # Non-blocking: if queue is full, parser already exited and doesn't need sentinel
+            try:
+                chunk_queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass  # Parser already exited, sentinel not needed
 
     def parser_worker():
         """Background thread: consume chunks from queue and write to disk."""
