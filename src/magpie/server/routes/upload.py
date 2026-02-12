@@ -184,9 +184,7 @@ class StreamingMultipartHandler:
         self._total_bytes += len(chunk)
         # Enforce size limit on all part data, not just file fields
         if self._max_size is not None and self._total_bytes > self._max_size:
-            raise UploadSizeExceededError(
-                f"Upload exceeds maximum size of {self._max_size} bytes"
-            )
+            raise UploadSizeExceededError(f"Upload exceeds maximum size of {self._max_size} bytes")
 
         # File-specific operations (write, hash) only for file field
         if self._in_file_field and self._temp_file is not None:
