@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.e2e
+@pytest.mark.slow
 class TestE2EUploadCompletion:
     """E2E smoke tests for upload through Caddy proxy."""
 
@@ -73,6 +74,7 @@ class TestE2EUploadCompletion:
 
 
 @pytest.mark.e2e
+@pytest.mark.slow
 class TestE2ECaddyLargeUpload:
     """E2E test for large uploads through Caddy proxy."""
 
