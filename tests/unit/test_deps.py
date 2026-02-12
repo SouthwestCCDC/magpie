@@ -13,6 +13,12 @@ from magpie.server.deps import clear_token_service_cache, get_token_service
 class TestTokenServiceCaching:
     """Tests for get_token_service() caching behavior."""
 
+    @pytest.fixture(autouse=True)
+    def _cleanup_cache(self) -> None:
+        """Clean up token service cache after each test."""
+        yield
+        clear_token_service_cache()
+
     def test_get_token_service_returns_same_instance(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
