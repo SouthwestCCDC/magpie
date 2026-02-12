@@ -235,7 +235,7 @@ def write_token(token_service: TokenService) -> str:
 
 
 @pytest.fixture
-def client(test_storage_service: StorageService) -> TestClient:
+def client(test_storage_service: StorageService, test_config: MagpieSettings) -> TestClient:
     """Create test client with overridden storage service dependency.
 
     This is the standard client fixture for most endpoint tests. It overrides
@@ -246,13 +246,21 @@ def client(test_storage_service: StorageService) -> TestClient:
     def override_storage_service() -> StorageService:
         return test_storage_service
 
+    def override_settings() -> MagpieSettings:
+        return test_config
+
+    from magpie.server.deps import get_magpie_settings
+
     app.dependency_overrides[get_storage_service] = override_storage_service
+    app.dependency_overrides[get_magpie_settings] = override_settings
     yield TestClient(app)
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
-def client_no_raise(test_storage_service: StorageService) -> TestClient:
+def client_no_raise(
+    test_storage_service: StorageService, test_config: MagpieSettings
+) -> TestClient:
     """Create test client that doesn't raise server exceptions.
 
     Used for tests that need to check HTTP error responses without
@@ -262,13 +270,19 @@ def client_no_raise(test_storage_service: StorageService) -> TestClient:
     def override_storage_service() -> StorageService:
         return test_storage_service
 
+    def override_settings() -> MagpieSettings:
+        return test_config
+
+    from magpie.server.deps import get_magpie_settings
+
     app.dependency_overrides[get_storage_service] = override_storage_service
+    app.dependency_overrides[get_magpie_settings] = override_settings
     yield TestClient(app, raise_server_exceptions=False)
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
-def api_client(test_storage_service: StorageService) -> TestClient:
+def api_client(test_storage_service: StorageService, test_config: MagpieSettings) -> TestClient:
     """Create test API client for CLI integration tests.
 
     Alias for client fixture, used by CLI tests that mock the HTTP client.
@@ -277,7 +291,13 @@ def api_client(test_storage_service: StorageService) -> TestClient:
     def override_storage_service() -> StorageService:
         return test_storage_service
 
+    def override_settings() -> MagpieSettings:
+        return test_config
+
+    from magpie.server.deps import get_magpie_settings
+
     app.dependency_overrides[get_storage_service] = override_storage_service
+    app.dependency_overrides[get_magpie_settings] = override_settings
     yield TestClient(app)
     app.dependency_overrides.clear()
 

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, BinaryIO
 
 import structlog
 
-from magpie.storage.blob import store_blob
+from magpie.storage.blob import store_blob, store_blob_from_temp
 from magpie.storage.exceptions import ArtifactNotFoundError, InvalidArtifactPathError
 from magpie.storage.hash import short_hash
 from magpie.storage.manifest import read_manifest, remove_tag, update_tag
@@ -111,6 +111,86 @@ class StorageService:
         # Store blob (handles streaming and hashing)
         # Returns full hash for metadata, short hash ref for display
         full_hash, hash_ref, is_duplicate = store_blob(artifact_dir, file_stream, self.config)
+
+        # Write metadata sidecar (only for new blobs, write_metadata is write-once)
+        # Use hash_ref (short hash) for filename, but store full_hash inside
+        metadata = BlobMetadata(
+            hash=full_hash,
+            uploaded_by=uploaded_by,
+            uploaded_at=datetime.now(timezone.utc),
+            source_uri=source_uri,
+        )
+        write_metadata(artifact_dir, hash_ref, metadata)
+
+        # Conditionally update manifest with "latest" tag
+        if not no_latest:
+            # Store full hash for verification, symlinks will extract first 8 chars
+            manifest = update_tag(artifact_dir, "latest", full_hash)
+            # Reconcile symlinks to match manifest
+            reconcile_symlinks(artifact_dir, manifest)
+
+        # Build artifact info
+        tags = self._get_tags_for_hash(artifact_dir, full_hash)
+
+        # Re-read metadata to get actual stored values (in case it was duplicate)
+        stored_metadata = read_metadata(artifact_dir, hash_ref)
+
+        info = ArtifactInfo(
+            hash=full_hash,
+            hash_ref=hash_ref,
+            tags=tags,
+            uploaded_by=stored_metadata.uploaded_by,
+            uploaded_at=stored_metadata.uploaded_at,
+            source_uri=stored_metadata.source_uri,
+        )
+
+        return (info, is_duplicate)
+
+    def store_artifact_from_temp(
+        self,
+        artifact_path: str,
+        temp_file_path: Path,
+        full_hash: str,
+        uploaded_by: str,
+        source_uri: str | None = None,
+        no_latest: bool = False,
+    ) -> tuple[ArtifactInfo, bool]:
+        """Store an artifact from a pre-written temp file with pre-computed hash.
+
+        This method is used by the streaming upload handler which writes chunks
+        directly to a temp file while computing the hash incrementally.
+
+        Args:
+            artifact_path: Logical path for the artifact (e.g., "project/component").
+            temp_file_path: Path to pre-written temp file.
+            full_hash: Pre-computed SHA-256 hash of the file content.
+            uploaded_by: Identity of uploader.
+            source_uri: Optional source URI for provenance.
+            no_latest: If True, skip creating/updating the "latest" tag (default: False).
+
+        Returns:
+            Tuple of (ArtifactInfo, is_duplicate):
+            - ArtifactInfo with full artifact details
+            - is_duplicate: True if blob already existed
+
+        Raises:
+            InvalidArtifactPathError: If path contains reserved names or conflicts
+                with existing artifacts.
+        """
+        # Validate artifact path for reserved names
+        validate_artifact_path(artifact_path)
+
+        # Check for nesting conflicts with existing artifacts.
+        # Skip security verification here since artifact_dir_path below will
+        # perform it; this avoids redundant segment-by-segment symlink resolution.
+        check_artifact_nesting(self.config.storage_path, artifact_path, verify_security=False)
+
+        # Security verification happens here via verify_path_is_descendant
+        artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
+
+        # Store blob from temp file (handles atomic move)
+        # Returns full hash for metadata, short hash ref for display
+        hash_ref, is_duplicate = store_blob_from_temp(artifact_dir, temp_file_path, full_hash)
 
         # Write metadata sidecar (only for new blobs, write_metadata is write-once)
         # Use hash_ref (short hash) for filename, but store full_hash inside
