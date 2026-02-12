@@ -61,7 +61,7 @@ def clear_token_service_cache() -> None:
 
     Note: This only clears the TokenService cache. If you've changed environment
     variables and need to pick up new settings, you'll also need to clear the
-    get_settings() cache separately (which is managed by Pydantic Settings).
+    get_settings() cache separately using get_settings.cache_clear().
 
     Example:
         >>> clear_token_service_cache()
