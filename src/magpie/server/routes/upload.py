@@ -69,7 +69,7 @@ class StreamingMultipartHandler:
         self._current_header_value: bytes = b""
         self._filename: str | None = None
         self._in_file_field = False
-        self._total_bytes = 0  # Total multipart payload size (all parts, for DoS prevention)
+        self._total_bytes = 0  # Part body content bytes (all fields, for DoS prevention)
         self._file_bytes = 0  # File field data only (for accurate size reporting)
         self._file_part_found = False
         self._current_part_header_count = 0
@@ -178,11 +178,12 @@ class StreamingMultipartHandler:
                 "Multipart part missing required Content-Disposition header"
             )
 
-        # Track total bytes for ALL parts (DoS prevention against payload bloat)
+        # Track total bytes for ALL part body content (DoS prevention against payload bloat)
         chunk = data[start:end]
         self._total_bytes += len(chunk)
-        # Enforce size limit on total multipart payload (all parts, headers, overhead)
-        # This prevents DoS via bloated non-file fields or multipart structure abuse.
+        # Enforce size limit on part body content bytes (file field + other form fields)
+        # Note: Does NOT count multipart headers or boundaries (parser strips these before callbacks)
+        # This prevents DoS via bloated non-file fields.
         if self._max_size is not None and self._total_bytes > self._max_size:
             raise UploadSizeExceededError(f"Upload exceeds maximum size of {self._max_size} bytes")
 

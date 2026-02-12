@@ -33,9 +33,10 @@ class MagpieSettings(BaseSettings):
 
     # Upload limits - enforced in two places for defense-in-depth:
     # 1. Content-Length header check: Includes multipart overhead (~200 bytes), provides early rejection
-    # 2. StreamingMultipartHandler: Counts all bytes in the multipart payload (file content, other form
-    #    fields, headers, boundaries) during streaming to prevent DoS. Catches malicious clients.
-    # Some valid uploads near the limit may be rejected early due to multipart overhead.
+    # 2. StreamingMultipartHandler: Counts all part body content bytes (file field + other form fields)
+    #    during streaming to prevent DoS. Catches malicious clients that omit/lie about Content-Length.
+    #    Note: Does NOT count multipart headers or boundaries (parser strips these before callbacks).
+    # Some valid uploads near the limit may be rejected early due to multipart overhead in Content-Length.
     max_upload_size: int | None = None  # MAGPIE_MAX_UPLOAD_SIZE (bytes, None = unlimited)
 
     # S3 backup settings (optional)
