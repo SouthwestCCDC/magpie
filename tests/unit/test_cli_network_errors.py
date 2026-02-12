@@ -272,6 +272,42 @@ class TestWithNetworkErrorHandlingDecorator:
 
         assert "Protocol error" in str(exc_info.value)
 
+    def test_catches_json_decode_error(self) -> None:
+        """Decorator catches JSONDecodeError and converts to user-friendly error."""
+        import json
+
+        from click.exceptions import ClickException
+
+        @with_network_error_handling
+        def failing_command() -> None:
+            raise json.JSONDecodeError("Expecting value", "invalid json", 0)
+
+        with pytest.raises(ClickException) as exc_info:
+            failing_command()
+
+        assert "Invalid JSON response from server" in str(exc_info.value)
+        assert "Expecting value" in str(exc_info.value)
+        assert "Hint:" in str(exc_info.value)
+
+    def test_catches_http_status_error(self) -> None:
+        """Decorator catches HTTPStatusError and converts to user-friendly error."""
+        from click.exceptions import ClickException
+
+        @with_network_error_handling
+        def failing_command() -> None:
+            mock_request = MagicMock()
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            mock_response.json.return_value = {"detail": "Not found"}
+            raise httpx.HTTPStatusError(
+                "404 Not Found", request=mock_request, response=mock_response
+            )
+
+        with pytest.raises(ClickException) as exc_info:
+            failing_command()
+
+        assert "404" in str(exc_info.value)
+
 
 class TestExitCodes:
     """Tests for exit codes in error scenarios."""
@@ -434,3 +470,43 @@ class TestCliRunnerIntegration:
         # Verify exit code is GENERAL_ERROR (1)
         assert result.exit_code == ExitCode.GENERAL_ERROR
         assert "Test operation failed (500)" in result.output
+
+    def test_json_decode_error_exit_code_with_runner(self) -> None:
+        """JSONDecodeError in human mode produces exit code 2 (NETWORK_ERROR)."""
+        import json
+
+        @click.command()
+        @with_network_error_handling
+        def test_command() -> None:
+            """Test command that raises a JSON decode error."""
+            raise json.JSONDecodeError("Expecting value", "invalid json", 0)
+
+        runner = CliRunner()
+        result = runner.invoke(test_command)
+
+        # Verify exit code is NETWORK_ERROR (2)
+        assert result.exit_code == ExitCode.NETWORK_ERROR
+        assert "Invalid JSON response from server" in result.output
+        assert "Hint:" in result.output
+
+    def test_http_status_error_exit_code_with_runner(self) -> None:
+        """HTTPStatusError in human mode produces appropriate exit code."""
+
+        @click.command()
+        @with_network_error_handling
+        def test_command() -> None:
+            """Test command that raises an HTTPStatusError."""
+            mock_request = MagicMock()
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            mock_response.json.return_value = {"detail": "Not found"}
+            raise httpx.HTTPStatusError(
+                "404 Not Found", request=mock_request, response=mock_response
+            )
+
+        runner = CliRunner()
+        result = runner.invoke(test_command)
+
+        # Verify exit code is NOT_FOUND (3) for 404 errors
+        assert result.exit_code == ExitCode.NOT_FOUND
+        assert "404" in result.output
