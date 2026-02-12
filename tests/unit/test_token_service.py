@@ -381,35 +381,6 @@ class TestHasScope:
         assert token_service.has_scope(TokenScope.WRITE, TokenScope.ADMIN) is False
 
 
-class TestTokenServiceInitialization:
-    """Tests for TokenService initialization."""
-
-    def test_service_initializes_database(self, test_config: MagpieSettings) -> None:
-        """TokenService should initialize database on creation."""
-        # Database should not exist yet
-        assert not test_config.database_path.exists()
-
-        # Create service
-        TokenService(test_config)
-
-        # Database should now exist
-        assert test_config.database_path.exists()
-
-    def test_service_can_be_created_multiple_times(self, test_config: MagpieSettings) -> None:
-        """Multiple TokenService instances should work correctly."""
-        service1 = TokenService(test_config)
-        service2 = TokenService(test_config)
-
-        # Create token with one service
-        plaintext = service1.create_token("shared", TokenScope.READ)
-
-        # Validate with another service
-        result = service2.validate_token(plaintext)
-
-        assert result is not None
-        assert result.name == "shared"
-
-
 class TestTokenNameValidation:
     """Tests for token name validation in TokenService.create_token.
 

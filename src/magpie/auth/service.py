@@ -87,14 +87,13 @@ class TokenService:
     """
 
     def __init__(self, config: MagpieSettings) -> None:
-        """Initialize the token service.
+        """Initialize the token service and database.
 
         Args:
             config: MagpieSettings instance with database_path configuration.
         """
         self.config = config
         self.db_path = config.database_path
-        # Ensure database is initialized
         init_database(self.db_path)
 
     def create_token(self, name: str, scope: TokenScope, plaintext_token: str | None = None) -> str:
