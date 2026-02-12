@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from magpie.config import MagpieSettings, get_settings
 from magpie.server.app import app
 from magpie.server.deps import get_storage_service
+from magpie.server.observability import reset_observability_state
 from magpie.storage.service import StorageService
 
 
@@ -46,6 +47,8 @@ def client_with_sentry(
     Yields:
         Tuple of (TestClient, mock_sentry_init) for testing.
     """
+    # Reset observability state to allow re-initialization in tests
+    reset_observability_state()
 
     def override_storage_service() -> StorageService:
         return test_storage_service_with_sentry
@@ -64,6 +67,8 @@ def client_with_sentry(
 
     app.dependency_overrides.clear()
     get_settings.cache_clear()
+    # Reset observability state after the test
+    reset_observability_state()
 
 
 class TestSentryIntegration:
@@ -102,11 +107,45 @@ class TestSentryIntegration:
         # Verify environment is set (debug=False by default -> production)
         assert call_kwargs["environment"] == "production"
 
-        # Verify traces sample rate (debug=False -> 0.1)
-        assert call_kwargs["traces_sample_rate"] == 0.1
+        # Verify traces sample rate (default is 1.0)
+        assert call_kwargs["traces_sample_rate"] == 1.0
 
         # Verify PII protection
         assert call_kwargs.get("send_default_pii") is False
+
+    def test_custom_traces_sample_rate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify custom traces_sample_rate is respected."""
+        # Reset observability state to allow re-initialization in tests
+        reset_observability_state()
+
+        def override_storage_service() -> StorageService:
+            config = MagpieSettings(
+                storage_path=tmp_path,
+                database_path=tmp_path / "magpie.db",
+                sentry_dsn="https://test@sentry.io/123",
+                sentry_traces_sample_rate=0.25,
+            )
+            config.temp_path.mkdir(parents=True, exist_ok=True)
+            return StorageService(config)
+
+        app.dependency_overrides[get_storage_service] = override_storage_service
+
+        get_settings.cache_clear()
+        monkeypatch.setenv("MAGPIE_SENTRY_DSN", "https://test@sentry.io/123")
+        monkeypatch.setenv("MAGPIE_SENTRY_TRACES_SAMPLE_RATE", "0.25")
+
+        with patch("sentry_sdk.init") as mock_sentry_init:
+            with TestClient(app):
+                # Verify custom sample rate was passed
+                call_kwargs = mock_sentry_init.call_args.kwargs
+                assert call_kwargs["traces_sample_rate"] == 0.25
+
+        app.dependency_overrides.clear()
+        get_settings.cache_clear()
+        # Reset observability state after the test
+        reset_observability_state()
 
 
 @pytest.fixture
@@ -139,6 +178,8 @@ def client_no_sentry(
     Yields:
         Tuple of (TestClient, mock_sentry_init) for testing.
     """
+    # Reset observability state to ensure clean test state
+    reset_observability_state()
 
     def override_storage_service() -> StorageService:
         return test_storage_service_no_sentry
@@ -156,6 +197,8 @@ def client_no_sentry(
 
     app.dependency_overrides.clear()
     get_settings.cache_clear()
+    # Reset observability state after the test
+    reset_observability_state()
 
 
 class TestSentryNotInitializedWithoutDSN:
