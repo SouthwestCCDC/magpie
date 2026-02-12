@@ -404,11 +404,9 @@ async def upload_artifact(
                 await chunk_queue.put(chunk)
         finally:
             # Signal end of stream with sentinel value
-            # Non-blocking: if queue is full, parser already exited and doesn't need sentinel
-            try:
-                chunk_queue.put_nowait(None)
-            except asyncio.QueueFull:
-                pass  # Parser already exited, sentinel not needed
+            # Must be blocking to ensure parser receives it on normal completion.
+            # If parser exits early (error), producer_task is cancelled by outer finally block.
+            await chunk_queue.put(None)
 
     def parser_worker():
         """Background thread: consume chunks from queue and write to disk."""
