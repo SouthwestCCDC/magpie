@@ -465,14 +465,6 @@ async def upload_artifact(
 
     temp_file_path, full_hash, bytes_written = result
 
-    # Reject zero-byte uploads
-    if bytes_written == 0:
-        temp_file_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty (0 bytes)",
-        )
-
     # Track upload timing
     start_time = time.perf_counter()
 

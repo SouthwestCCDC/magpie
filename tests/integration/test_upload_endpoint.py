@@ -279,22 +279,3 @@ class TestAuthHeaderHandling:
         # Verify anonymous was used as default
         info = test_storage_service.get_artifact_info("auth/anonymous-test", "latest")
         assert info.uploaded_by == "anonymous"
-
-
-class TestZeroByteUpload:
-    """Tests for zero-byte upload validation."""
-
-    def test_zero_byte_upload_returns_400(self, client: TestClient) -> None:
-        """Uploading a zero-byte file returns 400 with clear error message."""
-        content = b""  # Empty file
-        files = {"file": ("empty.bin", io.BytesIO(content), "application/octet-stream")}
-
-        response = client.post(
-            "/api/v1/upload/test/empty",
-            files=files,
-            params={"uploaded_by": "test-user"},
-        )
-
-        assert response.status_code == 400
-        assert "empty" in response.json()["detail"].lower()
-        assert "0 bytes" in response.json()["detail"]
