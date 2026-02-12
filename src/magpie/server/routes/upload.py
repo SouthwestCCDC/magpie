@@ -152,9 +152,8 @@ class StreamingMultipartHandler:
             if self._current_field_name == "file":
                 # Reject multiple file parts to prevent resource leaks and ambiguity
                 if self._file_part_found:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Multiple 'file' parts not allowed in multipart upload",
+                    raise MalformedMultipartError(
+                        "Multiple 'file' parts not allowed in multipart upload"
                     )
                 self._in_file_field = True
                 self._file_part_found = True
@@ -183,7 +182,8 @@ class StreamingMultipartHandler:
         # Track total bytes for ALL parts (DoS prevention against payload bloat)
         chunk = data[start:end]
         self._total_bytes += len(chunk)
-        # Enforce size limit on total multipart payload (prevents abuse via large non-file fields)
+        # Enforce size limit on total multipart payload (all parts, headers, overhead)
+        # This prevents DoS via bloated non-file fields or multipart structure abuse.
         if self._max_size is not None and self._total_bytes > self._max_size:
             raise UploadSizeExceededError(f"Upload exceeds maximum size of {self._max_size} bytes")
 
@@ -313,7 +313,8 @@ async def upload_artifact(
     #    is stricter than the file content limit. Some valid uploads near the limit
     #    may be rejected early. This is intentional - we prefer DoS protection over
     #    allowing the last ~200 bytes of capacity.
-    # 2. StreamingMultipartHandler: Enforces limit during parsing on file content only.
+    # 2. StreamingMultipartHandler: Enforces limit during parsing on total multipart payload.
+    #    Tracks ALL bytes (file data, form fields, headers, boundaries) to prevent DoS.
     #    Catches malicious clients that lie about Content-Length or omit it.
     max_size = settings.max_upload_size
     if max_size is not None and content_length is not None:
@@ -401,10 +402,22 @@ async def upload_artifact(
         """Read chunks from request stream and put them into queue."""
         try:
             async for chunk in request.stream():
-                await chunk_queue.put(chunk)
+                # Use timeout on put to allow cancellation if parser fails
+                # This prevents deadlock when queue is full and parser has raised
+                try:
+                    await asyncio.wait_for(chunk_queue.put(chunk), timeout=5.0)
+                except asyncio.TimeoutError:
+                    # Queue still full after 5s - parser likely failed
+                    # Break out and let finally block send sentinel
+                    break
         finally:
             # Signal end of stream with sentinel value
-            await chunk_queue.put(None)
+            # Use wait_for here too in case queue is still full
+            try:
+                await asyncio.wait_for(chunk_queue.put(None), timeout=1.0)
+            except asyncio.TimeoutError:
+                # Can't send sentinel, but parser is likely dead anyway
+                pass
 
     def parser_worker():
         """Background thread: consume chunks from queue and write to disk."""
@@ -423,6 +436,7 @@ async def upload_artifact(
             raise
 
     producer_task = None
+    temp_file_path = None
     try:
         # Start producer task and worker thread concurrently
         producer_task = asyncio.create_task(stream_producer())
@@ -465,6 +479,11 @@ async def upload_artifact(
     # Get the parsed file result
     result = handler.get_result()
     if result is None:
+        # Defensive cleanup for missing file part (temp file may still exist)
+        try:
+            handler.cleanup()
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing 'file' part in multipart upload",
@@ -491,6 +510,8 @@ async def upload_artifact(
         raise
     except Exception:
         # Clean up temp file on error
+        # Note: handler.cleanup() was already called by finalize() on success,
+        # so we only need to clean up the temp file path here
         temp_file_path.unlink(missing_ok=True)
         raise
 
