@@ -70,7 +70,8 @@ class StreamingMultipartHandler:
         self._current_header_value: bytes = b""
         self._filename: str | None = None
         self._in_file_field = False
-        self._total_bytes = 0
+        self._total_bytes = 0  # Total multipart payload size (all parts, for DoS prevention)
+        self._file_bytes = 0  # File field data only (for accurate size reporting)
         self._file_part_found = False
         self._current_part_header_count = 0
         self._current_part_has_content_disposition = False
@@ -179,19 +180,21 @@ class StreamingMultipartHandler:
                 "Multipart part missing required Content-Disposition header"
             )
 
-        # Track total bytes for ALL parts (DoS prevention)
+        # Track total bytes for ALL parts (DoS prevention against payload bloat)
         chunk = data[start:end]
         self._total_bytes += len(chunk)
-        # Enforce size limit on all part data, not just file fields
+        # Enforce size limit on total multipart payload (prevents abuse via large non-file fields)
         if self._max_size is not None and self._total_bytes > self._max_size:
             raise UploadSizeExceededError(f"Upload exceeds maximum size of {self._max_size} bytes")
 
-        # File-specific operations (write, hash) only for file field
+        # File-specific operations (write, hash, count) only for file field
         if self._in_file_field and self._temp_file is not None:
             # Write to buffered file object (handles partial writes internally)
             self._temp_file.write(chunk)
             # Update hasher incrementally
             self._hasher.update(chunk)
+            # Track file bytes separately for accurate size reporting
+            self._file_bytes += len(chunk)
 
     def get_callbacks(self) -> dict:
         """Get callback dictionary for MultipartParser."""
@@ -228,14 +231,16 @@ class StreamingMultipartHandler:
         """Get the uploaded file result.
 
         Returns:
-            Tuple of (temp_file_path, hash, bytes_written) if file was uploaded,
+            Tuple of (temp_file_path, hash, file_bytes) if file was uploaded,
             None if no file part was found.
+            Note: file_bytes is the size of the file field data only, excluding
+            multipart overhead and other form fields.
         """
         if not self._file_part_found:
             return None
         if self._temp_file_path is None:
             return None
-        return (self._temp_file_path, self._hasher.hexdigest(), self._total_bytes)
+        return (self._temp_file_path, self._hasher.hexdigest(), self._file_bytes)
 
     @property
     def filename(self) -> str | None:
