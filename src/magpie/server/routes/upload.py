@@ -49,7 +49,7 @@ class StreamingMultipartHandler:
     """
 
     # Safety limits for malicious multipart payloads (DoS prevention)
-    MAX_HEADER_SIZE = 16 * 1024  # 16KB per header (name + value)
+    MAX_HEADER_SIZE = 16 * 1024  # 16KB per header (combined name + value)
     MAX_HEADERS_PER_PART = 50  # Maximum headers per multipart part
 
     def __init__(self, boundary: bytes, temp_path: Path, max_size: int | None = None) -> None:
@@ -107,19 +107,19 @@ class StreamingMultipartHandler:
     def _on_header_field(self, data: bytes, start: int, end: int) -> None:
         """Called for header field data (header name)."""
         self._current_header_name += data[start:end]
-        # Enforce header size limit (DoS prevention)
-        if len(self._current_header_name) > self.MAX_HEADER_SIZE:
+        # Enforce combined header size limit (DoS prevention)
+        if len(self._current_header_name) + len(self._current_header_value) > self.MAX_HEADER_SIZE:
             raise HeaderLimitExceededError(
-                f"Multipart header name exceeds maximum size of {self.MAX_HEADER_SIZE} bytes"
+                f"Multipart header (name + value) exceeds maximum size of {self.MAX_HEADER_SIZE} bytes"
             )
 
     def _on_header_value(self, data: bytes, start: int, end: int) -> None:
         """Called for header value data."""
         self._current_header_value += data[start:end]
-        # Enforce header size limit (DoS prevention)
-        if len(self._current_header_value) > self.MAX_HEADER_SIZE:
+        # Enforce combined header size limit (DoS prevention)
+        if len(self._current_header_name) + len(self._current_header_value) > self.MAX_HEADER_SIZE:
             raise HeaderLimitExceededError(
-                f"Multipart header value exceeds maximum size of {self.MAX_HEADER_SIZE} bytes"
+                f"Multipart header (name + value) exceeds maximum size of {self.MAX_HEADER_SIZE} bytes"
             )
 
     def _on_header_end(self) -> None:
@@ -178,18 +178,22 @@ class StreamingMultipartHandler:
             raise MalformedMultipartError(
                 "Multipart part missing required Content-Disposition header"
             )
+
+        # Track total bytes for ALL parts (DoS prevention)
+        chunk = data[start:end]
+        self._total_bytes += len(chunk)
+        # Enforce size limit on all part data, not just file fields
+        if self._max_size is not None and self._total_bytes > self._max_size:
+            raise UploadSizeExceededError(
+                f"Upload exceeds maximum size of {self._max_size} bytes"
+            )
+
+        # File-specific operations (write, hash) only for file field
         if self._in_file_field and self._temp_file is not None:
-            chunk = data[start:end]
             # Write to buffered file object (handles partial writes internally)
             self._temp_file.write(chunk)
             # Update hasher incrementally
             self._hasher.update(chunk)
-            self._total_bytes += len(chunk)
-            # Early size check
-            if self._max_size is not None and self._total_bytes > self._max_size:
-                raise UploadSizeExceededError(
-                    f"Upload exceeds maximum size of {self._max_size} bytes"
-                )
 
     def get_callbacks(self) -> dict:
         """Get callback dictionary for MultipartParser."""
