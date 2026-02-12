@@ -171,8 +171,22 @@ def _scan_artifacts(
 
         # Read manifest to get tagged hashes
         # Manifest stores full hashes, but blobs are stored with short hashes (8 chars)
-        manifest = read_manifest(artifact_dir)
-        tagged_hashes = {h[:8] for h in manifest.tags.values()}
+        try:
+            manifest = read_manifest(artifact_dir)
+        except Exception as e:
+            # Skip artifacts with corrupt manifests and continue GC
+            # This is expected to handle ManifestCorruptError and JSON errors
+            logger.warning(
+                "gc_skipping_corrupt_manifest",
+                artifact_path=artifact_path,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            if progress_callback:
+                progress_callback("scan", idx + 1, total_manifests)
+            continue
+
+        tagged_hashes = {h.lstrip("@")[:8] for h in manifest.tags.values()}
 
         # Track artifact directory for cleanup pass
         artifact_dirs_to_cleanup.append(artifact_dir)

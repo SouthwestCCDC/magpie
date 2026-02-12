@@ -70,10 +70,11 @@ def create_artifact_with_blobs(
     blob_ages_days = blob_ages_days or {}
 
     for blob_hash in all_hashes:
-        # Blob and metadata files use short hash (first 8 chars)
-        short_hash = blob_hash[:8]
+        # Blob and metadata files use short hash (first 8 chars, @ prefix stripped)
+        # This matches blob_path() behavior in src/magpie/storage/paths.py
+        short_hash = blob_hash.lstrip("@")[:8]
 
-        # Create blob file with short hash name
+        # Create blob file with short hash name (no @ prefix)
         blob_file = blobs_dir / short_hash
         blob_file.write_bytes(b"test content for " + blob_hash.encode())
 
@@ -253,6 +254,24 @@ class TestInitCommand:
         assert token_info is not None
         assert token_info.name == "admin"
 
+    def test_init_with_custom_token_when_token_exists(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Init --admin-token succeeds but reports when admin token already exists."""
+        custom_token = "mgp_ADMIN_custom_token_789"
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            # First init creates an admin token
+            result1 = cli_runner.invoke(cli, ["init"])
+            assert result1.exit_code == 0
+
+            # Second init with custom token should succeed but report existing admin token
+            result2 = cli_runner.invoke(cli, ["init", "--admin-token", custom_token])
+            assert result2.exit_code == 0, "init should succeed but report token exists"
+            assert "already exists" in result2.output, "Should report token already exists"
+            # Custom token should NOT be created or displayed
+            assert custom_token not in result2.output, "Custom token should not be shown"
+
 
 class TestInitJsonOutput:
     """Tests for init command JSON output with --admin-token."""
@@ -273,6 +292,8 @@ class TestInitJsonOutput:
         # JSON output wraps in {"status": "ok", "data": {...}}
         assert output["status"] == "ok"
         data = output["data"]
+        # admin_token should be a string when first created
+        assert isinstance(data["admin_token"], str), "admin_token should be string on first init"
         assert data["admin_token"] == custom_token
         assert "storage_path" in data
         assert "database_path" in data
@@ -507,6 +528,40 @@ class TestGCCommand:
         assert "Deleted: 0 blob(s)" in result.output
         # File should still exist (it's tagged)
         assert blob_file.exists()
+
+    def test_gc_preserves_tagged_blobs_with_at_prefix(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """GC correctly handles @-prefixed hash references in tags."""
+        test_settings.storage_path.mkdir(parents=True, exist_ok=True)
+        # Create artifact with @-prefixed tag references
+        create_artifact_with_blobs(
+            test_settings.storage_path,
+            "test/artifact",
+            tagged_hashes={"latest": "@abc12345", "stable": "@def67890"},
+            untagged_hashes=["zzz99999"],
+            blob_ages_days={"@abc12345": 365, "@def67890": 365, "zzz99999": 365},
+        )
+
+        # Blob files use short hash WITHOUT the @ prefix (first 8 chars after stripping @)
+        tagged_blob1 = test_settings.storage_path / "test/artifact/blobs/abc12345"
+        tagged_blob2 = test_settings.storage_path / "test/artifact/blobs/def67890"
+        untagged_blob = test_settings.storage_path / "test/artifact/blobs/zzz99999"
+        assert tagged_blob1.exists()
+        assert tagged_blob2.exists()
+        assert untagged_blob.exists()
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["gc"])
+
+        assert result.exit_code == 0
+        # Only the untagged blob should be deleted
+        assert "Deleted: 1 blob(s)" in result.output
+        # Tagged blobs should still exist (@ prefix was correctly stripped)
+        assert tagged_blob1.exists()
+        assert tagged_blob2.exists()
+        # Untagged blob should be deleted
+        assert not untagged_blob.exists()
 
     def test_gc_multiple_artifacts(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
