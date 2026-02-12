@@ -427,7 +427,7 @@ def cidr_outside_http_client(cidr_base_url: str) -> Generator[httpx.Client, None
 
 
 # =============================================================================
-# PERFORMANCE TESTING FIXTURES
+# UPLOAD TESTING FIXTURES
 # =============================================================================
 
 
@@ -440,33 +440,9 @@ class E2EServices(TypedDict):
 
 @pytest.fixture(scope="session")
 def e2e_services(base_url: str, admin_token: str) -> E2EServices:
-    """Provide combined E2E services configuration for performance tests.
+    """Provide combined E2E services configuration for upload tests.
 
     Returns:
         Dictionary with base_url and admin_token for E2E testing.
     """
     return {"base_url": base_url, "admin_token": admin_token}
-
-
-@pytest.fixture
-def cleanup_after_upload(authenticated_client: httpx.Client) -> Generator[list[str], None, None]:
-    """Track uploaded artifacts after test completes.
-
-    Use for large upload tests to document artifacts created on self-hosted runners.
-    Tests should append artifact paths to the returned list for tracking purposes.
-
-    NOTE: Automatic cleanup is not currently supported. The API does not provide
-    a DELETE endpoint for artifacts (only for tags). Large test artifacts will
-    accumulate on disk and require manual cleanup or a future magpie-ctl gc command.
-    See issue #441 for artifact deletion implementation.
-
-    Yields:
-        List that tests can append artifact paths to for tracking.
-    """
-    uploaded_paths: list[str] = []
-
-    yield uploaded_paths
-
-    # NOTE: No automatic cleanup - DELETE /api/v1/artifacts/{path} doesn't exist.
-    # Artifacts will persist on disk until manual cleanup or garbage collection.
-    # See issue #441 for artifact deletion endpoint implementation.
