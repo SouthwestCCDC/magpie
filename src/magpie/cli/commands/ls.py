@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_path
-from magpie.cli.errors import handle_response_error
+from magpie.cli.errors import handle_response_error, with_network_error_handling
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -30,6 +30,7 @@ from magpie.cli.formatting import (
     help="List artifacts recursively (default: only current level)",
 )
 @click.pass_obj
+@with_network_error_handling
 def ls(ctx: CLIContext, artifact_path: str | None, recursive: bool) -> None:
     """List artifacts or versions.
 

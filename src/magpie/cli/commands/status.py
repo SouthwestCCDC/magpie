@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
-
 import click
 
 from magpie.cli import CLIContext
-from magpie.cli.errors import handle_http_error
+from magpie.cli.errors import handle_response_error, with_network_error_handling
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
-    http_status_to_error_code,
     is_json_output,
     output_error,
     output_result,
@@ -21,6 +18,7 @@ from magpie.utils.formatting import format_size
 
 @click.command()
 @click.pass_obj
+@with_network_error_handling
 def status(ctx: CLIContext) -> None:
     """Check server health, connectivity, and status (admin only).
 
@@ -51,24 +49,10 @@ def status(ctx: CLIContext) -> None:
         if ctx.debug:
             click.echo(f"Checking status of {ctx.server}...", err=True)
 
-        try:
-            response = client.get("/api/v1/status")
-        except Exception as e:
-            msg = f"Failed to connect to server: {e}"
-            if is_json_output():
-                output_error(ErrorCode.NETWORK_ERROR, msg)
-                return
-            raise click.ClickException(msg)
+        response = client.get("/api/v1/status")
 
         if response.status_code != 200:
-            if is_json_output():
-                try:
-                    detail = response.json().get("detail", response.text)
-                except (json.JSONDecodeError, ValueError, KeyError):
-                    detail = response.text
-                output_error(http_status_to_error_code(response.status_code), detail)
-                return
-            handle_http_error(response, "Status check", ctx.token)
+            handle_response_error(response, "Status check", ctx.token)
 
         data = response.json()
 

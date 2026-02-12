@@ -5,7 +5,7 @@ from __future__ import annotations
 import click
 
 from magpie.cli import CLIContext
-from magpie.cli.errors import handle_response_error, mask_token
+from magpie.cli.errors import handle_response_error, mask_token, with_network_error_handling
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -24,6 +24,7 @@ from magpie.utils.formatting import format_size
     help="Preview what would be deleted without making changes.",
 )
 @click.pass_obj
+@with_network_error_handling
 def gc(ctx: CLIContext, dry_run: bool) -> None:
     """Trigger remote garbage collection (requires admin token).
 

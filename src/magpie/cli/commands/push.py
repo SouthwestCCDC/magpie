@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from rich.progress import Progress, TaskID
 
 from magpie.cli import CLIContext
-from magpie.cli.errors import handle_response_error
+from magpie.cli.errors import handle_response_error, with_network_error_handling
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -105,6 +105,7 @@ def _show_processing_status(
 @click.option("--no-latest", is_flag=True, help="Don't auto-tag as latest.")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress output.")
 @click.pass_obj
+@with_network_error_handling
 def push(
     ctx: CLIContext,
     file: Path,

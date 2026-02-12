@@ -227,7 +227,8 @@ class TestHandleResponseError:
 
         runner = CliRunner()
         result = runner.invoke(test_cmd, ["--format", "human"])
-        assert result.exit_code == 1
+        # 401 should produce exit code 4 (AUTH_ERROR)
+        assert result.exit_code == 4
         assert "token: ********3456" in result.output
 
     def test_json_mode_outputs_error_envelope(self) -> None:
@@ -243,7 +244,8 @@ class TestHandleResponseError:
 
         runner = CliRunner()
         result = runner.invoke(test_cmd, ["--format", "json"])
-        assert result.exit_code == 1
+        # 404 should produce exit code 3 (NOT_FOUND)
+        assert result.exit_code == 3
 
         output = json.loads(result.output)
         assert output["status"] == "error"

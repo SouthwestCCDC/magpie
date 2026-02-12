@@ -5,7 +5,7 @@ from __future__ import annotations
 import click
 
 from magpie.cli import CLIContext
-from magpie.cli.errors import handle_response_error
+from magpie.cli.errors import handle_response_error, with_network_error_handling
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -32,6 +32,7 @@ def token() -> None:
     help="Token scope (default: read).",
 )
 @click.pass_obj
+@with_network_error_handling
 def create_token(ctx: CLIContext, name: str, scope: str) -> None:
     """Create a new authentication token.
 
@@ -91,6 +92,7 @@ def create_token(ctx: CLIContext, name: str, scope: str) -> None:
 @token.command(name="rotate")
 @click.argument("name")
 @click.pass_obj
+@with_network_error_handling
 def rotate_token(ctx: CLIContext, name: str) -> None:
     """Rotate an authentication token.
 

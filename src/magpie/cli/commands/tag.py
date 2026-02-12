@@ -6,7 +6,7 @@ import click
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
-from magpie.cli.errors import handle_response_error
+from magpie.cli.errors import handle_response_error, with_network_error_handling
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -20,6 +20,7 @@ from magpie.cli.formatting import (
 @click.argument("artifact_ref")
 @click.option("--as", "tag_name", required=True, help="Tag name to create.")
 @click.pass_obj
+@with_network_error_handling
 def tag(ctx: CLIContext, artifact_ref: str, tag_name: str) -> None:
     """Create a tag pointing to an artifact version.
 

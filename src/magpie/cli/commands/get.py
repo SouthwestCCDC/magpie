@@ -9,7 +9,7 @@ import click
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
-from magpie.cli.errors import handle_response_error
+from magpie.cli.errors import handle_response_error, with_network_error_handling
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -33,6 +33,7 @@ from magpie.storage.hash import compute_hash
     help="Overwrite existing output file without prompting, and re-download even if local hash matches.",
 )
 @click.pass_obj
+@with_network_error_handling
 def get(
     ctx: CLIContext,
     artifact_ref: str,
