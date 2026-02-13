@@ -154,7 +154,6 @@ def cli(
 )
 @pass_context
 @with_network_error_handling
-@sentry_wrapper
 def version(ctx: CLIContext, server_version: bool) -> None:
     """Show version.
 
