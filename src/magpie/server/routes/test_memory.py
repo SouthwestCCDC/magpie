@@ -44,7 +44,7 @@ class MemoryStats(BaseModel):
 @router.post("/api/v1/_test/memory/reset")
 async def reset_memory_tracking(
     settings: Annotated[MagpieSettings, Depends(get_magpie_settings)],
-    _admin: Annotated[TokenInfo, Depends(require_admin_scope)] = None,
+    _admin: Annotated[TokenInfo, Depends(require_admin_scope)],
 ) -> dict[str, str]:
     """Reset memory tracking and take baseline snapshot.
 
