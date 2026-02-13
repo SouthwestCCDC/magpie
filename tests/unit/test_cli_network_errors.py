@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import socket
+import ssl
 from unittest.mock import MagicMock, patch
 
 import click
@@ -37,7 +39,10 @@ class TestFormatNetworkError:
 
     def test_connection_refused(self) -> None:
         """Connection refused produces helpful error message."""
+        # Create ConnectError with ConnectionRefusedError as cause
+        refused_error = ConnectionRefusedError("Connection refused")
         connect_error = httpx.ConnectError("Connection refused", request=MagicMock())
+        connect_error.__cause__ = refused_error
 
         result = format_network_error(connect_error, server="https://magpie.example.com")
 
@@ -45,6 +50,74 @@ class TestFormatNetworkError:
         assert "Connection refused" in result
         assert "Hint:" in result
         assert "server is running" in result
+
+    def test_tls_handshake_failure(self) -> None:
+        """TLS handshake failure produces helpful error message."""
+        # Create ConnectError with ssl.SSLError as cause
+        ssl_error = ssl.SSLError("certificate verify failed")
+        connect_error = httpx.ConnectError("TLS handshake failed", request=MagicMock())
+        connect_error.__cause__ = ssl_error
+
+        result = format_network_error(connect_error, server="https://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "TLS handshake failed" in result
+        assert "Hint:" in result
+        assert "certificate" in result.lower()
+
+    def test_network_unreachable(self) -> None:
+        """Network unreachable produces helpful error message."""
+        # Create ConnectError with OSError using errno.ENETUNREACH as cause
+        net_error = OSError(errno.ENETUNREACH, "Network is unreachable")
+        connect_error = httpx.ConnectError("Network unreachable", request=MagicMock())
+        connect_error.__cause__ = net_error
+
+        result = format_network_error(connect_error, server="https://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "Network unreachable" in result
+        assert "Hint:" in result
+        assert "routing" in result.lower()
+
+    def test_connection_reset(self) -> None:
+        """Connection reset by peer produces helpful error message."""
+        # Create ConnectError with ConnectionResetError as cause
+        reset_error = ConnectionResetError("Connection reset by peer")
+        connect_error = httpx.ConnectError("Connection reset", request=MagicMock())
+        connect_error.__cause__ = reset_error
+
+        result = format_network_error(connect_error, server="https://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "Connection reset" in result
+        assert "Hint:" in result
+        assert "server" in result.lower()
+
+    def test_generic_connect_error(self) -> None:
+        """Generic ConnectError with unrecognized cause shows cause details."""
+        # Create ConnectError with generic exception as cause
+        generic_error = RuntimeError("Some unexpected error")
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        connect_error.__cause__ = generic_error
+
+        result = format_network_error(connect_error, server="https://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "Connection failed" in result
+        assert "Some unexpected error" in result
+        assert "Hint:" in result
+
+    def test_connect_error_no_cause(self) -> None:
+        """ConnectError without a cause falls back to generic message."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        # Explicitly set no cause
+        connect_error.__cause__ = None
+
+        result = format_network_error(connect_error, server="https://magpie.example.com")
+
+        assert "magpie.example.com" in result
+        assert "Connection failed" in result
+        assert "Hint:" in result
 
     def test_timeout_error(self) -> None:
         """Timeout error produces helpful error message."""
@@ -185,7 +258,7 @@ class TestWithNetworkErrorHandlingDecorator:
         with pytest.raises(ClickException) as exc_info:
             failing_command()
 
-        assert "Connection refused" in str(exc_info.value)
+        assert "Connection failed" in str(exc_info.value)
 
     def test_catches_timeout_error(self) -> None:
         """Decorator catches TimeoutException and converts to user-friendly error."""
@@ -362,7 +435,7 @@ class TestCliRunnerIntegration:
 
         # Verify exit code is NETWORK_ERROR (2), not GENERAL_ERROR (1)
         assert result.exit_code == ExitCode.NETWORK_ERROR
-        assert "Connection refused" in result.output
+        assert "Connection failed" in result.output
 
     def test_timeout_error_exit_code_with_runner(self) -> None:
         """Timeout error in human mode produces exit code 2 (NETWORK_ERROR)."""
