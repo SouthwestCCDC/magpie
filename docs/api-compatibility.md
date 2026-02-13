@@ -90,13 +90,13 @@ The CLI and server ship from the same repository with matching version numbers. 
 All versioned API endpoints are exposed under the `/api/v1/` prefix:
 
 ```
-POST /api/v1/upload/{path}
-GET  /api/v1/artifacts/{path}/{ref}/info
-POST /api/v1/artifacts/{path}/{ref}/tags
-DELETE /api/v1/artifacts/{path}/tags/{tag_name}
-PATCH /api/v1/artifacts/{path}/{ref}
+POST /api/v1/upload/{path:path}
+GET  /api/v1/artifacts/{path:path}/{ref}/info
+POST /api/v1/artifacts/{path:path}/{ref}/tags
+DELETE /api/v1/artifacts/{path:path}/tags/{tag_name}
+PATCH /api/v1/artifacts/{path:path}/{ref}
 GET  /api/v1/artifacts
-GET  /api/v1/artifacts/{path}
+GET  /api/v1/artifacts/{path:path}
 POST /api/v1/gc
 GET  /api/v1/auth/validate
 POST /api/v1/tokens
@@ -151,7 +151,7 @@ class ArtifactInfoResponse(BaseModel):
 
 Example:
 ```python
-@router.get("/api/v1/artifacts/{path}")
+@router.get("/api/v1/artifacts/{path:path}")
 async def list_artifacts(
     path: str,
     include_deleted: bool = False,  # New optional param - safe
@@ -170,7 +170,7 @@ When adding optional fields or parameters:
 
 1. **Add tests for old client behavior**: Ensure existing tests still pass without modification
 2. **Add tests for new behavior**: Cover the new field/parameter explicitly
-3. **Document in changelog**: Note the new feature and its optional nature
+3. **Document in release notes**: Note the new feature and its optional nature
 
 Example test structure:
 ```python
