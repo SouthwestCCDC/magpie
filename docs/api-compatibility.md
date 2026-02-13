@@ -185,7 +185,7 @@ def test_artifact_info_with_new_field():
     response = client.get("/api/v1/artifacts/foo/bar:latest/info")
     data = response.json()
     assert "retention_days" in data
-    assert isinstance(data["retention_days"], int | None)
+    assert data["retention_days"] is None or isinstance(data["retention_days"], int)
 ```
 
 ## See Also
