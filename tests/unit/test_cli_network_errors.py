@@ -200,8 +200,8 @@ class TestFormatNetworkError:
 
         # Hostname should be present
         assert "artifacts.example.com" in result
-        # Credentials should NOT be present
-        assert "user" not in result
+        # Credentials should NOT be present - check for the full userinfo string
+        assert "user:secret_password@" not in result
         assert "secret_password" not in result
         # Protocol should not be in the hostname part
         assert "https://" not in result
@@ -217,9 +217,48 @@ class TestFormatNetworkError:
 
         # Hostname and port should be present
         assert "artifacts.example.com:8443" in result
-        # Credentials should NOT be present
-        assert "admin" not in result
+        # Credentials should NOT be present - check for the full userinfo string
+        assert "admin:pass123@" not in result
         assert "pass123" not in result
+
+    def test_ipv6_with_port_formatted_correctly(self) -> None:
+        """IPv6 addresses are wrapped in brackets when port is present."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        connect_error.__cause__ = socket.gaierror("Name or service not known")
+
+        result = format_network_error(connect_error, server="https://[::1]:8443/api")
+
+        # IPv6 with port should use bracket notation
+        assert "[::1]:8443" in result
+        # Protocol should not be present
+        assert "https://" not in result
+
+    def test_invalid_port_does_not_leak_credentials(self) -> None:
+        """URLs with invalid ports and credentials still don't leak credentials."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        connect_error.__cause__ = socket.gaierror("Name or service not known")
+
+        result = format_network_error(
+            connect_error, server="https://user:pass@artifacts.example.com:invalid/api"
+        )
+
+        # Hostname should be present (without port since it's invalid)
+        assert "artifacts.example.com" in result
+        # Credentials should NOT be present
+        assert "user:pass@" not in result
+        assert "pass" not in result
+
+    def test_unparseable_url_uses_safe_placeholder(self) -> None:
+        """Completely unparseable URLs fall back to 'server' instead of leaking input."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+
+        # Provide a malformed URL that might contain sensitive data
+        result = format_network_error(connect_error, server="not-a-url-with-secret-data")
+
+        # Should use safe placeholder
+        assert "'server'" in result
+        # Should NOT echo back the potentially sensitive input
+        assert "secret-data" not in result
 
     def test_no_server_url_provided(self) -> None:
         """Error message uses 'server' when no URL provided."""
