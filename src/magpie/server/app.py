@@ -43,11 +43,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add middleware for request logging and correlation
-app.add_middleware(RequestLoggingMiddleware)
-# Add version checking middleware so it executes before request logging
+# Add version checking middleware; it should run inside logging so that
+# all requests (including 426 responses) are logged and get X-Request-ID.
 # (FastAPI/Starlette runs middleware in reverse registration order)
 app.add_middleware(VersionCheckMiddleware)
+# Add middleware for request logging and correlation (outermost layer)
+app.add_middleware(RequestLoggingMiddleware)
 
 register_exception_handlers(app)
 app.include_router(upload_router)
