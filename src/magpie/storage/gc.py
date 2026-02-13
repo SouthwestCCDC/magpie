@@ -175,7 +175,7 @@ def _scan_artifacts(
             manifest = read_manifest(artifact_dir)
         except (ManifestCorruptError, OSError) as e:
             # Skip artifacts with corrupt manifests or I/O errors and continue GC
-            # ManifestCorruptError: corrupt/invalid JSON in manifest
+            # ManifestCorruptError: invalid/corrupt manifest content or format (parse/validation failures)
             # OSError: permission denied, file read errors, etc.
             logger.warning(
                 "gc_skipping_corrupt_manifest",
