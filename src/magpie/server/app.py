@@ -12,7 +12,7 @@ from magpie import __version__
 from magpie.config import get_settings
 from magpie.logging_config import configure_logging
 from magpie.server.errors import register_exception_handlers
-from magpie.server.middleware import RequestLoggingMiddleware
+from magpie.server.middleware import RequestLoggingMiddleware, VersionCheckMiddleware
 from magpie.server.observability import setup_observability
 from magpie.server.routes.artifacts import router as artifacts_router
 from magpie.server.routes.auth import router as auth_router
@@ -45,6 +45,8 @@ app = FastAPI(
 
 # Add middleware for request logging and correlation
 app.add_middleware(RequestLoggingMiddleware)
+# Add version checking middleware before request logging
+app.add_middleware(VersionCheckMiddleware)
 
 register_exception_handlers(app)
 app.include_router(upload_router)

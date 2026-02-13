@@ -1,4 +1,4 @@
-"""Middleware for request correlation and logging context."""
+"""Middleware for request correlation, logging context, and version checking."""
 
 from __future__ import annotations
 
@@ -8,7 +8,11 @@ from typing import Callable
 
 import structlog
 from fastapi import Request, Response
+from packaging.version import Version, parse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+
+from magpie import __version__
 
 logger = structlog.get_logger()
 
@@ -93,3 +97,96 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             # Clear context vars after request
             # Note: This is safe because contextvars are isolated per async task
             structlog.contextvars.clear_contextvars()
+
+
+def get_min_client_version(server_version: str) -> str:
+    """Calculate minimum compatible client version from server version.
+
+    Default policy: Minimum client is the minor floor of server version.
+    Example: server 0.1.3 -> min client 0.1.0
+
+    Args:
+        server_version: Server version string (e.g., "0.1.3")
+
+    Returns:
+        Minimum client version string (e.g., "0.1.0")
+    """
+    parsed = parse(server_version)
+    if isinstance(parsed, Version):
+        return f"{parsed.major}.{parsed.minor}.0"
+    return server_version  # Fallback for dev versions
+
+
+class VersionCheckMiddleware(BaseHTTPMiddleware):
+    """Middleware to enforce client version compatibility.
+
+    Stamps every response with X-Magpie-Server-Version.
+    Reads User-Agent header to check client version.
+    Returns 426 Upgrade Required if client is too old.
+    """
+
+    def __init__(self, app, min_client_version: str | None = None):
+        """Initialize version check middleware.
+
+        Args:
+            app: ASGI application
+            min_client_version: Minimum compatible client version (default: minor floor of server)
+        """
+        super().__init__(app)
+        self.server_version = __version__
+        self.min_client_version = min_client_version or get_min_client_version(__version__)
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        """Check client version and stamp server version.
+
+        Args:
+            request: Incoming HTTP request
+            call_next: Next middleware or route handler
+
+        Returns:
+            HTTP response (426 if client too old, otherwise normal response)
+        """
+        # Exempt /health endpoint from version checking
+        if request.url.path == "/health":
+            response = await call_next(request)
+            response.headers["X-Magpie-Server-Version"] = self.server_version
+            return response
+
+        # Parse User-Agent header for client version
+        user_agent = request.headers.get("User-Agent", "")
+        if user_agent.startswith("magpie-cli/"):
+            client_version_str = user_agent.split("/", 1)[1].split()[
+                0
+            ]  # Handle "magpie-cli/0.1.0 python-httpx/..."
+
+            try:
+                client_version = parse(client_version_str)
+                min_version = parse(self.min_client_version)
+
+                if isinstance(client_version, Version) and isinstance(min_version, Version):
+                    if client_version < min_version:
+                        return JSONResponse(
+                            status_code=426,
+                            content={
+                                "error": "Client version too old",
+                                "detail": f"magpie-cli {client_version_str} is not compatible with server {self.server_version}. "
+                                f"Minimum required client version: {self.min_client_version}. "
+                                f"Please upgrade: pip install --upgrade magpie",
+                                "client_version": client_version_str,
+                                "server_version": self.server_version,
+                                "min_client_version": self.min_client_version,
+                            },
+                            headers={
+                                "X-Magpie-Server-Version": self.server_version,
+                                "X-Magpie-Min-Client-Version": self.min_client_version,
+                            },
+                        )
+            except Exception:
+                # If parsing fails, allow the request (don't block on malformed User-Agent)
+                pass
+
+        # Process request normally
+        response = await call_next(request)
+        response.headers["X-Magpie-Server-Version"] = self.server_version
+
+        return response
