@@ -195,7 +195,9 @@ class TestFormatNetworkError:
 
         # Test with embedded username and password
         result = format_network_error(
-            connect_error, "test_operation", server="https://user:secret_password@artifacts.example.com/api"
+            connect_error,
+            "test_operation",
+            server="https://user:secret_password@artifacts.example.com/api",
         )
 
         # Hostname should be present
@@ -212,7 +214,9 @@ class TestFormatNetworkError:
         connect_error.__cause__ = socket.gaierror("Name or service not known")
 
         result = format_network_error(
-            connect_error, "test_operation", server="https://admin:pass123@artifacts.example.com:8443/api"
+            connect_error,
+            "test_operation",
+            server="https://admin:pass123@artifacts.example.com:8443/api",
         )
 
         # Hostname and port should be present
@@ -226,7 +230,9 @@ class TestFormatNetworkError:
         connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
         connect_error.__cause__ = socket.gaierror("Name or service not known")
 
-        result = format_network_error(connect_error, "test_operation", server="https://[::1]:8443/api")
+        result = format_network_error(
+            connect_error, "test_operation", server="https://[::1]:8443/api"
+        )
 
         # IPv6 with port should use bracket notation
         assert "[::1]:8443" in result
@@ -239,7 +245,9 @@ class TestFormatNetworkError:
         connect_error.__cause__ = socket.gaierror("Name or service not known")
 
         result = format_network_error(
-            connect_error, "test_operation", server="https://user:pass@artifacts.example.com:invalid/api"
+            connect_error,
+            "test_operation",
+            server="https://user:pass@artifacts.example.com:invalid/api",
         )
 
         # Hostname should be present (without port since it's invalid)
