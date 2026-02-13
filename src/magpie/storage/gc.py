@@ -16,7 +16,7 @@ from typing import Callable
 import structlog
 
 from magpie.storage.cleanup import CleanupStats, cleanup_artifact_directories
-from magpie.storage.exceptions import ArtifactNotFoundError
+from magpie.storage.exceptions import ArtifactNotFoundError, ManifestCorruptError
 from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
 from magpie.storage.symlinks import ReconcileStats, reconcile_symlinks
@@ -173,9 +173,10 @@ def _scan_artifacts(
         # Manifest stores full hashes, but blobs are stored with short hashes (8 chars)
         try:
             manifest = read_manifest(artifact_dir)
-        except Exception as e:
-            # Skip artifacts with corrupt manifests and continue GC
-            # This is expected to handle ManifestCorruptError and JSON errors
+        except (ManifestCorruptError, OSError) as e:
+            # Skip artifacts with corrupt manifests or I/O errors and continue GC
+            # ManifestCorruptError: invalid/corrupt manifest content or format (parse/validation failures)
+            # OSError: permission denied, file read errors, etc.
             logger.warning(
                 "gc_skipping_corrupt_manifest",
                 artifact_path=artifact_path,

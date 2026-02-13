@@ -534,6 +534,161 @@ class TestRunGC:
         assert not metadata_file.exists()
 
 
+class TestCorruptManifestHandling:
+    """Tests for GC handling of corrupt manifests."""
+
+    def test_skips_artifact_with_corrupt_json(self, storage_root: Path) -> None:
+        """GC skips blob processing for artifacts with invalid JSON in manifest."""
+        # Create valid artifact
+        create_artifact_with_blobs(
+            storage_root,
+            "valid/artifact",
+            tagged_hashes={"latest": "hash_abc12345"},
+            untagged_hashes=[],
+        )
+
+        # Create artifact with corrupt JSON manifest
+        corrupt_dir = storage_root / "corrupt/artifact"
+        corrupt_dir.mkdir(parents=True)
+        manifest_file = corrupt_dir / ".magpie"
+        manifest_file.write_text("{invalid json", encoding="utf-8")
+
+        # GC should encounter both artifacts but skip processing corrupt one
+        result, blobs = run_gc(
+            storage_path=storage_root,
+            retention_days=30,
+        )
+
+        # Both artifacts are scanned (counter increments before read)
+        assert result.artifacts_scanned == 2
+        # But only valid artifact's blobs are processed
+        assert result.blobs_found == 1
+
+    def test_skips_artifact_with_invalid_utf8(self, storage_root: Path) -> None:
+        """GC skips blob processing for artifacts with invalid UTF-8 bytes in manifest."""
+        # Create valid artifact
+        create_artifact_with_blobs(
+            storage_root,
+            "valid/artifact",
+            tagged_hashes={"latest": "hash_abc12345"},
+            untagged_hashes=[],
+        )
+
+        # Create artifact with invalid UTF-8 in manifest
+        corrupt_dir = storage_root / "corrupt/artifact"
+        corrupt_dir.mkdir(parents=True)
+        manifest_file = corrupt_dir / ".magpie"
+        # Write invalid UTF-8 bytes
+        manifest_file.write_bytes(b"\xff\xfe{invalid utf8}")
+
+        # GC should encounter both artifacts but skip processing corrupt one
+        result, blobs = run_gc(
+            storage_path=storage_root,
+            retention_days=30,
+        )
+
+        # Both artifacts are scanned
+        assert result.artifacts_scanned == 2
+        # But only valid artifact's blobs are processed
+        assert result.blobs_found == 1
+
+    def test_skips_artifact_with_permission_denied(self, storage_root: Path) -> None:
+        """GC skips blob processing for artifacts with permission denied on manifest."""
+        # Create valid artifact
+        create_artifact_with_blobs(
+            storage_root,
+            "valid/artifact",
+            tagged_hashes={"latest": "hash_abc12345"},
+            untagged_hashes=[],
+        )
+
+        # Create artifact with unreadable manifest
+        restricted_dir = storage_root / "restricted/artifact"
+        restricted_dir.mkdir(parents=True)
+        manifest_file = restricted_dir / ".magpie"
+        manifest_file.write_text('{"version": 1, "tags": {}}', encoding="utf-8")
+        # Make manifest unreadable
+        manifest_file.chmod(0o000)
+
+        try:
+            # GC should encounter both artifacts but skip processing restricted one
+            result, blobs = run_gc(
+                storage_path=storage_root,
+                retention_days=30,
+            )
+
+            # Both artifacts are scanned
+            assert result.artifacts_scanned == 2
+            # But only valid artifact's blobs are processed
+            assert result.blobs_found == 1
+        finally:
+            # Restore permissions for cleanup
+            manifest_file.chmod(0o644)
+
+    def test_skips_artifact_with_invalid_manifest_schema(self, storage_root: Path) -> None:
+        """GC skips blob processing for artifacts with Pydantic validation errors."""
+        # Create valid artifact
+        create_artifact_with_blobs(
+            storage_root,
+            "valid/artifact",
+            tagged_hashes={"latest": "hash_abc12345"},
+            untagged_hashes=[],
+        )
+
+        # Create artifact with invalid manifest schema (wrong version type)
+        invalid_dir = storage_root / "invalid/artifact"
+        invalid_dir.mkdir(parents=True)
+        manifest_file = invalid_dir / ".magpie"
+        manifest_file.write_text('{"version": "not_an_int", "tags": {}}', encoding="utf-8")
+
+        # GC should encounter both artifacts but skip processing invalid one
+        result, blobs = run_gc(
+            storage_path=storage_root,
+            retention_days=30,
+        )
+
+        # Both artifacts are scanned
+        assert result.artifacts_scanned == 2
+        # But only valid artifact's blobs are processed
+        assert result.blobs_found == 1
+
+    def test_skips_multiple_corrupt_artifacts(self, storage_root: Path) -> None:
+        """GC continues scanning despite multiple corrupt artifacts."""
+        # Create several artifacts with various corruption types
+        corrupt1 = storage_root / "corrupt1/artifact"
+        corrupt1.mkdir(parents=True)
+        (corrupt1 / ".magpie").write_text("{bad json", encoding="utf-8")
+
+        corrupt2 = storage_root / "corrupt2/artifact"
+        corrupt2.mkdir(parents=True)
+        (corrupt2 / ".magpie").write_bytes(b"\xff\xfe")
+
+        # Create valid artifacts interspersed
+        create_artifact_with_blobs(
+            storage_root,
+            "valid1/artifact",
+            tagged_hashes={"latest": "hash_abc12345"},
+            untagged_hashes=[],
+        )
+        create_artifact_with_blobs(
+            storage_root,
+            "valid2/artifact",
+            tagged_hashes={"stable": "hash_def67890"},
+            untagged_hashes=[],
+        )
+
+        # GC should encounter all 4 artifacts but only process valid ones
+        result, blobs = run_gc(
+            storage_path=storage_root,
+            retention_days=30,
+        )
+
+        # All 4 artifacts are scanned (2 valid + 2 corrupt)
+        assert result.artifacts_scanned == 4
+        # But only valid artifacts' blobs are processed
+        assert result.blobs_found == 2
+
+
 class TestBlobToDelete:
     """Tests for BlobToDelete dataclass."""
 
