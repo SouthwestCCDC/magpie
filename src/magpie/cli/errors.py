@@ -6,6 +6,7 @@ consistent error messages and exit codes across the application.
 
 from __future__ import annotations
 
+import errno
 import json
 import socket
 import ssl
@@ -180,6 +181,11 @@ def format_network_error(exc: Exception, server: str | None = None) -> str:
             msg = f"Could not connect to server '{hostname}': Connection refused"
             hint = "Check that the server is running and the URL is correct."
             return f"{msg}\nHint: {hint}"
+        if isinstance(cause, ConnectionResetError):
+            msg = f"Could not connect to server '{hostname}': Connection reset by peer"
+            hint = "The server closed the connection. Check server logs or try again."
+            return f"{msg}\nHint: {hint}"
+        # Note: ssl.SSLError inherits from OSError, so it must be checked before OSError
         if isinstance(cause, ssl.SSLError):
             msg = f"Could not connect to server '{hostname}': TLS handshake failed"
             hint = (
@@ -188,14 +194,10 @@ def format_network_error(exc: Exception, server: str | None = None) -> str:
             return f"{msg}\nHint: {hint}"
         if isinstance(cause, OSError):
             # Check errno for common network conditions
-            errno_msg = getattr(cause, "errno", None)
-            if errno_msg == 101:  # ENETUNREACH
+            errno_val = getattr(cause, "errno", None)
+            if errno_val == errno.ENETUNREACH:
                 msg = f"Could not connect to server '{hostname}': Network unreachable"
                 hint = "Check your network connection and routing configuration."
-                return f"{msg}\nHint: {hint}"
-            if errno_msg == 104:  # ECONNRESET
-                msg = f"Could not connect to server '{hostname}': Connection reset by peer"
-                hint = "The server closed the connection. Check server logs or try again."
                 return f"{msg}\nHint: {hint}"
             # Fall through to generic connection failed for other OSErrors
 

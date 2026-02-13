@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import socket
 import ssl
 from unittest.mock import MagicMock, patch
@@ -66,8 +67,8 @@ class TestFormatNetworkError:
 
     def test_network_unreachable(self) -> None:
         """Network unreachable produces helpful error message."""
-        # Create ConnectError with OSError errno 101 (ENETUNREACH) as cause
-        net_error = OSError(101, "Network is unreachable")
+        # Create ConnectError with OSError using errno.ENETUNREACH as cause
+        net_error = OSError(errno.ENETUNREACH, "Network is unreachable")
         connect_error = httpx.ConnectError("Network unreachable", request=MagicMock())
         connect_error.__cause__ = net_error
 
@@ -80,8 +81,8 @@ class TestFormatNetworkError:
 
     def test_connection_reset(self) -> None:
         """Connection reset by peer produces helpful error message."""
-        # Create ConnectError with OSError errno 104 (ECONNRESET) as cause
-        reset_error = OSError(104, "Connection reset by peer")
+        # Create ConnectError with ConnectionResetError as cause
+        reset_error = ConnectionResetError("Connection reset by peer")
         connect_error = httpx.ConnectError("Connection reset", request=MagicMock())
         connect_error.__cause__ = reset_error
 
