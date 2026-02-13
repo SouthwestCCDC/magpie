@@ -40,6 +40,7 @@
 - Branch from `default`, target `default`
 - CI must pass (lint, test, security, e2e)
 - Squash merge preferred for clean history
+- **API changes**: Review [API Compatibility Policy](docs/api-compatibility.md) to ensure backward compatibility
 
 ## Commits
 

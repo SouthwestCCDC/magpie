@@ -6,6 +6,10 @@
 2. [User Guide](user-guide.md) - CLI usage and workflows
 3. [Production Checklist](production-checklist.md) - Pre-deployment verification
 
+## Development
+
+- [API Compatibility Policy](api-compatibility.md) - Versioning guarantees and breaking change guidelines
+
 ## Operations
 
 - [Backup & Restore](backup-restore.md) - Backup procedures and disaster recovery
