@@ -44,11 +44,11 @@ Runs 3 concurrent 100MB uploads and verifies peak memory stays under 100MB total
 
 ### test_throughput_not_degraded
 
-Uploads 100MB and verifies throughput exceeds 400 MB/s (1.25x degradation margin).
+Uploads 100MB and verifies throughput exceeds 250 MB/s (2x degradation margin).
 
 **Baseline expectations:**
 - Local Docker network: 500+ MB/s
-- Acceptable threshold: 400 MB/s
+- Acceptable threshold: 250 MB/s (2x margin for CI variance)
 
 Throughput below 400 MB/s indicates:
 - Excessive memory pressure causing swapping

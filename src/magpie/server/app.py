@@ -58,11 +58,7 @@ app.include_router(tags_router)
 app.include_router(auth_router)
 app.include_router(gc_router)
 app.include_router(status_router)
-
-# Conditionally include test endpoints (only when explicitly enabled)
-settings = get_settings()
-if settings.enable_test_endpoints:
-    app.include_router(test_memory_router)
+app.include_router(test_memory_router)  # Endpoints check enable_test_endpoints themselves
 
 
 class HealthResponse(BaseModel):

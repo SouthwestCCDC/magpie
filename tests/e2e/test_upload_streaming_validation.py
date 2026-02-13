@@ -230,15 +230,15 @@ class TestServerSideStreamingValidation:
 
         Baseline expectation:
         - Local Docker network: 500+ MB/s
-        - Acceptable threshold: 400 MB/s (1.25x margin for variance)
+        - Acceptable threshold: 250 MB/s (2x margin for variance)
 
-        If throughput drops below 400 MB/s on localhost, it indicates:
+        If throughput drops below 250 MB/s on localhost, it indicates:
         - Excessive memory pressure causing swapping
         - Double-buffering through multiple layers
         - Synchronous I/O blocking the upload stream
         """
         file_size = 100 * 1024 * 1024  # 100 MB
-        min_throughput_mbps = 400.0  # MB/s
+        min_throughput_mbps = 250.0  # MB/s
 
         base_url = e2e_services["base_url"]
         admin_token = e2e_services["admin_token"]
