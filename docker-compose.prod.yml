@@ -21,6 +21,18 @@
 #                       (e.g., authentik.example.com)
 #                       See docs/authentik-setup.md for setup instructions
 #
+# TLS Configuration:
+#   By default, Caddy uses Let's Encrypt for automatic TLS certificates.
+#   For manual TLS certificates or testing:
+#   1. Mount certificate files as volumes (see commented example below)
+#   2. In Caddyfile.prod, add or uncomment a tls directive with the mounted paths
+#      Example: tls /certs/cert.pem /certs/key.pem
+#   For Let's Encrypt staging (testing): In Caddyfile.prod, add or uncomment a tls block:
+#      tls {
+#        ca https://acme-staging-v02.api.letsencrypt.org/directory
+#      }
+#   For self-signed certificates (testing): In Caddyfile.prod, add or uncomment: tls internal
+#
 # Note: For Let's Encrypt auto-TLS, ensure:
 # - Port 443 is publicly accessible
 # - MAGPIE_DOMAIN resolves to this server's IP
@@ -39,17 +51,22 @@ services:
       - ${MAGPIE_DATA_DIR:-./data}/artifacts:/data/artifacts:ro
       - caddy_data:/data      # TLS certificates and state
       - caddy_config:/config  # Caddy configuration
+      # Optional: Mount manual TLS certificates (requires editing Caddyfile.prod)
+      # Uncomment the line below and edit Caddyfile.prod to use manual certificates:
+      # - /path/to/certs:/certs:ro
     environment:
       # MAGPIE_DOMAIN is required - Let's Encrypt will fail without a valid domain
       - MAGPIE_DOMAIN=${MAGPIE_DOMAIN:?MAGPIE_DOMAIN must be set}
-      # Optional: IP allow-listing for read-only access without bearer tokens
+      # Optional: IP allow-listing for read-only access without bearer tokens.
+      # The application's default for MAGPIE_ALLOWED_CIDRS is empty (disabled), but this
+      # compose file sets 255.255.255.255/32 as a sentinel to keep Caddy's client_ip
+      # matcher valid. The effective behavior is the same: no CIDR-based bypass.
+      # To enable this feature, set one or more real CIDRs, e.g.:
+      # MAGPIE_ALLOWED_CIDRS=10.0.0.0/8,192.168.1.0/24
       - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-255.255.255.255/32}
       # Optional: Authentik SSO integration for browser access to /artifacts/*
       # See docs/authentik-setup.md for setup instructions
       - AUTHENTIK_HOST=${AUTHENTIK_HOST:-}
-      # Optional: CIDR allow-list for read-only access without bearer token
-      # Example: MAGPIE_ALLOWED_CIDRS=10.0.0.0/8,192.168.1.0/24
-      - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-}
     depends_on:
       magpie:
         condition: service_healthy
