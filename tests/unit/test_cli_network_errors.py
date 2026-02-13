@@ -188,6 +188,39 @@ class TestFormatNetworkError:
         assert "artifacts.example.com:8443" in result
         assert "https://" not in result
 
+    def test_credentials_not_leaked_in_error(self) -> None:
+        """Credentials embedded in URLs are never shown in error messages."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        connect_error.__cause__ = socket.gaierror("Name or service not known")
+
+        # Test with embedded username and password
+        result = format_network_error(
+            connect_error, server="https://user:secret_password@artifacts.example.com/api"
+        )
+
+        # Hostname should be present
+        assert "artifacts.example.com" in result
+        # Credentials should NOT be present
+        assert "user" not in result
+        assert "secret_password" not in result
+        # Protocol should not be in the hostname part
+        assert "https://" not in result
+
+    def test_credentials_with_port_not_leaked(self) -> None:
+        """Credentials with port numbers are handled safely."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        connect_error.__cause__ = socket.gaierror("Name or service not known")
+
+        result = format_network_error(
+            connect_error, server="https://admin:pass123@artifacts.example.com:8443/api"
+        )
+
+        # Hostname and port should be present
+        assert "artifacts.example.com:8443" in result
+        # Credentials should NOT be present
+        assert "admin" not in result
+        assert "pass123" not in result
+
     def test_no_server_url_provided(self) -> None:
         """Error message uses 'server' when no URL provided."""
         connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
