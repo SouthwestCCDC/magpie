@@ -30,10 +30,16 @@ Release candidates allow operators to test major changes before they reach stabl
 
 Update the version in `pyproject.toml`:
 
+**For stable releases:**
 ```toml
 [project]
-version = "X.Y.Z"      # For stable releases (no 'v' prefix)
-version = "X.Y.Z-rcN"  # For release candidates (no 'v' prefix)
+version = "X.Y.Z"  # No 'v' prefix
+```
+
+**For release candidates:**
+```toml
+[project]
+version = "X.Y.Z-rcN"  # No 'v' prefix, hyphen required before 'rc'
 ```
 
 **Note:** The version in `pyproject.toml` does NOT include the `v` prefix. The git tag will have the `v` prefix (e.g., git tag `v1.0.0` corresponds to `version = "1.0.0"` in `pyproject.toml`).
@@ -50,7 +56,7 @@ git tag vX.Y.Z
 git push origin HEAD vX.Y.Z
 ```
 
-**Important:** The tag must match the version in `pyproject.toml` exactly.
+**Important:** The tag version (minus the leading `v` prefix) must match the version in `pyproject.toml` exactly.
 
 ### Step 3: CI/CD Automation
 
