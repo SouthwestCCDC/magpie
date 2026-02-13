@@ -12,21 +12,21 @@ During the `0.x` series, API changes are expected as we refine the interface bas
 - Such changes will be documented in release notes with migration guides
 - After reaching `1.0`, the full SemVer contract applies strictly
 
-**Note:** Semantic Versioning allows complete instability during `0.x` development, but we aim for additive-only changes to support early adopters.
+**Note:** Semantic Versioning allows complete instability during `0.x` development, but we aim for additive-only changes to support early adopters. During 0.x releases, the additive-only policy described below is a best-effort goal rather than a strict guarantee.
 
 ## Core Principle: Additive-Only Changes
 
-Within a major version, the API follows an **additive-only** compatibility policy. Old clients must continue to work without modification when the server is upgraded to a newer minor or patch version.
+Within a given API version prefix (for example, `/api/v1`), the HTTP API follows an **additive-only** compatibility policy: old clients must continue to work without modification when the server is upgraded to a newer minor or patch version.
 
 ### Safe Changes (Non-Breaking)
 
 The following changes are **safe** and can be made in minor releases:
 
-- **New optional response fields**: Safe when clients use lenient parsers. The Magpie CLI uses Pydantic's default `extra='ignore'` and will silently ignore unknown response fields. Clients with strict validators (e.g., `extra='forbid'` or strict JSON schemas) may error on unknown fields.
+- **New optional response fields**: Safe when clients use lenient parsers. The Magpie CLI parses responses with `response.json()` and accesses only the fields it knows about, without validating against a strict schema, so unknown response fields are effectively ignored. Clients with strict validators (e.g., Pydantic models with `extra='forbid'` or strict JSON schemas) may error on unknown fields.
 - **New endpoints**: Old clients don't call endpoints they don't know about.
 - **New optional request parameters**: Existing requests without the new parameter continue to work.
 - **New optional query parameters**: Existing requests without the new parameter continue to work.
-- **Relaxing validation rules**: Accepting more input is backward compatible (except when fixing security vulnerabilities).
+- **Relaxing validation rules**: Accepting more input is backward compatible.
 - **Adding new enum values**: If handled with proper defaults in existing code.
 
 ### Breaking Changes (Require Major Version)
@@ -46,7 +46,7 @@ The following changes are **breaking** and require a new API version (`/api/v2/`
 
 Magpie follows [Semantic Versioning](https://semver.org/) with the following semantics:
 
-### PATCH (0.1.x)
+### PATCH (x.y.Z)
 
 **Bug fixes only.** No API schema changes or new features.
 
@@ -55,7 +55,7 @@ Magpie follows [Semantic Versioning](https://semver.org/) with the following sem
 - Performance improvements
 - Documentation updates
 
-### MINOR (0.x.0)
+### MINOR (x.Y.0)
 
 **Backward-compatible additions.** Old clients continue to work.
 
@@ -65,7 +65,7 @@ Magpie follows [Semantic Versioning](https://semver.org/) with the following sem
 - New CLI commands or flags
 - Internal refactoring with no API impact
 
-### MAJOR (x.0.0)
+### MAJOR (X.0.0)
 
 **Breaking API changes.** Requires coordinated upgrade planning.
 
@@ -87,7 +87,7 @@ The CLI and server ship from the same repository with matching version numbers. 
 
 ## API Versioning in URLs
 
-The current API uses the `/api/v1/` prefix for all endpoints:
+All versioned API endpoints are exposed under the `/api/v1/` prefix:
 
 ```
 POST /api/v1/upload/{path}
@@ -117,7 +117,7 @@ Before making API changes, ask yourself:
 
 ✅ **Safe for minor release** if the field is:
 - Optional with a sensible default (nullable or with a default value)
-- Documented in API reference and changelog
+- Documented in API reference and release notes
 
 Example:
 ```python
