@@ -12,6 +12,7 @@ import socket
 import ssl
 from functools import wraps
 from typing import Callable, TypeVar
+from urllib.parse import urlparse
 
 import click
 import httpx
@@ -152,6 +153,57 @@ def handle_response_error(
     handle_http_error(response, operation, token)
 
 
+def _extract_hostname_safely(url: str) -> str:
+    """Extract hostname (and optionally port) from URL, never credentials.
+
+    This uses urllib.parse.urlparse to safely extract only the hostname and port,
+    ensuring that credentials embedded in URLs (e.g., https://user:pass@host) are
+    never included in user-facing error messages.
+
+    Handles IPv6 addresses by wrapping them in brackets when a port is present.
+    Returns a safe placeholder instead of the original URL if parsing fails,
+    preventing credential leaks in error cases.
+
+    Args:
+        url: The URL to extract the hostname from.
+
+    Returns:
+        Hostname and port (if non-default), or "server" if parsing fails.
+
+    Examples:
+        >>> _extract_hostname_safely("https://artifacts.example.com:8443/api")
+        'artifacts.example.com:8443'
+        >>> _extract_hostname_safely("https://user:pass@artifacts.example.com")
+        'artifacts.example.com'
+        >>> _extract_hostname_safely("https://[::1]:8443/api")
+        '[::1]:8443'
+        >>> _extract_hostname_safely("https://user:pass@host:invalid")
+        'host'
+    """
+    try:
+        parsed = urlparse(url)
+        if parsed.hostname:
+            # Try to get port, but handle invalid port gracefully
+            try:
+                port = parsed.port
+                if port:
+                    host = parsed.hostname
+                    # For IPv6 literals, urlparse.hostname omits brackets
+                    # Add them when a port is present for standard notation
+                    if ":" in host and not host.startswith("["):
+                        host = f"[{host}]"
+                    return f"{host}:{port}"
+            except ValueError:
+                # Invalid port - just return hostname without port
+                pass
+            return parsed.hostname
+    except (ValueError, AttributeError):
+        # If parsing fails completely, return safe placeholder
+        pass
+    # Never return the original URL as it may contain credentials
+    return "server"
+
+
 def format_network_error(exc: Exception, operation: str, server: str | None = None) -> str:
     """Format a network exception into a user-friendly error message.
 
@@ -164,9 +216,8 @@ def format_network_error(exc: Exception, operation: str, server: str | None = No
         User-friendly error message with optional hint.
     """
     # Extract hostname from server URL for clearer messages
-    hostname = server if server else "server"
-    if server and "://" in server:
-        hostname = server.split("://", 1)[1].split("/", 1)[0]
+    # Use safe extraction to avoid leaking credentials in error messages
+    hostname = _extract_hostname_safely(server) if server else "server"
 
     # Handle different network error types
     if isinstance(exc, httpx.ConnectError):
