@@ -179,7 +179,9 @@ def format_network_error(exc: Exception, operation: str, server: str | None = No
         # Check for specific connection failure types by inspecting the cause
         cause = exc.__cause__
         if isinstance(cause, ConnectionRefusedError):
-            msg = f"{operation} failed: Could not connect to server '{hostname}': Connection refused"
+            msg = (
+                f"{operation} failed: Could not connect to server '{hostname}': Connection refused"
+            )
             hint = "Check that the server is running and the URL is correct."
             return f"{msg}\nHint: {hint}"
         if isinstance(cause, ConnectionResetError):
