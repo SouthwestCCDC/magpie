@@ -36,13 +36,27 @@ def get_storage_service() -> StorageService:
 def get_token_service() -> TokenService:
     """Get TokenService instance configured from settings (cached singleton).
 
-    The TokenService is cached to avoid recreating it on every request.
-    This means that changes to MagpieSettings after the first call will
-    not be reflected in the TokenService. In production, settings should
-    be configured once at application startup.
+    Performance Optimization (Issue #426):
+        The TokenService is cached using @lru_cache(maxsize=1) to avoid recreating
+        it on every request. This provides a ~9000x speedup (see benchmark tests
+        in tests/unit/test_token_service_performance.py).
 
-    For testing scenarios where settings change, use clear_token_service_cache()
-    to invalidate the cache before creating a new TokenService with different settings.
+        Without caching, TokenService.__init__() would call init_database() on every
+        request. While init_database() is idempotent (uses CREATE TABLE IF NOT EXISTS),
+        this incurs significant overhead (connection setup, WAL mode pragma, schema check).
+
+    Thread Safety:
+        - lru_cache is thread-safe (uses internal locking)
+        - TokenService instances are immutable after construction
+        - SQLite connections are created per-operation, not shared
+        - WAL mode provides concurrent read access
+
+    Configuration Changes:
+        Changes to MagpieSettings after the first call will not be reflected in the
+        TokenService. In production, settings should be configured once at application
+        startup. For testing scenarios where settings change, use
+        clear_token_service_cache() to invalidate the cache before creating a new
+        TokenService with different settings.
 
     Returns:
         Cached TokenService instance using current application settings.
