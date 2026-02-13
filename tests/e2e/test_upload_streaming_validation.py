@@ -120,12 +120,16 @@ class TestServerSideStreamingValidation:
             finally:
                 # Clean up temp file
                 tmp_path.unlink(missing_ok=True)
-                # Stop memory tracking to avoid affecting other tests
-                httpx.post(
-                    f"{base_url}/api/v1/_test/memory/stop",
-                    headers={"Authorization": f"Bearer {admin_token}"},
-                    timeout=10.0,
-                )
+                # Stop memory tracking to avoid affecting other tests (best-effort cleanup)
+                try:
+                    httpx.post(
+                        f"{base_url}/api/v1/_test/memory/stop",
+                        headers={"Authorization": f"Bearer {admin_token}"},
+                        timeout=10.0,
+                    )
+                except Exception:
+                    # Don't mask original test failures with cleanup errors
+                    pass
 
     def test_concurrent_uploads_memory_bounded(
         self,
@@ -223,12 +227,16 @@ class TestServerSideStreamingValidation:
             # Clean up temp files
             for tmp_path in temp_files:
                 tmp_path.unlink(missing_ok=True)
-            # Stop memory tracking to avoid affecting other tests
-            httpx.post(
-                f"{base_url}/api/v1/_test/memory/stop",
-                headers={"Authorization": f"Bearer {admin_token}"},
-                timeout=10.0,
-            )
+            # Stop memory tracking to avoid affecting other tests (best-effort cleanup)
+            try:
+                httpx.post(
+                    f"{base_url}/api/v1/_test/memory/stop",
+                    headers={"Authorization": f"Bearer {admin_token}"},
+                    timeout=10.0,
+                )
+            except Exception:
+                # Don't mask original test failures with cleanup errors
+                pass
 
     def test_throughput_not_degraded(
         self,

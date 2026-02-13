@@ -148,20 +148,20 @@ async def get_memory_stats(
             detail="Memory tracking not initialized - call /api/v1/_test/memory/reset first",
         )
 
-    # Get current snapshot and compute delta
-    current_snapshot = tracemalloc.take_snapshot()
-    current_stats = current_snapshot.compare_to(_baseline_snapshot, "lineno")
-
-    # Calculate total memory delta (sum of all allocations minus deallocations)
-    current_delta = sum(stat.size_diff for stat in current_stats)
-
-    # Get peak memory usage since reset_peak() was called
+    # Get peak memory usage FIRST (before snapshot operations that allocate memory)
     # peak_current = current memory, peak_max = peak since last reset
     peak_current, peak_max = tracemalloc.get_traced_memory()
 
     # Compute peak delta: peak_max includes baseline, so subtract _baseline_current
     # reset_peak() resets to CURRENT traced memory (not zero), so we need to subtract baseline
     peak_delta = max(0, peak_max - _baseline_current)
+
+    # Get current snapshot and compute delta (after peak measurement to avoid inflation)
+    current_snapshot = tracemalloc.take_snapshot()
+    current_stats = current_snapshot.compare_to(_baseline_snapshot, "lineno")
+
+    # Calculate total memory delta (sum of all allocations minus deallocations)
+    current_delta = sum(stat.size_diff for stat in current_stats)
 
     logger.debug(
         "memory_stats_retrieved",
