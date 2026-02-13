@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Callable
+from collections.abc import Awaitable, Callable
 
 import structlog
 from fastapi import Request, Response
-from packaging.version import Version, parse
+from packaging.version import InvalidVersion, Version, parse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp
 
 from magpie import __version__
 
@@ -132,18 +133,37 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
     Returns 426 Upgrade Required if client is too old.
     """
 
-    def __init__(self, app, min_client_version: str | None = None):
+    def __init__(self, app: ASGIApp, min_client_version: str | None = None):
         """Initialize version check middleware.
 
         Args:
             app: ASGI application
             min_client_version: Minimum compatible client version (default: minor floor of server)
+
+        Raises:
+            ValueError: If min_client_version is invalid and cannot be parsed
         """
         super().__init__(app)
         self.server_version = __version__
         self.min_client_version = min_client_version or get_min_client_version(__version__)
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        # Pre-parse and validate min_client_version at startup
+        try:
+            parsed = parse(self.min_client_version)
+            if not isinstance(parsed, Version):
+                raise ValueError(
+                    f"Invalid min_client_version: {self.min_client_version!r} "
+                    f"(parsed as {type(parsed).__name__}, expected Version)"
+                )
+            self._parsed_min_client_version = parsed
+        except InvalidVersion as e:
+            raise ValueError(
+                f"Failed to parse min_client_version {self.min_client_version!r}: {e}"
+            ) from e
+
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         """Check client version and stamp server version.
 
         Args:
@@ -153,8 +173,9 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
         Returns:
             HTTP response (426 if client too old, otherwise normal response)
         """
-        # Exempt /health endpoint from version checking
-        if request.url.path == "/health":
+        # Exempt /health endpoint from version checking (with or without trailing slash)
+        normalized_path = request.url.path.rstrip("/") or "/"
+        if normalized_path == "/health":
             response = await call_next(request)
             response.headers["X-Magpie-Server-Version"] = self.server_version
             return response
@@ -175,10 +196,9 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
 
             try:
                 client_version = parse(client_version_str)
-                min_version = parse(self.min_client_version)
 
-                if isinstance(client_version, Version) and isinstance(min_version, Version):
-                    if client_version < min_version:
+                if isinstance(client_version, Version):
+                    if client_version < self._parsed_min_client_version:
                         return JSONResponse(
                             status_code=426,
                             content={

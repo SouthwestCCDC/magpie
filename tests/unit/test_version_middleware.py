@@ -130,6 +130,13 @@ class TestVersionCheckMiddleware:
         assert response.json() == {"status": "ok", "version": __version__}
         assert "X-Magpie-Server-Version" in response.headers
 
+    def test_health_endpoint_with_trailing_slash_exempt(self, client: TestClient) -> None:
+        """Test that /health/ (with trailing slash) bypasses version checking."""
+        response = client.get("/health/", headers={"User-Agent": "magpie-cli/0.0.1"})
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "version": __version__}
+        assert "X-Magpie-Server-Version" in response.headers
+
     def test_custom_min_version_enforcement(self) -> None:
         """Test that custom minimum version can be configured."""
         app = FastAPI()
@@ -148,3 +155,11 @@ class TestVersionCheckMiddleware:
         # Client 1.0.0 should be allowed
         response = client.get("/test", headers={"User-Agent": "magpie-cli/1.0.0"})
         assert response.status_code == 200
+
+    def test_invalid_min_version_raises_at_init(self) -> None:
+        """Test that invalid min_client_version raises ValueError at initialization."""
+        app = FastAPI()
+
+        # Direct instantiation should raise ValueError for invalid version
+        with pytest.raises(ValueError, match="Failed to parse min_client_version"):
+            VersionCheckMiddleware(app, min_client_version="not-a-version")
