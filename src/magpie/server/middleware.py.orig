@@ -181,7 +181,7 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
                                 "X-Magpie-Min-Client-Version": self.min_client_version,
                             },
                         )
-            except Exception:  # nosec B110
+            except Exception:
                 # If parsing fails, allow the request (don't block on malformed User-Agent)
                 pass
 
