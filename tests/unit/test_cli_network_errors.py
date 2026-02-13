@@ -510,3 +510,65 @@ class TestCliRunnerIntegration:
         # Verify exit code is NOT_FOUND (3) for 404 errors
         assert result.exit_code == ExitCode.NOT_FOUND
         assert "404" in result.output
+
+    @patch("magpie.cli.formatting.is_json_output")
+    @patch("magpie.cli.formatting.output_error")
+    def test_json_decode_error_json_mode(
+        self, mock_output_error: MagicMock, mock_is_json: MagicMock
+    ) -> None:
+        """JSONDecodeError in JSON mode calls output_error with network error code."""
+        import json
+
+        mock_is_json.return_value = True
+        mock_output_error.side_effect = SystemExit(ExitCode.NETWORK_ERROR)
+
+        @click.command()
+        @with_network_error_handling
+        def test_command() -> None:
+            """Test command that raises a JSON decode error."""
+            raise json.JSONDecodeError("Expecting value", "invalid json", 0)
+
+        runner = CliRunner()
+        result = runner.invoke(test_command)
+
+        # Verify exit code is NETWORK_ERROR (2)
+        assert result.exit_code == ExitCode.NETWORK_ERROR
+        # Verify output_error was called with correct parameters
+        mock_output_error.assert_called_once()
+        call_args = mock_output_error.call_args
+        assert call_args[0][0] == "NETWORK_ERROR"
+        assert "Invalid JSON response from server" in call_args[0][1]
+        assert call_args[1]["exit_code"] == ExitCode.NETWORK_ERROR
+
+    @patch("magpie.cli.formatting.is_json_output")
+    @patch("magpie.cli.formatting.output_error")
+    def test_http_status_error_json_mode(
+        self, mock_output_error: MagicMock, mock_is_json: MagicMock
+    ) -> None:
+        """HTTPStatusError in JSON mode calls output_error with appropriate error code."""
+        mock_is_json.return_value = True
+        mock_output_error.side_effect = SystemExit(ExitCode.NOT_FOUND)
+
+        @click.command()
+        @with_network_error_handling
+        def test_command() -> None:
+            """Test command that raises an HTTPStatusError."""
+            mock_request = MagicMock()
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            mock_response.json.return_value = {"detail": "Not found"}
+            raise httpx.HTTPStatusError(
+                "404 Not Found", request=mock_request, response=mock_response
+            )
+
+        runner = CliRunner()
+        result = runner.invoke(test_command)
+
+        # Verify exit code is NOT_FOUND (3) for 404 errors
+        assert result.exit_code == ExitCode.NOT_FOUND
+        # Verify output_error was called with correct parameters
+        mock_output_error.assert_called_once()
+        call_args = mock_output_error.call_args
+        assert call_args[0][0] == "NOT_FOUND"
+        assert "Not found" in call_args[0][1]
+        assert call_args[1]["exit_code"] == ExitCode.NOT_FOUND

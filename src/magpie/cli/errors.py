@@ -278,25 +278,33 @@ def with_network_error_handling(func: F) -> F:
     @wraps(func)
     def wrapper(*args: object, **kwargs: object) -> object:
         # Import here to avoid circular imports
-        from magpie.cli.formatting import ErrorCode, ExitCode, is_json_output, output_error
+        from magpie.cli.formatting import (
+            ErrorCode,
+            ExitCode,
+            http_status_to_exit_code,
+            is_json_output,
+            output_error,
+        )
 
         try:
             return func(*args, **kwargs)
         except httpx.HTTPStatusError as exc:
             # HTTP error responses (4xx, 5xx) raised by raise_for_status()
-            # Extract server and token from context if available
+            # NOTE: This handler is defensive/future-proofing. Currently no CLI code
+            # calls raise_for_status() - all code manually checks response.status_code
+            # and calls handle_response_error() directly. If someone adds
+            # raise_for_status() in the future, this will handle it correctly.
+
+            # Extract token from context if available
             ctx = click.get_current_context(silent=True)
-            server = None
             token = None
-            if ctx and ctx.obj:
-                if hasattr(ctx.obj, "server"):
-                    server = ctx.obj.server
-                if hasattr(ctx.obj, "token"):
-                    token = ctx.obj.token
+            if ctx and ctx.obj and hasattr(ctx.obj, "token"):
+                token = ctx.obj.token
 
             # Use handle_response_error for consistent error formatting
             handle_response_error(exc.response, operation=func.__name__, token=token)
-            raise SystemExit(ExitCode.NETWORK_ERROR)  # pragma: no cover
+            # Unreachable: handle_response_error never returns
+            raise SystemExit(http_status_to_exit_code(exc.response.status_code))  # pragma: no cover
         except httpx.RequestError as exc:
             # Catch all RequestError subclasses (TransportError, DecodingError, TooManyRedirects, etc.)
             # format_network_error() handles specific types with custom messages
