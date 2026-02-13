@@ -110,11 +110,18 @@ def get_min_client_version(server_version: str) -> str:
 
     Returns:
         Minimum client version string (e.g., "0.1.0")
+
+    Note:
+        packaging.version.parse() always returns a Version object for standard
+        and dev versions (e.g., "0.0.0-dev" -> Version('0.0.0.dev0')).
+        The minor floor calculation works correctly for both cases.
     """
     parsed = parse(server_version)
+    # parse() always returns a Version object for valid semver/PEP440 versions
     if isinstance(parsed, Version):
         return f"{parsed.major}.{parsed.minor}.0"
-    return server_version  # Fallback for dev versions
+    # This fallback is unreachable for standard/dev versions but kept for safety
+    return server_version
 
 
 class VersionCheckMiddleware(BaseHTTPMiddleware):
@@ -155,9 +162,16 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
         # Parse User-Agent header for client version
         user_agent = request.headers.get("User-Agent", "")
         if user_agent.startswith("magpie-cli/"):
-            client_version_str = user_agent.split("/", 1)[1].split()[
-                0
-            ]  # Handle "magpie-cli/0.1.0 python-httpx/..."
+            # Extract version string from "magpie-cli/0.1.0" or "magpie-cli/0.1.0 python-httpx/..."
+            # Handle edge case: "magpie-cli/" with no version
+            version_part = user_agent.split("/", 1)[1].split()
+            if not version_part:
+                # Empty version string - allow the request
+                response = await call_next(request)
+                response.headers["X-Magpie-Server-Version"] = self.server_version
+                return response
+
+            client_version_str = version_part[0]
 
             try:
                 client_version = parse(client_version_str)
@@ -181,9 +195,14 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
                                 "X-Magpie-Min-Client-Version": self.min_client_version,
                             },
                         )
-            except Exception:  # nosec B110
+            except (ValueError, AttributeError, IndexError):
                 # If parsing fails, allow the request (don't block on malformed User-Agent)
-                pass
+                logger.debug(
+                    "Failed to parse client version from User-Agent",
+                    exc_info=True,
+                    user_agent=user_agent,
+                    client_version_str=client_version_str,
+                )
 
         # Process request normally
         response = await call_next(request)

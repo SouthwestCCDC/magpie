@@ -45,7 +45,8 @@ app = FastAPI(
 
 # Add middleware for request logging and correlation
 app.add_middleware(RequestLoggingMiddleware)
-# Add version checking middleware before request logging
+# Add version checking middleware so it executes before request logging
+# (FastAPI/Starlette runs middleware in reverse registration order)
 app.add_middleware(VersionCheckMiddleware)
 
 register_exception_handlers(app)

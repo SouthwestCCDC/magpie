@@ -108,6 +108,12 @@ class TestVersionCheckMiddleware:
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
 
+    def test_empty_version_string_allowed(self, client: TestClient) -> None:
+        """Test that magpie-cli/ with no version doesn't block the request."""
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/"})
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
     def test_user_agent_with_additional_info(self, client: TestClient) -> None:
         """Test that User-Agent with additional info is parsed correctly."""
         response = client.get(
