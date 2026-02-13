@@ -276,6 +276,16 @@
 	}
 
 	# =========================================================================
+	# Test endpoints - requires admin scope, only enabled when MAGPIE_ENABLE_TEST_ENDPOINTS=true
+	handle /api/v1/_test/* {
+		forward_auth magpie:8000 {
+			uri /api/v1/auth/validate
+			copy_headers X-Magpie-User X-Magpie-Scope
+		}
+		reverse_proxy magpie:8000
+	}
+
+	# =========================================================================
 	# ROOT LANDING PAGE
 	# =========================================================================
 
