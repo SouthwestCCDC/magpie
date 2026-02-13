@@ -21,6 +21,7 @@ dependencies = [
     "structlog",
     "truststore>=0.8.0",
     "protobuf>=6.33.4",
+    "packaging",
 ]
 
 [project.scripts]
