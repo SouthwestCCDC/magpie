@@ -276,8 +276,7 @@
 	}
 
 	# =========================================================================
-	# Test endpoints - requires admin scope, only enabled when MAGPIE_ENABLE_TEST_ENDPOINTS=true
-	# Test-only memory tracking endpoints (admin scope enforced by FastAPI endpoint)
+	# Test-only memory tracking endpoints (feature flag and admin scope enforced by FastAPI)
 	handle /api/v1/_test/* {
 		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate

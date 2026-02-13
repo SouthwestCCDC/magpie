@@ -107,12 +107,16 @@ class TestMemoryEndpointsEnabled:
 
     def test_reset_endpoint_succeeds_when_enabled(self, client_enabled: TestClient) -> None:
         """POST /api/v1/_test/memory/reset succeeds when test endpoints enabled."""
-        response = client_enabled.post("/api/v1/_test/memory/reset")
+        try:
+            response = client_enabled.post("/api/v1/_test/memory/reset")
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "reset"
-        assert "baseline" in data["message"].lower()
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "reset"
+            assert "baseline" in data["message"].lower()
+        finally:
+            # Cleanup: Stop memory tracking to prevent state leakage
+            client_enabled.post("/api/v1/_test/memory/stop")
 
     def test_stop_endpoint_succeeds_when_enabled(self, client_enabled: TestClient) -> None:
         """POST /api/v1/_test/memory/stop succeeds when test endpoints enabled."""

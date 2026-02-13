@@ -78,6 +78,7 @@ uv run pytest tests/e2e/test_upload_streaming_validation.py::TestServerSideStrea
 Test-only endpoints at `/api/v1/_test/memory/*`:
 - `POST /api/v1/_test/memory/reset` - Take baseline memory snapshot
 - `GET /api/v1/_test/memory/stats` - Get peak/current memory delta
+- `POST /api/v1/_test/memory/stop` - Stop memory tracking
 
 **Security:**
 - Requires admin scope
