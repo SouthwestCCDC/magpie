@@ -243,11 +243,12 @@ def handle_network_error(exc: Exception, operation: str, server: str | None = No
 
 
 def with_network_error_handling(func: F) -> F:
-    """Decorator to wrap CLI commands with network error handling.
+    """Decorator to wrap CLI commands with network and response parsing error handling.
 
     This decorator catches network-related exceptions (RequestError and all subclasses
     including ConnectError, TimeoutException, ProxyError, ProtocolError, etc.) and
-    converts them to user-friendly error messages with appropriate exit codes.
+    response parsing errors, converting them to user-friendly error messages with
+    appropriate exit codes.
 
     Coverage includes:
     - httpx.RequestError: Base class for all request errors
@@ -259,7 +260,12 @@ def with_network_error_handling(func: F) -> F:
         - httpx.ProtocolError: HTTP protocol violations
       - httpx.DecodingError: Response decoding failures
       - httpx.TooManyRedirects: Redirect loop detection
+    - httpx.HTTPStatusError: HTTP error status codes (4xx, 5xx) raised by raise_for_status()
+    - json.JSONDecodeError: Response JSON parsing errors
     - socket.gaierror: DNS errors that occur outside httpx
+
+    Unexpected exceptions (AttributeError, KeyError, etc.) are allowed to propagate
+    so they're visible in debug mode and captured by Sentry for diagnosis.
 
     Usage:
         @click.command()
@@ -272,10 +278,33 @@ def with_network_error_handling(func: F) -> F:
     @wraps(func)
     def wrapper(*args: object, **kwargs: object) -> object:
         # Import here to avoid circular imports
-        from magpie.cli.formatting import ExitCode
+        from magpie.cli.formatting import (
+            ErrorCode,
+            ExitCode,
+            http_status_to_exit_code,
+            is_json_output,
+            output_error,
+        )
 
         try:
             return func(*args, **kwargs)
+        except httpx.HTTPStatusError as exc:
+            # HTTP error responses (4xx, 5xx) raised by raise_for_status()
+            # NOTE: This handler is defensive/future-proofing. Currently no CLI code
+            # calls raise_for_status() - all code manually checks response.status_code
+            # and calls handle_response_error() directly. If someone adds
+            # raise_for_status() in the future, this will handle it correctly.
+
+            # Extract token from context if available
+            ctx = click.get_current_context(silent=True)
+            token = None
+            if ctx and ctx.obj and hasattr(ctx.obj, "token"):
+                token = ctx.obj.token
+
+            # Use handle_response_error for consistent error formatting
+            handle_response_error(exc.response, operation=func.__name__, token=token)
+            # Unreachable: handle_response_error never returns
+            raise SystemExit(http_status_to_exit_code(exc.response.status_code))  # pragma: no cover
         except httpx.RequestError as exc:
             # Catch all RequestError subclasses (TransportError, DecodingError, TooManyRedirects, etc.)
             # format_network_error() handles specific types with custom messages
@@ -287,6 +316,19 @@ def with_network_error_handling(func: F) -> F:
             handle_network_error(exc, operation=func.__name__, server=server)
             # handle_network_error raises ClickException, but for type checker:
             raise SystemExit(ExitCode.NETWORK_ERROR)  # pragma: no cover
+        except json.JSONDecodeError as exc:
+            # Response parsing errors - server returned invalid JSON
+            error_msg = f"Invalid JSON response from server: {exc.msg} at line {exc.lineno} column {exc.colno}"
+            hint = "The server may be misconfigured or returned an error page. Check server logs."
+            full_msg = f"{error_msg}\nHint: {hint}"
+
+            if is_json_output():
+                output_error(ErrorCode.NETWORK_ERROR, full_msg, exit_code=ExitCode.NETWORK_ERROR)
+                return  # pragma: no cover - output_error never returns
+
+            click_exc = click.ClickException(full_msg)
+            click_exc.exit_code = ExitCode.NETWORK_ERROR
+            raise click_exc
         except socket.gaierror as exc:
             # DNS resolution errors can occur outside of httpx
             ctx = click.get_current_context(silent=True)
