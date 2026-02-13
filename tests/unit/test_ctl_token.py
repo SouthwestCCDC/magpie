@@ -166,17 +166,19 @@ class TestTokenList:
             create_result = cli_runner.invoke(
                 cli, ["token", "create", "--name", "secret", "--scope", "read"]
             )
+            assert create_result.exit_code == 0, f"Output: {create_result.output}"
+
             # Extract the token from create output using regex
             match = re.search(r"mgp_[A-Za-z0-9_-]+", create_result.output)
-            token_line = match.group(0) if match else None
+            assert match is not None, "Failed to find token in create output"
+            token_line = match.group(0)
 
             # List tokens
             result = cli_runner.invoke(cli, ["token", "list"])
 
         assert result.exit_code == 0
         # Token value should not appear in list
-        if token_line:
-            assert token_line not in result.output
+        assert token_line not in result.output
         # No 64-character hex strings (SHA-256 hashes)
         hash_pattern = re.compile(r"[a-f0-9]{64}", re.IGNORECASE)
         assert not hash_pattern.search(result.output)
