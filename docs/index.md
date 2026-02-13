@@ -12,6 +12,7 @@
 
 ## Operations
 
+- [Releases](releases.md) - Versioning policy, release process, and release candidate testing
 - [Backup & Restore](backup-restore.md) - Backup procedures and disaster recovery
 - [Monitoring](monitoring.md) - Health checks, logging, error tracking, and observability
 
