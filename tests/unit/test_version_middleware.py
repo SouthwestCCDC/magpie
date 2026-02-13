@@ -19,10 +19,23 @@ class TestGetMinClientVersion:
         assert get_min_client_version("1.2.5") == "1.2.0"
         assert get_min_client_version("2.0.1") == "2.0.0"
 
-    def test_dev_version_returns_minor_floor(self) -> None:
-        """Test that dev versions also return minor floor (packaging parses them as Version)."""
-        assert get_min_client_version("0.0.0-dev") == "0.0.0"
-        assert get_min_client_version("0.1.2-dev") == "0.1.0"
+    def test_dev_version_preserves_dev_suffix(self) -> None:
+        """Test that dev versions preserve .dev0 suffix for correct PEP 440 ordering."""
+        # PEP 440: 0.0.0.dev0 < 0.0.0, so we need to preserve dev suffix
+        assert get_min_client_version("0.0.0-dev") == "0.0.0.dev0"
+        assert get_min_client_version("0.1.2-dev") == "0.1.0.dev0"
+
+    def test_pre_release_version_preserves_suffix(self) -> None:
+        """Test that pre-release versions preserve their suffix for correct PEP 440 ordering."""
+        # Alpha releases
+        assert get_min_client_version("0.1.0a1") == "0.1.0a1"
+        assert get_min_client_version("0.1.5a3") == "0.1.0a3"
+        # Beta releases
+        assert get_min_client_version("0.2.0b1") == "0.2.0b1"
+        assert get_min_client_version("0.2.3b2") == "0.2.0b2"
+        # RC releases
+        assert get_min_client_version("1.0.0rc1") == "1.0.0rc1"
+        assert get_min_client_version("1.0.2rc3") == "1.0.0rc3"
 
 
 @pytest.fixture
@@ -163,3 +176,78 @@ class TestVersionCheckMiddleware:
         # Direct instantiation should raise ValueError for invalid version
         with pytest.raises(ValueError, match="Failed to parse min_client_version"):
             VersionCheckMiddleware(app, min_client_version="not-a-version")
+
+    def test_dev_server_allows_dev_client(self) -> None:
+        """Test that dev server (0.0.0-dev) allows dev client (0.0.0-dev)."""
+        app = FastAPI()
+        # Simulate dev server with min_client_version="0.0.0.dev0"
+        app.add_middleware(VersionCheckMiddleware, min_client_version="0.0.0.dev0")
+
+        @app.get("/test")
+        async def test_endpoint() -> dict:
+            return {"status": "ok"}
+
+        client = TestClient(app)
+
+        # Dev client should be allowed
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.0.0-dev"})
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
+    def test_dev_server_allows_release_client(self) -> None:
+        """Test that dev server allows release client (0.1.0)."""
+        app = FastAPI()
+        # Simulate dev server with min_client_version="0.0.0.dev0"
+        app.add_middleware(VersionCheckMiddleware, min_client_version="0.0.0.dev0")
+
+        @app.get("/test")
+        async def test_endpoint() -> dict:
+            return {"status": "ok"}
+
+        client = TestClient(app)
+
+        # Release client 0.1.0 should be allowed (0.1.0 > 0.0.0.dev0)
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.1.0"})
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
+    def test_pre_release_server_allows_pre_release_client(self) -> None:
+        """Test that pre-release server allows matching pre-release client."""
+        app = FastAPI()
+        # Simulate alpha server with min_client_version="0.1.0a1"
+        app.add_middleware(VersionCheckMiddleware, min_client_version="0.1.0a1")
+
+        @app.get("/test")
+        async def test_endpoint() -> dict:
+            return {"status": "ok"}
+
+        client = TestClient(app)
+
+        # Alpha client should be allowed
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.1.0a1"})
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
+        # Newer alpha should be allowed
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.1.0a2"})
+        assert response.status_code == 200
+
+        # Beta should be allowed (beta > alpha)
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.1.0b1"})
+        assert response.status_code == 200
+
+    def test_pre_release_server_rejects_older_client(self) -> None:
+        """Test that pre-release server rejects older dev client."""
+        app = FastAPI()
+        # Simulate alpha server with min_client_version="0.1.0a1"
+        app.add_middleware(VersionCheckMiddleware, min_client_version="0.1.0a1")
+
+        @app.get("/test")
+        async def test_endpoint() -> dict:
+            return {"status": "ok"}
+
+        client = TestClient(app)
+
+        # Dev client should be rejected (0.0.0.dev0 < 0.1.0a1)
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.0.0-dev"})
+        assert response.status_code == 426

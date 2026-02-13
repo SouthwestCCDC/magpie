@@ -106,21 +106,29 @@ def get_min_client_version(server_version: str) -> str:
     Default policy: Minimum client is the minor floor of server version.
     Example: server 0.1.3 -> min client 0.1.0
 
+    For dev/pre-release versions, preserve the dev/pre-release suffix to ensure
+    proper PEP 440 ordering. Example: server 0.0.0-dev -> min client 0.0.0.dev0
+    (since 0.0.0.dev0 < 0.0.0 per PEP 440).
+
     Args:
-        server_version: Server version string (e.g., "0.1.3")
+        server_version: Server version string (e.g., "0.1.3", "0.0.0-dev")
 
     Returns:
-        Minimum client version string (e.g., "0.1.0")
-
-    Note:
-        packaging.version.parse() always returns a Version object for standard
-        and dev versions (e.g., "0.0.0-dev" -> Version('0.0.0.dev0')).
-        The minor floor calculation works correctly for both cases.
+        Minimum client version string (e.g., "0.1.0", "0.0.0.dev0")
     """
     parsed = parse(server_version)
     # parse() always returns a Version object for valid semver/PEP440 versions
     if isinstance(parsed, Version):
-        return f"{parsed.major}.{parsed.minor}.0"
+        # Handle dev versions (e.g., 0.0.0-dev -> 0.0.0.dev0)
+        if parsed.dev is not None:
+            return f"{parsed.major}.{parsed.minor}.0.dev0"
+        # Handle pre-release versions (e.g., 0.1.0a1 -> 0.1.0a1)
+        elif parsed.pre is not None:
+            pre_type, pre_num = parsed.pre
+            return f"{parsed.major}.{parsed.minor}.0{pre_type}{pre_num}"
+        # Handle stable versions (e.g., 0.1.3 -> 0.1.0)
+        else:
+            return f"{parsed.major}.{parsed.minor}.0"
     # This fallback is unreachable for standard/dev versions but kept for safety
     return server_version
 
