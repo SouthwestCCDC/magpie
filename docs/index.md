@@ -22,6 +22,8 @@ New to Magpie? Start here:
 ## Reference
 
 - [User Guide](user-guide.md) - Complete CLI and API reference
+- [API Compatibility](api-compatibility.md) - Versioning guarantees and upgrade guidance
+- [Release Notes](releases.md) - Changes and migration notes by release
 - [GitHub Repository](https://github.com/SouthwestCCDC/magpie) - Source code and issue tracker
 
 ---

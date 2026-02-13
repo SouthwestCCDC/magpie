@@ -52,8 +52,8 @@ magpie ls demo/greeting
 # Download it back
 magpie get demo/greeting:latest
 
-# Check the content
-cat hello.txt
+# Check the content (default filename is the tag name)
+cat greeting
 ```
 
 ## Creating Additional Tokens
@@ -76,23 +76,29 @@ docker compose exec magpie magpie-ctl token create --name ci-deployer --scope wr
 # Push a new version
 magpie push app.tar.gz --to apps/myapp
 
-# The upload creates a tag with the current timestamp
-# Pin it to a stable tag
-magpie tag apps/myapp:2025-02-13T12-34-56 --as stable
+# List versions and find the hash for the version you want to pin
+magpie ls apps/myapp
 
-# Or use explicit version tags
+# Pin that specific version (replace @abcdef12 with the hash_ref from 'magpie ls')
+magpie tag apps/myapp@abcdef12 --as stable
+
+# Or tag latest directly
 magpie tag apps/myapp:latest --as v1.2.0
 ```
 
 ### Scripting with URLs
 
 ```bash
-# Get a direct download URL (no auth required for downloads)
+# Get a direct download URL (downloads require a Bearer token unless the artifact is public
+# or your IP is in MAGPIE_ALLOWED_CIDRS)
 URL=$(magpie url apps/myapp:stable)
 
-# Use it in scripts
-curl -O "$URL"
-wget "$URL"
+# Use it in scripts with your Magpie token
+curl -H "Authorization: Bearer $MAGPIE_TOKEN" -O "$URL"
+wget --header="Authorization: Bearer $MAGPIE_TOKEN" "$URL"
+
+# For simpler scripting, use the magpie CLI
+magpie get apps/myapp:stable -o myapp.tar.gz
 ```
 
 ### Provenance Tracking
@@ -100,7 +106,7 @@ wget "$URL"
 ```bash
 # Tag with source information
 magpie push artifact.tar.gz --to builds/myapp \
-  --source "https://github.com/org/repo/commit/abc123"
+  --source-uri "https://github.com/org/repo/commit/abc123"
 
 # View the metadata
 magpie info builds/myapp:latest

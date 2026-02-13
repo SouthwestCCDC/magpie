@@ -10,9 +10,9 @@ Magpie solves the artifact distribution problem for teams that need:
 - **Content deduplication** - identical files are stored once regardless of how many tags point to them
 - **Immutable artifacts with mutable pointers** - tags like `latest` or `stable` can move while the underlying content never changes
 - **Provenance tracking** - know where artifacts came from via source URI metadata
-- **Straightforward operation** - single binary, minimal dependencies, filesystem-based storage
+- **Straightforward operation** - single service deployment, minimal dependencies, filesystem-based storage
 
-Built for distributing build artifacts, container images, deployment packages, and other binary assets across infrastructure without the complexity of S3, artifactory, or package-specific registries.
+Built for distributing build artifacts, container images, deployment packages, and other binary assets across infrastructure without the complexity of S3, Artifactory, or package-specific registries.
 
 ## Features
 
