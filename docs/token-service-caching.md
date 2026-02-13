@@ -31,13 +31,15 @@ The `@lru_cache(maxsize=1)` decorator caches the first TokenService instance and
 
 ### Performance Impact
 
-Benchmark results (from `tests/unit/test_token_service_performance.py`):
+Benchmark results (example from development environment; exact numbers will vary by machine, OS, and filesystem):
 
 | Metric | Cached | Uncached | Speedup |
 |--------|--------|----------|---------|
 | Time per call | 0.03µs | 316µs | 9065x |
 | Iterations/sec | ~33M | ~3.2K | - |
 | `init_database()` calls | 1 (total) | 1 per request | - |
+
+Run `pytest tests/unit/test_token_service_performance.py -v -s` to measure performance on your environment.
 
 The caching eliminates 99.99% of the overhead associated with TokenService instantiation.
 
@@ -61,8 +63,14 @@ The TokenService itself is designed for safe concurrent use:
 
 Example:
 ```python
+import hashlib
+
 def validate_token(self, token: str) -> TokenInfo | None:
-    conn = get_connection(self.db_path)  # New connection per call
+    # Hash the token for lookup
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    
+    # Create new connection per call (not shared between requests)
+    conn = get_connection(self.db_path)
     try:
         stored_token = get_token_by_hash(conn, token_hash)
     finally:
