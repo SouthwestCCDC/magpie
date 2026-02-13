@@ -78,16 +78,31 @@ services:
       # IMPORTANT: Keep debug mode disabled in production. Enabling it exposes
       # detailed error messages and stack traces that could leak sensitive info.
       - MAGPIE_DEBUG=false
-      # S3/AWS configuration for magpie-ctl sync command
+      # S3/AWS configuration for magpie-ctl sync command (optional)
+      # Set these variables in your .env file to enable S3 backup functionality
       - MAGPIE_S3_BUCKET=${MAGPIE_S3_BUCKET:-}
       - MAGPIE_S3_PREFIX=${MAGPIE_S3_PREFIX:-}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
       - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-}
-      # Observability configuration
+      # Upload limits (optional)
+      # Set MAGPIE_MAX_UPLOAD_SIZE in bytes to limit upload size (default: unlimited)
+      - MAGPIE_MAX_UPLOAD_SIZE=${MAGPIE_MAX_UPLOAD_SIZE:-}
+      # Logging configuration (optional)
+      # Set MAGPIE_LOG_FORMAT to "console" for human-readable logs (default: json)
+      - MAGPIE_LOG_FORMAT=${MAGPIE_LOG_FORMAT:-json}
+      # Artifact retention (optional)
+      # Set MAGPIE_RETENTION_DAYS for garbage collection retention period (default: 90)
+      - MAGPIE_RETENTION_DAYS=${MAGPIE_RETENTION_DAYS:-90}
+      # Temporary file storage (optional)
+      # Set MAGPIE_TEMP_PATH to override default temp directory (default: /data/artifacts/.tmp)
+      - MAGPIE_TEMP_PATH=${MAGPIE_TEMP_PATH:-}
+      # Observability configuration (optional)
+      # Sentry error tracking - set MAGPIE_SENTRY_DSN in .env to enable
       - MAGPIE_SENTRY_DSN=${MAGPIE_SENTRY_DSN:-}
       - MAGPIE_SENTRY_TRACES_SAMPLE_RATE=${MAGPIE_SENTRY_TRACES_SAMPLE_RATE:-1.0}
+      # OpenTelemetry - set MAGPIE_OTEL_ENABLED=true and MAGPIE_OTEL_ENDPOINT in .env to enable
       - MAGPIE_OTEL_ENABLED=${MAGPIE_OTEL_ENABLED:-false}
       - MAGPIE_OTEL_ENDPOINT=${MAGPIE_OTEL_ENDPOINT:-}
       - MAGPIE_OTEL_SERVICE_NAME=${MAGPIE_OTEL_SERVICE_NAME:-magpie}
