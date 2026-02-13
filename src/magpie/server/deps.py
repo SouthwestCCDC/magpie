@@ -49,7 +49,7 @@ def get_token_service() -> TokenService:
 
     Thread Safety:
         - lru_cache is thread-safe (uses internal locking)
-        - TokenService instances are immutable after construction
+        - TokenService instances are treated as immutable and not mutated after construction
         - SQLite connections are created per-operation, not shared
         - WAL mode provides concurrent read access
 

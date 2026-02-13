@@ -98,16 +98,19 @@ class TestTokenServicePerformance:
         # Informational assertion: cached should be faster than uncached
         # Note: Ratio can vary widely by environment, so we only verify cached is faster
         # (the deterministic call-count tests verify correctness)
-        if cached_time < uncached_time / 10:
+        if cached_time > 0 and cached_time < uncached_time / 10:
             # Log success for visibility
             speedup = uncached_time / cached_time
         else:
             # On slow/loaded CI runners, timing can be unreliable; log but don't fail
-            print(
-                f"Warning: Cached speedup ({uncached_time / cached_time:.1f}x) "
-                f"is lower than expected (likely due to CI runner load)"
-            )
-            speedup = uncached_time / cached_time if cached_time > 0 else 1
+            if cached_time > 0:
+                print(
+                    f"Warning: Cached speedup ({uncached_time / cached_time:.1f}x) "
+                    f"is lower than expected (likely due to CI runner load)"
+                )
+                speedup = uncached_time / cached_time
+            else:
+                speedup = 1
 
         # Print benchmark results for visibility
         print(

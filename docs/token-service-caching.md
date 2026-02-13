@@ -40,8 +40,8 @@ The caching eliminates 99.99% of the overhead associated with TokenService insta
 The implementation is thread-safe:
 - `@lru_cache` uses an internal lock to protect the cache dictionary
 - Multiple threads can safely call `get_token_service()` concurrently
-- Only one TokenService instance will be created, even under concurrent access
-- TokenService instances are immutable after construction
+- Concurrent first calls may create duplicate instances during cache stampede, but only one will be cached and returned to future callers. This is safe because TokenService construction is idempotent.
+- TokenService instances are treated as immutable and not mutated after construction
 - Each method creates its own SQLite connection (no shared connection state)
 - SQLite WAL mode allows concurrent readers
 
