@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -165,23 +166,20 @@ class TestTokenList:
             create_result = cli_runner.invoke(
                 cli, ["token", "create", "--name", "secret", "--scope", "read"]
             )
-            # Extract the token from create output
-            token_line = None
-            for line in create_result.output.split("\n"):
-                if line.startswith("mgp_"):
-                    token_line = line.strip()
-                    break
+            assert create_result.exit_code == 0, f"Output: {create_result.output}"
+
+            # Extract the token from create output using regex
+            match = re.search(r"mgp_[A-Za-z0-9_-]+", create_result.output)
+            assert match is not None, "Failed to find token in create output"
+            token_line = match.group(0)
 
             # List tokens
             result = cli_runner.invoke(cli, ["token", "list"])
 
         assert result.exit_code == 0
         # Token value should not appear in list
-        if token_line:
-            assert token_line not in result.output
+        assert token_line not in result.output
         # No 64-character hex strings (SHA-256 hashes)
-        import re
-
         hash_pattern = re.compile(r"[a-f0-9]{64}", re.IGNORECASE)
         assert not hash_pattern.search(result.output)
 
@@ -229,12 +227,10 @@ class TestTokenRotate:
             )
             assert create_result.exit_code == 0
 
-            # Extract original token
-            original_token = None
-            for line in create_result.output.split("\n"):
-                if line.startswith("mgp_"):
-                    original_token = line.strip()
-                    break
+            # Extract original token using regex
+            match = re.search(r"mgp_[A-Za-z0-9_-]+", create_result.output)
+            assert match is not None, "Failed to find token in create output"
+            original_token = match.group(0)
 
             # Rotate it
             rotate_result = cli_runner.invoke(cli, ["token", "rotate", "to-rotate"])
@@ -243,14 +239,10 @@ class TestTokenRotate:
             assert "to-rotate" in rotate_result.output
             assert "write" in rotate_result.output
 
-            # Extract new token
-            new_token = None
-            for line in rotate_result.output.split("\n"):
-                if line.startswith("mgp_"):
-                    new_token = line.strip()
-                    break
-
-            assert new_token is not None
+            # Extract new token using regex
+            match = re.search(r"mgp_[A-Za-z0-9_-]+", rotate_result.output)
+            assert match is not None, "Failed to find token in rotate output"
+            new_token = match.group(0)
             assert new_token != original_token
             assert new_token.startswith("mgp_")
 
@@ -267,12 +259,10 @@ class TestTokenRotate:
             )
             assert create_result.exit_code == 0
 
-            # Extract original token
-            original_token = None
-            for line in create_result.output.split("\n"):
-                if line.startswith("mgp_"):
-                    original_token = line.strip()
-                    break
+            # Extract original token using regex
+            match = re.search(r"mgp_[A-Za-z0-9_-]+", create_result.output)
+            assert match is not None, "Failed to find token in create output"
+            original_token = match.group(0)
 
             # Verify original token works
             token_service = TokenService(test_settings)
