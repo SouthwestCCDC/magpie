@@ -54,9 +54,7 @@ class TestMemoryEndpointsDisabled:
         yield TestClient(app)
         app.dependency_overrides.clear()
 
-    def test_reset_endpoint_returns_403_when_disabled(
-        self, client_disabled: TestClient
-    ) -> None:
+    def test_reset_endpoint_returns_403_when_disabled(self, client_disabled: TestClient) -> None:
         """POST /api/v1/_test/memory/reset returns 403 when test endpoints disabled."""
         response = client_disabled.post("/api/v1/_test/memory/reset")
 
@@ -64,9 +62,7 @@ class TestMemoryEndpointsDisabled:
         data = response.json()
         assert "Test endpoints are disabled" in data["detail"]
 
-    def test_stats_endpoint_returns_403_when_disabled(
-        self, client_disabled: TestClient
-    ) -> None:
+    def test_stats_endpoint_returns_403_when_disabled(self, client_disabled: TestClient) -> None:
         """GET /api/v1/_test/memory/stats returns 403 when test endpoints disabled."""
         response = client_disabled.get("/api/v1/_test/memory/stats")
 
@@ -74,9 +70,7 @@ class TestMemoryEndpointsDisabled:
         data = response.json()
         assert "Test endpoints are disabled" in data["detail"]
 
-    def test_stop_endpoint_returns_403_when_disabled(
-        self, client_disabled: TestClient
-    ) -> None:
+    def test_stop_endpoint_returns_403_when_disabled(self, client_disabled: TestClient) -> None:
         """POST /api/v1/_test/memory/stop returns 403 when test endpoints disabled."""
         response = client_disabled.post("/api/v1/_test/memory/stop")
 
@@ -128,9 +122,7 @@ class TestMemoryEndpointsEnabled:
         data = response.json()
         assert data["status"] == "stopped"
 
-    def test_stats_endpoint_returns_400_before_reset(
-        self, client_enabled: TestClient
-    ) -> None:
+    def test_stats_endpoint_returns_400_before_reset(self, client_enabled: TestClient) -> None:
         """GET /api/v1/_test/memory/stats returns 400 if reset not called first."""
         # Ensure tracking is stopped
         client_enabled.post("/api/v1/_test/memory/stop")
