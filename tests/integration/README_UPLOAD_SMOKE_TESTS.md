@@ -100,3 +100,16 @@ These capabilities are tracked in issue #438 for future implementation.
 ---
 
 *This documentation was generated with AI assistance (Claude Code w/ Sonnet 4.5).*
+
+## Related: Server-Side Streaming Validation
+
+For server-side streaming validation and memory profiling, see:
+- `tests/e2e/test_upload_streaming_validation.py` - Memory tracking and throughput tests
+
+The streaming validation tests use tracemalloc instrumentation to verify:
+- Peak memory stays bounded during large uploads (500MB upload < 50MB memory)
+- Concurrent uploads don't multiply memory usage
+- Throughput is not degraded by buffering
+
+These tests complement the smoke tests by measuring actual server-side behavior
+rather than just client-side completion.
