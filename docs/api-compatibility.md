@@ -2,18 +2,31 @@
 
 This document defines the API compatibility contract for Magpie, including what constitutes a breaking change and the versioning guarantees that contributors and operators can rely on.
 
+## Pre-1.0 Stability
+
+**Current status:** Magpie is at version `0.1.x` (pre-1.0).
+
+During the `0.x` series, API changes are expected as we refine the interface based on operational experience. However, we still aim to minimize breaking changes:
+
+- Minor version bumps (`0.1` → `0.2`) may include carefully considered breaking changes if necessary
+- Such changes will be documented in release notes with migration guides
+- After reaching `1.0`, the full SemVer contract applies strictly
+
+**Note:** Semantic Versioning allows complete instability during `0.x` development, but we aim for additive-only changes to support early adopters.
+
 ## Core Principle: Additive-Only Changes
 
 Within a major version, the API follows an **additive-only** compatibility policy. Old clients must continue to work without modification when the server is upgraded to a newer minor or patch version.
 
 ### Safe Changes (Non-Breaking)
 
-The following changes are **always safe** and can be made in minor releases:
+The following changes are **safe** and can be made in minor releases:
 
-- **New optional response fields**: Old clients ignore fields they don't recognize. Pydantic models allow extra fields by default.
+- **New optional response fields**: Safe when clients use lenient parsers. The Magpie CLI uses Pydantic's default `extra='ignore'` and will silently ignore unknown response fields. Clients with strict validators (e.g., `extra='forbid'` or strict JSON schemas) may error on unknown fields.
 - **New endpoints**: Old clients don't call endpoints they don't know about.
 - **New optional request parameters**: Existing requests without the new parameter continue to work.
-- **Relaxing validation rules**: Accepting more input is backward compatible.
+- **New optional query parameters**: Existing requests without the new parameter continue to work.
+- **Relaxing validation rules**: Accepting more input is backward compatible (except when fixing security vulnerabilities).
 - **Adding new enum values**: If handled with proper defaults in existing code.
 
 ### Breaking Changes (Require Major Version)
@@ -25,7 +38,7 @@ The following changes are **breaking** and require a new API version (`/api/v2/`
 - **Adding a required request field**: Old clients not sending the field will fail.
 - **Changing field types**: Old clients may send or expect incompatible data.
 - **Renaming request parameters**: Old clients using the old name will fail.
-- **Tightening validation rules**: Previously accepted input may now be rejected.
+- **Tightening validation rules**: Previously accepted input may now be rejected (exception: fixing security vulnerabilities like path traversal may justify breaking changes in minor versions).
 - **Changing endpoint paths**: Old clients calling the old path will fail.
 - **Changing HTTP methods**: Old clients using the wrong method will fail.
 
@@ -66,8 +79,8 @@ Magpie follows [Semantic Versioning](https://semver.org/) with the following sem
 
 The CLI and server ship from the same repository with matching version numbers. This simplifies compatibility reasoning:
 
-- **CLI and server must match at the minor level**: CLI `0.2.x` is compatible with server `0.2.x`
-- **Patch versions are interchangeable within a minor**: CLI `0.2.1` works with server `0.2.3` and vice versa
+- **Recommendation: Deploy CLI and server at matching minor versions**: CLI `0.2.x` with server `0.2.x` ensures compatibility. Version checking is not currently enforced by the CLI (tracked in issue #451 for v0.1.3 milestone).
+- **Patch versions are interchangeable within a minor**: CLI `0.2.1` should work with server `0.2.3` and vice versa
 - **Cross-minor compatibility is not guaranteed**: CLI `0.2.x` may not work with server `0.3.x`
 
 **Recommendation:** Deploy the CLI and server together using the same container image tag or release artifact.
@@ -80,7 +93,7 @@ The current API uses the `/api/v1/` prefix for all endpoints:
 POST /api/v1/upload/{path}
 GET  /api/v1/artifacts/{path}/{ref}/info
 POST /api/v1/artifacts/{path}/{ref}/tags
-DELETE /api/v1/artifacts/{path}/{ref}/tags/{tag_name}
+DELETE /api/v1/artifacts/{path}/tags/{tag_name}
 PATCH /api/v1/artifacts/{path}/{ref}
 GET  /api/v1/artifacts
 GET  /api/v1/artifacts/{path}
@@ -95,16 +108,6 @@ GET  /api/v1/status
 ```
 
 If a breaking change is required, we would introduce `/api/v2/` and run both versions side-by-side during a deprecation window.
-
-## Pre-1.0 Stability
-
-**Current status:** Magpie is at version `0.1.x` (pre-1.0).
-
-During the `0.x` series, API changes are expected as we refine the interface based on operational experience. However, we still aim to minimize breaking changes:
-
-- Minor version bumps (`0.1` → `0.2`) may include carefully considered breaking changes if necessary
-- Such changes will be documented in release notes with migration guides
-- After reaching `1.0`, the full SemVer contract applies strictly
 
 ## Contributor Checklist
 
@@ -159,7 +162,7 @@ async def list_artifacts(
 ### Changing Validation Rules?
 
 - **Relaxing (accepting more)**: ✅ Safe for minor release
-- **Tightening (rejecting more)**: ❌ Breaking change
+- **Tightening (rejecting more)**: ❌ Breaking change (exception: fixing security vulnerabilities like path traversal may justify breaking changes in minor versions)
 
 ## Testing for Compatibility
 
@@ -172,10 +175,10 @@ When adding optional fields or parameters:
 Example test structure:
 ```python
 def test_artifact_info_without_new_field():
-    """Old clients should work without expecting the new field."""
+    """Old clients should work without the new field being required."""
     response = client.get("/api/v1/artifacts/foo/bar:latest/info")
     assert "hash" in response.json()
-    # Don't assert presence of new field - old clients ignore it
+    # New field IS in response, but old clients don't break if they ignore it
 
 def test_artifact_info_with_new_field():
     """New field is present and has expected value."""
