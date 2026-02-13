@@ -152,11 +152,12 @@ def handle_response_error(
     handle_http_error(response, operation, token)
 
 
-def format_network_error(exc: Exception, server: str | None = None) -> str:
+def format_network_error(exc: Exception, operation: str, server: str | None = None) -> str:
     """Format a network exception into a user-friendly error message.
 
     Args:
         exc: The network exception to format.
+        operation: Description of the operation that failed.
         server: Optional server URL for context.
 
     Returns:
@@ -171,23 +172,25 @@ def format_network_error(exc: Exception, server: str | None = None) -> str:
     if isinstance(exc, httpx.ConnectError):
         # Check if it's a DNS resolution error
         if isinstance(exc.__cause__, socket.gaierror):
-            msg = f"Could not connect to server '{hostname}': DNS resolution failed"
+            msg = f"{operation} failed: Could not connect to server '{hostname}': DNS resolution failed"
             hint = "Check that the server hostname is correct and your network is connected."
             return f"{msg}\nHint: {hint}"
 
         # Check for specific connection failure types by inspecting the cause
         cause = exc.__cause__
         if isinstance(cause, ConnectionRefusedError):
-            msg = f"Could not connect to server '{hostname}': Connection refused"
+            msg = (
+                f"{operation} failed: Could not connect to server '{hostname}': Connection refused"
+            )
             hint = "Check that the server is running and the URL is correct."
             return f"{msg}\nHint: {hint}"
         if isinstance(cause, ConnectionResetError):
-            msg = f"Could not connect to server '{hostname}': Connection reset by peer"
+            msg = f"{operation} failed: Could not connect to server '{hostname}': Connection reset by peer"
             hint = "The server closed the connection. Check server logs or try again."
             return f"{msg}\nHint: {hint}"
         # Note: ssl.SSLError inherits from OSError, so it must be checked before OSError
         if isinstance(cause, ssl.SSLError):
-            msg = f"Could not connect to server '{hostname}': TLS handshake failed"
+            msg = f"{operation} failed: Could not connect to server '{hostname}': TLS handshake failed"
             hint = (
                 "Check server certificate configuration or try using http:// instead of https://."
             )
@@ -196,52 +199,52 @@ def format_network_error(exc: Exception, server: str | None = None) -> str:
             # Check errno for common network conditions
             errno_val = getattr(cause, "errno", None)
             if errno_val == errno.ENETUNREACH:
-                msg = f"Could not connect to server '{hostname}': Network unreachable"
+                msg = f"{operation} failed: Could not connect to server '{hostname}': Network unreachable"
                 hint = "Check your network connection and routing configuration."
                 return f"{msg}\nHint: {hint}"
             # Fall through to generic connection failed for other OSErrors
 
         # Generic connection failure for unrecognized causes
-        msg = f"Could not connect to server '{hostname}': Connection failed"
+        msg = f"{operation} failed: Could not connect to server '{hostname}': Connection failed"
         if cause:
             msg += f" ({cause})"
         hint = "Check that the server is running and the URL is correct."
         return f"{msg}\nHint: {hint}"
 
     if isinstance(exc, httpx.TimeoutException):
-        msg = f"Request to server '{hostname}' timed out"
+        msg = f"{operation} failed: Request to server '{hostname}' timed out"
         hint = "Check your network connection or try increasing the timeout with --timeout."
         return f"{msg}\nHint: {hint}"
 
     if isinstance(exc, httpx.ProxyError):
-        msg = f"Proxy error connecting to '{hostname}': {exc}"
+        msg = f"{operation} failed: Proxy error connecting to '{hostname}': {exc}"
         hint = "Check your proxy configuration and that the proxy is accessible."
         return f"{msg}\nHint: {hint}"
 
     if isinstance(exc, httpx.UnsupportedProtocol):
-        msg = f"Unsupported protocol connecting to '{hostname}': {exc}"
+        msg = f"{operation} failed: Unsupported protocol connecting to '{hostname}': {exc}"
         hint = "Check that the server URL uses a supported protocol (http/https)."
         return f"{msg}\nHint: {hint}"
 
     if isinstance(exc, httpx.ProtocolError):
-        msg = f"Protocol error connecting to '{hostname}': {exc}"
+        msg = f"{operation} failed: Protocol error connecting to '{hostname}': {exc}"
         hint = "The server sent an invalid response. Check server logs or try again."
         return f"{msg}\nHint: {hint}"
 
     if isinstance(exc, httpx.RequestError):
         # Generic request error (catches all other RequestError subclasses)
-        msg = f"Network error connecting to '{hostname}': {exc}"
+        msg = f"{operation} failed: Network error connecting to '{hostname}': {exc}"
         hint = "Check your network connection and server configuration."
         return f"{msg}\nHint: {hint}"
 
     if isinstance(exc, socket.gaierror):
         # Standalone DNS resolution error (not wrapped in httpx exception)
-        msg = f"Could not connect to server '{hostname}': DNS resolution failed"
+        msg = f"{operation} failed: Could not connect to server '{hostname}': DNS resolution failed"
         hint = "Check that the server hostname is correct and your network is connected."
         return f"{msg}\nHint: {hint}"
 
     # Fallback for unexpected network errors
-    return f"Network error: {exc}"
+    return f"{operation} failed: Network error: {exc}"
 
 
 def handle_network_error(exc: Exception, operation: str, server: str | None = None) -> None:
@@ -259,7 +262,7 @@ def handle_network_error(exc: Exception, operation: str, server: str | None = No
     # Import here to avoid circular imports
     from magpie.cli.formatting import ErrorCode, ExitCode, is_json_output, output_error
 
-    error_msg = format_network_error(exc, server)
+    error_msg = format_network_error(exc, operation, server)
 
     if is_json_output():
         output_error(ErrorCode.NETWORK_ERROR, error_msg, exit_code=ExitCode.NETWORK_ERROR)
