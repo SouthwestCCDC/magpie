@@ -612,7 +612,7 @@ def to_s3(ctx: CTLContext, dry_run: bool, quiet: bool) -> None:
                 relative_metadata_path = f"{relative_artifact_path}/metadata/{metadata_path.name}"
                 files_to_sync.append((metadata_path, relative_metadata_path))
                 total_bytes += metadata_path.stat().st_size
-    
+
     # Show preview of what will be synced
     if not quiet and not is_json_output():
         click.echo("")
