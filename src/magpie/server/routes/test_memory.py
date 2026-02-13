@@ -16,6 +16,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from magpie.auth.service import TokenInfo
 from magpie.config import MagpieSettings
 from magpie.server.deps import get_magpie_settings, require_admin_scope
 
@@ -29,6 +30,7 @@ router = APIRouter()
 # since these are test-only endpoints used in controlled E2E test scenarios.
 _memory_tracking_active = False
 _baseline_snapshot = None
+_baseline_current = 0  # Traced memory at baseline (for computing peak_delta)
 
 
 class MemoryStats(BaseModel):
@@ -42,7 +44,7 @@ class MemoryStats(BaseModel):
 @router.post("/api/v1/_test/memory/reset")
 async def reset_memory_tracking(
     settings: Annotated[MagpieSettings, Depends(get_magpie_settings)],
-    _admin_scope_check: Annotated[None, Depends(require_admin_scope)] = None,
+    _admin: Annotated[TokenInfo, Depends(require_admin_scope)] = None,
 ) -> dict[str, str]:
     """Reset memory tracking and take baseline snapshot.
 
@@ -62,7 +64,7 @@ async def reset_memory_tracking(
             detail="Test endpoints are disabled in this environment",
         )
 
-    global _memory_tracking_active, _baseline_snapshot
+    global _memory_tracking_active, _baseline_snapshot, _baseline_current
 
     # Start tracemalloc if not already running
     if not tracemalloc.is_tracing():
@@ -72,6 +74,9 @@ async def reset_memory_tracking(
     # Take baseline snapshot and reset peak tracking for this test run
     _baseline_snapshot = tracemalloc.take_snapshot()
     tracemalloc.reset_peak()
+
+    # Capture current traced memory after reset - this is our baseline for peak_delta
+    _baseline_current, _ = tracemalloc.get_traced_memory()
     _memory_tracking_active = True
 
     logger.info("memory_tracking_reset", msg="Memory tracking baseline reset")
@@ -82,7 +87,7 @@ async def reset_memory_tracking(
 @router.post("/api/v1/_test/memory/stop")
 async def stop_memory_tracking(
     settings: Annotated[MagpieSettings, Depends(get_magpie_settings)],
-    _admin_scope_check: Annotated[None, Depends(require_admin_scope)] = None,
+    _admin: Annotated[TokenInfo, Depends(require_admin_scope)] = None,
 ) -> dict[str, str]:
     """Stop memory tracking and clear baseline snapshot.
 
@@ -119,7 +124,7 @@ async def stop_memory_tracking(
 @router.get("/api/v1/_test/memory/stats")
 async def get_memory_stats(
     settings: Annotated[MagpieSettings, Depends(get_magpie_settings)],
-    _admin_scope_check: Annotated[None, Depends(require_admin_scope)] = None,
+    _admin: Annotated[TokenInfo, Depends(require_admin_scope)] = None,
 ) -> MemoryStats:
     """Get current memory tracking statistics.
 
@@ -154,9 +159,9 @@ async def get_memory_stats(
     # peak_current = current memory, peak_max = peak since last reset
     peak_current, peak_max = tracemalloc.get_traced_memory()
 
-    # Use peak_max directly since we called reset_peak() after baseline snapshot
-    # This gives us the peak memory delta from baseline, which is what we want
-    peak_delta = peak_max
+    # Compute peak delta: peak_max includes baseline, so subtract _baseline_current
+    # reset_peak() resets to CURRENT traced memory (not zero), so we need to subtract baseline
+    peak_delta = max(0, peak_max - _baseline_current)
 
     logger.debug(
         "memory_stats_retrieved",
