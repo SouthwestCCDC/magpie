@@ -67,55 +67,55 @@ class TestServerSideStreamingValidation:
         tmp.close()
 
         try:
-                # Reset memory tracking on the server
-                reset_response = httpx.post(
-                    f"{base_url}/api/v1/_test/memory/reset",
+            # Reset memory tracking on the server
+            reset_response = httpx.post(
+                f"{base_url}/api/v1/_test/memory/reset",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                timeout=10.0,
+            )
+            assert reset_response.status_code == 200, (
+                f"Failed to reset memory tracking: {reset_response.text}"
+            )
+
+            # Perform upload with file stream (not in-memory buffer)
+            start_time = time.time()
+            with open(tmp_path, "rb") as f:
+                upload_response = httpx.post(
+                    f"{base_url}/api/v1/upload/e2e/streaming-validation",
+                    files={"file": ("large.bin", f, "application/octet-stream")},
                     headers={"Authorization": f"Bearer {admin_token}"},
-                    timeout=10.0,
+                    params={"uploaded_by": "streaming-test"},
+                    timeout=300.0,  # 5 minute timeout for large upload
                 )
-                assert reset_response.status_code == 200, (
-                    f"Failed to reset memory tracking: {reset_response.text}"
-                )
+            elapsed = time.time() - start_time
 
-                # Perform upload with file stream (not in-memory buffer)
-                start_time = time.time()
-                with open(tmp_path, "rb") as f:
-                    upload_response = httpx.post(
-                        f"{base_url}/api/v1/upload/e2e/streaming-validation",
-                        files={"file": ("large.bin", f, "application/octet-stream")},
-                        headers={"Authorization": f"Bearer {admin_token}"},
-                        params={"uploaded_by": "streaming-test"},
-                        timeout=300.0,  # 5 minute timeout for large upload
-                    )
-                elapsed = time.time() - start_time
+            # Upload should succeed
+            assert upload_response.status_code == 200, f"Upload failed: {upload_response.text}"
 
-                # Upload should succeed
-                assert upload_response.status_code == 200, f"Upload failed: {upload_response.text}"
+            # Get memory stats from server
+            stats_response = httpx.get(
+                f"{base_url}/api/v1/_test/memory/stats",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                timeout=10.0,
+            )
+            assert stats_response.status_code == 200, (
+                f"Failed to get memory stats: {stats_response.text}"
+            )
 
-                # Get memory stats from server
-                stats_response = httpx.get(
-                    f"{base_url}/api/v1/_test/memory/stats",
-                    headers={"Authorization": f"Bearer {admin_token}"},
-                    timeout=10.0,
-                )
-                assert stats_response.status_code == 200, (
-                    f"Failed to get memory stats: {stats_response.text}"
-                )
+            stats = stats_response.json()
+            peak_delta = stats["peak_delta_bytes"]
 
-                stats = stats_response.json()
-                peak_delta = stats["peak_delta_bytes"]
+            throughput_mbps = (file_size / (1024 * 1024)) / elapsed
+            print(
+                f"\n500MB upload: {elapsed:.2f}s ({throughput_mbps:.2f} MB/s), "
+                f"peak memory delta: {peak_delta / (1024 * 1024):.2f} MB"
+            )
 
-                throughput_mbps = (file_size / (1024 * 1024)) / elapsed
-                print(
-                    f"\n500MB upload: {elapsed:.2f}s ({throughput_mbps:.2f} MB/s), "
-                    f"peak memory delta: {peak_delta / (1024 * 1024):.2f} MB"
-                )
-
-                # Verify memory stayed bounded (server is streaming, not buffering)
-                assert peak_delta < memory_threshold, (
-                    f"Server memory delta {peak_delta} bytes exceeded threshold "
-                    f"{memory_threshold} bytes - upload is being buffered, not streamed!"
-                )
+            # Verify memory stayed bounded (server is streaming, not buffering)
+            assert peak_delta < memory_threshold, (
+                f"Server memory delta {peak_delta} bytes exceeded threshold "
+                f"{memory_threshold} bytes - upload is being buffered, not streamed!"
+            )
 
         finally:
             # Clean up temp file
@@ -276,32 +276,32 @@ class TestServerSideStreamingValidation:
         tmp.close()
 
         try:
-                # Upload file
-                start_time = time.time()
-                with open(tmp_path, "rb") as f:
-                    response = httpx.post(
-                        f"{base_url}/api/v1/upload/e2e/throughput-test",
-                        files={"file": ("throughput.bin", f, "application/octet-stream")},
-                        headers={"Authorization": f"Bearer {admin_token}"},
-                        params={"uploaded_by": "throughput-test"},
-                        timeout=60.0,
-                    )
-                elapsed = time.time() - start_time
+            # Upload file
+            start_time = time.time()
+            with open(tmp_path, "rb") as f:
+                response = httpx.post(
+                    f"{base_url}/api/v1/upload/e2e/throughput-test",
+                    files={"file": ("throughput.bin", f, "application/octet-stream")},
+                    headers={"Authorization": f"Bearer {admin_token}"},
+                    params={"uploaded_by": "throughput-test"},
+                    timeout=60.0,
+                )
+            elapsed = time.time() - start_time
 
-                assert response.status_code == 200, f"Upload failed: {response.text}"
+            assert response.status_code == 200, f"Upload failed: {response.text}"
 
-                throughput_mbps = (file_size / (1024 * 1024)) / elapsed
-                print(f"\n100MB throughput: {elapsed:.2f}s ({throughput_mbps:.2f} MB/s)")
+            throughput_mbps = (file_size / (1024 * 1024)) / elapsed
+            print(f"\n100MB throughput: {elapsed:.2f}s ({throughput_mbps:.2f} MB/s)")
 
-                # Warn if throughput is low, but don't fail the test
-                # Throughput varies significantly in CI (160-400+ MB/s observed)
-                # The key validation is memory tracking, not throughput
-                if throughput_mbps < min_throughput_mbps:
-                    print(
-                        f"WARNING: Throughput {throughput_mbps:.2f} MB/s is below "
-                        f"baseline {min_throughput_mbps} MB/s. This may indicate I/O issues "
-                        f"but is often just CI variance."
-                    )
+            # Warn if throughput is low, but don't fail the test
+            # Throughput varies significantly in CI (160-400+ MB/s observed)
+            # The key validation is memory tracking, not throughput
+            if throughput_mbps < min_throughput_mbps:
+                print(
+                    f"WARNING: Throughput {throughput_mbps:.2f} MB/s is below "
+                    f"baseline {min_throughput_mbps} MB/s. This may indicate I/O issues "
+                    f"but is often just CI variance."
+                )
 
         finally:
             tmp_path.unlink(missing_ok=True)
