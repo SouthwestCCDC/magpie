@@ -659,7 +659,7 @@ class TestContentDispositionParsing:
 
         # Test the internal _extract_filename method directly
         # Invalid UTF-8 sequence - will be replaced, not raise
-        malformed_header = b"Content-Disposition: form-data; filename=\xff\xfe"
+        malformed_header = b"form-data; filename=\xff\xfe"
 
         # Should not raise an exception (graceful degradation)
         # The actual return value depends on whether the regex matches after replacement
@@ -1058,7 +1058,7 @@ class TestStateMachineViolations:
 
         # Add header name in small chunks until we exceed limit
         chunk = b"X" * 1000
-        # MAX_HEADER_SIZE is 16KB, so 17 chunks of 1KB should exceed it
+        # MAX_HEADER_SIZE is 16KB (16384 bytes), so 17 chunks of 1000 bytes should exceed it
         # The 17th chunk should cause the limit to be exceeded
         with pytest.raises(HeaderLimitExceededError, match="exceeds maximum size"):
             for i in range(17):
