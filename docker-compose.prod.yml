@@ -25,13 +25,13 @@
 #   By default, Caddy uses Let's Encrypt for automatic TLS certificates.
 #   For manual TLS certificates or testing:
 #   1. Mount certificate files as volumes (see commented example below)
-#   2. Edit Caddyfile.prod to uncomment the tls directive with the mounted paths
+#   2. In Caddyfile.prod, add or uncomment a tls directive with the mounted paths
 #      Example: tls /certs/cert.pem /certs/key.pem
-#   For Let's Encrypt staging (testing): Edit Caddyfile.prod tls block to add:
+#   For Let's Encrypt staging (testing): In Caddyfile.prod, add or uncomment a tls block:
 #      tls {
 #        ca https://acme-staging-v02.api.letsencrypt.org/directory
 #      }
-#   For self-signed certificates (testing): Edit Caddyfile.prod to use: tls internal
+#   For self-signed certificates (testing): In Caddyfile.prod, add or uncomment: tls internal
 #
 # Note: For Let's Encrypt auto-TLS, ensure:
 # - Port 443 is publicly accessible
@@ -57,8 +57,10 @@ services:
     environment:
       # MAGPIE_DOMAIN is required - Let's Encrypt will fail without a valid domain
       - MAGPIE_DOMAIN=${MAGPIE_DOMAIN:?MAGPIE_DOMAIN must be set}
-      # Optional: IP allow-listing for read-only access without bearer tokens
-      # Example: MAGPIE_ALLOWED_CIDRS=10.0.0.0/8,192.168.1.0/24
+      # Optional: IP allow-listing for read-only access without bearer tokens.
+      # The default value 255.255.255.255/32 is a "deny-all" sentinel and effectively
+      # disables CIDR-based unauthenticated access. To enable this feature, set one or
+      # more real CIDRs, e.g.: MAGPIE_ALLOWED_CIDRS=10.0.0.0/8,192.168.1.0/24
       - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-255.255.255.255/32}
       # Optional: Authentik SSO integration for browser access to /artifacts/*
       # See docs/authentik-setup.md for setup instructions
