@@ -2,6 +2,10 @@
 
 These tests verify that magpie-ctl commands work correctly with actual filesystem
 and database operations (no mocking of storage or database access).
+
+Testing Conventions:
+- Error message assertions use exact casing (no .lower()) to catch unintended
+  message changes. This makes tests stricter and more precise.
 """
 
 from __future__ import annotations
@@ -1215,7 +1219,7 @@ class TestSync:
         result = runner.invoke(ctl_cli, ["sync", "gc-s3", "--help"])
         assert result.exit_code == 0
         assert "--execute" in result.output
-        assert "dry-run" in result.output.lower() or "preview" in result.output.lower()
+        assert "dry-run" in result.output or "preview" in result.output
 
     def test_sync_to_s3_nonexistent_storage_path(self, ctl_runner: tuple[CliRunner, Path]) -> None:
         """Sync to-s3 with nonexistent storage path shows error."""
