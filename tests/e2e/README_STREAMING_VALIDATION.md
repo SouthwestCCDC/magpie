@@ -50,7 +50,7 @@ Uploads 100MB and verifies throughput exceeds 250 MB/s (2x degradation margin).
 - Local Docker network: 500+ MB/s
 - Acceptable threshold: 250 MB/s (2x margin for CI variance)
 
-Throughput below 400 MB/s indicates:
+Throughput below 250 MB/s indicates:
 - Excessive memory pressure causing swapping
 - Double-buffering through multiple layers
 - Synchronous I/O blocking the upload stream
@@ -116,11 +116,12 @@ Both are needed:
 The issue also mentions Caddy proxy buffering validation. These tests implicitly
 verify Caddy behavior because:
 - E2E tests go through full stack (Caddy + FastAPI)
-- Memory tracking would detect Caddy buffering entire uploads
-- Caddyfile already disables request buffering via `request_body_max_size 0`
+- Any misconfiguration that causes Caddy to buffer full request bodies would show up
+  as increased memory usage or degraded throughput in these tests
 
-Explicit Caddy log analysis (checking for buffer warnings) is out of scope for
-these E2E tests but could be added as integration tests if needed.
+Validation that the Caddy configuration disables unwanted buffering (for example,
+via appropriate `request_body`/`reverse_proxy` settings) is handled separately in
+infrastructure and deployment documentation, not in these E2E tests.
 
 ## CI Behavior
 

@@ -24,6 +24,9 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 # Global state for memory tracking (module-level, shared across requests)
+# NOTE: These globals are not thread-safe. Memory tracking endpoints (/reset, /stats, /stop)
+# must be called sequentially (one test at a time), not concurrently. This is acceptable
+# since these are test-only endpoints used in controlled E2E test scenarios.
 _memory_tracking_active = False
 _baseline_snapshot = None
 
@@ -66,13 +69,51 @@ async def reset_memory_tracking(
         tracemalloc.start()
         logger.info("memory_tracking_started", msg="tracemalloc started")
 
-    # Take baseline snapshot
+    # Take baseline snapshot and reset peak tracking for this test run
     _baseline_snapshot = tracemalloc.take_snapshot()
+    tracemalloc.reset_peak()
     _memory_tracking_active = True
 
     logger.info("memory_tracking_reset", msg="Memory tracking baseline reset")
 
     return {"status": "reset", "message": "Memory tracking baseline established"}
+
+
+@router.post("/api/v1/_test/memory/stop")
+async def stop_memory_tracking(
+    settings: Annotated[MagpieSettings, Depends(get_magpie_settings)],
+    _admin_scope_check: Annotated[None, Depends(require_admin_scope)] = None,
+) -> dict[str, str]:
+    """Stop memory tracking and clear baseline snapshot.
+
+    This endpoint:
+    1. Stops tracemalloc if it is currently running
+    2. Clears the baseline snapshot
+    3. Marks memory tracking as inactive
+
+    Requires admin scope.
+
+    Raises:
+        HTTPException 403: If test endpoints are disabled.
+    """
+    if not settings.enable_test_endpoints:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Test endpoints are disabled in this environment",
+        )
+
+    global _memory_tracking_active, _baseline_snapshot
+
+    if tracemalloc.is_tracing():
+        tracemalloc.stop()
+        logger.info("memory_tracking_stopped", msg="tracemalloc stopped")
+
+    _baseline_snapshot = None
+    _memory_tracking_active = False
+
+    logger.info("memory_tracking_cleared", msg="Memory tracking state cleared")
+
+    return {"status": "stopped", "message": "Memory tracking disabled and state cleared"}
 
 
 @router.get("/api/v1/_test/memory/stats")
@@ -109,16 +150,13 @@ async def get_memory_stats(
     # Calculate total memory delta (sum of all allocations minus deallocations)
     current_delta = sum(stat.size_diff for stat in current_stats)
 
-    # Get peak memory usage (tracemalloc tracks this automatically)
+    # Get peak memory usage since reset_peak() was called
+    # peak_current = current memory, peak_max = peak since last reset
     peak_current, peak_max = tracemalloc.get_traced_memory()
 
-    # Calculate peak delta from baseline
-    # Note: We use peak_max - baseline_current as an approximation
-    # More accurate tracking would require periodic polling, but this is sufficient
-    # for detecting buffering issues (500MB upload should show <50MB delta)
-    baseline_current = _baseline_snapshot.statistics("lineno")
-    baseline_total = sum(stat.size for stat in baseline_current)
-    peak_delta = peak_max - baseline_total
+    # Use peak_max directly since we called reset_peak() after baseline snapshot
+    # This gives us the peak memory delta from baseline, which is what we want
+    peak_delta = peak_max
 
     logger.debug(
         "memory_stats_retrieved",

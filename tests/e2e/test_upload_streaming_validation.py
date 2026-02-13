@@ -11,6 +11,7 @@ performance degradation.
 
 from __future__ import annotations
 
+import concurrent.futures
 import tempfile
 import time
 from pathlib import Path
@@ -60,9 +61,11 @@ class TestServerSideStreamingValidation:
                 # Write chunks of data to the temp file
                 # Use zeros for faster testing (still realistic file I/O)
                 chunk_size = 1024 * 1024  # 1 MB chunks
+                chunk = b"\x00" * chunk_size
                 for _ in range(file_size // chunk_size):
-                    tmp.write(b"\x00" * chunk_size)
+                    tmp.write(chunk)
                 tmp.flush()
+                tmp.close()
 
                 # Reset memory tracking on the server
                 reset_response = httpx.post(
@@ -117,6 +120,12 @@ class TestServerSideStreamingValidation:
             finally:
                 # Clean up temp file
                 tmp_path.unlink(missing_ok=True)
+                # Stop memory tracking to avoid affecting other tests
+                httpx.post(
+                    f"{base_url}/api/v1/_test/memory/stop",
+                    headers={"Authorization": f"Bearer {admin_token}"},
+                    timeout=10.0,
+                )
 
     def test_concurrent_uploads_memory_bounded(
         self,
@@ -151,18 +160,16 @@ class TestServerSideStreamingValidation:
         # Create temporary files for concurrent uploads
         temp_files = []
         try:
+            chunk_size = 1024 * 1024  # 1 MB chunks
+            chunk = b"\x00" * chunk_size
             for i in range(num_concurrent):
                 tmp = tempfile.NamedTemporaryFile(delete=False)
                 # Write file data
-                chunk_size = 1024 * 1024  # 1 MB chunks
                 for _ in range(file_size // chunk_size):
-                    tmp.write(b"\x00" * chunk_size)
+                    tmp.write(chunk)
                 tmp.flush()
                 tmp.close()
                 temp_files.append(Path(tmp.name))
-
-            # Perform concurrent uploads using separate httpx clients
-            import concurrent.futures
 
             def upload_file(file_path: Path, index: int) -> httpx.Response:
                 """Upload a single file."""
@@ -216,6 +223,12 @@ class TestServerSideStreamingValidation:
             # Clean up temp files
             for tmp_path in temp_files:
                 tmp_path.unlink(missing_ok=True)
+            # Stop memory tracking to avoid affecting other tests
+            httpx.post(
+                f"{base_url}/api/v1/_test/memory/stop",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                timeout=10.0,
+            )
 
     def test_throughput_not_degraded(
         self,
@@ -249,9 +262,11 @@ class TestServerSideStreamingValidation:
             try:
                 # Write file data
                 chunk_size = 1024 * 1024  # 1 MB chunks
+                chunk = b"\x00" * chunk_size
                 for _ in range(file_size // chunk_size):
-                    tmp.write(b"\x00" * chunk_size)
+                    tmp.write(chunk)
                 tmp.flush()
+                tmp.close()
 
                 # Upload file
                 start_time = time.time()
