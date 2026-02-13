@@ -76,10 +76,10 @@ jobs:
           tags: |
             # Tag with version (v1.0.0 -> 1.0.0)
             type=semver,pattern={{version}}
-            # Tag with major.minor (v1.0.0 -> 1.0)
-            type=semver,pattern={{major}}.{{minor}}
-            # Tag with major (v1.0.0 -> 1)
-            type=semver,pattern={{major}}
+            # Tag with major.minor (v1.0.0 -> 1.0) - stable releases only
+            type=semver,pattern={{major}}.{{minor}},enable=${{ needs.validate.outputs.is_prerelease == 'false' }}
+            # Tag with major (v1.0.0 -> 1) - stable releases only
+            type=semver,pattern={{major}},enable=${{ needs.validate.outputs.is_prerelease == 'false' }}
             # Tag latest only for stable releases (not prereleases)
             type=raw,value=latest,enable=${{ needs.validate.outputs.is_prerelease == 'false' }}
 
