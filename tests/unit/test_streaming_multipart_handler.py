@@ -1082,4 +1082,6 @@ class TestStateMachineViolations:
             exception_raised = True
 
         # Verify exception was raised
-        assert exception_raised, "Header size limit was not enforced during incremental accumulation"
+        assert exception_raised, (
+            "Header size limit was not enforced during incremental accumulation"
+        )
