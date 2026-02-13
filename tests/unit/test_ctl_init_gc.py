@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -155,12 +156,10 @@ class TestInitCommand:
             # First init creates token
             result1 = cli_runner.invoke(cli, ["init"])
             assert result1.exit_code == 0
-            # Extract first token
-            first_token = None
-            for line in result1.output.split("\n"):
-                if line.startswith("mgp_ADMIN_"):
-                    first_token = line.strip()
-                    break
+            # Extract first token using regex
+            match1 = re.search(r"mgp_ADMIN_[A-Za-z0-9_-]+", result1.output)
+            assert match1 is not None, "Failed to find admin token in output"
+            first_token = match1.group(0)
 
             # Reset token
             result2 = cli_runner.invoke(cli, ["init", "--reset-admin-token"])
@@ -168,16 +167,12 @@ class TestInitCommand:
             assert "NEW ADMIN TOKEN" in result2.output
             assert "Revoked existing" in result2.output
 
-            # Extract second token
-            second_token = None
-            for line in result2.output.split("\n"):
-                if line.startswith("mgp_ADMIN_"):
-                    second_token = line.strip()
-                    break
+            # Extract second token using regex
+            match2 = re.search(r"mgp_ADMIN_[A-Za-z0-9_-]+", result2.output)
+            assert match2 is not None, "Failed to find new admin token in output"
+            second_token = match2.group(0)
 
             # Tokens should be different
-            assert first_token is not None
-            assert second_token is not None
             assert first_token != second_token
 
     def test_init_with_custom_admin_token(
