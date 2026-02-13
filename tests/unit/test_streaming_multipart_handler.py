@@ -416,31 +416,51 @@ class TestCleanupOnError:
         return tmp_path
 
     def test_temp_file_removed_on_parser_error(self, temp_dir: Path) -> None:
-        """Temp file should be removed when parser raises."""
+        """Temp file should be removed when parser raises.
+
+        The test sends a valid file part first (which creates a temp file),
+        then a malformed second part that triggers an error. This ensures
+        the cleanup path is properly exercised for a temp file that was
+        actually created.
+        """
         handler = StreamingMultipartHandler(temp_dir, max_size=None)
         boundary = b"test-boundary"
 
-        # Malformed payload - missing Content-Disposition
-        payload = b"--test-boundary\r\n\r\ntest content\r\n--test-boundary--\r\n"
+        # Payload starts with a valid file part so the handler creates a temp file,
+        # then includes a second malformed part (missing Content-Disposition) that
+        # triggers MalformedMultipartError.
+        payload = (
+            b"--test-boundary\r\n"
+            b'Content-Disposition: form-data; name="file"; filename="test.txt"\r\n'
+            b"Content-Type: application/octet-stream\r\n"
+            b"\r\n"
+            b"test content\r\n"
+            b"--test-boundary\r\n"
+            b"\r\n"
+            b"malformed\r\n"
+            b"--test-boundary--\r\n"
+        )
 
         parser = MultipartParser(boundary, handler.get_callbacks())
 
-        # This should raise MalformedMultipartError
+        # This should raise MalformedMultipartError on the malformed second part.
         with pytest.raises(MalformedMultipartError, match="missing required Content-Disposition"):
             parser.write(payload)
             parser.finalize()
 
-        # Get temp file path before cleanup (may be None if no file was created)
+        # Get temp file path before cleanup; it should exist because the first part
+        # was a valid file upload.
         temp_file_path = handler._temp_file_path
+        assert temp_file_path is not None
+        assert temp_file_path.exists()
 
-        # Cleanup should remove temp file if it exists
+        # Cleanup should remove the temp file
         handler.cleanup()
 
         # Verify cleanup succeeded
-        if temp_file_path is not None:
-            assert not temp_file_path.exists()
         assert handler._temp_file is None
         assert handler._temp_file_path is None or not handler._temp_file_path.exists()
+        assert not temp_file_path.exists()
 
     def test_temp_file_removed_on_size_limit_exceeded(self, temp_dir: Path) -> None:
         """Temp file should be removed when size limit is exceeded."""
