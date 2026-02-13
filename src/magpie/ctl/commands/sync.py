@@ -16,7 +16,7 @@ from magpie.cli.formatting import (
     output_error,
     output_result,
 )
-from magpie.cli.progress import count_progress
+from magpie.cli.progress import count_progress, processing_spinner
 from magpie.ctl import CTLContext
 from magpie.storage.manifest import Manifest, read_manifest
 from magpie.utils.formatting import format_size
@@ -588,31 +588,39 @@ def to_s3(ctx: CTLContext, dry_run: bool, quiet: bool) -> None:
     blobs_found = 0
     total_bytes = 0
 
+    # Use spinner for scanning phase to show progress
+    with processing_spinner("Scanning for tagged artifacts", quiet=quiet or is_json_output()):
+        for artifact_dir, manifest in _iter_tagged_artifacts(storage_path):
+            artifacts_found += 1
+            relative_artifact_path = str(artifact_dir.relative_to(storage_path))
+
+            # Add manifest file
+            manifest_path = artifact_dir / ".magpie"
+            if manifest_path.exists():
+                files_to_sync.append((manifest_path, f"{relative_artifact_path}/.magpie"))
+                total_bytes += manifest_path.stat().st_size
+
+            # Add blobs
+            for blob_path in _get_blobs_for_manifest(artifact_dir, manifest):
+                blobs_found += 1
+                relative_blob_path = f"{relative_artifact_path}/blobs/{blob_path.name}"
+                files_to_sync.append((blob_path, relative_blob_path))
+                total_bytes += blob_path.stat().st_size
+
+            # Add metadata
+            for metadata_path in _get_metadata_for_manifest(artifact_dir, manifest):
+                relative_metadata_path = f"{relative_artifact_path}/metadata/{metadata_path.name}"
+                files_to_sync.append((metadata_path, relative_metadata_path))
+                total_bytes += metadata_path.stat().st_size
+
+    # Show preview of what will be synced
     if not quiet and not is_json_output():
-        click.echo("Scanning for tagged artifacts...")
-
-    for artifact_dir, manifest in _iter_tagged_artifacts(storage_path):
-        artifacts_found += 1
-        relative_artifact_path = str(artifact_dir.relative_to(storage_path))
-
-        # Add manifest file
-        manifest_path = artifact_dir / ".magpie"
-        if manifest_path.exists():
-            files_to_sync.append((manifest_path, f"{relative_artifact_path}/.magpie"))
-            total_bytes += manifest_path.stat().st_size
-
-        # Add blobs
-        for blob_path in _get_blobs_for_manifest(artifact_dir, manifest):
-            blobs_found += 1
-            relative_blob_path = f"{relative_artifact_path}/blobs/{blob_path.name}"
-            files_to_sync.append((blob_path, relative_blob_path))
-            total_bytes += blob_path.stat().st_size
-
-        # Add metadata
-        for metadata_path in _get_metadata_for_manifest(artifact_dir, manifest):
-            relative_metadata_path = f"{relative_artifact_path}/metadata/{metadata_path.name}"
-            files_to_sync.append((metadata_path, relative_metadata_path))
-            total_bytes += metadata_path.stat().st_size
+        click.echo("")
+        click.echo("Scan complete:")
+        click.echo(f"  Artifacts found: {artifacts_found}")
+        click.echo(f"  Blobs found: {blobs_found}")
+        click.echo(f"  Total files: {len(files_to_sync)}")
+        click.echo(f"  Total size: {format_size(total_bytes)}")
 
     if ctx.debug:
         click.echo(f"Found {artifacts_found} tagged artifacts", err=True)
@@ -637,6 +645,11 @@ def to_s3(ctx: CTLContext, dry_run: bool, quiet: bool) -> None:
         else:
             click.echo("No tagged artifacts found to sync.")
         return
+
+    # Show starting message for actual sync (not dry-run)
+    if not quiet and not is_json_output() and not dry_run:
+        click.echo("")
+        click.echo("Starting sync to S3...")
 
     # Perform sync
     if sync_tool == RCLONE_CMD:
