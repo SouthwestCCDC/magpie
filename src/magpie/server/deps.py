@@ -40,8 +40,8 @@ def get_token_service() -> TokenService:
         The TokenService is cached using @lru_cache(maxsize=1) to avoid recreating
         it on every request. This provides at least an order-of-magnitude performance
         improvement in typical environments. See benchmark tests in
-        tests/unit/test_token_service_performance.py, which assert a minimum 10x
-        speedup; exact ratios will vary by machine, OS, and filesystem.
+        tests/unit/test_token_service_performance.py for empirical measurements;
+        exact ratios will vary by machine, OS, and filesystem.
 
         Without caching, TokenService.__init__() would call init_database() on every
         request. While init_database() is idempotent (uses CREATE TABLE IF NOT EXISTS),
