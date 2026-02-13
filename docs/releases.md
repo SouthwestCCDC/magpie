@@ -20,6 +20,8 @@ v2.0.0-rc2    # Second release candidate for 2.0.0 (fixes issues found in rc1)
 v2.0.0        # Final stable release
 ```
 
+**Important:** The hyphen is required for semver compliance. Non-hyphenated formats like `v2.0.0rc1` (without the hyphen) are rejected as invalid semver by the Docker metadata action, resulting in only the `:latest` tag being created (with no versioned tags). Always use the hyphenated format.
+
 Release candidates allow operators to test major changes before they reach stable releases.
 
 ## Release Process
@@ -30,9 +32,11 @@ Update the version in `pyproject.toml`:
 
 ```toml
 [project]
-version = "X.Y.Z"  # For stable releases
-version = "X.Y.Z-rcN"  # For release candidates
+version = "X.Y.Z"      # For stable releases (no 'v' prefix)
+version = "X.Y.Z-rcN"  # For release candidates (no 'v' prefix)
 ```
+
+**Note:** The version in `pyproject.toml` does NOT include the `v` prefix. The git tag will have the `v` prefix (e.g., git tag `v1.0.0` corresponds to `version = "1.0.0"` in `pyproject.toml`).
 
 ### Step 2: Commit and Tag
 
@@ -72,18 +76,19 @@ Full stable releases receive multiple container tags:
 
 ### Release Candidate Tags
 
-Release candidates receive a single immutable tag with the full version:
+Release candidates receive multiple container tags (but NOT `latest`):
 
 | Git Tag | Container Tags | Behavior |
 |---------|----------------|----------|
-| `v2.0.0-rc1` | `2.0.0-rc1` | **Immutable** - does not update mutable tags |
-| `v2.0.0-rc2` | `2.0.0-rc2` | **Immutable** - does not update mutable tags |
+| `v2.0.0-rc1` | `2.0.0-rc1`, `2.0`, `2` | Updates major/minor tags (does NOT update `latest`) |
+| `v2.0.0-rc2` | `2.0.0-rc2`, `2.0`, `2` | Updates major/minor tags (does NOT update `latest`) |
 
-**Key differences:**
-- Release candidates **do not** get `latest`, major, or minor tags
-- Each RC is identified by its full version including the `-rcX` suffix
-- RCs are immutable - the tag will never change
-- Stable release candidates help validate critical changes before final release
+**Key differences from stable releases:**
+- Release candidates **do not** update the `latest` tag (only stable releases do)
+- Release candidates **do** update major and minor tags (e.g., `2`, `2.0`)
+- This means pulling `ghcr.io/southwestccdc/magpie:2` may give you an RC if one exists
+- For production, always use full version tags (e.g., `1.5.0`) to avoid RCs
+- Release candidates help validate critical changes before final release
 
 ## Tag Mutability Policy
 
@@ -100,26 +105,31 @@ These tags always point to the exact same release:
 
 ### Mutable Tags (Major and Minor)
 
-These tags move to the latest patch release in their series:
-- `1.0` moves from `1.0.0` → `1.0.1` → `1.0.2`
-- `1` moves from `1.0.0` → `1.5.0` → `2.0.0`
-- `latest` moves to the newest stable release
+These tags move to the latest release in their series (including release candidates):
+- `1.0` moves from `1.0.0` → `1.0.1` → `1.0.2` (and potentially to `1.0.3-rc1`)
+- `1` moves from `1.0.0` → `1.5.0` → `1.9.9` (stays on latest 1.x.x release; `2` tag is used for 2.x.x)
+- `latest` moves to the newest **stable** release (RCs do NOT update `latest`)
 
 **Use for:** Development and testing where you want automatic updates.
 
-**Note:** RCs never update mutable tags. For example, releasing `v2.0.0-rc1` does not move the `2` or `latest` tags.
+**Warning:** Major and minor tags MAY point to release candidates. For example, releasing `v2.0.0-rc1` WILL update the `2` and `2.0` tags (but NOT `latest`). For production deployments, always use full version tags to avoid accidentally pulling an RC.
 
 ## Upgrade Paths
 
 ### From Stable to Release Candidate
 
-You **can** upgrade from a stable release to a release candidate:
+You **can** upgrade from a stable release to a release candidate for testing purposes:
 
 ```bash
 docker pull ghcr.io/southwestccdc/magpie:2.0.0-rc1
 ```
 
-This allows early testing of major changes before the final release.
+**When to test RCs:**
+- Upgrade to RCs for testing breaking changes in non-production environments
+- Never deploy RCs directly to production without thorough validation
+- RCs are for operators who want to verify compatibility before the stable release
+
+**Warning:** If you use mutable tags like `:2` or `:2.0`, you may automatically pull an RC when one is released. For production, always pin to full version tags (e.g., `:1.5.0`) to avoid unintended RC upgrades.
 
 ### From Release Candidate to Stable
 
@@ -177,6 +187,11 @@ When testing a release candidate, verify:
 - [ ] Performance is acceptable for your use case
 - [ ] Monitoring and error reporting work (Sentry, OpenTelemetry)
 
+**For major version RCs (e.g., 2.0.0-rc1), also verify:**
+- [ ] Storage format migration completes successfully (if applicable)
+- [ ] Existing artifacts remain accessible after upgrade
+- [ ] Rollback to previous major version is possible (or documented as one-way upgrade)
+
 ## Feedback on Release Candidates
 
 Found a problem with a release candidate? Open an issue with:
@@ -194,3 +209,7 @@ Release candidate feedback helps ensure the final stable release is production-r
 - [Installation Guide](installation.md) - Server deployment and client setup
 - [Production Checklist](production-checklist.md) - Pre-deployment verification
 - [User Guide](user-guide.md) - CLI usage reference
+
+---
+
+*(AI-generated via Claude Code w/ Opus 4.6)*
