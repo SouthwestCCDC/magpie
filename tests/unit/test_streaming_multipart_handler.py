@@ -5,7 +5,6 @@ the full HTTP stack. They validate edge cases and error handling that are diffic
 to test via integration tests.
 
 Tests cover:
-- Boundary extraction from Content-Type headers
 - Multiple file parts rejection
 - Size limit enforcement
 - Cleanup on error
@@ -15,6 +14,8 @@ Tests cover:
 
 from __future__ import annotations
 
+import hashlib
+import re
 from pathlib import Path
 
 import pytest
@@ -52,8 +53,6 @@ class TestBoundaryExtraction:
 
         for content_type, expected_boundary in test_cases:
             # Use the actual boundary extraction logic from upload.py
-            import re
-
             match = re.search(r'boundary\s*=\s*"([^"]+)"', content_type, flags=re.IGNORECASE)
             assert match is not None, f"Failed to extract boundary from: {content_type}"
             boundary = match.group(1).encode("utf-8")
@@ -81,8 +80,6 @@ class TestBoundaryExtraction:
 
     def test_quoted_boundary_value(self, temp_dir: Path) -> None:
         """Quoted boundary values should be supported per RFC 2046."""
-        import re
-
         content_type = 'multipart/form-data; boundary="----WebKitFormBoundary"'
         match = re.search(r'boundary\s*=\s*"([^"]+)"', content_type, flags=re.IGNORECASE)
         assert match is not None
@@ -110,8 +107,6 @@ class TestBoundaryExtraction:
 
     def test_unquoted_boundary_value(self, temp_dir: Path) -> None:
         """Unquoted boundary values should be supported per RFC 2046."""
-        import re
-
         content_type = "multipart/form-data; boundary=simple-boundary-123"
         # Try quoted format first
         match = re.search(r'boundary\s*=\s*"([^"]+)"', content_type, flags=re.IGNORECASE)
@@ -145,8 +140,6 @@ class TestBoundaryExtraction:
 
     def test_whitespace_around_equals(self, temp_dir: Path) -> None:
         """Whitespace around = sign should be handled per RFC 2046."""
-        import re
-
         test_cases = [
             'multipart/form-data; boundary="test"',
             'multipart/form-data; boundary ="test"',
@@ -208,7 +201,8 @@ class TestMultipleFilePartsRejection:
 
         parser = MultipartParser(boundary, handler.get_callbacks())
 
-        # Parser should raise MalformedMultipartError when second file part is encountered
+        # Handler should detect the second file part and raise MalformedMultipartError,
+        # which is propagated out of parser.write()/parser.finalize().
         with pytest.raises(MalformedMultipartError, match="Multiple 'file' parts not allowed"):
             parser.write(payload)
             parser.finalize()
@@ -317,7 +311,7 @@ class TestSizeLimitEnforcement:
 
         # Write in chunks to simulate incremental parsing
         chunk_size = 50
-        with pytest.raises(UploadSizeExceededError):
+        with pytest.raises(UploadSizeExceededError, match="exceeds maximum size"):
             for i in range(0, len(payload), chunk_size):
                 parser.write(payload[i : i + chunk_size])
 
@@ -432,11 +426,9 @@ class TestCleanupOnError:
         parser = MultipartParser(boundary, handler.get_callbacks())
 
         # This should raise MalformedMultipartError
-        try:
+        with pytest.raises(MalformedMultipartError, match="missing required Content-Disposition"):
             parser.write(payload)
             parser.finalize()
-        except MalformedMultipartError:
-            pass
 
         # Get temp file path before cleanup (may be None if no file was created)
         temp_file_path = handler._temp_file_path
@@ -468,11 +460,9 @@ class TestCleanupOnError:
         parser = MultipartParser(boundary, handler.get_callbacks())
 
         # This should raise UploadSizeExceededError
-        try:
+        with pytest.raises(UploadSizeExceededError, match="exceeds maximum size"):
             parser.write(payload)
             parser.finalize()
-        except UploadSizeExceededError:
-            pass
 
         # Get temp file path before cleanup
         temp_file_path = handler._temp_file_path
@@ -539,11 +529,9 @@ class TestCleanupOnError:
         parser = MultipartParser(boundary, handler.get_callbacks())
 
         # Size limit should be exceeded during parsing
-        try:
+        with pytest.raises(UploadSizeExceededError, match="exceeds maximum size"):
             parser.write(payload)
             parser.finalize()
-        except UploadSizeExceededError:
-            pass
 
         # Get temp file path before finalize (may exist if created before error)
         temp_file_path = handler._temp_file_path
@@ -910,8 +898,6 @@ class TestHandlerGetResult:
         assert all(c in "0123456789abcdef" for c in file_hash)
 
         # Verify hash is correct
-        import hashlib
-
         expected_hash = hashlib.sha256(file_content).hexdigest()
         assert file_hash == expected_hash
 
@@ -951,8 +937,6 @@ class TestHandlerGetResult:
         temp_file_path, file_hash, file_bytes = result
 
         # Verify hash matches expected value
-        import hashlib
-
         expected_hash = hashlib.sha256(file_content).hexdigest()
         assert file_hash == expected_hash
 
@@ -1019,6 +1003,8 @@ class TestStateMachineViolations:
         with pytest.raises(MalformedMultipartError, match="missing required Content-Disposition"):
             handler._on_part_data(b"test data", 0, 9)
 
+        handler.cleanup()
+
     def test_part_data_without_content_disposition_rejected(self, temp_dir: Path) -> None:
         """Part data without Content-Disposition header should be rejected."""
         handler = StreamingMultipartHandler(temp_dir, max_size=None)
@@ -1034,6 +1020,8 @@ class TestStateMachineViolations:
         # Try to write data without Content-Disposition
         with pytest.raises(MalformedMultipartError, match="missing required Content-Disposition"):
             handler._on_part_data(b"test data", 0, 9)
+
+        handler.cleanup()
 
     def test_multiple_part_begins_without_completion(self, temp_dir: Path) -> None:
         """Multiple part_begin calls should reset state properly.
@@ -1072,16 +1060,6 @@ class TestStateMachineViolations:
         chunk = b"X" * 1000
         # MAX_HEADER_SIZE is 16KB, so 17 chunks of 1KB should exceed it
         # The 17th chunk should cause the limit to be exceeded
-        exception_raised = False
-        try:
+        with pytest.raises(HeaderLimitExceededError, match="exceeds maximum size"):
             for i in range(17):
                 handler._on_header_field(chunk, 0, len(chunk))
-        except HeaderLimitExceededError as e:
-            # This is expected - verify the exception message
-            assert "exceeds maximum size" in str(e)
-            exception_raised = True
-
-        # Verify exception was raised
-        assert exception_raised, (
-            "Header size limit was not enforced during incremental accumulation"
-        )
