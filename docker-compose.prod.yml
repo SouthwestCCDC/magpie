@@ -58,9 +58,11 @@ services:
       # MAGPIE_DOMAIN is required - Let's Encrypt will fail without a valid domain
       - MAGPIE_DOMAIN=${MAGPIE_DOMAIN:?MAGPIE_DOMAIN must be set}
       # Optional: IP allow-listing for read-only access without bearer tokens.
-      # The default value 255.255.255.255/32 is a "deny-all" sentinel and effectively
-      # disables CIDR-based unauthenticated access. To enable this feature, set one or
-      # more real CIDRs, e.g.: MAGPIE_ALLOWED_CIDRS=10.0.0.0/8,192.168.1.0/24
+      # The application's default for MAGPIE_ALLOWED_CIDRS is empty (disabled), but this
+      # compose file sets 255.255.255.255/32 as a sentinel to keep Caddy's client_ip
+      # matcher valid. The effective behavior is the same: no CIDR-based bypass.
+      # To enable this feature, set one or more real CIDRs, e.g.:
+      # MAGPIE_ALLOWED_CIDRS=10.0.0.0/8,192.168.1.0/24
       - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-255.255.255.255/32}
       # Optional: Authentik SSO integration for browser access to /artifacts/*
       # See docs/authentik-setup.md for setup instructions
