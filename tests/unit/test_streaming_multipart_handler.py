@@ -1064,6 +1064,7 @@ class TestStateMachineViolations:
         # State should be clean
         assert handler._current_header_name == b""
         assert handler._current_header_value == b""
+        handler.cleanup()
 
     def test_header_callbacks_with_large_accumulated_data(self, temp_dir: Path) -> None:
         """Handler should reject headers that accumulate beyond size limit.
@@ -1083,3 +1084,4 @@ class TestStateMachineViolations:
         with pytest.raises(HeaderLimitExceededError, match="exceeds maximum size"):
             for i in range(17):
                 handler._on_header_field(chunk, 0, len(chunk))
+        handler.cleanup()
