@@ -1,7 +1,18 @@
 # Magpie
 
-Content-addressed artifact storage with mutable tags for distributing build artifacts,
-container images, and other binary assets.
+Lightweight versioned artifact storage with content-addressing and mutable tags.
+
+## Why Magpie?
+
+Magpie solves the artifact distribution problem for teams that need:
+
+- **Simple versioned storage** without complex object storage setup or package registry overhead
+- **Content deduplication** - identical files are stored once regardless of how many tags point to them
+- **Immutable artifacts with mutable pointers** - tags like `latest` or `stable` can move while the underlying content never changes
+- **Provenance tracking** - know where artifacts came from via source URI metadata
+- **Straightforward operation** - single binary, minimal dependencies, filesystem-based storage
+
+Built for distributing build artifacts, container images, deployment packages, and other binary assets across infrastructure without the complexity of S3, artifactory, or package-specific registries.
 
 ## Features
 
@@ -14,11 +25,64 @@ container images, and other binary assets.
 
 ## Quick Start
 
-```bash
-# Configure the client
-export MAGPIE_SERVER=https://magpie.example.com
-export MAGPIE_TOKEN=mgp_your_token
+### Try It Locally
 
+```bash
+# Clone and start
+git clone https://github.com/SouthwestCCDC/magpie
+cd magpie
+docker compose up -d
+
+# Get the admin token from logs
+docker compose logs magpie | grep "ADMIN TOKEN"
+
+# Configure client
+export MAGPIE_SERVER=http://localhost:8080
+export MAGPIE_TOKEN=mgp_ADMIN_...
+
+# Install client (requires uv: https://docs.astral.sh/uv/)
+uv pip install git+https://github.com/SouthwestCCDC/magpie
+
+# Upload and download
+echo "Hello Magpie" > hello.txt
+magpie push hello.txt --to demo/greeting
+magpie get demo/greeting:latest
+magpie ls demo/greeting
+```
+
+Server runs at `http://localhost:8080` (change via `MAGPIE_HTTP_PORT`).
+
+### Production Deployment
+
+```bash
+# Set domain and storage location
+export MAGPIE_DOMAIN=magpie.example.com
+export MAGPIE_DATA_DIR=/path/to/persistent/storage
+
+# Start with TLS (auto-provisioned via Let's Encrypt)
+docker compose -f docker-compose.prod.yml up -d
+
+# Get admin token
+docker compose -f docker-compose.prod.yml logs magpie | grep "ADMIN TOKEN"
+
+# Create additional tokens
+docker compose -f docker-compose.prod.yml exec magpie \
+  magpie-ctl token create --name ci-deployer --scope write
+```
+
+See [Installation Guide](docs/installation.md) for detailed deployment options.
+
+## Documentation
+
+- [Installation Guide](docs/installation.md) - Server deployment and client setup
+- [User Guide](docs/user-guide.md) - Complete CLI and API reference
+- [Production Checklist](docs/production-checklist.md) - Pre-deployment verification
+- [Backup and Restore Guide](docs/backup-restore.md) - Backup procedures and disaster recovery
+- [Documentation Index](docs/index.md) - Full documentation overview
+
+## CLI Usage
+
+```bash
 # Upload an artifact
 magpie push myfile.tar.gz --to images/ubuntu
 
@@ -28,16 +92,14 @@ magpie get images/ubuntu:latest
 # List versions
 magpie ls images/ubuntu
 
-# Create a tag
+# Create a tag pointing to a specific version
 magpie tag images/ubuntu:latest --as stable
+
+# Get download URL for scripting
+magpie url images/ubuntu:stable
 ```
 
-## Documentation
-
-- [Documentation Index](docs/index.md) - Complete documentation overview
-- [Installation Guide](docs/installation.md) - Server deployment and client setup
-- [User Guide](docs/user-guide.md) - Complete CLI and API reference
-- [Backup and Restore Guide](docs/backup-restore.md) - Backup procedures and disaster recovery
+See [User Guide](docs/user-guide.md) for complete command reference.
 
 ## Development
 
@@ -48,51 +110,19 @@ uv sync
 # Run server locally
 uv run uvicorn magpie.server.app:app --reload
 
-# Run CLI
+# Run CLI commands
 uv run magpie --help
 uv run magpie-ctl --help
 
 # Run with Docker Compose (Caddy + Magpie)
 docker compose up --build
+
+# Run tests
+uv run pytest tests/unit/ -v
+uv run ruff check src/ tests/
 ```
 
-## Production Deployment
-
-For production with TLS/HTTPS:
-
-```bash
-# Set required environment variables
-export MAGPIE_DOMAIN=magpie.example.com
-export MAGPIE_DATA_DIR=/path/to/persistent/storage
-
-# Start with production configuration
-docker compose -f docker-compose.prod.yml up -d
-```
-
-**Port conflicts**: The production configuration binds to ports 80 and 443. If other
-services (e.g., nginx, Apache, another Caddy instance) are using these ports, either
-stop them first or customize the port bindings in `docker-compose.prod.yml`.
-
-The production configuration (`docker-compose.prod.yml` and `Caddyfile.prod`) includes:
-- Automatic TLS via Let's Encrypt (or manual certificate configuration)
-- Security headers (HSTS, X-Frame-Options, CSP, etc.)
-- JSON access logging
-- Optional Authentik SSO integration for browser access (see [docs/authentik-setup.md](docs/authentik-setup.md))
-- Rate limiting must be configured at the infrastructure layer. See [issue #129](https://github.com/SouthwestCCDC/magpie/issues/129) for implementation options (custom Caddy build, FastAPI middleware, or load balancer).
-
-For manual TLS certificates, edit `Caddyfile.prod` and uncomment the `tls` directive
-with your certificate paths.
-
-**Let's Encrypt rate limits**: Let's Encrypt enforces a limit of 50 certificates per
-registered domain per week. For testing, use `tls internal` to generate self-signed
-certificates, or configure the Let's Encrypt staging environment in `Caddyfile.prod`:
-```
-tls {
-    ca https://acme-staging-v02.api.letsencrypt.org/directory
-}
-```
-The `caddy_data` volume stores issued certificates. Persist this volume across
-container recreations to avoid requesting duplicate certificates.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow.
 
 ## Project Structure
 
@@ -206,4 +236,4 @@ uv pip install git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z
 ```
 
 ---
-*Release documentation generated with AI assistance (Claude Code w/ Opus 4.5).*
+*Documentation improved with AI assistance (Claude Code w/ Sonnet 4.5).*
