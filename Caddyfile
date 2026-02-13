@@ -276,7 +276,11 @@
 	}
 
 	# =========================================================================
-	# Test-only memory tracking endpoints (feature flag and admin scope enforced by FastAPI)
+	# TEST-ONLY MEMORY TRACKING ENDPOINTS
+	# =========================================================================
+	# Caddy's forward_auth validates token existence only; admin scope enforcement
+	# is implemented in FastAPI route dependencies (require_admin_scope).
+	# Test endpoints also check MAGPIE_ENABLE_TEST_ENDPOINTS before running.
 	handle /api/v1/_test/* {
 		forward_auth magpie:8000 {
 			uri /api/v1/auth/validate

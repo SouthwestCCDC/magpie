@@ -57,16 +57,16 @@ class TestServerSideStreamingValidation:
         # Create a real temporary file (not in-memory) to ensure realistic I/O
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
             tmp_path = Path(tmp.name)
-            try:
-                # Write chunks of data to the temp file
-                # Use zeros for faster testing (still realistic file I/O)
-                chunk_size = 1024 * 1024  # 1 MB chunks
-                chunk = b"\x00" * chunk_size
-                for _ in range(file_size // chunk_size):
-                    tmp.write(chunk)
-                tmp.flush()
-                tmp.close()
+            # Write chunks of data to the temp file
+            # Use zeros for faster testing (still realistic file I/O)
+            chunk_size = 1024 * 1024  # 1 MB chunks
+            chunk = b"\x00" * chunk_size
+            for _ in range(file_size // chunk_size):
+                tmp.write(chunk)
+            tmp.flush()
+        tmp.close()
 
+        try:
                 # Reset memory tracking on the server
                 reset_response = httpx.post(
                     f"{base_url}/api/v1/_test/memory/reset",
@@ -111,25 +111,25 @@ class TestServerSideStreamingValidation:
                     f"peak memory delta: {peak_delta / (1024 * 1024):.2f} MB"
                 )
 
-                # Verify memory stayed bounded (server is streaming, not buffering)
-                assert peak_delta < memory_threshold, (
-                    f"Server memory delta {peak_delta} bytes exceeded threshold "
-                    f"{memory_threshold} bytes - upload is being buffered, not streamed!"
-                )
+            # Verify memory stayed bounded (server is streaming, not buffering)
+            assert peak_delta < memory_threshold, (
+                f"Server memory delta {peak_delta} bytes exceeded threshold "
+                f"{memory_threshold} bytes - upload is being buffered, not streamed!"
+            )
 
-            finally:
-                # Clean up temp file
-                tmp_path.unlink(missing_ok=True)
-                # Stop memory tracking to avoid affecting other tests (best-effort cleanup)
-                try:
-                    httpx.post(
-                        f"{base_url}/api/v1/_test/memory/stop",
-                        headers={"Authorization": f"Bearer {admin_token}"},
-                        timeout=10.0,
-                    )
-                except Exception:
-                    # Don't mask original test failures with cleanup errors
-                    pass
+        finally:
+            # Clean up temp file
+            tmp_path.unlink(missing_ok=True)
+            # Stop memory tracking to avoid affecting other tests (best-effort cleanup)
+            try:
+                httpx.post(
+                    f"{base_url}/api/v1/_test/memory/stop",
+                    headers={"Authorization": f"Bearer {admin_token}"},
+                    timeout=10.0,
+                )
+            except Exception:
+                # Don't mask original test failures with cleanup errors
+                pass
 
     def test_concurrent_uploads_memory_bounded(
         self,
@@ -246,7 +246,7 @@ class TestServerSideStreamingValidation:
 
         This test uploads a 100MB file and verifies throughput is reasonable
         (not suffering from double-buffering or memory pressure). We use a
-        1.25x degradation threshold rather than the overly generous 2.5x used
+        2x degradation threshold rather than the overly generous 2.5x used
         in older tests.
 
         Baseline expectation:
@@ -267,15 +267,15 @@ class TestServerSideStreamingValidation:
         # Create temporary file
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
             tmp_path = Path(tmp.name)
-            try:
-                # Write file data
-                chunk_size = 1024 * 1024  # 1 MB chunks
-                chunk = b"\x00" * chunk_size
-                for _ in range(file_size // chunk_size):
-                    tmp.write(chunk)
-                tmp.flush()
-                tmp.close()
+            # Write file data
+            chunk_size = 1024 * 1024  # 1 MB chunks
+            chunk = b"\x00" * chunk_size
+            for _ in range(file_size // chunk_size):
+                tmp.write(chunk)
+            tmp.flush()
+        tmp.close()
 
+        try:
                 # Upload file
                 start_time = time.time()
                 with open(tmp_path, "rb") as f:
@@ -293,15 +293,25 @@ class TestServerSideStreamingValidation:
                 throughput_mbps = (file_size / (1024 * 1024)) / elapsed
                 print(f"\n100MB throughput: {elapsed:.2f}s ({throughput_mbps:.2f} MB/s)")
 
-                # Warn if throughput is low, but don't fail the test
-                # Throughput varies significantly in CI (160-400+ MB/s observed)
-                # The key validation is memory tracking, not throughput
-                if throughput_mbps < min_throughput_mbps:
-                    print(
-                        f"WARNING: Throughput {throughput_mbps:.2f} MB/s is below "
-                        f"baseline {min_throughput_mbps} MB/s. This may indicate I/O issues "
-                        f"but is often just CI variance."
-                    )
+            # Warn if throughput is low, but don't fail the test
+            # Throughput varies significantly in CI (160-400+ MB/s observed)
+            # The key validation is memory tracking, not throughput
+            if throughput_mbps < min_throughput_mbps:
+                print(
+                    f"WARNING: Throughput {throughput_mbps:.2f} MB/s is below "
+                    f"baseline {min_throughput_mbps} MB/s. This may indicate I/O issues "
+                    f"but is often just CI variance."
+                )
 
-            finally:
-                tmp_path.unlink(missing_ok=True)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+            # Stop memory tracking if it was left active (best-effort cleanup)
+            try:
+                httpx.post(
+                    f"{base_url}/api/v1/_test/memory/stop",
+                    headers={"Authorization": f"Bearer {admin_token}"},
+                    timeout=10.0,
+                )
+            except Exception:
+                # Don't mask original test failures with cleanup errors
+                pass

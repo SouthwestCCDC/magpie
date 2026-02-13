@@ -76,9 +76,9 @@ uv run pytest tests/e2e/test_upload_streaming_validation.py::TestServerSideStrea
 ### Server-Side Instrumentation
 
 Test-only endpoints at `/api/v1/_test/memory/*`:
-- `POST /api/v1/_test/memory/reset` - Take baseline memory snapshot
-- `GET /api/v1/_test/memory/stats` - Get peak/current memory delta
-- `POST /api/v1/_test/memory/stop` - Stop memory tracking
+- `POST /api/v1/_test/memory/reset` - Take baseline memory snapshot, start tracemalloc
+- `GET /api/v1/_test/memory/stats` - Get peak/current memory delta since reset
+- `POST /api/v1/_test/memory/stop` - Stop tracemalloc and clear baseline state
 
 **Security:**
 - Requires admin scope

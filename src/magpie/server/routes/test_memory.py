@@ -87,7 +87,7 @@ async def reset_memory_tracking(
 @router.post("/api/v1/_test/memory/stop")
 async def stop_memory_tracking(
     settings: Annotated[MagpieSettings, Depends(get_magpie_settings)],
-    _admin: Annotated[TokenInfo, Depends(require_admin_scope)] = None,
+    _admin: Annotated[TokenInfo, Depends(require_admin_scope)],
 ) -> dict[str, str]:
     """Stop memory tracking and clear baseline snapshot.
 
@@ -107,13 +107,14 @@ async def stop_memory_tracking(
             detail="Test endpoints are disabled in this environment",
         )
 
-    global _memory_tracking_active, _baseline_snapshot
+    global _memory_tracking_active, _baseline_snapshot, _baseline_current
 
     if tracemalloc.is_tracing():
         tracemalloc.stop()
         logger.info("memory_tracking_stopped", msg="tracemalloc stopped")
 
     _baseline_snapshot = None
+    _baseline_current = 0
     _memory_tracking_active = False
 
     logger.info("memory_tracking_cleared", msg="Memory tracking state cleared")
@@ -124,7 +125,7 @@ async def stop_memory_tracking(
 @router.get("/api/v1/_test/memory/stats")
 async def get_memory_stats(
     settings: Annotated[MagpieSettings, Depends(get_magpie_settings)],
-    _admin: Annotated[TokenInfo, Depends(require_admin_scope)] = None,
+    _admin: Annotated[TokenInfo, Depends(require_admin_scope)],
 ) -> MemoryStats:
     """Get current memory tracking statistics.
 

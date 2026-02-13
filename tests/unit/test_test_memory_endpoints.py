@@ -156,3 +156,62 @@ class TestMemoryEndpointsEnabled:
 
         # Cleanup
         client_enabled.post("/api/v1/_test/memory/stop")
+
+
+class TestMemoryEndpointsAuthEnforcement:
+    """Tests verifying admin scope enforcement for test memory endpoints."""
+
+    @pytest.fixture
+    def test_config_enabled(self, tmp_path: Path) -> MagpieSettings:
+        """Create test configuration with test endpoints enabled."""
+        config = MagpieSettings(
+            storage_path=tmp_path,
+            database_path=tmp_path / "magpie.db",
+            enable_test_endpoints=True,
+        )
+        config.temp_path.mkdir(parents=True, exist_ok=True)
+        return config
+
+    @pytest.fixture
+    def client_non_admin(self, test_config_enabled: MagpieSettings) -> TestClient:
+        """Create test client with test endpoints enabled but non-admin scope."""
+
+        def override_settings() -> MagpieSettings:
+            return test_config_enabled
+
+        def non_admin_scope() -> TokenInfo:
+            from fastapi import HTTPException, status
+
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin scope required",
+            )
+
+        app.dependency_overrides[get_magpie_settings] = override_settings
+        app.dependency_overrides[require_admin_scope] = non_admin_scope
+        yield TestClient(app)
+        app.dependency_overrides.clear()
+
+    def test_reset_endpoint_rejects_non_admin(self, client_non_admin: TestClient) -> None:
+        """POST /api/v1/_test/memory/reset returns 403 for non-admin tokens."""
+        response = client_non_admin.post("/api/v1/_test/memory/reset")
+
+        assert response.status_code == 403
+        data = response.json()
+        assert "Admin scope required" in data["detail"]
+
+    def test_stats_endpoint_rejects_non_admin(self, client_non_admin: TestClient) -> None:
+        """GET /api/v1/_test/memory/stats returns 403 for non-admin tokens."""
+        response = client_non_admin.get("/api/v1/_test/memory/stats")
+
+        assert response.status_code == 403
+        data = response.json()
+        assert "Admin scope required" in data["detail"]
+
+    def test_stop_endpoint_rejects_non_admin(self, client_non_admin: TestClient) -> None:
+        """POST /api/v1/_test/memory/stop returns 403 for non-admin tokens."""
+        response = client_non_admin.post("/api/v1/_test/memory/stop")
+
+        assert response.status_code == 403
+        data = response.json()
+        assert "Admin scope required" in data["detail"]
