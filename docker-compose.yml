@@ -52,6 +52,7 @@ services:
       - MAGPIE_OTEL_ENABLED=${MAGPIE_OTEL_ENABLED:-false}
       - MAGPIE_OTEL_ENDPOINT=${MAGPIE_OTEL_ENDPOINT:-}
       - MAGPIE_OTEL_SERVICE_NAME=${MAGPIE_OTEL_SERVICE_NAME:-magpie}
+      - MAGPIE_ENABLE_TEST_ENDPOINTS=${MAGPIE_ENABLE_TEST_ENDPOINTS:-false}
     expose:
       - "8000"  # Internal only - accessed via Caddy
     restart: unless-stopped

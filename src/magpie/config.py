@@ -61,6 +61,9 @@ class MagpieSettings(BaseSettings):
     # NOTE: This setting is consumed by Caddy, not the Python application
     allowed_cidrs: str = ""  # MAGPIE_ALLOWED_CIDRS
 
+    # Test endpoints (NEVER enable in production)
+    enable_test_endpoints: bool = False  # MAGPIE_ENABLE_TEST_ENDPOINTS
+
     @field_validator("allowed_cidrs")
     @classmethod
     def validate_cidrs(cls, v: str) -> str:
