@@ -46,6 +46,7 @@ def app_with_version_middleware(monkeypatch) -> FastAPI:
     """
     # Fix server version before middleware initialization
     import magpie.server.middleware as mw_module
+
     monkeypatch.setattr(mw_module, "__version__", "1.2.3")
 
     app = FastAPI()
@@ -326,6 +327,7 @@ class TestVersionCheckMiddleware:
         """
         # Monkeypatch server version to stable 1.2.3
         import magpie.server.middleware as mw_module
+
         monkeypatch.setattr(mw_module, "__version__", "1.2.3")
 
         app = FastAPI()
@@ -351,6 +353,7 @@ class TestVersionCheckMiddleware:
         """
         # Monkeypatch server version to stable 1.2.3
         import magpie.server.middleware as mw_module
+
         monkeypatch.setattr(mw_module, "__version__", "1.2.3")
 
         app = FastAPI()
