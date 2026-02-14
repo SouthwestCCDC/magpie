@@ -19,6 +19,7 @@ from magpie.server.routes.auth import router as auth_router
 from magpie.server.routes.gc import router as gc_router
 from magpie.server.routes.status import router as status_router
 from magpie.server.routes.tags import router as tags_router
+from magpie.server.routes.test_memory import router as test_memory_router
 from magpie.server.routes.upload import router as upload_router
 
 # Configure logging at module level, before app creation,
@@ -57,6 +58,7 @@ app.include_router(tags_router)
 app.include_router(auth_router)
 app.include_router(gc_router)
 app.include_router(status_router)
+app.include_router(test_memory_router)  # Endpoints check enable_test_endpoints themselves
 
 
 class HealthResponse(BaseModel):

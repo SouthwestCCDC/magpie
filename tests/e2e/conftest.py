@@ -89,6 +89,7 @@ def docker_services(
     # Use the temp directory for data isolation - this overrides the default ./data
     # The temp directory will contain both artifacts/ subdirectory and magpie.db file
     env["MAGPIE_DATA_DIR"] = str(temp_data_dir)
+    env["MAGPIE_ENABLE_TEST_ENDPOINTS"] = "true"  # Enable memory tracking endpoints for E2E tests
 
     compose_cmd = ["docker", "compose", "-f", str(PROJECT_ROOT / "docker-compose.yml")]
 
