@@ -1,17 +1,21 @@
 # Quick Start Guide
 
-Get Magpie running locally in 5 minutes.
+Get Magpie running in 5 minutes using the installer script.
 
 **Prerequisites:** Python 3.13+, git, Docker, and `uv` ([install guide](https://docs.astral.sh/uv/))
 
-## 1. Start Server
+## 1. Deploy Server
 
 ```bash
 git clone https://github.com/SouthwestCCDC/magpie
 cd magpie
-docker compose up -d
-docker compose logs magpie | grep "ADMIN TOKEN"  # Save this token
+sudo ./scripts/magpie-deploy.sh install --tls-mode off --noninteractive
+sudo ./scripts/magpie-deploy.sh logs | grep "ADMIN TOKEN"  # Save this token
 ```
+
+The `--tls-mode off` option is recommended for local testing or when running behind a reverse proxy. For production with Let's Encrypt, use `--tls-mode auto --domain magpie.example.com` instead.
+
+See [Installation Guide](installation.md) for TLS options and advanced configuration.
 
 ## 2. Install Client
 
@@ -46,23 +50,19 @@ URL=$(magpie url apps/myapp:stable)  # For curl/wget
 # Provenance
 magpie push build.tar.gz --to builds/app --source-uri "https://github.com/org/repo/commit/abc123"
 magpie info builds/app:latest
-
-# Token management
-docker compose exec magpie magpie-ctl token create --name readonly --scope read
-docker compose exec magpie magpie-ctl token create --name ci --scope write
 ```
 
 ## Troubleshooting
 
-**Connection refused:** Check `docker compose ps` and `docker compose logs magpie`
+**Connection refused:** Check status with `sudo ./scripts/magpie-deploy.sh status`
 
 **Auth errors:** Verify token with `magpie status`
 
-**Port conflict:** Set `MAGPIE_HTTP_PORT=8888` and update `MAGPIE_SERVER` URL
+**Port conflict:** Reinstall with `--http-port 8888` and update `MAGPIE_SERVER` URL
 
 ## Next Steps
 
-- [Installation Guide](installation.md) - Production deployment
+- [Installation Guide](installation.md) - Advanced deployment options and TLS configuration
 - [User Guide](user-guide.md) - Complete CLI reference
 - [Production Checklist](production-checklist.md) - Pre-deployment verification
 
