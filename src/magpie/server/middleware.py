@@ -139,6 +139,7 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
     Stamps every response with X-Magpie-Server-Version.
     Reads User-Agent header to check client version.
     Returns 426 Upgrade Required if client is too old.
+    Adds X-Magpie-Upgrade-Available header if client is compatible but outdated.
     """
 
     def __init__(self, app: ASGIApp, min_client_version: str | None = None):
@@ -169,6 +170,18 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
                 f"Failed to parse min_client_version {self.min_client_version!r}: {e}"
             ) from e
 
+        # Pre-parse server version for upgrade-available check
+        try:
+            parsed_server = parse(self.server_version)
+            if not isinstance(parsed_server, Version):
+                raise ValueError(
+                    f"Invalid server_version: {self.server_version!r} "
+                    f"(parsed as {type(parsed_server).__name__}, expected Version)"
+                )
+            self._parsed_server_version = parsed_server
+        except InvalidVersion as e:
+            raise ValueError(f"Failed to parse server_version {self.server_version!r}: {e}") from e
+
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
@@ -179,7 +192,8 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
             call_next: Next middleware or route handler
 
         Returns:
-            HTTP response (426 if client too old, otherwise normal response)
+            HTTP response (426 if client too old, otherwise normal response with
+            optional X-Magpie-Upgrade-Available header)
         """
         # Exempt /health endpoint from version checking (with or without trailing slash)
         normalized_path = request.url.path.rstrip("/") or "/"
@@ -190,6 +204,8 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
 
         # Parse User-Agent header for client version
         user_agent = request.headers.get("User-Agent", "")
+        client_version: Version | None = None
+
         if user_agent.startswith("magpie-cli/"):
             # Extract version string from "magpie-cli/0.1.0" or "magpie-cli/0.1.0 python-httpx/..."
             # Handle edge case: "magpie-cli/" with no version
@@ -203,9 +219,11 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
             client_version_str = version_part[0]
 
             try:
-                client_version = parse(client_version_str)
+                parsed_client = parse(client_version_str)
 
-                if isinstance(client_version, Version):
+                if isinstance(parsed_client, Version):
+                    client_version = parsed_client
+
                     if client_version < self._parsed_min_client_version:
                         return JSONResponse(
                             status_code=426,
@@ -235,5 +253,9 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
         # Process request normally
         response = await call_next(request)
         response.headers["X-Magpie-Server-Version"] = self.server_version
+
+        # Add upgrade-available header if client is compatible but outdated
+        if client_version is not None and client_version < self._parsed_server_version:
+            response.headers["X-Magpie-Upgrade-Available"] = self.server_version
 
         return response
