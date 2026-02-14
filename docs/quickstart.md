@@ -10,7 +10,7 @@ Get Magpie running in 5 minutes using the installer script.
 git clone https://github.com/SouthwestCCDC/magpie
 cd magpie
 sudo ./scripts/magpie-deploy.sh install --tls-mode off --noninteractive
-sudo ./scripts/magpie-deploy.sh logs | grep "ADMIN TOKEN"  # Save this token
+sudo ./scripts/magpie-deploy.sh logs | grep "Admin token:"  # Save this token
 ```
 
 The `--tls-mode off` option is recommended for local testing or when running behind a reverse proxy. For production with Let's Encrypt, use `--tls-mode auto --domain magpie.example.com` instead.
@@ -45,7 +45,8 @@ magpie tag apps/myapp@abcdef12 --as v1.0.0  # Pin specific version
 
 # Scripting
 magpie get apps/myapp:stable -o myapp.tar.gz
-URL=$(magpie url apps/myapp:stable)  # For curl/wget
+URL=$(magpie url apps/myapp:stable)
+curl -H "Authorization: Bearer $MAGPIE_TOKEN" -o myapp.tar.gz "$URL"
 
 # Provenance
 magpie push build.tar.gz --to builds/app --source-uri "https://github.com/org/repo/commit/abc123"
