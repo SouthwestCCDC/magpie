@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from functools import wraps
-from typing import TYPE_CHECKING, Callable, TypeVar
+from typing import TYPE_CHECKING
 
 import click
 
@@ -11,42 +10,9 @@ from magpie.cli.client import get_client
 from magpie.cli.config import get_ca_cert, get_server, get_timeout, get_token
 from magpie.cli.errors import handle_response_error, with_network_error_handling
 from magpie.cli.formatting import OutputFormat
-from magpie.config import get_settings
 
 if TYPE_CHECKING:
     import httpx
-
-F = TypeVar("F", bound=Callable[..., object])
-
-
-def sentry_wrapper(func: F) -> F:
-    """Wrap CLI command to capture exceptions in Sentry if configured.
-
-    Only initializes Sentry if MAGPIE_SENTRY_DSN is set.
-    """
-
-    @wraps(func)
-    def wrapper(*args: object, **kwargs: object) -> object:
-        settings = get_settings()
-
-        if not settings.sentry_dsn:
-            return func(*args, **kwargs)
-
-        import sentry_sdk
-
-        sentry_sdk.init(
-            dsn=settings.sentry_dsn,
-            environment="cli",
-            send_default_pii=False,
-        )
-
-        try:
-            return func(*args, **kwargs)
-        except Exception as exc:
-            sentry_sdk.capture_exception(exc)
-            raise
-
-    return wrapper  # type: ignore[return-value]
 
 
 class CLIContext:
@@ -154,7 +120,6 @@ def cli(
 )
 @pass_context
 @with_network_error_handling
-@sentry_wrapper
 def version(ctx: CLIContext, server_version: bool) -> None:
     """Show version.
 
@@ -229,4 +194,4 @@ cli.add_command(config_cmd, name="config")
 
 
 # Keep the old 'main' as an alias for backwards compatibility with entry point
-main = sentry_wrapper(cli)
+main = cli

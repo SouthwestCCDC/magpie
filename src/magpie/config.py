@@ -47,7 +47,7 @@ class MagpieSettings(BaseSettings):
     log_format: Literal["json", "console"] = "json"  # MAGPIE_LOG_FORMAT
 
     # Observability settings
-    sentry_dsn: str | None = None  # MAGPIE_SENTRY_DSN
+    sentry_dsn: str | None = None  # MAGPIE_SENTRY_DSN (server-side only)
     sentry_traces_sample_rate: float = Field(
         default=1.0, ge=0.0, le=1.0
     )  # MAGPIE_SENTRY_TRACES_SAMPLE_RATE
@@ -60,6 +60,9 @@ class MagpieSettings(BaseSettings):
     # Example: "10.0.0.0/8,192.168.1.0/24"
     # NOTE: This setting is consumed by Caddy, not the Python application
     allowed_cidrs: str = ""  # MAGPIE_ALLOWED_CIDRS
+
+    # Test endpoints (NEVER enable in production)
+    enable_test_endpoints: bool = False  # MAGPIE_ENABLE_TEST_ENDPOINTS
 
     @field_validator("allowed_cidrs")
     @classmethod

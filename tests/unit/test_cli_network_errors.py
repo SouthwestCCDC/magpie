@@ -30,7 +30,11 @@ class TestFormatNetworkError:
         connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
         connect_error.__cause__ = dns_error
 
-        result = format_network_error(connect_error, server="https://magpie.example.com")
+        result = format_network_error(
+            connect_error, "test_operation", server="https://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "DNS resolution failed" in result
@@ -44,7 +48,11 @@ class TestFormatNetworkError:
         connect_error = httpx.ConnectError("Connection refused", request=MagicMock())
         connect_error.__cause__ = refused_error
 
-        result = format_network_error(connect_error, server="https://magpie.example.com")
+        result = format_network_error(
+            connect_error, "test_operation", server="https://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "Connection refused" in result
@@ -58,7 +66,11 @@ class TestFormatNetworkError:
         connect_error = httpx.ConnectError("TLS handshake failed", request=MagicMock())
         connect_error.__cause__ = ssl_error
 
-        result = format_network_error(connect_error, server="https://magpie.example.com")
+        result = format_network_error(
+            connect_error, "test_operation", server="https://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "TLS handshake failed" in result
@@ -72,7 +84,11 @@ class TestFormatNetworkError:
         connect_error = httpx.ConnectError("Network unreachable", request=MagicMock())
         connect_error.__cause__ = net_error
 
-        result = format_network_error(connect_error, server="https://magpie.example.com")
+        result = format_network_error(
+            connect_error, "test_operation", server="https://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "Network unreachable" in result
@@ -86,7 +102,11 @@ class TestFormatNetworkError:
         connect_error = httpx.ConnectError("Connection reset", request=MagicMock())
         connect_error.__cause__ = reset_error
 
-        result = format_network_error(connect_error, server="https://magpie.example.com")
+        result = format_network_error(
+            connect_error, "test_operation", server="https://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "Connection reset" in result
@@ -100,7 +120,11 @@ class TestFormatNetworkError:
         connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
         connect_error.__cause__ = generic_error
 
-        result = format_network_error(connect_error, server="https://magpie.example.com")
+        result = format_network_error(
+            connect_error, "test_operation", server="https://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "Connection failed" in result
@@ -113,7 +137,11 @@ class TestFormatNetworkError:
         # Explicitly set no cause
         connect_error.__cause__ = None
 
-        result = format_network_error(connect_error, server="https://magpie.example.com")
+        result = format_network_error(
+            connect_error, "test_operation", server="https://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "Connection failed" in result
@@ -123,7 +151,11 @@ class TestFormatNetworkError:
         """Timeout error produces helpful error message."""
         timeout_error = httpx.TimeoutException("Request timed out", request=MagicMock())
 
-        result = format_network_error(timeout_error, server="https://magpie.example.com")
+        result = format_network_error(
+            timeout_error, "test_operation", server="https://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "timed out" in result
@@ -134,7 +166,11 @@ class TestFormatNetworkError:
         """Generic request error produces error message."""
         request_error = httpx.RequestError("Network error", request=MagicMock())
 
-        result = format_network_error(request_error, server="https://magpie.example.com")
+        result = format_network_error(
+            request_error, "test_operation", server="https://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "Network error" in result
@@ -146,17 +182,100 @@ class TestFormatNetworkError:
         connect_error.__cause__ = socket.gaierror("Name or service not known")
 
         result = format_network_error(
-            connect_error, server="https://artifacts.example.com:8443/api"
+            connect_error, "test_operation", server="https://artifacts.example.com:8443/api"
         )
 
         assert "artifacts.example.com:8443" in result
         assert "https://" not in result
 
+    def test_credentials_not_leaked_in_error(self) -> None:
+        """Credentials embedded in URLs are never shown in error messages."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        connect_error.__cause__ = socket.gaierror("Name or service not known")
+
+        # Test with embedded username and password
+        result = format_network_error(
+            connect_error,
+            "test_operation",
+            server="https://user:secret_password@artifacts.example.com/api",
+        )
+
+        # Hostname should be present
+        assert "artifacts.example.com" in result
+        # Credentials should NOT be present - check for the full userinfo string
+        assert "user:secret_password@" not in result
+        assert "secret_password" not in result
+        # Protocol should not be in the hostname part
+        assert "https://" not in result
+
+    def test_credentials_with_port_not_leaked(self) -> None:
+        """Credentials with port numbers are handled safely."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        connect_error.__cause__ = socket.gaierror("Name or service not known")
+
+        result = format_network_error(
+            connect_error,
+            "test_operation",
+            server="https://admin:pass123@artifacts.example.com:8443/api",
+        )
+
+        # Hostname and port should be present
+        assert "artifacts.example.com:8443" in result
+        # Credentials should NOT be present - check for the full userinfo string
+        assert "admin:pass123@" not in result
+        assert "pass123" not in result
+
+    def test_ipv6_with_port_formatted_correctly(self) -> None:
+        """IPv6 addresses are wrapped in brackets when port is present."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        connect_error.__cause__ = socket.gaierror("Name or service not known")
+
+        result = format_network_error(
+            connect_error, "test_operation", server="https://[::1]:8443/api"
+        )
+
+        # IPv6 with port should use bracket notation
+        assert "[::1]:8443" in result
+        # Protocol should not be present
+        assert "https://" not in result
+
+    def test_invalid_port_does_not_leak_credentials(self) -> None:
+        """URLs with invalid ports and credentials still don't leak credentials."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+        connect_error.__cause__ = socket.gaierror("Name or service not known")
+
+        result = format_network_error(
+            connect_error,
+            "test_operation",
+            server="https://user:pass@artifacts.example.com:invalid/api",
+        )
+
+        # Hostname should be present (without port since it's invalid)
+        assert "artifacts.example.com" in result
+        # Credentials should NOT be present
+        assert "user:pass@" not in result
+        assert "pass" not in result
+
+    def test_unparseable_url_uses_safe_placeholder(self) -> None:
+        """Completely unparseable URLs fall back to 'server' instead of leaking input."""
+        connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
+
+        # Provide a malformed URL with credentials that can't be parsed properly
+        result = format_network_error(connect_error, "test_operation", server="://user:secret@host")
+
+        # Should use safe placeholder
+        assert "'server'" in result
+        # Should NOT echo back the credentials from the malformed URL
+        assert "user:secret@" not in result
+        assert "secret" not in result
+
     def test_no_server_url_provided(self) -> None:
         """Error message uses 'server' when no URL provided."""
         connect_error = httpx.ConnectError("Connection failed", request=MagicMock())
 
-        result = format_network_error(connect_error, server=None)
+        result = format_network_error(connect_error, "test_operation", server=None)
+
+        assert "test_operation failed:" in result
 
         assert "server" in result
 
@@ -164,7 +283,11 @@ class TestFormatNetworkError:
         """Standalone socket.gaierror produces helpful DNS error message."""
         dns_error = socket.gaierror("Name or service not known")
 
-        result = format_network_error(dns_error, server="https://magpie.example.com")
+        result = format_network_error(
+            dns_error, "test_operation", server="https://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "DNS resolution failed" in result
@@ -175,7 +298,11 @@ class TestFormatNetworkError:
         """ProxyError produces helpful error message."""
         proxy_error = httpx.ProxyError("Proxy connection failed")
 
-        result = format_network_error(proxy_error, server="https://magpie.example.com")
+        result = format_network_error(
+            proxy_error, "test_operation", server="https://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "Proxy error" in result
@@ -186,7 +313,11 @@ class TestFormatNetworkError:
         """UnsupportedProtocol produces helpful error message."""
         protocol_error = httpx.UnsupportedProtocol("Unsupported protocol 'ftp'")
 
-        result = format_network_error(protocol_error, server="ftp://magpie.example.com")
+        result = format_network_error(
+            protocol_error, "test_operation", server="ftp://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "Unsupported protocol" in result
@@ -197,7 +328,11 @@ class TestFormatNetworkError:
         """ProtocolError produces helpful error message."""
         protocol_error = httpx.ProtocolError("Invalid HTTP response")
 
-        result = format_network_error(protocol_error, server="https://magpie.example.com")
+        result = format_network_error(
+            protocol_error, "test_operation", server="https://magpie.example.com"
+        )
+
+        assert "test_operation failed:" in result
 
         assert "magpie.example.com" in result
         assert "Protocol error" in result
