@@ -6,7 +6,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from magpie import __version__
 from magpie.server.middleware import VersionCheckMiddleware, get_min_client_version
 
 
@@ -39,10 +38,18 @@ class TestGetMinClientVersion:
 
 
 @pytest.fixture
-def app_with_version_middleware() -> FastAPI:
-    """Create a test FastAPI app with VersionCheckMiddleware."""
+def app_with_version_middleware(monkeypatch) -> FastAPI:
+    """Create a test FastAPI app with VersionCheckMiddleware and fixed server version.
+
+    Monkeypatches the server version to "1.2.3" for deterministic testing of
+    version comparison logic.
+    """
+    # Fix server version before middleware initialization
+    import magpie.server.middleware as mw_module
+    monkeypatch.setattr(mw_module, "__version__", "1.2.3")
+
     app = FastAPI()
-    app.add_middleware(VersionCheckMiddleware, min_client_version="0.1.0")
+    app.add_middleware(VersionCheckMiddleware, min_client_version="1.2.0")
 
     @app.get("/test")
     async def test_endpoint() -> dict:
@@ -50,7 +57,7 @@ def app_with_version_middleware() -> FastAPI:
 
     @app.get("/health")
     async def health_endpoint() -> dict:
-        return {"status": "ok", "version": __version__}
+        return {"status": "ok", "version": "1.2.3"}
 
     return app
 
@@ -68,29 +75,29 @@ class TestVersionCheckMiddleware:
         """Test that X-Magpie-Server-Version header is in all responses."""
         response = client.get("/test")
         assert "X-Magpie-Server-Version" in response.headers
-        assert response.headers["X-Magpie-Server-Version"] == __version__
+        assert response.headers["X-Magpie-Server-Version"] == "1.2.3"
 
     def test_server_version_header_on_health(self, client: TestClient) -> None:
         """Test that X-Magpie-Server-Version header is in /health responses."""
         response = client.get("/health")
         assert "X-Magpie-Server-Version" in response.headers
-        assert response.headers["X-Magpie-Server-Version"] == __version__
+        assert response.headers["X-Magpie-Server-Version"] == "1.2.3"
 
     def test_compatible_client_allowed(self, client: TestClient) -> None:
         """Test that compatible client versions are allowed through."""
-        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.1.0"})
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/1.2.0"})
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
 
     def test_newer_client_allowed(self, client: TestClient) -> None:
         """Test that newer client versions are allowed through."""
-        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.2.0"})
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/1.3.0"})
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
 
     def test_outdated_client_rejected(self, client: TestClient) -> None:
         """Test that outdated client versions get 426 Upgrade Required."""
-        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.0.5"})
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/1.1.9"})
         assert response.status_code == 426
         assert "X-Magpie-Server-Version" in response.headers
         assert "X-Magpie-Min-Client-Version" in response.headers
@@ -100,8 +107,8 @@ class TestVersionCheckMiddleware:
         assert "Client version too old" in data["error"]
         assert "detail" in data
         assert "pip install --upgrade" in data["detail"]
-        assert data["client_version"] == "0.0.5"
-        assert data["min_client_version"] == "0.1.0"
+        assert data["client_version"] == "1.1.9"
+        assert data["min_client_version"] == "1.2.0"
 
     def test_missing_user_agent_allowed(self, client: TestClient) -> None:
         """Test that requests without User-Agent are allowed (don't block non-CLI clients)."""
@@ -131,23 +138,23 @@ class TestVersionCheckMiddleware:
         """Test that User-Agent with additional info is parsed correctly."""
         response = client.get(
             "/test",
-            headers={"User-Agent": "magpie-cli/0.1.0 python-httpx/0.27.0"},
+            headers={"User-Agent": "magpie-cli/1.2.0 python-httpx/0.27.0"},
         )
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
 
     def test_health_endpoint_exempt_from_version_check(self, client: TestClient) -> None:
         """Test that /health endpoint bypasses version checking even with old client."""
-        response = client.get("/health", headers={"User-Agent": "magpie-cli/0.0.1"})
+        response = client.get("/health", headers={"User-Agent": "magpie-cli/1.0.0"})
         assert response.status_code == 200
-        assert response.json() == {"status": "ok", "version": __version__}
+        assert response.json() == {"status": "ok", "version": "1.2.3"}
         assert "X-Magpie-Server-Version" in response.headers
 
     def test_health_endpoint_with_trailing_slash_exempt(self, client: TestClient) -> None:
         """Test that /health/ (with trailing slash) bypasses version checking."""
-        response = client.get("/health/", headers={"User-Agent": "magpie-cli/0.0.1"})
+        response = client.get("/health/", headers={"User-Agent": "magpie-cli/1.0.0"})
         assert response.status_code == 200
-        assert response.json() == {"status": "ok", "version": __version__}
+        assert response.json() == {"status": "ok", "version": "1.2.3"}
         assert "X-Magpie-Server-Version" in response.headers
 
     def test_custom_min_version_enforcement(self) -> None:
@@ -256,17 +263,17 @@ class TestVersionCheckMiddleware:
         self, client: TestClient
     ) -> None:
         """Test that X-Magpie-Upgrade-Available header is added for compatible but outdated clients."""
-        # Assuming server is 0.1.3, min is 0.1.0
-        # Client 0.1.0 is compatible but outdated
-        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.1.0"})
+        # Server is 1.2.3, min is 1.2.0
+        # Client 1.2.0 is compatible but outdated
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/1.2.0"})
         assert response.status_code == 200
         assert "X-Magpie-Upgrade-Available" in response.headers
-        assert response.headers["X-Magpie-Upgrade-Available"] == __version__
+        assert response.headers["X-Magpie-Upgrade-Available"] == "1.2.3"
 
     def test_no_upgrade_header_for_current_client(self, client: TestClient) -> None:
         """Test that X-Magpie-Upgrade-Available header is NOT added when client matches server."""
-        # Client version matches server version
-        response = client.get("/test", headers={"User-Agent": f"magpie-cli/{__version__}"})
+        # Client version matches server version (1.2.3)
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/1.2.3"})
         assert response.status_code == 200
         assert "X-Magpie-Upgrade-Available" not in response.headers
 
@@ -291,31 +298,38 @@ class TestVersionCheckMiddleware:
 
     def test_upgrade_available_header_for_patch_version_behind(self, client: TestClient) -> None:
         """Test upgrade header when client is one patch version behind."""
-        # Server is 0.1.2, client is 0.1.1
-        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.1.1"})
+        # Server is 1.2.3, client is 1.2.2
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/1.2.2"})
         assert response.status_code == 200
         assert "X-Magpie-Upgrade-Available" in response.headers
-        assert response.headers["X-Magpie-Upgrade-Available"] == __version__
+        assert response.headers["X-Magpie-Upgrade-Available"] == "1.2.3"
 
     def test_no_upgrade_header_on_426_response(self, client: TestClient) -> None:
         """Test that X-Magpie-Upgrade-Available header is NOT added on 426 responses."""
         # Incompatible client should get 426, not upgrade-available header
-        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.0.5"})
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/1.1.9"})
         assert response.status_code == 426
         assert "X-Magpie-Upgrade-Available" not in response.headers
 
     def test_no_upgrade_header_on_health_endpoint(self, client: TestClient) -> None:
         """Test that X-Magpie-Upgrade-Available header is NOT added on /health endpoint."""
         # Even though client is outdated, /health should not add upgrade header
-        response = client.get("/health", headers={"User-Agent": "magpie-cli/0.1.0"})
+        response = client.get("/health", headers={"User-Agent": "magpie-cli/1.2.0"})
         assert response.status_code == 200
         assert "X-Magpie-Upgrade-Available" not in response.headers
 
-    def test_upgrade_header_with_dev_versions(self) -> None:
-        """Test upgrade header with dev versions."""
+    def test_upgrade_header_with_dev_versions(self, monkeypatch) -> None:
+        """Test upgrade header with dev versions.
+
+        Dev client (1.2.3.dev0) talking to stable server (1.2.3) IS outdated per PEP 440,
+        so should get the upgrade header.
+        """
+        # Monkeypatch server version to stable 1.2.3
+        import magpie.server.middleware as mw_module
+        monkeypatch.setattr(mw_module, "__version__", "1.2.3")
+
         app = FastAPI()
-        # Simulate dev server (0.0.0-dev) with min client 0.0.0.dev0
-        app.add_middleware(VersionCheckMiddleware, min_client_version="0.0.0.dev0")
+        app.add_middleware(VersionCheckMiddleware, min_client_version="1.2.0")
 
         @app.get("/test")
         async def test_endpoint() -> dict:
@@ -323,18 +337,24 @@ class TestVersionCheckMiddleware:
 
         client = TestClient(app)
 
-        # Older dev client should NOT get upgrade header (same version)
-        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.0.0-dev"})
+        # Dev client (1.2.3.dev0) < stable server (1.2.3) per PEP 440
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/1.2.3-dev"})
         assert response.status_code == 200
-        # Dev versions are tricky - 0.0.0-dev should parse as 0.0.0.dev0
-        # If server is also 0.0.0.dev0, no upgrade header
-        # This test documents current behavior
+        assert "X-Magpie-Upgrade-Available" in response.headers
+        assert response.headers["X-Magpie-Upgrade-Available"] == "1.2.3"
 
-    def test_upgrade_header_with_pre_release_versions(self) -> None:
-        """Test upgrade header with pre-release versions."""
+    def test_upgrade_header_with_pre_release_versions(self, monkeypatch) -> None:
+        """Test upgrade header with pre-release versions.
+
+        Pre-release client (1.2.3a1) talking to stable server (1.2.3) IS outdated per PEP 440,
+        so should get the upgrade header.
+        """
+        # Monkeypatch server version to stable 1.2.3
+        import magpie.server.middleware as mw_module
+        monkeypatch.setattr(mw_module, "__version__", "1.2.3")
+
         app = FastAPI()
-        # Simulate alpha server (0.1.0a2) with min client 0.1.0a1
-        app.add_middleware(VersionCheckMiddleware, min_client_version="0.1.0a1")
+        app.add_middleware(VersionCheckMiddleware, min_client_version="1.2.0")
 
         @app.get("/test")
         async def test_endpoint() -> dict:
@@ -342,9 +362,8 @@ class TestVersionCheckMiddleware:
 
         client = TestClient(app)
 
-        # Client 0.1.0a1 is compatible but older than server 0.1.0a2
-        response = client.get("/test", headers={"User-Agent": "magpie-cli/0.1.0a1"})
+        # Alpha client (1.2.3a1) < stable server (1.2.3) per PEP 440
+        response = client.get("/test", headers={"User-Agent": "magpie-cli/1.2.3a1"})
         assert response.status_code == 200
-        # Should get upgrade header since a1 < a2
-        # Note: This depends on server version being a2, which we can't set in test
-        # This test documents the expected behavior
+        assert "X-Magpie-Upgrade-Available" in response.headers
+        assert response.headers["X-Magpie-Upgrade-Available"] == "1.2.3"
