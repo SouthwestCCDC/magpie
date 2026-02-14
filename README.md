@@ -36,10 +36,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full development workflow.
 docker pull ghcr.io/southwestccdc/magpie:latest
 
 # Client (via pip)
-uv pip install git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z
+uv pip install git+https://github.com/SouthwestCCDC/magpie@v0.1.2
 ```
 
-Container tags: Full versions (`1.0.1`) are immutable. Major/minor tags (`1`, `1.0`) and `latest` are mutable and track the latest patch release. Pin to full versions for stable deployments.
+Pin to full version tags (`1.0.1`) for stable deployments; `latest` and partial versions track newest releases.
 
 See [Installation Guide](docs/installation.md) for deployment details and [Release Notes](docs/releases.md) for version history.
 

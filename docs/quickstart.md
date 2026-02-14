@@ -2,7 +2,7 @@
 
 Get Magpie running locally in 5 minutes.
 
-**Prerequisites:** Docker and `uv` ([install guide](https://docs.astral.sh/uv/))
+**Prerequisites:** Python 3.13+, git, Docker, and `uv` ([install guide](https://docs.astral.sh/uv/))
 
 ## 1. Start Server
 
@@ -16,7 +16,7 @@ docker compose logs magpie | grep "ADMIN TOKEN"  # Save this token
 ## 2. Install Client
 
 ```bash
-uv pip install git+https://github.com/SouthwestCCDC/magpie
+uv pip install -e .
 export MAGPIE_SERVER=http://localhost:8080
 export MAGPIE_TOKEN=mgp_ADMIN_...  # Token from step 1
 magpie status  # Verify connection
@@ -56,7 +56,7 @@ docker compose exec magpie magpie-ctl token create --name ci --scope write
 
 **Connection refused:** Check `docker compose ps` and `docker compose logs magpie`
 
-**Auth errors:** Verify token with `magpie config`
+**Auth errors:** Verify token with `magpie status`
 
 **Port conflict:** Set `MAGPIE_HTTP_PORT=8888` and update `MAGPIE_SERVER` URL
 
