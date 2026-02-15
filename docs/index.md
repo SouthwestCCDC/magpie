@@ -1,18 +1,14 @@
 # Magpie Documentation
 
-## Quick Start Path
+## Getting Started
 
-1. [Installation](installation.md) - Deploy server and client
-2. [User Guide](user-guide.md) - CLI usage and workflows
-3. [Production Checklist](production-checklist.md) - Pre-deployment verification
-
-## Development
-
-- [API Compatibility Policy](api-compatibility.md) - Versioning guarantees and breaking change guidelines
+1. [Quick Start](quickstart.md)
+2. [Installation Guide](installation.md)
+3. [User Guide](user-guide.md)
 
 ## Operations
 
-- [Releases](releases.md) - Versioning policy, release process, and release candidate testing
+- [Production Checklist](production-checklist.md) - Pre-deployment verification
 - [Backup & Restore](backup-restore.md) - Backup procedures and disaster recovery
 - [Monitoring](monitoring.md) - Health checks, logging, error tracking, and observability
 
@@ -20,6 +16,13 @@
 
 - [Ansible](ansible-integration.md) - Download artifacts in playbooks
 - [Authentik SSO](authentik-setup.md) - Browser-based authentication (optional)
+
+## Reference
+
+- [User Guide](user-guide.md)
+- [API Compatibility](api-compatibility.md)
+- [Release Notes](releases.md)
+- [GitHub Repository](https://github.com/SouthwestCCDC/magpie)
 
 ---
 

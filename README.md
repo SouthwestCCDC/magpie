@@ -1,209 +1,49 @@
 # Magpie
 
-Content-addressed artifact storage with mutable tags for distributing build artifacts,
-container images, and other binary assets.
+Content-addressed artifact storage with mutable tags for distributing build artifacts, container images, and deployment packages.
 
-## Features
+## Why Magpie
 
-- **Content-addressed storage**: Artifacts stored by SHA-256 hash with automatic deduplication
-- **Mutable tags**: Human-readable tags (`latest`, `stable`, `v1.0`) pointing to specific blobs
-- **Provenance tracking**: Optional source URI metadata for traceability
-- **Dual authentication**: Bearer tokens for API/CLI access, optional Authentik SSO for browser access
-- **Garbage collection**: Automatic cleanup of untagged artifacts past retention period
-- **Observability**: Sentry integration and OpenTelemetry support
+Magpie is a lightweight, open source, content-addressed versioned artifact store. If you don't need the overhead of Artifactory or a container registry and just need to store and tag arbitrary files, that's what it's for.
 
-## Quick Start
-
-```bash
-# Configure the client
-export MAGPIE_SERVER=https://magpie.example.com
-export MAGPIE_TOKEN=mgp_your_token
-
-# Upload an artifact
-magpie push myfile.tar.gz --to images/ubuntu
-
-# Download an artifact
-magpie get images/ubuntu:latest
-
-# List versions
-magpie ls images/ubuntu
-
-# Create a tag
-magpie tag images/ubuntu:latest --as stable
-```
+- SHA-256 content addressing with automatic deduplication
+- Mutable tags (`latest`, `stable`) pointing to immutable artifacts
+- Optional provenance tracking via source URI metadata
+- Bearer token auth with optional Authentik SSO
+- Garbage collection with configurable retention
 
 ## Documentation
 
-- [Documentation Index](docs/index.md) - Complete documentation overview
-- [Installation Guide](docs/installation.md) - Server deployment and client setup
-- [User Guide](docs/user-guide.md) - Complete CLI and API reference
-- [Backup and Restore Guide](docs/backup-restore.md) - Backup procedures and disaster recovery
+- [Quick Start](docs/quickstart.md)
+- [Installation Guide](docs/installation.md)
+- [User Guide](docs/user-guide.md)
+- [Documentation Index](docs/index.md)
 
 ## Development
 
 ```bash
-# Install dependencies
-uv sync
-
-# Run server locally
-uv run uvicorn magpie.server.app:app --reload
-
-# Run CLI
-uv run magpie --help
-uv run magpie-ctl --help
-
-# Run with Docker Compose (Caddy + Magpie)
-docker compose up --build
+uv sync                                          # Install dependencies
+uv run uvicorn magpie.server.app:app --reload   # Run server locally
+docker compose up --build                        # Full stack with Caddy
+uv run pytest tests/unit/ -v                     # Run tests
+uv run ruff check src/ tests/                    # Lint
 ```
 
-## Production Deployment
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full development workflow.
 
-For production with TLS/HTTPS:
+## Installation
 
 ```bash
-# Set required environment variables
-export MAGPIE_DOMAIN=magpie.example.com
-export MAGPIE_DATA_DIR=/path/to/persistent/storage
-
-# Start with production configuration
-docker compose -f docker-compose.prod.yml up -d
-```
-
-**Port conflicts**: The production configuration binds to ports 80 and 443. If other
-services (e.g., nginx, Apache, another Caddy instance) are using these ports, either
-stop them first or customize the port bindings in `docker-compose.prod.yml`.
-
-The production configuration (`docker-compose.prod.yml` and `Caddyfile.prod`) includes:
-- Automatic TLS via Let's Encrypt (or manual certificate configuration)
-- Security headers (HSTS, X-Frame-Options, CSP, etc.)
-- JSON access logging
-- Optional Authentik SSO integration for browser access (see [docs/authentik-setup.md](docs/authentik-setup.md))
-- Rate limiting must be configured at the infrastructure layer. See [issue #129](https://github.com/SouthwestCCDC/magpie/issues/129) for implementation options (custom Caddy build, FastAPI middleware, or load balancer).
-
-For manual TLS certificates, edit `Caddyfile.prod` and uncomment the `tls` directive
-with your certificate paths.
-
-**Let's Encrypt rate limits**: Let's Encrypt enforces a limit of 50 certificates per
-registered domain per week. For testing, use `tls internal` to generate self-signed
-certificates, or configure the Let's Encrypt staging environment in `Caddyfile.prod`:
-```
-tls {
-    ca https://acme-staging-v02.api.letsencrypt.org/directory
-}
-```
-The `caddy_data` volume stores issued certificates. Persist this volume across
-container recreations to avoid requesting duplicate certificates.
-
-## Project Structure
-
-```
-src/magpie/
-  server/     # FastAPI application
-  storage/    # Filesystem operations (blobs, manifests, tags)
-  cli/        # Client CLI (magpie)
-  ctl/        # Server admin CLI (magpie-ctl)
-  auth/       # Token authentication and database
-```
-
-## CLI Commands
-
-### Client (`magpie`)
-
-| Command | Description |
-|---------|-------------|
-| `push` | Upload an artifact to the server |
-| `get` | Download an artifact |
-| `ls` | List artifact versions |
-| `info` | Show artifact metadata |
-| `url` | Get download URL for scripting |
-| `tag` | Create or update a tag |
-| `untag` | Remove a tag |
-| `amend` | Update artifact metadata |
-| `gc` | Run garbage collection (admin) |
-| `flush-tag` | Remove tag globally (admin) |
-| `status` | Check server health and connectivity (admin) |
-| `token` | Create tokens (admin) |
-| `config` | Show resolved configuration |
-| `version` | Show client version |
-
-### Server Admin (`magpie-ctl`)
-
-| Command | Description |
-|---------|-------------|
-| `init` | Initialize storage and create admin token |
-| `token` | Manage tokens (create, list, revoke) |
-| `gc` | Run garbage collection |
-| `flush-tag` | Remove tag globally |
-| `sync` | S3 backup operations (to-s3, from-s3, gc-s3) |
-| `version` | Show server version |
-
-## Testing
-
-```bash
-# Run all tests
-uv run pytest
-
-# Run with coverage
-uv run pytest --cov=magpie
-
-# Run linting
-uv run ruff check .
-uv run ruff format --check .
-```
-
-## Releases
-
-Releases are automated via GitHub Actions when a version tag is pushed.
-
-### Release Process
-
-1. Update version in `pyproject.toml`
-2. Commit the change:
-   ```bash
-   git add pyproject.toml
-   git commit -m "Release vX.Y.Z"
-   ```
-3. Create and push the tag:
-   ```bash
-   git tag vX.Y.Z
-   git push origin HEAD vX.Y.Z
-   ```
-
-The release workflow will:
-- Validate the tag matches `pyproject.toml` version
-- Build multi-arch container images (amd64, arm64)
-- Push to `ghcr.io/southwestccdc/magpie`
-- Create a GitHub Release with auto-generated changelog
-- Attach `scripts/magpie-deploy.sh` as a release asset
-
-### Container Tags
-
-| Git Tag | Container Tags |
-|---------|----------------|
-| `v1.2.0` | `1.2.0`, `1.2`, `1`, `latest` |
-| `v1.2.1` | `1.2.1`, `1.2`, `1`, `latest` |
-| `v2.0.0-rc1` | `2.0.0-rc1` (no `latest`) |
-
-**Note on tag mutability**
-
-- Full version tags (`MAJOR.MINOR.PATCH`, e.g. `1.0.1`) are immutable and always point to the
-  exact release that created them.
-- Major/minor tags (`MAJOR`, `MAJOR.MINOR`, e.g. `1`, `1.0`) are **mutable** and will be moved
-  to the latest patch release in that series (e.g. `1.0` and `1` move from `1.0.0` to `1.0.1`).
-- `latest` is also **mutable** and always points to the most recent stable release.
-
-If you require a non-changing reference for deployments, pin to the full version tag
-(e.g. `ghcr.io/southwestccdc/magpie:1.0.1`).
-
-### Installing from Release
-
-```bash
-# Server: Use container from registry
+# Server (via container)
 docker pull ghcr.io/southwestccdc/magpie:latest
 
-# Client: Install from git tag
-uv pip install git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z
+# Client (via pip)
+uv pip install git+https://github.com/SouthwestCCDC/magpie
 ```
 
+Pin to full tags (`1.0.1`) for production; `latest` tracks newest releases.
+
+See [Installation Guide](docs/installation.md) for deployment details and [Release Notes](docs/releases.md) for version history.
+
 ---
-*Release documentation generated with AI assistance (Claude Code w/ Opus 4.5).*
+*Documentation improved with AI assistance (Claude Code w/ Sonnet 4.5).*
