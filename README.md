@@ -38,7 +38,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full development workflow.
 docker pull ghcr.io/southwestccdc/magpie:latest
 
 # Client (via pip)
-uv pip install git+https://github.com/SouthwestCCDC/magpie@v0.1.2
+uv pip install git+https://github.com/SouthwestCCDC/magpie
 ```
 
 Pin to full tags (`1.0.1`) for production; `latest` tracks newest releases.
