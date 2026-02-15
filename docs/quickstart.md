@@ -2,7 +2,7 @@
 
 Get Magpie running in 5 minutes using the installer script.
 
-**Prerequisites:** Python 3.13+, git, Docker, and `uv` ([install guide](https://docs.astral.sh/uv/))
+**Prerequisites:** Python 3.13+, git, Docker, `uv` ([install](https://docs.astral.sh/uv/))
 
 ## 1. Deploy Server
 
@@ -10,10 +10,10 @@ Get Magpie running in 5 minutes using the installer script.
 git clone https://github.com/SouthwestCCDC/magpie
 cd magpie
 sudo ./scripts/magpie-deploy.sh install --tls-mode off --noninteractive
-sudo ./scripts/magpie-deploy.sh logs | grep "Admin token:"  # Save this token
+sudo ./scripts/magpie-deploy.sh logs | grep "Admin token:"
 ```
 
-The `--tls-mode off` option is recommended for local testing or when running behind a reverse proxy. For production with Let's Encrypt, use `--tls-mode auto --domain magpie.example.com` instead.
+Use `--tls-mode off` for local testing or behind a reverse proxy. For Let's Encrypt: `--tls-mode auto --domain magpie.example.com`.
 
 See [Installation Guide](installation.md) for TLS options and advanced configuration.
 
@@ -55,11 +55,9 @@ magpie info builds/app:latest
 
 ## Troubleshooting
 
-**Connection refused:** Check status with `sudo ./scripts/magpie-deploy.sh status`
-
-**Auth errors:** Verify token with `magpie status`
-
-**Port conflict:** Reinstall with `--http-port 8888` and update `MAGPIE_SERVER` URL
+- **Connection refused:** `sudo ./scripts/magpie-deploy.sh status`
+- **Auth errors:** `magpie status`
+- **Port conflict:** Reinstall with `--http-port 8888`
 
 ## Next Steps
 

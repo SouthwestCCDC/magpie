@@ -2,20 +2,22 @@
 
 Content-addressed artifact storage with mutable tags for distributing build artifacts, container images, and deployment packages.
 
+## Why Magpie
+
+Magpie is a lightweight, open source, content-addressed versioned artifact store. If you don't need the overhead of Artifactory or a container registry and just need to store and tag arbitrary files, that's what it's for.
+
 - SHA-256 content addressing with automatic deduplication
 - Mutable tags (`latest`, `stable`) pointing to immutable artifacts
 - Optional provenance tracking via source URI metadata
 - Bearer token auth with optional Authentik SSO
 - Garbage collection with configurable retention
 
-See [Quick Start Guide](docs/quickstart.md) to get running in 5 minutes.
-
 ## Documentation
 
-- [Quick Start](docs/quickstart.md) - Get running in 5 minutes
-- [Installation Guide](docs/installation.md) - Server deployment and client setup
-- [User Guide](docs/user-guide.md) - Complete CLI and API reference
-- [Documentation Index](docs/index.md) - Full documentation overview
+- [Quick Start](docs/quickstart.md)
+- [Installation Guide](docs/installation.md)
+- [User Guide](docs/user-guide.md)
+- [Documentation Index](docs/index.md)
 
 ## Development
 
@@ -39,7 +41,7 @@ docker pull ghcr.io/southwestccdc/magpie:latest
 uv pip install git+https://github.com/SouthwestCCDC/magpie@v0.1.2
 ```
 
-Pin to full version tags (`1.0.1`) for stable deployments; `latest` and partial versions track newest releases.
+Pin to full tags (`1.0.1`) for production; `latest` tracks newest releases.
 
 See [Installation Guide](docs/installation.md) for deployment details and [Release Notes](docs/releases.md) for version history.
 

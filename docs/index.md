@@ -2,11 +2,9 @@
 
 ## Getting Started
 
-New to Magpie? Start here:
-
-1. [Quick Start](quickstart.md) - Get running in 5 minutes
-2. [Installation Guide](installation.md) - Deploy server and client
-3. [User Guide](user-guide.md) - CLI usage and workflows
+1. [Quick Start](quickstart.md)
+2. [Installation Guide](installation.md)
+3. [User Guide](user-guide.md)
 
 ## Operations
 
@@ -21,10 +19,10 @@ New to Magpie? Start here:
 
 ## Reference
 
-- [User Guide](user-guide.md) - Complete CLI and API reference
-- [API Compatibility](api-compatibility.md) - Versioning guarantees and upgrade guidance
-- [Release Notes](releases.md) - Changes and migration notes by release
-- [GitHub Repository](https://github.com/SouthwestCCDC/magpie) - Source code and issue tracker
+- [User Guide](user-guide.md)
+- [API Compatibility](api-compatibility.md)
+- [Release Notes](releases.md)
+- [GitHub Repository](https://github.com/SouthwestCCDC/magpie)
 
 ---
 
