@@ -2,7 +2,7 @@
 
 Get Magpie running in 5 minutes using the installer script.
 
-**Prerequisites:** Python 3.13+, git, Docker, `uv` ([install](https://docs.astral.sh/uv/))
+**Prerequisites:** Debian 12/13, Python 3.13+, git, Docker with Compose v2, curl, `uv` ([install](https://docs.astral.sh/uv/))
 
 ## 1. Deploy Server
 
@@ -10,7 +10,8 @@ Get Magpie running in 5 minutes using the installer script.
 git clone https://github.com/SouthwestCCDC/magpie
 cd magpie
 sudo ./scripts/magpie-deploy.sh install --tls-mode off --noninteractive
-sudo ./scripts/magpie-deploy.sh logs | grep "Admin token:"
+# Copy the admin token from install output. If lost, reset with:
+# docker exec -it magpie-magpie-1 magpie-ctl init --reset-admin-token
 ```
 
 Use `--tls-mode off` for local testing or behind a reverse proxy. For Let's Encrypt: `--tls-mode auto --domain magpie.example.com`.
