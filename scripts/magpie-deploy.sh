@@ -785,6 +785,40 @@ patch_compose_for_tls_certs() {
     log "TLS certificate mount added to docker-compose.yml"
 }
 
+patch_compose_for_https_port() {
+    # Remove HTTPS port mapping when TLS is off
+    #
+    # When TLS mode is off, Caddy does not listen on port 443 — the HTTPS port
+    # mapping serves no purpose and causes bind failures if the port is already
+    # in use on the host (e.g. port 8443 occupied by Authentik).
+    #
+    # Docker Compose has no native way to conditionally include a port mapping
+    # based on an env var value (the :-default syntax always maps the port), so
+    # we patch the file directly.
+    #
+    # See issue #506.
+
+    if [[ "$TLS_MODE" != "off" ]]; then
+        return 0
+    fi
+
+    log "TLS mode is off — removing HTTPS port mapping from Docker Compose..."
+
+    local compose_file="${INSTALL_DIR}/docker-compose.yml"
+
+    # Remove the HTTPS port line entirely.
+    # This runs before patch_compose_for_bind_ip, so the line still has its
+    # original form: - "${MAGPIE_HTTPS_PORT:-8443}:443"
+    sed -i '/"\${MAGPIE_HTTPS_PORT:-[0-9]*}:443"/d' "$compose_file"
+
+    # Verify the line is gone
+    if grep -q 'MAGPIE_HTTPS_PORT' "$compose_file"; then
+        die "Failed to remove HTTPS port mapping from docker-compose.yml"
+    fi
+
+    log "HTTPS port mapping removed (TLS off — port 443 will not be mapped to host)"
+}
+
 patch_compose_for_bind_ip() {
     # Patch port bindings to use specific IP address
     # Only called when BIND_IP is set
@@ -974,6 +1008,7 @@ cmd_install() {
     pull_or_build_image
     patch_compose_for_caddyfile
     patch_compose_for_tls_certs
+    patch_compose_for_https_port
     patch_compose_for_bind_ip
     patch_compose_for_local_image
 
@@ -1088,6 +1123,7 @@ cmd_update() {
     # Re-patch compose files for deployment
     patch_compose_for_caddyfile
     patch_compose_for_tls_certs
+    patch_compose_for_https_port
     patch_compose_for_bind_ip
     patch_compose_for_local_image
 
