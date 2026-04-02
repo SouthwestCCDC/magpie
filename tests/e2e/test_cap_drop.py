@@ -113,7 +113,7 @@ def _wait_for_http_health(port: int, timeout: int = 60, interval: float = 1.0) -
             r = httpx.get(f"http://localhost:{port}/health", timeout=3.0)
             if r.status_code == 200:
                 return True
-        except (httpx.ConnectError, httpx.TimeoutException):
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadError):
             pass
         time.sleep(interval)
     return False
@@ -311,7 +311,9 @@ class TestCapDropInit:
         The CHOWN capability allows the entrypoint to transfer ownership of the
         newly-created artifacts directory to the target non-root user.
         """
-        with tempfile.TemporaryDirectory(prefix="magpie_cap_chown_") as temp_dir:
+        with tempfile.TemporaryDirectory(
+            prefix="magpie_cap_chown_", ignore_cleanup_errors=True
+        ) as temp_dir:
             temp_path = Path(temp_dir)
             # Do NOT pre-create artifacts/ — let the entrypoint create and chown it
             (temp_path / "magpie.db").touch()
@@ -418,7 +420,9 @@ class TestCapDropServiceHealth:
 
     def test_service_becomes_healthy_under_cap_drop(self, image_tag: str) -> None:
         """Full init + service boot under cap_drop: ALL with pre-existing data dir."""
-        with tempfile.TemporaryDirectory(prefix="magpie_cap_health_") as temp_dir:
+        with tempfile.TemporaryDirectory(
+            prefix="magpie_cap_health_", ignore_cleanup_errors=True
+        ) as temp_dir:
             temp_path = Path(temp_dir)
             (temp_path / "artifacts").mkdir()
             # Let the DB be created by magpie-ctl init inside the container
@@ -481,7 +485,9 @@ class TestCapDropServiceHealth:
 
     def test_service_becomes_healthy_with_explicit_uid_gid(self, image_tag: str) -> None:
         """Full init sequence with MAGPIE_UID/GID set, under cap_drop: ALL."""
-        with tempfile.TemporaryDirectory(prefix="magpie_cap_uid_health_") as temp_dir:
+        with tempfile.TemporaryDirectory(
+            prefix="magpie_cap_uid_health_", ignore_cleanup_errors=True
+        ) as temp_dir:
             temp_path = Path(temp_dir)
             # No artifacts dir or DB — full first-boot scenario
 
