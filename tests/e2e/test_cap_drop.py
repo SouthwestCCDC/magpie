@@ -21,6 +21,7 @@ Tests cover:
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -64,6 +65,35 @@ def _remove_image(tag: str) -> None:
     """
     subprocess.run(
         ["docker", "rmi", tag],
+        capture_output=True,
+    )
+
+
+def _cleanup_docker_volume(path: str) -> None:
+    """Make all files in a directory accessible so the host can delete them.
+
+    When Docker containers run as a non-root UID and write files into a
+    bind-mounted temp directory, the host runner may lack permission to remove
+    those files (e.g. ``PermissionError: [Errno 1] Operation not permitted``).
+    This helper runs a privileged alpine container to ``chmod -R 777`` the tree,
+    making every entry deletable by the host user before ``shutil.rmtree``.
+
+    Args:
+        path: Absolute path on the host to the directory to fix up.
+    """
+    subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{path}:/cleanup",
+            "alpine",
+            "chmod",
+            "-R",
+            "777",
+            "/cleanup",
+        ],
         capture_output=True,
     )
 
@@ -311,10 +341,15 @@ class TestCapDropInit:
         The CHOWN capability allows the entrypoint to transfer ownership of the
         newly-created artifacts directory to the target non-root user.
         """
-        with tempfile.TemporaryDirectory(
-            prefix="magpie_cap_chown_", ignore_cleanup_errors=True
-        ) as temp_dir:
+        # Use mkdtemp + explicit cleanup because Docker creates /data/artifacts
+        # as a non-runner UID; TemporaryDirectory.__exit__ cannot chmod those
+        # files and raises PermissionError even with ignore_cleanup_errors=True.
+        temp_dir = tempfile.mkdtemp(prefix="magpie_cap_chown_")
+        try:
             temp_path = Path(temp_dir)
+            # chmod 0755 so the container can traverse /data after gosu drops to
+            # MAGPIE_UID (tempfile.mkdtemp creates with 0700 which blocks non-owner).
+            os.chmod(temp_dir, 0o755)
             # Do NOT pre-create artifacts/ — let the entrypoint create and chown it
             (temp_path / "magpie.db").touch()
 
@@ -351,6 +386,9 @@ class TestCapDropInit:
                 f"Expected /data/artifacts GID {test_gid}, got {dir_gid}.\n"
                 f"stdout: {result.stdout}\nstderr: {result.stderr}"
             )
+        finally:
+            _cleanup_docker_volume(temp_dir)
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_fails_without_required_capabilities(self, image_tag: str) -> None:
         """Verify that the entrypoint fails when SETUID/SETGID are absent.
@@ -485,10 +523,15 @@ class TestCapDropServiceHealth:
 
     def test_service_becomes_healthy_with_explicit_uid_gid(self, image_tag: str) -> None:
         """Full init sequence with MAGPIE_UID/GID set, under cap_drop: ALL."""
-        with tempfile.TemporaryDirectory(
-            prefix="magpie_cap_uid_health_", ignore_cleanup_errors=True
-        ) as temp_dir:
+        # Use mkdtemp + explicit cleanup because Docker creates /data/artifacts
+        # as a non-runner UID; TemporaryDirectory.__exit__ cannot chmod those
+        # files and raises PermissionError even with ignore_cleanup_errors=True.
+        temp_dir = tempfile.mkdtemp(prefix="magpie_cap_uid_health_")
+        try:
             temp_path = Path(temp_dir)
+            # chmod 0755 so the container can traverse /data after gosu drops to
+            # MAGPIE_UID (tempfile.mkdtemp creates with 0700 which blocks non-owner).
+            os.chmod(temp_dir, 0o755)
             # No artifacts dir or DB — full first-boot scenario
 
             host_port = 18766
@@ -549,3 +592,6 @@ class TestCapDropServiceHealth:
                         ["docker", "stop", container_id],
                         capture_output=True,
                     )
+        finally:
+            _cleanup_docker_volume(temp_dir)
+            shutil.rmtree(temp_dir, ignore_errors=True)
