@@ -465,9 +465,6 @@ class TestCapDropServiceHealth:
             (temp_path / "artifacts").mkdir()
             # Let the DB be created by magpie-ctl init inside the container
 
-            # Pick an unprivileged port unlikely to be in use
-            host_port = 18765
-
             docker_cmd = [
                 "docker",
                 "run",
@@ -484,7 +481,7 @@ class TestCapDropServiceHealth:
                 "-v",
                 f"{temp_path}:/data",
                 "-p",
-                f"{host_port}:8000",
+                "0:8000",
                 "-e",
                 "MAGPIE_STORAGE_PATH=/data/artifacts",
                 image_tag,
@@ -494,6 +491,15 @@ class TestCapDropServiceHealth:
             try:
                 result = subprocess.run(docker_cmd, capture_output=True, text=True, check=True)
                 container_id = result.stdout.strip()
+
+                # Read the OS-assigned ephemeral port
+                port_result = subprocess.run(
+                    ["docker", "port", container_id, "8000/tcp"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                host_port = int(port_result.stdout.strip().split(":")[-1])
 
                 healthy = _wait_for_http_health(host_port, timeout=90)
 
@@ -534,7 +540,6 @@ class TestCapDropServiceHealth:
             os.chmod(temp_dir, 0o755)
             # No artifacts dir or DB — full first-boot scenario
 
-            host_port = 18766
             test_uid = 6000
             test_gid = 6001
 
@@ -554,7 +559,7 @@ class TestCapDropServiceHealth:
                 "-v",
                 f"{temp_path}:/data",
                 "-p",
-                f"{host_port}:8000",
+                "0:8000",
                 "-e",
                 f"MAGPIE_UID={test_uid}",
                 "-e",
@@ -573,6 +578,15 @@ class TestCapDropServiceHealth:
             try:
                 result = subprocess.run(docker_cmd, capture_output=True, text=True, check=True)
                 container_id = result.stdout.strip()
+
+                # Read the OS-assigned ephemeral port
+                port_result = subprocess.run(
+                    ["docker", "port", container_id, "8000/tcp"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                host_port = int(port_result.stdout.strip().split(":")[-1])
 
                 healthy = _wait_for_http_health(host_port, timeout=90)
 
