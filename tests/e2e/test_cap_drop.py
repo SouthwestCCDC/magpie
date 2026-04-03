@@ -561,6 +561,11 @@ class TestCapDropServiceHealth:
                 f"MAGPIE_GID={test_gid}",
                 "-e",
                 "MAGPIE_STORAGE_PATH=/data/artifacts",
+                "-e",
+                # DB must live inside artifacts/ because /data is owned by the CI
+                # runner and MAGPIE_UID (6000) cannot write to /data directly.
+                # The entrypoint chowns artifacts/ to MAGPIE_UID before init runs.
+                "MAGPIE_DATABASE_PATH=/data/artifacts/magpie.db",
                 image_tag,
             ]
 
