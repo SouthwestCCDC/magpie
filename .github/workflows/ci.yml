@@ -22,7 +22,7 @@ jobs:
           python-version: "3.13"
 
       - name: Set up just
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@v4
 
       - name: Install dependencies
         run: uv sync --all-groups
@@ -49,7 +49,7 @@ jobs:
           python-version: "3.13"
 
       - name: Set up just
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@v4
 
       - name: Install dependencies
         run: uv sync --all-groups
@@ -58,7 +58,7 @@ jobs:
         run: just test-ci
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         if: always()
         with:
           files: ./coverage.xml
@@ -80,7 +80,7 @@ jobs:
           python-version: "3.13"
 
       - name: Set up just
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@v4
 
       - name: Install dependencies
         run: uv sync --all-groups
