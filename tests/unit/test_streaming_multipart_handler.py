@@ -871,7 +871,9 @@ class TestLibraryParseErrorBackstop:
 
         parser = build_multipart_parser(boundary, handler)
 
-        with pytest.raises(MultipartParseError, match="invalid character"):
+        # Assert on the exception type only -- the library's message wording
+        # is not part of magpie's contract and has changed across releases.
+        with pytest.raises(MultipartParseError):
             parser.write(payload)
             parser.finalize()
 
