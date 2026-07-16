@@ -75,8 +75,11 @@ def _cleanup_docker_volume(path: str) -> None:
     When Docker containers run as a non-root UID and write files into a
     bind-mounted temp directory, the host runner may lack permission to remove
     those files (e.g. ``PermissionError: [Errno 1] Operation not permitted``).
-    This helper runs a privileged alpine container to ``chmod -R 777`` the tree,
-    making every entry deletable by the host user before ``shutil.rmtree``.
+    This helper runs an alpine container (root inside the container, but not
+    ``--privileged``) to ``chmod -R 777`` the tree, making every entry deletable
+    by the host user before ``shutil.rmtree``. Root inside an unprivileged
+    container already bypasses DAC checks for the chmod, so no elevated
+    container privileges are needed.
 
     Args:
         path: Absolute path on the host to the directory to fix up.
@@ -88,7 +91,7 @@ def _cleanup_docker_volume(path: str) -> None:
             "--rm",
             "-v",
             f"{path}:/cleanup",
-            "alpine",
+            "alpine:3.21",
             "chmod",
             "-R",
             "777",
