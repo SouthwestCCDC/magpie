@@ -7,13 +7,18 @@ correctly in the full Docker Compose environment.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import tempfile
 
 import httpx
 import pytest
+from packaging.version import parse
 
+from magpie import __version__
+from magpie.cli.formatting import ExitCode
+from magpie.server.middleware import get_min_client_version
 from tests.e2e.conftest import PROJECT_ROOT, create_token_via_api
 
 
@@ -153,8 +158,10 @@ class TestVersionMiddleware:
     """Validates version-check middleware header behavior.
 
     Covers issues #451, #496 - server version check middleware.
-    Tests that the API correctly sets X-Magpie-Upgrade-Available header
-    when clients use older versions.
+    Tests that every response is stamped with X-Magpie-Server-Version (#451),
+    that clients below the minimum compatible version are rejected with 426
+    and X-Magpie-Min-Client-Version, and that clients which are compatible but
+    below the current server version receive X-Magpie-Upgrade-Available (#496).
     """
 
     def test_current_version_no_upgrade_header(
@@ -174,13 +181,50 @@ class TestVersionMiddleware:
 
             # Current versions succeed with 200
             assert response.status_code == 200
+            # Every response is stamped with the server version (issue #451)
+            assert response.headers.get("X-Magpie-Server-Version") == __version__
+            # A client at/above the server version is not "outdated"
+            assert "X-Magpie-Upgrade-Available" not in response.headers
 
-    def test_old_version_receives_upgrade_header(
+    def test_outdated_but_compatible_version_receives_upgrade_available_header(
         self,
         base_url: str,
         write_token: str,
     ) -> None:
-        """Verify old version clients receive upgrade requirement response."""
+        """Verify a compatible-but-outdated client receives X-Magpie-Upgrade-Available.
+
+        Covers issue #496. The client version used here is exactly the minimum
+        compatible version derived from the running server version, so it is
+        guaranteed to pass the "too old, rejected" check but still be older
+        than the server - the actual trigger condition for the upgrade-available
+        header (magpie.server.middleware.VersionCheckMiddleware.dispatch).
+        """
+        min_client_version = get_min_client_version(__version__)
+        assert parse(min_client_version) < parse(__version__), (
+            "test precondition violated: min_client_version must be strictly "
+            "less than the running server version to exercise the "
+            "compatible-but-outdated path"
+        )
+
+        with httpx.Client(base_url=base_url, timeout=30.0) as client:
+            response = client.get(
+                "/api/v1/artifacts",
+                headers={
+                    "Authorization": f"Bearer {write_token}",
+                    "User-Agent": f"magpie-cli/{min_client_version}",
+                },
+            )
+
+            # Compatible clients still succeed with 200 (not rejected)
+            assert response.status_code == 200
+            assert response.headers.get("X-Magpie-Upgrade-Available") == __version__
+
+    def test_below_min_version_receives_426_and_min_version_header(
+        self,
+        base_url: str,
+        write_token: str,
+    ) -> None:
+        """Verify clients below the minimum compatible version are rejected with 426."""
         with httpx.Client(base_url=base_url, timeout=30.0) as client:
             response = client.get(
                 "/api/v1/artifacts",
@@ -324,9 +368,10 @@ class TestTokenLifecycle:
 class TestGarbageCollectionDryRun:
     """Validates garbage collection dry-run with artifacts present.
 
-    Covers issue #465 - GC exception narrowing.
-    Tests that GC runs without errors and reports correct counts when
-    artifacts are present.
+    Covers issue #465 - GC exception narrowing. `test_gc_dry_run_with_tagged_and_untagged`
+    exercises the ordinary scan/report path; `test_gc_dry_run_skips_corrupt_manifest`
+    actually corrupts a manifest on disk so the narrowed exception handler in
+    magpie.storage.gc._scan_artifacts is exercised, not just the happy path.
     """
 
     def test_gc_dry_run_with_tagged_and_untagged(
@@ -348,10 +393,11 @@ class TestGarbageCollectionDryRun:
         tagged_hash = upload_response.json()["hash"]
 
         # Create a named tag to ensure it's protected
-        authenticated_client.post(
+        tag_response = authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/release-validation/gc-tagged/@{tagged_hash[:8]}/tags",
             json={"tag_name": "keep-this"},
         )
+        assert tag_response.status_code in (200, 201)
 
         # Upload another artifact, then remove its latest tag to make it untagged
         untagged_content = b"GC test - untagged artifact for cleanup"
@@ -362,17 +408,21 @@ class TestGarbageCollectionDryRun:
         assert upload_response.status_code == 200
 
         # Remove the latest tag to make it untagged
-        authenticated_client.delete(
+        untag_response = authenticated_client.delete(
             "/api/v1/artifacts/e2e-tests/release-validation/gc-untagged/tags/latest"
         )
+        assert untag_response.status_code in (200, 204)
 
-        # Run GC dry-run via CLI
+        # Run GC dry-run via CLI, using JSON output so we can assert on the
+        # actual reported counts instead of grepping human-readable text (the
+        # CLI unconditionally prints "GC Preview (dry run):" regardless of
+        # what was actually found, so that text alone proves nothing).
         env = os.environ.copy()
         env["MAGPIE_SERVER"] = base_url
         env["MAGPIE_TOKEN"] = admin_token
 
         result = subprocess.run(
-            ["uv", "run", "magpie", "gc", "--dry-run"],
+            ["uv", "run", "magpie", "--format", "json", "gc", "--dry-run"],
             cwd=PROJECT_ROOT,
             env=env,
             capture_output=True,
@@ -382,8 +432,86 @@ class TestGarbageCollectionDryRun:
         # GC should complete without error
         assert result.returncode == 0, f"GC failed: {result.stderr}"
 
-        # Output should indicate it ran (may not clean anything due to retention period)
-        assert "dry" in result.stdout.lower() or "gc" in result.stdout.lower()
+        gc_data = json.loads(result.stdout)["data"]
+        assert gc_data["dry_run"] is True
+        # Both artifacts uploaded above must have been scanned and their blobs
+        # counted (other e2e tests may add more, so these are lower bounds).
+        assert gc_data["artifacts_scanned"] >= 2
+        assert gc_data["blobs_found"] >= 2
+
+    def test_gc_dry_run_skips_corrupt_manifest(
+        self,
+        docker_services: dict[str, str],
+        authenticated_client: httpx.Client,
+        admin_token: str,
+    ) -> None:
+        """Verify GC survives a corrupt manifest instead of failing the whole run.
+
+        Covers issue #465 directly: the corrupt-manifest handler in
+        magpie.storage.gc._scan_artifacts must catch ManifestCorruptError/OSError
+        for a single artifact and continue scanning, not let the exception
+        propagate and abort the entire GC run. This actually corrupts a
+        manifest file on disk (via docker exec into the running container) so
+        the handler is exercised - a test that only uploads valid artifacts,
+        as the happy-path test above does, never reaches this code path at all.
+        """
+        base_url = docker_services["base_url"]
+        artifact_path = "e2e-tests/release-validation/gc-corrupt-manifest"
+
+        # Upload an artifact so a real .magpie manifest exists on disk.
+        upload_response = authenticated_client.post(
+            f"/api/v1/upload/{artifact_path}",
+            files={"file": ("artifact", b"GC test - corrupt manifest", "application/octet-stream")},
+        )
+        assert upload_response.status_code == 200
+
+        # Corrupt the manifest in place inside the running container so the
+        # next GC scan hits ManifestCorruptError (invalid JSON) when reading it.
+        compose_cmd = ["docker", "compose", "-f", str(PROJECT_ROOT / "docker-compose.yml")]
+        docker_env = os.environ.copy()
+        docker_env["COMPOSE_PROJECT_NAME"] = docker_services["project_name"]
+        manifest_path = f"/data/artifacts/{artifact_path}/.magpie"
+
+        corrupt_result = subprocess.run(
+            [
+                *compose_cmd,
+                "exec",
+                "-T",
+                "magpie",
+                "sh",
+                "-c",
+                f"echo 'not valid json' > {manifest_path}",
+            ],
+            cwd=PROJECT_ROOT,
+            env=docker_env,
+            capture_output=True,
+            text=True,
+        )
+        assert corrupt_result.returncode == 0, (
+            f"Failed to corrupt manifest: {corrupt_result.stderr}"
+        )
+
+        # GC dry-run must complete successfully despite the corrupt manifest -
+        # it should skip that artifact and continue, not 500 the whole request.
+        cli_env = os.environ.copy()
+        cli_env["MAGPIE_SERVER"] = base_url
+        cli_env["MAGPIE_TOKEN"] = admin_token
+
+        result = subprocess.run(
+            ["uv", "run", "magpie", "--format", "json", "gc", "--dry-run"],
+            cwd=PROJECT_ROOT,
+            env=cli_env,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, f"GC failed on corrupt manifest: {result.stderr}"
+
+        gc_data = json.loads(result.stdout)["data"]
+        # The corrupt-manifest artifact is still counted as scanned (the
+        # counter increments before the manifest is read), confirming GC
+        # actually reached it and recovered rather than aborting beforehand.
+        assert gc_data["artifacts_scanned"] >= 1
 
 
 @pytest.mark.e2e
@@ -466,12 +594,14 @@ class TestCLINetworkErrorHandling:
             text=True,
         )
 
-        # Should exit non-zero
-        assert result.returncode != 0
+        # Issue #443 mandates exit code 2 (ExitCode.NETWORK_ERROR) specifically
+        # for network errors, so scripts can differentiate them from other
+        # failures - not merely "some nonzero code".
+        assert result.returncode == ExitCode.NETWORK_ERROR
 
         # Should contain user-friendly error message, not Python traceback
         stderr_lower = result.stderr.lower()
         assert "error" in stderr_lower or "failed" in stderr_lower or "connect" in stderr_lower
         # Should NOT contain Python traceback indicators
         assert "traceback" not in stderr_lower
-        assert "exception" not in stderr_lower or "connection" in stderr_lower
+        assert "exception" not in stderr_lower
