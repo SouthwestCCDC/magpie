@@ -19,22 +19,23 @@ import re
 from pathlib import Path
 
 import pytest
-from python_multipart.multipart import MultipartParser
 
 from magpie.server.routes.upload import (
     HeaderLimitExceededError,
     MalformedMultipartError,
     StreamingMultipartHandler,
     UploadSizeExceededError,
+    build_multipart_parser,
 )
 
 
 class TestBoundaryExtraction:
     """Tests for boundary extraction from Content-Type headers.
 
-    NOTE: These tests verify the boundary extraction logic that's implemented
-    in upload.py (lines 347-373). The handler itself doesn't parse Content-Type,
-    so we test the actual regex patterns used by the upload endpoint.
+    NOTE: These tests verify the boundary extraction logic in the
+    upload_artifact() endpoint's Content-Type parsing. The handler itself
+    doesn't parse Content-Type, so we test the actual regex patterns used
+    by the upload endpoint.
     """
 
     @pytest.fixture
@@ -68,7 +69,7 @@ class TestBoundaryExtraction:
                 b"--" + boundary + b"--\r\n"
             )
 
-            parser = MultipartParser(boundary, handler.get_callbacks())
+            parser = build_multipart_parser(boundary, handler)
             parser.write(payload)
             parser.finalize()
             handler.finalize()
@@ -96,7 +97,7 @@ class TestBoundaryExtraction:
             b"------WebKitFormBoundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -129,7 +130,7 @@ class TestBoundaryExtraction:
             b"--simple-boundary-123--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -163,7 +164,7 @@ class TestBoundaryExtraction:
                 b"--test--\r\n"
             )
 
-            parser = MultipartParser(boundary, handler.get_callbacks())
+            parser = build_multipart_parser(boundary, handler)
             parser.write(payload)
             parser.finalize()
             handler.finalize()
@@ -199,7 +200,7 @@ class TestMultipleFilePartsRejection:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # Handler should detect the second file part and raise MalformedMultipartError,
         # which is propagated out of parser.write()/parser.finalize().
@@ -223,7 +224,7 @@ class TestMultipleFilePartsRejection:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -257,7 +258,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -284,7 +285,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         with pytest.raises(UploadSizeExceededError, match="exceeds maximum size"):
             parser.write(payload)
@@ -307,7 +308,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # Write in chunks to simulate incremental parsing
         chunk_size = 50
@@ -335,7 +336,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         with pytest.raises(UploadSizeExceededError):
             parser.write(payload)
@@ -357,7 +358,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -378,7 +379,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -399,7 +400,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         with pytest.raises(UploadSizeExceededError):
             parser.write(payload)
@@ -441,7 +442,7 @@ class TestCleanupOnError:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # This should raise MalformedMultipartError on the malformed second part.
         with pytest.raises(MalformedMultipartError, match="missing required Content-Disposition"):
@@ -477,7 +478,7 @@ class TestCleanupOnError:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # This should raise UploadSizeExceededError
         with pytest.raises(UploadSizeExceededError, match="exceeds maximum size"):
@@ -509,7 +510,7 @@ class TestCleanupOnError:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
 
@@ -546,7 +547,7 @@ class TestCleanupOnError:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # Size limit should be exceeded during parsing
         with pytest.raises(UploadSizeExceededError, match="exceeds maximum size"):
@@ -584,7 +585,7 @@ class TestCleanupOnError:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
 
@@ -618,7 +619,7 @@ class TestContentDispositionParsing:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -639,7 +640,7 @@ class TestContentDispositionParsing:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -660,7 +661,7 @@ class TestContentDispositionParsing:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -696,7 +697,7 @@ class TestContentDispositionParsing:
         # Part without Content-Disposition header
         payload = b"--test-boundary\r\n\r\ntest content\r\n--test-boundary--\r\n"
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         with pytest.raises(MalformedMultipartError, match="missing required Content-Disposition"):
             parser.write(payload)
@@ -719,7 +720,7 @@ class TestContentDispositionParsing:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # The handler should raise when it processes the header end callback
         # because the Content-Disposition is missing the required 'name' parameter
@@ -796,7 +797,7 @@ class TestHeaderSizeLimits:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         with pytest.raises(HeaderLimitExceededError, match="more than .* headers"):
             parser.write(payload)
@@ -820,7 +821,7 @@ class TestHeaderSizeLimits:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -828,6 +829,51 @@ class TestHeaderSizeLimits:
         # Should succeed
         result = handler.get_result()
         assert result is not None
+
+        handler.cleanup()
+
+
+class TestLibraryParseErrorBackstop:
+    """Tests for python-multipart's own MultipartParseError guard.
+
+    magpie's own checks (HeaderLimitExceededError, MalformedMultipartError) only
+    cover conditions the handler explicitly validates (header size/count,
+    Content-Disposition presence, single file part). Generic RFC 2046 syntax
+    violations -- e.g. an invalid character in a header field name -- are never
+    seen by magpie's callbacks and are instead caught by python-multipart's own
+    parser, which raises MultipartParseError. This confirms that path is
+    actually reachable so upload_artifact()'s translation of it is exercised.
+    """
+
+    @pytest.fixture
+    def temp_dir(self, tmp_path: Path) -> Path:
+        """Create a temporary directory for handler temp files."""
+        return tmp_path
+
+    def test_invalid_header_character_raises_library_parse_error(self, temp_dir: Path) -> None:
+        """A header field name with an invalid token character raises MultipartParseError."""
+        from python_multipart.exceptions import MultipartParseError
+
+        handler = StreamingMultipartHandler(temp_dir, max_size=None)
+        boundary = b"test-boundary"
+
+        # "Invalid Header" contains a space, which is not a valid RFC 7230 token
+        # character for a header field name -- magpie never inspects header
+        # field name syntax itself, so this is only caught by the library.
+        payload = (
+            b"--test-boundary\r\n"
+            b"Invalid Header: value\r\n"
+            b'Content-Disposition: form-data; name="file"\r\n'
+            b"\r\n"
+            b"test content\r\n"
+            b"--test-boundary--\r\n"
+        )
+
+        parser = build_multipart_parser(boundary, handler)
+
+        with pytest.raises(MultipartParseError, match="invalid character"):
+            parser.write(payload)
+            parser.finalize()
 
         handler.cleanup()
 
@@ -854,7 +900,7 @@ class TestHandlerGetResult:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -877,7 +923,7 @@ class TestHandlerGetResult:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -904,7 +950,7 @@ class TestHandlerGetResult:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -942,7 +988,7 @@ class TestHandlerGetResult:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # Write payload in small chunks to force incremental parsing
         chunk_size = 100
@@ -980,7 +1026,7 @@ class TestHandlerGetResult:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()

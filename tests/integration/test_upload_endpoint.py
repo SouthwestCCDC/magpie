@@ -279,3 +279,38 @@ class TestAuthHeaderHandling:
         # Verify anonymous was used as default
         info = test_storage_service.get_artifact_info("auth/anonymous-test", "latest")
         assert info.uploaded_by == "anonymous"
+
+
+class TestMalformedMultipartHandling:
+    """Tests for python-multipart parser errors surfacing as clean 4xx responses.
+
+    magpie's own StreamingMultipartHandler only validates conditions it
+    explicitly checks (header size/count, Content-Disposition presence, single
+    file part). Generic RFC 2046 syntax violations are instead caught by
+    python-multipart's own parser (MultipartParseError) and must be translated
+    to a 400 rather than bubbling out as an unhandled 500.
+    """
+
+    def test_invalid_header_character_returns_400(self, client_no_raise: TestClient) -> None:
+        """A header with an invalid token character returns 400, not 500."""
+        boundary = "test-boundary"
+        # "Invalid Header" contains a space, which is not a valid RFC 7230 token
+        # character for a header field name -- only python-multipart's own
+        # parser catches this, not magpie's handler callbacks.
+        body = (
+            f"--{boundary}\r\n"
+            "Invalid Header: value\r\n"
+            'Content-Disposition: form-data; name="file"; filename="artifact.bin"\r\n'
+            "\r\n"
+            "test content\r\n"
+            f"--{boundary}--\r\n"
+        ).encode()
+
+        response = client_no_raise.post(
+            "/api/v1/upload/malformed/header-test",
+            content=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+
+        assert response.status_code == 400
+        assert "Malformed multipart payload" in response.json()["detail"]

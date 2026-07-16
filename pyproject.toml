@@ -8,11 +8,11 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
-    "click",
+    "click>=8.3.3",
     "httpx",
-    "pydantic-settings",
+    "pydantic-settings>=2.14.2",
     "aiofiles",
-    "python-multipart>=0.0.22",
+    "python-multipart>=0.0.30",
     "sentry-sdk[fastapi]",
     "opentelemetry-instrumentation-fastapi",
     "opentelemetry-exporter-otlp",
@@ -20,8 +20,13 @@ dependencies = [
     "tomli_w",
     "structlog",
     "truststore>=0.8.0",
-    "protobuf>=6.33.4",
+    "protobuf>=6.33.5,<7",
     "packaging",
+    "requests>=2.33.0",
+    "urllib3>=2.7.0",
+    "idna>=3.15",
+    "pygments>=2.20.0",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.scripts]
@@ -31,7 +36,7 @@ magpie-ctl = "magpie.ctl:main"
 [dependency-groups]
 dev = [
     "ruff",
-    "pytest",
+    "pytest>=9.0.3",
     "pytest-asyncio",
     "pytest-cov",
     "bandit[toml]",

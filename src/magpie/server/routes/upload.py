@@ -14,6 +14,7 @@ from typing import Annotated
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel
+from python_multipart.exceptions import ParseError
 from python_multipart.multipart import MultipartParser
 
 from magpie.config import MagpieSettings
@@ -37,6 +38,26 @@ class HeaderLimitExceededError(Exception):
 
 class MalformedMultipartError(Exception):
     """Raised when multipart payload is malformed or missing required headers."""
+
+
+def build_multipart_parser(
+    boundary: bytes, handler: "StreamingMultipartHandler"
+) -> MultipartParser:
+    """Construct a MultipartParser with library-level header guards above magpie's own.
+
+    python-multipart's own max_header_count/max_header_size defaults (8 headers,
+    ~4KB) are tighter than StreamingMultipartHandler's configured limits
+    (MAX_HEADERS_PER_PART, MAX_HEADER_SIZE) and would otherwise raise the library's
+    MultipartParseError before the handler's callbacks raise HeaderLimitExceededError.
+    Setting the library limits to a multiple of magpie's own keeps magpie's checks
+    authoritative while still providing an outer backstop.
+    """
+    return MultipartParser(
+        boundary,
+        handler.get_callbacks(),
+        max_header_count=StreamingMultipartHandler.MAX_HEADERS_PER_PART * 2,
+        max_header_size=StreamingMultipartHandler.MAX_HEADER_SIZE * 2,
+    )
 
 
 class StreamingMultipartHandler:
@@ -391,7 +412,7 @@ async def upload_artifact(
 
     # Set up streaming multipart handler
     handler = StreamingMultipartHandler(temp_dir, max_size)
-    parser = MultipartParser(boundary, handler.get_callbacks())
+    parser = build_multipart_parser(boundary, handler)
 
     # Stream request body through multipart parser in a single background thread
     # Bridge async stream → sync parser using a queue (avoids per-chunk thread overhead)
@@ -451,6 +472,17 @@ async def upload_artifact(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
+        )
+    except ParseError as e:
+        # Outer backstop from python-multipart itself (see build_multipart_parser):
+        # its own max_header_count/max_header_size guards, or any other malformed
+        # input the library rejects before magpie's own checks run. Translate the
+        # same way as magpie's own HeaderLimitExceededError/MalformedMultipartError
+        # so callers see a clean 400 instead of an unhandled 500.
+        handler.cleanup()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Malformed multipart payload: {e}",
         )
     except Exception:
         handler.cleanup()
