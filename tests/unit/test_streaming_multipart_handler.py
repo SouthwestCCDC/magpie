@@ -19,13 +19,13 @@ import re
 from pathlib import Path
 
 import pytest
-from python_multipart.multipart import MultipartParser
 
 from magpie.server.routes.upload import (
     HeaderLimitExceededError,
     MalformedMultipartError,
     StreamingMultipartHandler,
     UploadSizeExceededError,
+    build_multipart_parser,
 )
 
 
@@ -68,7 +68,7 @@ class TestBoundaryExtraction:
                 b"--" + boundary + b"--\r\n"
             )
 
-            parser = MultipartParser(boundary, handler.get_callbacks())
+            parser = build_multipart_parser(boundary, handler)
             parser.write(payload)
             parser.finalize()
             handler.finalize()
@@ -96,7 +96,7 @@ class TestBoundaryExtraction:
             b"------WebKitFormBoundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -129,7 +129,7 @@ class TestBoundaryExtraction:
             b"--simple-boundary-123--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -163,7 +163,7 @@ class TestBoundaryExtraction:
                 b"--test--\r\n"
             )
 
-            parser = MultipartParser(boundary, handler.get_callbacks())
+            parser = build_multipart_parser(boundary, handler)
             parser.write(payload)
             parser.finalize()
             handler.finalize()
@@ -199,7 +199,7 @@ class TestMultipleFilePartsRejection:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # Handler should detect the second file part and raise MalformedMultipartError,
         # which is propagated out of parser.write()/parser.finalize().
@@ -223,7 +223,7 @@ class TestMultipleFilePartsRejection:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -257,7 +257,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -284,7 +284,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         with pytest.raises(UploadSizeExceededError, match="exceeds maximum size"):
             parser.write(payload)
@@ -307,7 +307,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # Write in chunks to simulate incremental parsing
         chunk_size = 50
@@ -335,7 +335,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         with pytest.raises(UploadSizeExceededError):
             parser.write(payload)
@@ -357,7 +357,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -378,7 +378,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -399,7 +399,7 @@ class TestSizeLimitEnforcement:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         with pytest.raises(UploadSizeExceededError):
             parser.write(payload)
@@ -441,7 +441,7 @@ class TestCleanupOnError:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # This should raise MalformedMultipartError on the malformed second part.
         with pytest.raises(MalformedMultipartError, match="missing required Content-Disposition"):
@@ -477,7 +477,7 @@ class TestCleanupOnError:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # This should raise UploadSizeExceededError
         with pytest.raises(UploadSizeExceededError, match="exceeds maximum size"):
@@ -509,7 +509,7 @@ class TestCleanupOnError:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
 
@@ -546,7 +546,7 @@ class TestCleanupOnError:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # Size limit should be exceeded during parsing
         with pytest.raises(UploadSizeExceededError, match="exceeds maximum size"):
@@ -584,7 +584,7 @@ class TestCleanupOnError:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
 
@@ -618,7 +618,7 @@ class TestContentDispositionParsing:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -639,7 +639,7 @@ class TestContentDispositionParsing:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -660,7 +660,7 @@ class TestContentDispositionParsing:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -696,7 +696,7 @@ class TestContentDispositionParsing:
         # Part without Content-Disposition header
         payload = b"--test-boundary\r\n\r\ntest content\r\n--test-boundary--\r\n"
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         with pytest.raises(MalformedMultipartError, match="missing required Content-Disposition"):
             parser.write(payload)
@@ -719,7 +719,7 @@ class TestContentDispositionParsing:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # The handler should raise when it processes the header end callback
         # because the Content-Disposition is missing the required 'name' parameter
@@ -796,7 +796,7 @@ class TestHeaderSizeLimits:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         with pytest.raises(HeaderLimitExceededError, match="more than .* headers"):
             parser.write(payload)
@@ -820,7 +820,7 @@ class TestHeaderSizeLimits:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -854,7 +854,7 @@ class TestHandlerGetResult:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -877,7 +877,7 @@ class TestHandlerGetResult:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -904,7 +904,7 @@ class TestHandlerGetResult:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()
@@ -942,7 +942,7 @@ class TestHandlerGetResult:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
 
         # Write payload in small chunks to force incremental parsing
         chunk_size = 100
@@ -980,7 +980,7 @@ class TestHandlerGetResult:
             b"--test-boundary--\r\n"
         )
 
-        parser = MultipartParser(boundary, handler.get_callbacks())
+        parser = build_multipart_parser(boundary, handler)
         parser.write(payload)
         parser.finalize()
         handler.finalize()

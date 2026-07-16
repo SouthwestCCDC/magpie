@@ -39,6 +39,26 @@ class MalformedMultipartError(Exception):
     """Raised when multipart payload is malformed or missing required headers."""
 
 
+def build_multipart_parser(
+    boundary: bytes, handler: "StreamingMultipartHandler"
+) -> MultipartParser:
+    """Construct a MultipartParser with library-level header guards above magpie's own.
+
+    python-multipart's own max_header_count/max_header_size defaults (8 headers,
+    ~4KB) are tighter than StreamingMultipartHandler's configured limits
+    (MAX_HEADERS_PER_PART, MAX_HEADER_SIZE) and would otherwise raise the library's
+    MultipartParseError before the handler's callbacks raise HeaderLimitExceededError.
+    Setting the library limits to a multiple of magpie's own keeps magpie's checks
+    authoritative while still providing an outer backstop.
+    """
+    return MultipartParser(
+        boundary,
+        handler.get_callbacks(),
+        max_header_count=StreamingMultipartHandler.MAX_HEADERS_PER_PART * 2,
+        max_header_size=StreamingMultipartHandler.MAX_HEADER_SIZE * 2,
+    )
+
+
 class StreamingMultipartHandler:
     """Handler for streaming multipart/form-data without buffering.
 
@@ -391,7 +411,7 @@ async def upload_artifact(
 
     # Set up streaming multipart handler
     handler = StreamingMultipartHandler(temp_dir, max_size)
-    parser = MultipartParser(boundary, handler.get_callbacks())
+    parser = build_multipart_parser(boundary, handler)
 
     # Stream request body through multipart parser in a single background thread
     # Bridge async stream → sync parser using a queue (avoids per-chunk thread overhead)
