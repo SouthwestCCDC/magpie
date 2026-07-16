@@ -14,6 +14,7 @@ from typing import Annotated
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel
+from python_multipart.exceptions import ParseError
 from python_multipart.multipart import MultipartParser
 
 from magpie.config import MagpieSettings
@@ -471,6 +472,17 @@ async def upload_artifact(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
+        )
+    except ParseError as e:
+        # Outer backstop from python-multipart itself (see build_multipart_parser):
+        # its own max_header_count/max_header_size guards, or any other malformed
+        # input the library rejects before magpie's own checks run. Translate the
+        # same way as magpie's own HeaderLimitExceededError/MalformedMultipartError
+        # so callers see a clean 400 instead of an unhandled 500.
+        handler.cleanup()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Malformed multipart payload: {e}",
         )
     except Exception:
         handler.cleanup()
