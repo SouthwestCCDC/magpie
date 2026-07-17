@@ -14,13 +14,27 @@
 
 set -euo pipefail
 
+# Captured before the Constants section below initializes MAGPIE_VERSION for
+# its own purpose (the semver string detected from the cloned
+# pyproject.toml, used to pick the GHCR image tag). An inherited
+# environment variable of the same name is read here first, so
+# `MAGPIE_VERSION=vX.Y.Z magpie-deploy.sh install` can still select a
+# version to install even though the name is reused below for a different
+# value once the repo is cloned. GITHUB_REF is also honored (and any
+# "refs/tags/" or "refs/heads/" prefix stripped) so a CI-style ref like
+# "refs/tags/v0.1.3" works too. See issue #559.
+REQUESTED_VERSION_ENV="${MAGPIE_VERSION:-${GITHUB_REF:-}}"
+REQUESTED_VERSION_ENV="${REQUESTED_VERSION_ENV#refs/tags/}"
+REQUESTED_VERSION_ENV="${REQUESTED_VERSION_ENV#refs/heads/}"
+
 # =============================================================================
 # Constants
 # =============================================================================
 
 SCRIPT_NAME="$(basename "$0")"
 GITHUB_REPO="SouthwestCCDC/magpie"
-GITHUB_BRANCH="default"
+DEFAULT_GITHUB_BRANCH="default"
+GITHUB_BRANCH="$DEFAULT_GITHUB_BRANCH"
 GHCR_IMAGE="ghcr.io/southwestccdc/magpie"
 MAGPIE_VERSION=""  # Dynamically detected from pyproject.toml after cloning repo
 # For --version output before repo clone, display "dev" (cosmetic only).
@@ -55,6 +69,7 @@ YES="false"
 FOLLOW="false"
 LINES="100"
 FROM_SOURCE="false"
+REQUESTED_VERSION=""  # from --version; empty means "use the default branch"
 
 # =============================================================================
 # Helper functions
@@ -308,6 +323,22 @@ is_valid_acme_server_url() {
     if [[ -n "$port" ]]; then
         (( 10#$port >= 1 && 10#$port <= 65535 )) || return 1
     fi
+    return 0
+}
+
+# Matches a safe git ref name (branch or tag): alphanumerics, dot,
+# underscore, hyphen, and slash, starting and ending with an alphanumeric.
+# This is a conservative allowlist, not a full `git check-ref-format`
+# implementation -- its job is to keep a user-controlled --version value
+# out of `git clone --branch`/`git fetch` as anything but a literal ref
+# name. In particular it rejects a leading '-' (which `git` would
+# otherwise parse as another option) and '..' or '//' sequences. See
+# issue #559.
+is_valid_git_ref() {
+    local ref="$1"
+    [[ "$ref" =~ ^[A-Za-z0-9]([A-Za-z0-9._/-]*[A-Za-z0-9])?$ ]] || return 1
+    [[ "$ref" == *..* ]] && return 1
+    [[ "$ref" == *//* ]] && return 1
     return 0
 }
 
@@ -971,6 +1002,33 @@ detect_version() {
     log "Detected magpie version: ${MAGPIE_VERSION}"
 }
 
+resolve_and_validate_version() {
+    # Priority: --version flag (already in REQUESTED_VERSION) > MAGPIE_VERSION
+    # / GITHUB_REF env override (captured at script start, before the
+    # Constants section repurposed the MAGPIE_VERSION name) > the default
+    # branch. See issue #559.
+    if [[ -z "$REQUESTED_VERSION" ]]; then
+        REQUESTED_VERSION="$REQUESTED_VERSION_ENV"
+    fi
+
+    if [[ -z "$REQUESTED_VERSION" ]]; then
+        return 0
+    fi
+
+    if ! is_valid_git_ref "$REQUESTED_VERSION"; then
+        die "Invalid --version value: $REQUESTED_VERSION (must be a valid git ref/tag name: letters, digits, '.', '_', '-', '/' only)"
+    fi
+
+    GITHUB_BRANCH="$REQUESTED_VERSION"
+
+    log "Verifying requested version exists: ${GITHUB_BRANCH}..."
+    local repo_url="https://github.com/${GITHUB_REPO}.git"
+    if ! git ls-remote --exit-code "$repo_url" "$GITHUB_BRANCH" &>/dev/null; then
+        die "Requested version/tag '${GITHUB_BRANCH}' not found in ${GITHUB_REPO} (checked branches and tags)."
+    fi
+    log "Version ${GITHUB_BRANCH} found"
+}
+
 update_repo_to_latest() {
     # Update repository to latest code from remote branch
     # Expects repo to already exist at ${INSTALL_DIR}/repo
@@ -1134,7 +1192,7 @@ pull_or_build_image() {
         log "Pulling magpie image from container registry..."
         log "  Image: ${image_tag}"
         if ! docker pull "$image_tag"; then
-            die "Failed to pull magpie image from ${image_tag}"
+            die "Failed to pull magpie image from ${image_tag}\nThe image tag is derived from the version in the cloned repo's pyproject.toml (${MAGPIE_VERSION}). If you used --version, confirm a release was published for that version."
         fi
         # Tag as magpie:latest for compose compatibility
         docker tag "$image_tag" magpie:latest
@@ -1276,6 +1334,7 @@ cmd_install() {
     log "Starting magpie installation..."
 
     check_prerequisites
+    resolve_and_validate_version
     gather_config
     validate_config
     check_existing_installation
@@ -1626,7 +1685,19 @@ Commands:
   status      Show service status
   logs        View container logs
 
+Global options:
+  -h, --help              Show this help message and exit
+  -v, --version           Show this installer script's own version and exit
+                          (with 'install --version vX.Y.Z', selects a magpie
+                          release to install instead -- see below)
+
 Install options (only used with 'install' command):
+  --version VERSION       Install a specific release/tag instead of the
+                          default branch (e.g. --version v0.1.3). Validates
+                          that the tag and its ghcr.io image both exist
+                          before installing; fails clearly if not.
+                          Env override: MAGPIE_VERSION or GITHUB_REF.
+                          Default: $DEFAULT_GITHUB_BRANCH branch (latest)
   --install-dir PATH      Installation directory (default: $DEFAULT_INSTALL_DIR)
   --data-dir PATH         Data storage directory (default: INSTALL_DIR/data)
                           Must be an absolute path. Paths under /home are not
@@ -1674,6 +1745,9 @@ Examples:
 
   # Installation with Let's Encrypt
   sudo $SCRIPT_NAME install --tls-mode auto --domain magpie.example.com
+
+  # Install a specific tagged release instead of the default branch
+  sudo $SCRIPT_NAME install --version v0.1.3
 
   # Update existing installation
   sudo $SCRIPT_NAME update
@@ -1780,8 +1854,19 @@ parse_args() {
                 exit 0
                 ;;
             --version|-v)
-                echo "$SCRIPT_NAME v${HARDCODED_VERSION}"
-                exit 0
+                # Dual purpose: `install --version vX.Y.Z` selects a release
+                # to install (issue #559). Bare `--version`/`-v` -- with no
+                # following value, or immediately followed by a command
+                # name -- prints this script's own cosmetic version and
+                # exits.
+                if [[ $# -ge 2 && "$2" != -* && -n "$2" \
+                    && ! "$2" =~ ^(install|update|uninstall|status|logs)$ ]]; then
+                    REQUESTED_VERSION="$2"
+                    shift 2
+                else
+                    echo "$SCRIPT_NAME v${HARDCODED_VERSION}"
+                    exit 0
+                fi
                 ;;
             -*)
                 die "Unknown option: $1\nUse --help for usage information."
@@ -1796,6 +1881,15 @@ parse_args() {
     if [[ -z "$command" ]]; then
         show_help
         exit 1
+    fi
+
+    # --version selects a release to install and is only meaningful for
+    # 'install' -- the env-var override (MAGPIE_VERSION/GITHUB_REF) is
+    # deliberately not checked here, since it may be set in an operator's
+    # environment for unrelated reasons and shouldn't break other commands.
+    # See issue #559.
+    if [[ -n "$REQUESTED_VERSION" ]] && [[ "$command" != "install" ]]; then
+        die "--version is only supported by the 'install' command (got: $command)"
     fi
 
     # Execute command

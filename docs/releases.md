@@ -135,6 +135,21 @@ docker pull ghcr.io/southwestccdc/magpie:2.0.0-rc1
 - Never deploy RCs directly to production without thorough validation
 - RCs are for operators who want to verify compatibility before the stable release
 
+**Installing an RC (or any specific release) with the installer script:**
+
+`scripts/magpie-deploy.sh` installs whatever is on the `default` branch by
+default. To install a specific tag -- an RC or an older stable release --
+without waiting for `default` to carry it, pass `--version`:
+
+```bash
+sudo ./scripts/magpie-deploy.sh install --version v2.0.0-rc1
+```
+
+This clones that tag and pulls the matching `ghcr.io/southwestccdc/magpie`
+image tag, failing clearly if either the tag or its image doesn't exist. A
+`MAGPIE_VERSION` or `GITHUB_REF` environment variable is honored as an
+override too, for scripted installs.
+
 **Warning:** If you use mutable tags like `:2` or `:2.0`, you may automatically pull an RC when one is released. For production, always pin to full version tags (e.g., `:1.5.0`) to avoid unintended RC upgrades.
 
 ### From Release Candidate to Stable
