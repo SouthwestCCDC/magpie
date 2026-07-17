@@ -13,6 +13,16 @@
 #    when read by read_env_file/load_existing_config (no more `source`).
 # 5. Path inputs (--install-dir/--data-dir) reject '..' and shell metachars.
 # 6. `logs` rejects a non-numeric --lines value.
+# 7. An escape-encoded --acme-server payload (\n, octal \173/\175/\040 --
+#    i.e. no literal blocked bytes) is rejected by the allowlist validator,
+#    and even if validation were bypassed, generate_caddyfile no longer
+#    decodes it into a real directive (ENVIRON, not `awk -v`).
+# 8. `uninstall --purge` refuses to `rm -rf` a DATA_DIR loaded from a
+#    hostile .env.
+# 9. `update` rejects an --install-dir containing sed metacharacters
+#    (e.g. '|') before it reaches the docker-compose sed patching.
+# 10. IPv4/IPv6 CIDR validation does not misjudge or error on leading-zero
+#     octets/prefixes (bash arithmetic octal gotcha).
 
 set -uo pipefail
 
@@ -310,6 +320,165 @@ test_logs_lines_validation() {
     log "  ✓ cmd_logs no longer uses unquoted \$follow_flag expansion"
 }
 
+# Test 11: an escape-encoded --acme-server payload (\n, octal \173/\175/\040
+# -- i.e. no *literal* whitespace/brace/backslash-decoded bytes at
+# validation time) must be rejected by the allowlist validator, not just a
+# denylist of literal bytes. This is the payload class that bypassed the
+# original denylist-based validation and reached awk's escape-decoding `-v`
+# assignment.
+test_acme_server_rejects_escape_encoded_injection() {
+    log "Test 11: is_valid_acme_server_url rejects an escape-encoded injection payload"
+
+    local hostile_acme
+    hostile_acme=$(printf 'https://ca.example.com\\n\\175\\nadmin_endpoint\\0400.0.0.0:2999\\040\\173\\n\\tenforce_origin\\n\\175\\ntest\\040\\173')
+
+    if is_valid_acme_server_url "$hostile_acme"; then
+        fail "is_valid_acme_server_url accepted an escape-encoded injection payload: $hostile_acme"
+    fi
+    log "  ✓ escape-encoded payload rejected by the allowlist validator"
+
+    if ! is_valid_acme_server_url "https://ca.example.com/acme/acme/directory"; then
+        fail "is_valid_acme_server_url rejected a legitimate ACME server URL"
+    fi
+    log "  ✓ legitimate https:// ACME server URL accepted"
+
+    if (
+        TLS_MODE=auto DOMAIN="magpie.example.com" TLS_CERT="" TLS_KEY="" \
+        HTTP_PORT=8080 HTTPS_PORT=8443 \
+        INSTALL_DIR="${TEST_DIR}/install_acme_escape" DATA_DIR="${TEST_DIR}/install_acme_escape/data" \
+        TRUSTED_PROXIES="" BIND_IP="" ACME_SERVER="$hostile_acme" \
+        validate_config
+    ) >/dev/null 2>&1; then
+        fail "validate_config accepted an escape-encoded --acme-server payload"
+    fi
+    log "  ✓ validate_config rejects the escape-encoded payload end to end"
+}
+
+# Test 12: even if ACME_SERVER validation were bypassed, generate_caddyfile
+# must not decode escape sequences in it into real Caddyfile syntax. This
+# is the defense-in-depth layer: ACME_SERVER is passed to awk via ENVIRON
+# (which does not decode \n / octal escapes), not `awk -v` (which does).
+test_generate_caddyfile_no_escape_decoding() {
+    log "Test 12: generate_caddyfile does not decode escape sequences in ACME_SERVER"
+
+    local hostile_acme
+    hostile_acme=$(printf 'https://ca.example.com\\n\\175\\nadmin_endpoint\\0400.0.0.0:2999\\040\\173\\n\\tenforce_origin\\n\\175\\ntest\\040\\173')
+
+    local install_dir="${TEST_DIR}/gc_escape_install"
+    mkdir -p "${install_dir}/repo" "${install_dir}/etc"
+    cp "${SCRIPT_DIR}/../Caddyfile.prod" "${install_dir}/repo/Caddyfile.prod" 2>/dev/null \
+        || cat > "${install_dir}/repo/Caddyfile.prod" << 'EOF'
+{
+	admin off
+}
+
+{$MAGPIE_DOMAIN} {
+	reverse_proxy magpie:8000
+}
+EOF
+
+    (
+        INSTALL_DIR="$install_dir" MAGPIE_VERSION="test" TLS_MODE="auto" \
+        DOMAIN="magpie.example.com" ACME_SERVER="$hostile_acme" \
+        generate_caddyfile
+    ) >/dev/null 2>&1 || true
+
+    local caddyfile="${install_dir}/etc/Caddyfile"
+    [[ -f "$caddyfile" ]] || fail "generate_caddyfile did not produce a Caddyfile"
+
+    # A real injected directive would appear as its own line (awk decoding
+    # \n into an actual newline, and \175/\173 into standalone braces). If
+    # the escapes were left inert, everything stays on the single `ca` line.
+    if grep -qxE '[[:space:]]*admin_endpoint.*' "$caddyfile"; then
+        fail "admin_endpoint was injected as its own Caddyfile directive -- escape sequences were decoded"
+    fi
+    log "  ✓ no standalone admin_endpoint directive was injected"
+
+    local ca_lines
+    ca_lines=$(grep -c '^\s*ca ' "$caddyfile" || true)
+    if [[ "$ca_lines" -ne 1 ]]; then
+        fail "expected exactly one 'ca' directive line, found $ca_lines"
+    fi
+    log "  ✓ hostile ACME_SERVER value stayed inert on a single 'ca' line (no escape decoding)"
+}
+
+# Test 13: `uninstall --purge` must refuse to `rm -rf` a DATA_DIR that was
+# loaded from a hostile/stale .env, not just trust whatever load_existing_config
+# populated it with.
+test_uninstall_purge_revalidates_data_dir() {
+    log "Test 13: cmd_uninstall --purge refuses a hostile DATA_DIR loaded from .env"
+
+    local install_dir="${TEST_DIR}/uninstall_install"
+    mkdir -p "${install_dir}/etc"
+    echo "MAGPIE_DATA_DIR=/opt/magpie/data; touch ${MARKER}_purge" > "${install_dir}/etc/.env"
+
+    local out
+    if out=$(
+        (
+            INSTALL_DIR="$install_dir" PURGE="true" YES="true" NONINTERACTIVE="true" \
+            cmd_uninstall
+        ) 2>&1
+    ); then
+        fail "cmd_uninstall --purge accepted a hostile DATA_DIR from .env"
+    fi
+
+    if ! echo "$out" | grep -q "failed validation"; then
+        fail "cmd_uninstall --purge did not report a validation failure for the hostile DATA_DIR: $out"
+    fi
+    log "  ✓ cmd_uninstall --purge refused a hostile DATA_DIR before rm -rf"
+
+    [[ -e "${MARKER}_purge" ]] && fail "hostile DATA_DIR content was executed"
+    log "  ✓ no command executed via the hostile DATA_DIR value"
+}
+
+# Test 14: `update` must reject an --install-dir containing sed
+# metacharacters (e.g. '|') before it reaches
+# patch_compose_for_caddyfile()/patch_compose_for_tls_certs(), which
+# interpolate INSTALL_DIR into a `sed 's|...|...|g'` replacement.
+test_update_rejects_hostile_install_dir() {
+    log "Test 14: cmd_update rejects an --install-dir containing sed metacharacters"
+
+    local out
+    if out=$(
+        (
+            INSTALL_DIR="/opt/magpie|s/foo/bar/;x" cmd_update
+        ) 2>&1
+    ); then
+        fail "cmd_update accepted an --install-dir containing '|'"
+    fi
+
+    if ! echo "$out" | grep -qE "Invalid --install-dir|invalid characters"; then
+        fail "cmd_update did not report an install-dir validation failure: $out"
+    fi
+    log "  ✓ cmd_update rejected a pipe-containing --install-dir before any patching"
+}
+
+# Test 15: leading-zero IPv4 octets / CIDR prefixes must not be misjudged
+# (bash arithmetic treats a leading zero as octal) or throw a stderr error.
+test_cidr_leading_zero_octets() {
+    log "Test 15: IPv4/IPv6 CIDR validation handles leading-zero octets/prefixes correctly"
+
+    local err_output
+    err_output=$(is_valid_ipv4_cidr "10.0.008.1" 2>&1 1>/dev/null)
+    if [[ -n "$err_output" ]]; then
+        fail "is_valid_ipv4_cidr printed a stderr error for a leading-zero octet: $err_output"
+    fi
+    if ! is_valid_ipv4_cidr "10.0.008.1"; then
+        fail "is_valid_ipv4_cidr rejected a valid leading-zero octet (008 == 8, <= 255)"
+    fi
+    log "  ✓ leading-zero octet '008' handled without error, correctly accepted"
+
+    if ! is_valid_ipv4_cidr "10.0.017.1"; then
+        fail "is_valid_ipv4_cidr rejected 10.0.017.1 (017 == 17 in base 10, <= 255)"
+    fi
+    log "  ✓ leading-zero octet '017' evaluated as base-10 17, not octal 15"
+
+    if is_valid_ipv4_cidr "10.0.0.1/256"; then
+        fail "is_valid_ipv4_cidr accepted an out-of-range CIDR prefix"
+    fi
+    log "  ✓ out-of-range CIDR prefix still rejected"
+}
+
 # Run all tests
 log "Running tests for issue #448"
 log ""
@@ -324,6 +493,11 @@ test_env_file_not_sourced
 test_load_existing_config_no_execution
 test_path_validation
 test_logs_lines_validation
+test_acme_server_rejects_escape_encoded_injection
+test_generate_caddyfile_no_escape_decoding
+test_uninstall_purge_revalidates_data_dir
+test_update_rejects_hostile_install_dir
+test_cidr_leading_zero_octets
 
 log ""
 log "All tests passed!"

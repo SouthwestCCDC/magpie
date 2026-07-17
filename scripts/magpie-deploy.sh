@@ -243,12 +243,16 @@ is_valid_ipv4_cidr() {
     local value="$1"
     [[ "$value" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(/([0-9]{1,2}))?$ ]] || return 1
 
+    # Force base-10 interpretation with `10#...`: bash arithmetic otherwise
+    # treats a leading-zero octet (e.g. "008") as octal, which either
+    # misjudges its value (e.g. "017" -> 15) or hard-errors ("008" has no
+    # digit 8/9 in octal).
     local octet
     for octet in "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"; do
-        (( octet <= 255 )) || return 1
+        (( 10#$octet <= 255 )) || return 1
     done
     if [[ -n "${BASH_REMATCH[6]}" ]]; then
-        (( BASH_REMATCH[6] <= 32 )) || return 1
+        (( 10#${BASH_REMATCH[6]} <= 32 )) || return 1
     fi
     return 0
 }
@@ -264,7 +268,7 @@ is_valid_ipv6_cidr() {
     if [[ "$value" == */* ]]; then
         addr="${value%%/*}"
         prefix="${value#*/}"
-        [[ "$prefix" =~ ^[0-9]{1,3}$ ]] && (( prefix <= 128 )) || return 1
+        [[ "$prefix" =~ ^[0-9]{1,3}$ ]] && (( 10#$prefix <= 128 )) || return 1
     fi
 
     [[ "$addr" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
@@ -276,6 +280,23 @@ is_valid_ipv6_cidr() {
 is_valid_ip_or_cidr() {
     local value="$1"
     is_valid_ipv4_cidr "$value" || is_valid_ipv6_cidr "$value"
+}
+
+# Matches an https:// URL using only an allowlisted RFC 3986-ish charset
+# for the authority and path. This is a strict ALLOWLIST (not a denylist of
+# specific bytes like whitespace/braces): it excludes every character not
+# explicitly permitted, including backslash. That matters because the
+# value is later interpolated into an awk program via ENVIRON (not `-v`),
+# but a denylist alone is not enough defense in depth -- `awk -v x=value`
+# decodes backslash escapes (`\n`, octal `\173`/`\175`/`\040`, etc.) in the
+# assigned value *before* the awk program runs, so a denylist that checks
+# only for literal whitespace/braces can be bypassed with escape sequences
+# that decode into them. Excluding backslash here closes that off
+# independently of how the value is later consumed. See issue #448.
+is_valid_acme_server_url() {
+    local value="$1"
+    local pattern='^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%!$&()*+,;=:@/-]*)?$'
+    [[ "$value" =~ $pattern ]]
 }
 
 # Validates a whitespace-separated list of IPv4/IPv6 addresses or CIDRs.
@@ -330,12 +351,8 @@ validate_network_config() {
         fi
     fi
 
-    if [[ -n "$ACME_SERVER" ]]; then
-        if [[ "$ACME_SERVER" != https://* ]]; then
-            errors+=("Invalid --acme-server: $ACME_SERVER (must start with https://)")
-        elif [[ "$ACME_SERVER" =~ [[:space:]{}] ]]; then
-            errors+=("Invalid --acme-server: $ACME_SERVER (must not contain whitespace, '{', or '}')")
-        fi
+    if [[ -n "$ACME_SERVER" ]] && ! is_valid_acme_server_url "$ACME_SERVER"; then
+        errors+=("Invalid --acme-server: $ACME_SERVER (must be an https:// URL using only RFC 3986 host/path characters; no whitespace, braces, or backslashes)")
     fi
 }
 
@@ -712,7 +729,19 @@ EOF
             if [[ -n "$ACME_SERVER" ]]; then
                 # Insert a tls block with the custom ACME server directly
                 # after the site address line.
-                awk -v site="${DOMAIN} {" -v acme="$ACME_SERVER" '
+                #
+                # ACME_SERVER is passed via ENVIRON, not `awk -v`: `-v`
+                # decodes backslash escapes (\n, octal \173/\175/\040, ...)
+                # in the assigned value before the awk program ever runs,
+                # which would let an escape-encoded payload with zero
+                # literal blocked bytes decode into real braces/newlines
+                # here -- even though it passed the ACME_SERVER allowlist.
+                # ENVIRON does not decode escapes. This is deliberately
+                # belt-and-suspenders with the strict allowlist in
+                # is_valid_acme_server_url(), which rejects backslashes
+                # outright. See issue #448.
+                ACME_SERVER="$ACME_SERVER" awk -v site="${DOMAIN} {" '
+                    BEGIN { acme = ENVIRON["ACME_SERVER"] }
                     {
                         print
                         if ($0 == site) {
@@ -1245,6 +1274,28 @@ cmd_update() {
     log "Updating magpie..."
 
     INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+
+    # Unlike DATA_DIR, INSTALL_DIR is not persisted to .env -- it comes
+    # straight from --install-dir on this invocation (or the default). It's
+    # later interpolated into `sed 's|...|${INSTALL_DIR}/...|g'` in
+    # patch_compose_for_caddyfile()/patch_compose_for_tls_certs(), so an
+    # unvalidated value containing '|' or other sed metacharacters could
+    # corrupt or hijack docker-compose.yml. cmd_install validates this via
+    # validate_config(); cmd_update needs its own check. See issue #448.
+    local errors=()
+    if [[ ! "$INSTALL_DIR" =~ ^/ ]]; then
+        errors+=("Install directory must be an absolute path: $INSTALL_DIR")
+    else
+        validate_path_value "$INSTALL_DIR" "Install directory"
+    fi
+    if [[ ${#errors[@]} -gt 0 ]]; then
+        log_error "Invalid --install-dir:"
+        for err in "${errors[@]}"; do
+            echo "  - $err" >&2
+        done
+        die "Fix the --install-dir value and try again."
+    fi
+
     verify_installation
     load_existing_config
 
@@ -1378,6 +1429,25 @@ cmd_uninstall() {
     load_existing_config
 
     if [[ "$PURGE" == "true" ]]; then
+        # DATA_DIR was just loaded from .env above; re-validate it before
+        # it's used in `rm -rf` -- a stale or hand-edited .env could
+        # otherwise point --purge at an arbitrary path. See issue #448.
+        local errors=()
+        if [[ -z "$DATA_DIR" ]]; then
+            errors+=("Data directory is empty; refusing to run --purge")
+        elif [[ ! "$DATA_DIR" =~ ^/ ]]; then
+            errors+=("Data directory must be an absolute path: $DATA_DIR")
+        else
+            validate_path_value "$DATA_DIR" "Data directory"
+        fi
+        if [[ ${#errors[@]} -gt 0 ]]; then
+            log_error "Refusing to purge -- data directory failed validation:"
+            for err in "${errors[@]}"; do
+                echo "  - $err" >&2
+            done
+            die "Fix ${INSTALL_DIR}/etc/.env or reinstall, then retry."
+        fi
+
         if ! confirm "This will permanently delete all artifacts and data. Continue?"; then
             log "Uninstall cancelled."
             exit 0
