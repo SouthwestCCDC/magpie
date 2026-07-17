@@ -1204,7 +1204,14 @@ run_init() {
     while (( attempt <= max_retries )); do
         log "Attempting database initialization (attempt $attempt/$max_retries)..."
 
-        if output=$(docker compose --env-file "${INSTALL_DIR}/etc/.env" exec -T magpie magpie-ctl init 2>&1); then
+        # MAGPIE_ADMIN_TOKEN_SINK=stdout is overridden for just this exec so
+        # the token can be scraped below and shown to the operator running
+        # this installer, regardless of the deployed docker-compose.yml's
+        # own default -- this is an operator-initiated `docker compose exec`
+        # printing to this interactive install session, not the automatic
+        # first-boot init that runs as the container's PID 1 (which is the
+        # actual leak vector #387 addresses; see docs/installation.md).
+        if output=$(docker compose --env-file "${INSTALL_DIR}/etc/.env" exec -T -e MAGPIE_ADMIN_TOKEN_SINK=stdout magpie magpie-ctl init 2>&1); then
             init_success=true
             break
         fi
@@ -1249,7 +1256,15 @@ run_init() {
         echo "=============================================="
         echo ""
     else
-        log "Database initialized (admin token already exists)"
+        # No token in this exec's output -- almost always because the
+        # container's own first-boot init (entrypoint.sh, running before
+        # this script's health check returns) already generated and
+        # delivered it via MAGPIE_ADMIN_TOKEN_SINK (default: file, at
+        # ${DATA_DIR}/admin-token) before this exec ever ran.
+        log "Database already initialized; admin token was delivered on first boot."
+        log "Default sink is 'file': sudo cat ${DATA_DIR}/admin-token"
+        log "To mint an additional admin-scope token instead:"
+        log "  docker compose --env-file ${INSTALL_DIR}/etc/.env exec magpie magpie-ctl token create --name ops-admin --scope admin"
     fi
 }
 

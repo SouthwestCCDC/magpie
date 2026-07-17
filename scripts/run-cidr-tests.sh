@@ -72,7 +72,11 @@ fi
 # Initialize magpie and get admin token
 echo "Initializing magpie and getting admin token..."
 # Capture output and return code separately to avoid mixing stdout/stderr
-INIT_OUTPUT=$(docker compose exec -T magpie magpie-ctl init --reset-admin-token 2>&1)
+# MAGPIE_ADMIN_TOKEN_SINK=stdout is overridden for just this exec so the
+# token can be scraped below, regardless of docker-compose.yml's own
+# (file-sink) default -- this is the script reading its own token, not a
+# production delivery path.
+INIT_OUTPUT=$(docker compose exec -T -e MAGPIE_ADMIN_TOKEN_SINK=stdout magpie magpie-ctl init --reset-admin-token 2>&1)
 INIT_EXIT_CODE=$?
 
 if [ $INIT_EXIT_CODE -ne 0 ]; then
