@@ -9,7 +9,8 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel
 
-from magpie.server.deps import require_admin_scope_header
+from magpie.auth.service import TokenInfo
+from magpie.server.deps import require_admin_scope
 from magpie.server.subprocess_utils import CtlCommandError, run_ctl_command
 from magpie.validation import TAG_NAME_MAX_LENGTH, TAG_NAME_PATTERN
 
@@ -37,13 +38,13 @@ async def flush_tag(
         bool,
         Query(description="If true, return preview without actually removing tags"),
     ] = False,
-    _admin_scope_check: Annotated[None, Depends(require_admin_scope_header)] = None,
+    admin: Annotated[TokenInfo, Depends(require_admin_scope)] = None,
 ) -> FlushTagResponse:
     """Remove a tag from all artifacts globally.
 
-    Requires admin scope. This is a potentially destructive operation that walks
-    the entire storage tree and removes the specified tag from every artifact that
-    has it.
+    Requires admin scope, validated via Bearer token. This is a potentially
+    destructive operation that walks the entire storage tree and removes the
+    specified tag from every artifact that has it.
 
     The confirm_walk_filesystem parameter must be explicitly set to true to
     acknowledge that this operation will scan the entire storage filesystem.
@@ -54,12 +55,14 @@ async def flush_tag(
         tag_name: Name of the tag to remove globally.
         confirm_walk_filesystem: Must be true to proceed with the operation.
         dry_run: If true, return affected artifacts without actually removing tags.
+        admin: Validated admin token (injected by dependency).
 
     Returns:
         FlushTagResponse with list of affected artifacts and count.
 
     Raises:
-        HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
+        HTTPException 401: If the Authorization Bearer token is missing, malformed,
+            invalid, or disabled.
         HTTPException 403: If token doesn't have admin scope.
         HTTPException 400: If confirm_walk_filesystem is not true.
     """

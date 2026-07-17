@@ -41,8 +41,14 @@ chmod 644 /run/magpie-user
 # with artifacts.
 STORAGE_DIR="${MAGPIE_STORAGE_PATH:-/data/artifacts}"
 if [ ! -d "$STORAGE_DIR" ]; then
-    mkdir -p "$STORAGE_DIR"
-    chown "$RUN_UID:$RUN_GID" "$STORAGE_DIR"
+    if ! mkdir -p "$STORAGE_DIR"; then
+        echo "Error: Failed to create storage directory $STORAGE_DIR" >&2
+        exit 1
+    fi
+    if ! chown "$RUN_UID:$RUN_GID" "$STORAGE_DIR"; then
+        echo "Error: Failed to chown storage directory $STORAGE_DIR to $RUN_UID:$RUN_GID (the container may lack permission to change ownership on this mount, e.g. some bind mounts or non-root filesystems)" >&2
+        exit 1
+    fi
 fi
 
 # Auto-initialize database if it doesn't exist
