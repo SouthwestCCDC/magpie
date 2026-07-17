@@ -221,6 +221,124 @@ check_prerequisites() {
 # Configuration validation
 # =============================================================================
 
+# Validation helpers (see issue #448) ----------------------------------------
+#
+# These are deliberately permissive-but-safe pattern checks rather than
+# fully RFC-compliant validators: the goal is to reject anything that could
+# be interpreted as shell, sed, or Caddyfile syntax (metacharacters,
+# newlines, braces), not to certify that a value is a *routable* hostname
+# or IP address.
+
+# Matches a syntactically valid DNS hostname: labels of alphanumerics and
+# hyphens (not starting/ending with a hyphen), separated by dots. Excludes
+# every character that would let a value act as regex, sed script, or shell
+# metacharacters ('/', '\', '$', backtick, ';', '&', newline, etc.).
+is_valid_domain() {
+    local domain="$1"
+    [[ "$domain" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]]
+}
+
+# Matches a single IPv4 address, optionally with a /NN CIDR prefix.
+is_valid_ipv4_cidr() {
+    local value="$1"
+    [[ "$value" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(/([0-9]{1,2}))?$ ]] || return 1
+
+    local octet
+    for octet in "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"; do
+        (( octet <= 255 )) || return 1
+    done
+    if [[ -n "${BASH_REMATCH[6]}" ]]; then
+        (( BASH_REMATCH[6] <= 32 )) || return 1
+    fi
+    return 0
+}
+
+# Matches a single IPv6 address, optionally with a /NNN CIDR prefix. This is
+# a charset/shape check (hex digits and colons only), not a full RFC 4291
+# validator -- it exists to reject injection characters.
+is_valid_ipv6_cidr() {
+    local value="$1"
+    local addr="$value"
+    local prefix=""
+
+    if [[ "$value" == */* ]]; then
+        addr="${value%%/*}"
+        prefix="${value#*/}"
+        [[ "$prefix" =~ ^[0-9]{1,3}$ ]] && (( prefix <= 128 )) || return 1
+    fi
+
+    [[ "$addr" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
+    [[ "$addr" == *:* ]] || return 1
+    return 0
+}
+
+# Matches a single IP address (v4 or v6), optionally with a CIDR prefix.
+is_valid_ip_or_cidr() {
+    local value="$1"
+    is_valid_ipv4_cidr "$value" || is_valid_ipv6_cidr "$value"
+}
+
+# Validates a whitespace-separated list of IPv4/IPv6 addresses or CIDRs.
+# Word-splits on IFS (space, tab, newline), so an embedded newline is
+# checked per-token like any other separator: an injected non-IP token
+# (e.g. a Caddy directive) fails validation rather than being smuggled
+# through as part of one value.
+is_valid_ip_or_cidr_list() {
+    local list="$1"
+    local token
+    for token in $list; do
+        is_valid_ip_or_cidr "$token" || return 1
+    done
+    return 0
+}
+
+# Rejects path values that contain '..' path-traversal segments or any
+# character outside a safe allowlist. Paths in this script are written
+# unquoted into generated shell/systemd/docker-compose artifacts, so this
+# is stricter than "not empty" / "absolute" alone. Appends to the caller's
+# 'errors' array (relies on bash's dynamic scoping of locals). See issue #448.
+validate_path_value() {
+    local path="$1"
+    local label="$2"
+
+    if [[ "$path" =~ (^|/)\.\.(/|$) ]]; then
+        errors+=("$label must not contain '..' path segments: $path")
+    fi
+
+    if ! [[ "$path" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+        errors+=("$label contains invalid characters (only letters, digits, '.', '_', '-', '/' are allowed): $path")
+    fi
+}
+
+# Validates DOMAIN, TRUSTED_PROXIES, BIND_IP, and ACME_SERVER format.
+# Called both during install (via validate_config) and update (to
+# re-validate values loaded from an existing .env before they're used to
+# regenerate the Caddyfile). Appends to the caller's 'errors' array (relies
+# on bash's dynamic scoping of locals). See issue #448.
+validate_network_config() {
+    if [[ -n "$DOMAIN" ]] && ! is_valid_domain "$DOMAIN"; then
+        errors+=("Invalid domain: $DOMAIN (must be a valid hostname, e.g. magpie.example.com)")
+    fi
+
+    if [[ -n "$TRUSTED_PROXIES" ]] && ! is_valid_ip_or_cidr_list "$TRUSTED_PROXIES"; then
+        errors+=("Invalid --trusted-proxies: $TRUSTED_PROXIES (must be a whitespace-separated list of IPv4/IPv6 addresses or CIDRs)")
+    fi
+
+    if [[ -n "$BIND_IP" ]]; then
+        if [[ "$BIND_IP" == */* ]] || ! is_valid_ip_or_cidr "$BIND_IP"; then
+            errors+=("Invalid --bind-ip: $BIND_IP (must be a single IPv4 or IPv6 address, no CIDR prefix)")
+        fi
+    fi
+
+    if [[ -n "$ACME_SERVER" ]]; then
+        if [[ "$ACME_SERVER" != https://* ]]; then
+            errors+=("Invalid --acme-server: $ACME_SERVER (must start with https://)")
+        elif [[ "$ACME_SERVER" =~ [[:space:]{}] ]]; then
+            errors+=("Invalid --acme-server: $ACME_SERVER (must not contain whitespace, '{', or '}')")
+        fi
+    fi
+}
+
 validate_config() {
     local errors=()
 
@@ -264,11 +382,18 @@ validate_config() {
         errors+=("Invalid HTTPS port: $HTTPS_PORT")
     fi
 
+    # Network value validation (DOMAIN, TRUSTED_PROXIES, BIND_IP, ACME_SERVER)
+    # These values later flow into the generated .env and Caddyfile, so they
+    # must be validated here, before any file is generated. See issue #448.
+    validate_network_config
+
     # Directory validation
     if [[ -z "$INSTALL_DIR" ]]; then
         errors+=("Install directory cannot be empty")
     elif [[ ! "$INSTALL_DIR" =~ ^/ ]]; then
         errors+=("Install directory must be an absolute path: $INSTALL_DIR")
+    else
+        validate_path_value "$INSTALL_DIR" "Install directory"
     fi
 
     # Data directory validation
@@ -276,6 +401,8 @@ validate_config() {
         errors+=("Data directory cannot be empty")
     elif [[ ! "$DATA_DIR" =~ ^/ ]]; then
         errors+=("Data directory must be an absolute path: $DATA_DIR")
+    else
+        validate_path_value "$DATA_DIR" "Data directory"
     fi
 
     # Warn about /home with ProtectHome=true
@@ -338,17 +465,49 @@ verify_installation() {
     fi
 }
 
+# Reads a strict KEY=value .env file into the caller's associative array
+# without performing any shell expansion, command substitution, sourcing,
+# or evaluation of the file's contents. Comment lines (leading '#') and
+# blank lines are skipped; lines that do not match a bare KEY=value shape
+# are silently ignored -- this also means a value containing an embedded
+# newline cannot smuggle in a second "line" that looks like a directive, it
+# just becomes inert trailing text or a rejected non-KV line. See issue #448.
+read_env_file() {
+    local file="$1"
+    local -n out_array="$2"
+    local line key value
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+            # shellcheck disable=SC2034  # out_array is a nameref to the caller's array; shellcheck can't see its use there
+            out_array["$key"]="$value"
+        fi
+    done < "$file"
+}
+
 load_existing_config() {
     if [[ -f "${INSTALL_DIR}/etc/.env" ]]; then
-        # shellcheck source=/dev/null
-        source "${INSTALL_DIR}/etc/.env"
+        # Parsed with read_env_file (no shell expansion/execution of the
+        # file's contents) rather than sourced as a shell script. See #448.
+        local -A env_vars=()
+        read_env_file "${INSTALL_DIR}/etc/.env" env_vars
 
         # Map env vars to script variables (only for MAGPIE_* prefixed vars)
-        DATA_DIR="${MAGPIE_DATA_DIR:-$DATA_DIR}"
-        HTTP_PORT="${MAGPIE_HTTP_PORT:-$HTTP_PORT}"
-        HTTPS_PORT="${MAGPIE_HTTPS_PORT:-$HTTPS_PORT}"
-        DOMAIN="${MAGPIE_DOMAIN:-$DOMAIN}"
-        # TLS_MODE, TRUSTED_PROXIES, BIND_IP, and ACME_SERVER are loaded directly (no prefix mapping needed)
+        DATA_DIR="${env_vars[MAGPIE_DATA_DIR]:-$DATA_DIR}"
+        HTTP_PORT="${env_vars[MAGPIE_HTTP_PORT]:-$HTTP_PORT}"
+        HTTPS_PORT="${env_vars[MAGPIE_HTTPS_PORT]:-$HTTPS_PORT}"
+        DOMAIN="${env_vars[MAGPIE_DOMAIN]:-$DOMAIN}"
+        # TLS_MODE, TRUSTED_PROXIES, BIND_IP, and ACME_SERVER are stored
+        # without a MAGPIE_ prefix (see generate_env_file); map directly.
+        TLS_MODE="${env_vars[TLS_MODE]:-$TLS_MODE}"
+        TRUSTED_PROXIES="${env_vars[TRUSTED_PROXIES]:-$TRUSTED_PROXIES}"
+        BIND_IP="${env_vars[BIND_IP]:-$BIND_IP}"
+        ACME_SERVER="${env_vars[ACME_SERVER]:-$ACME_SERVER}"
     fi
 }
 
@@ -537,27 +696,53 @@ EOF
 
         auto)
             # Automatic TLS (Let's Encrypt or custom ACME server)
-            # - Replace {$MAGPIE_DOMAIN} with actual domain
-            # - Add custom ACME server if configured
-            cp "$source_caddyfile" "$dest_caddyfile"
-            sed -i "s/{\\\$MAGPIE_DOMAIN}/${DOMAIN}/g" "$dest_caddyfile"
+            # - Replace {$MAGPIE_DOMAIN} with the actual domain
+            # - Add a custom ACME server if configured
+            #
+            # DOMAIN and ACME_SERVER are substituted with bash's own literal
+            # string replacement and matched with awk -v (not sed), and are
+            # validated (validate_config/validate_network_config) before
+            # this ever runs, so neither value is interpreted as a regex or
+            # sed script. See issue #448.
+            local content
+            content="$(cat "$source_caddyfile")"
+            content="${content//\{\$MAGPIE_DOMAIN\}/$DOMAIN}"
+            printf '%s\n' "$content" > "$dest_caddyfile"
 
-            # Add custom ACME server if configured
             if [[ -n "$ACME_SERVER" ]]; then
-                # Insert custom ACME server after the site address line
-                # The tls block should be added inside the site block
-                sed -i "/${DOMAIN} {/a\\	tls {\n\t\tca ${ACME_SERVER}\n\t}" "$dest_caddyfile"
+                # Insert a tls block with the custom ACME server directly
+                # after the site address line.
+                awk -v site="${DOMAIN} {" -v acme="$ACME_SERVER" '
+                    {
+                        print
+                        if ($0 == site) {
+                            print "\ttls {"
+                            print "\t\tca " acme
+                            print "\t}"
+                        }
+                    }
+                ' "$dest_caddyfile" > "${dest_caddyfile}.tmp"
+                mv "${dest_caddyfile}.tmp" "$dest_caddyfile"
             fi
 
             # Add generation header
-            sed -i "1i# Generated by magpie-deploy.sh v${MAGPIE_VERSION} (TLS mode: auto)" "$dest_caddyfile"
+            {
+                echo "# Generated by magpie-deploy.sh v${MAGPIE_VERSION} (TLS mode: auto)"
+                cat "$dest_caddyfile"
+            } > "${dest_caddyfile}.tmp"
+            mv "${dest_caddyfile}.tmp" "$dest_caddyfile"
             ;;
 
         manual)
             # Manual TLS with user-provided certificates
             # - Copy certs to install dir so they're managed with the installation
-            # - Replace {$MAGPIE_DOMAIN} with actual domain
+            # - Replace {$MAGPIE_DOMAIN} with the actual domain
             # - Add tls directive with container paths
+            #
+            # DOMAIN is substituted with bash's own literal string
+            # replacement and matched with awk -v (not sed), and is
+            # validated (validate_config/validate_network_config) before
+            # this ever runs. See issue #448.
 
             # Copy certificates to installation directory
             local tls_dir="${INSTALL_DIR}/etc/tls"
@@ -568,14 +753,28 @@ EOF
             chmod 644 "${tls_dir}/cert.pem"
             chmod 600 "${tls_dir}/key.pem"
 
-            cp "$source_caddyfile" "$dest_caddyfile"
-            sed -i "s/{\\\$MAGPIE_DOMAIN}/${DOMAIN}/g" "$dest_caddyfile"
+            local content
+            content="$(cat "$source_caddyfile")"
+            content="${content//\{\$MAGPIE_DOMAIN\}/$DOMAIN}"
+            printf '%s\n' "$content" > "$dest_caddyfile"
 
             # Add tls directive with container paths (certs mounted at /etc/caddy/tls/)
-            sed -i "/${DOMAIN} {/a\\	tls /etc/caddy/tls/cert.pem /etc/caddy/tls/key.pem" "$dest_caddyfile"
+            awk -v site="${DOMAIN} {" '
+                {
+                    print
+                    if ($0 == site) {
+                        print "\ttls /etc/caddy/tls/cert.pem /etc/caddy/tls/key.pem"
+                    }
+                }
+            ' "$dest_caddyfile" > "${dest_caddyfile}.tmp"
+            mv "${dest_caddyfile}.tmp" "$dest_caddyfile"
 
             # Add generation header
-            sed -i "1i# Generated by magpie-deploy.sh v${MAGPIE_VERSION} (TLS mode: manual)" "$dest_caddyfile"
+            {
+                echo "# Generated by magpie-deploy.sh v${MAGPIE_VERSION} (TLS mode: manual)"
+                cat "$dest_caddyfile"
+            } > "${dest_caddyfile}.tmp"
+            mv "${dest_caddyfile}.tmp" "$dest_caddyfile"
             ;;
     esac
 
@@ -1097,19 +1296,31 @@ cmd_update() {
     if [[ ! -f "${INSTALL_DIR}/repo/Caddyfile.prod" ]]; then
         log_warn "Caddyfile.prod not found in repo, skipping Caddyfile update"
     else
-        # Load existing environment (includes TLS_MODE, DOMAIN, TRUSTED_PROXIES from .env)
-        # These values are persisted during install by generate_env_file().
-        # See issues #340 and #344 for background.
-        if [[ -f "${INSTALL_DIR}/etc/.env" ]]; then
-            set -a
-            # shellcheck disable=SC1091
-            source "${INSTALL_DIR}/etc/.env"
-            set +a
-        fi
+        # TLS_MODE, DOMAIN, TRUSTED_PROXIES, BIND_IP, and ACME_SERVER were
+        # already loaded from .env by load_existing_config() above, using a
+        # parser that performs no shell expansion or execution of the
+        # file's contents -- no need to source the file again here.
+        # See issues #340, #344, and #448 for background.
 
         # Apply defaults for vars that may be missing from old .env files (migration from pre-#345 installs)
         TLS_MODE="${TLS_MODE:-$DEFAULT_TLS_MODE}"
         TRUSTED_PROXIES="${TRUSTED_PROXIES:-$DEFAULT_TRUSTED_PROXIES}"
+
+        # Re-validate the values loaded from .env before they're used to
+        # regenerate the Caddyfile -- guards against a hand-edited or
+        # pre-#448 .env file containing a value that would no longer pass
+        # validation. Does not call the full validate_config(), since
+        # TLS_CERT/TLS_KEY (manual-mode certificate paths) are per-install
+        # CLI args, not persisted to .env, and would spuriously fail here.
+        local errors=()
+        validate_network_config
+        if [[ ${#errors[@]} -gt 0 ]]; then
+            log_error "Existing configuration in .env failed validation; refusing to regenerate Caddyfile:"
+            for err in "${errors[@]}"; do
+                echo "  - $err" >&2
+            done
+            die "Fix or remove the invalid value(s) in ${INSTALL_DIR}/etc/.env, or reinstall."
+        fi
 
         # Regenerate the Caddyfile using the configured (or defaulted) TLS settings
         if declare -F generate_caddyfile >/dev/null 2>&1; then
@@ -1250,11 +1461,19 @@ cmd_logs() {
 
     cd "$INSTALL_DIR"
 
-    local follow_flag=""
-    [[ "$FOLLOW" == "true" ]] && follow_flag="-f"
+    # Validate --lines before it reaches docker compose. See issue #448.
+    if ! [[ "$LINES" =~ ^[0-9]+$ ]]; then
+        die "Invalid --lines value: $LINES (must be a non-negative integer)"
+    fi
 
-    # shellcheck disable=SC2086
-    docker compose --env-file "${INSTALL_DIR}/etc/.env" logs $follow_flag --tail="$LINES" "$@"
+    # Build the docker-compose argument list as a quoted array rather than
+    # interpolating into an unquoted command line. See issue #448.
+    local compose_args=(--env-file "${INSTALL_DIR}/etc/.env" logs)
+    [[ "$FOLLOW" == "true" ]] && compose_args+=(-f)
+    compose_args+=(--tail="$LINES")
+    compose_args+=("$@")
+
+    docker compose "${compose_args[@]}"
 }
 
 # =============================================================================
