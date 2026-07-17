@@ -61,6 +61,24 @@ def flush_tag(
         action = "Would flush" if dry_run else "Flushing"
         click.echo(f"{action} tag '{tag_name}' globally...", err=True)
 
+    if json_output:
+        # Suppress all structlog output when outputting JSON to keep stdout clean.
+        # Without this, StorageService.flush_tag()'s info-level log events land on
+        # stdout alongside the JSON payload, breaking the server's
+        # run_ctl_command() json.loads() parse of the subprocess output. See gc.py
+        # for the same pattern (this command never got the equivalent fix).
+        from typing import NoReturn
+
+        import structlog
+
+        def drop_all_logs(logger: object, method_name: str, event_dict: dict) -> NoReturn:
+            raise structlog.DropEvent
+
+        structlog.configure(
+            processors=[drop_all_logs],
+            cache_logger_on_first_use=False,
+        )
+
     # Use StorageService for the actual flush operation
     storage_service = StorageService(settings)
     try:
