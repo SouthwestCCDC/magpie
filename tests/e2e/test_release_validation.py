@@ -175,7 +175,7 @@ class TestVersionMiddleware:
                 "/api/v1/artifacts",
                 headers={
                     "Authorization": f"Bearer {write_token}",
-                    "User-Agent": "magpie-cli/0.1.3",
+                    "User-Agent": f"magpie-cli/{__version__}",
                 },
             )
 
