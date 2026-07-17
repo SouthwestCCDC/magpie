@@ -87,7 +87,7 @@ def write_manifest(artifact_dir: Path, manifest: Manifest) -> None:
 
 
 @contextmanager
-def _artifact_lock(artifact_dir: Path) -> Iterator[None]:
+def artifact_lock(artifact_dir: Path) -> Iterator[None]:
     """Acquire an exclusive advisory lock serializing manifest mutations.
 
     Uses POSIX ``flock`` on the artifact directory itself (rather than on a
@@ -97,6 +97,13 @@ def _artifact_lock(artifact_dir: Path) -> Iterator[None]:
     ``storage/cleanup.py``) treats an artifact directory as removable once it
     has no blobs, metadata, or manifest left; a stray lock file would defeat
     that check and leak empty directories.
+
+    This lock also guards ``cleanup_artifact_directories()`` in
+    ``storage/cleanup.py``: GC's "is this artifact deletable" check and the
+    resulting manifest unlink / directory rmdir must happen under the same
+    lock ``update_tag``/``remove_tag`` use, or GC can act on a stale read and
+    delete a manifest (and the whole artifact directory) that a concurrent
+    tag mutation just wrote to.
 
     Args:
         artifact_dir: Path to artifact directory to lock.
@@ -131,7 +138,7 @@ def update_tag(artifact_dir: Path, tag_name: str, hash_ref: str) -> Manifest:
     Returns:
         Updated Manifest instance.
     """
-    with _artifact_lock(artifact_dir):
+    with artifact_lock(artifact_dir):
         manifest = read_manifest(artifact_dir)
         manifest.tags[tag_name] = hash_ref
         write_manifest(artifact_dir, manifest)
@@ -153,7 +160,7 @@ def remove_tag(artifact_dir: Path, tag_name: str) -> Manifest:
     Returns:
         Updated Manifest instance.
     """
-    with _artifact_lock(artifact_dir):
+    with artifact_lock(artifact_dir):
         manifest = read_manifest(artifact_dir)
         manifest.tags.pop(tag_name, None)  # Remove if exists, no error if missing
         write_manifest(artifact_dir, manifest)

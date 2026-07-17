@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from magpie.storage.cleanup import (
     cleanup_artifact_directories,
     is_empty_directory,
 )
+from magpie.storage.manifest import Manifest, read_manifest, update_tag, write_manifest
 
 
 @pytest.fixture
@@ -339,3 +341,77 @@ class TestCleanupArtifactDirectories:
 
         # Everything should be cleaned up
         assert not (storage_root / "project").exists()
+
+
+class TestConcurrentCleanupVsUpdateTag:
+    """Regression tests for the GC-cleanup-vs-tag-update race.
+
+    Before cleanup_artifact_directories() took the per-artifact lock, GC
+    could read the manifest as empty (no tags), decide the artifact
+    directory was deletable, and then unlink the manifest and rmdir the
+    directory -- even though a concurrent update_tag() had, in the
+    meantime, won the lock and written a brand new tag into that very
+    manifest. The result was total loss of both the new tag and the
+    artifact directory. cleanup_artifact_directories() and update_tag()
+    now share the same artifact_lock(), so whichever side wins the race
+    completes its full read-modify-write (or check-then-delete) before the
+    other proceeds, and no interleaving can observe a stale state.
+    """
+
+    def test_concurrent_cleanup_and_update_tag_no_data_loss(self, storage_root: Path) -> None:
+        """Racing cleanup against a new tag write must never lose either.
+
+        Runs many rounds, each starting a cleanup thread and an
+        update_tag thread at the same instant via a barrier. Every round
+        starts from an artifact directory that looks fully deletable to
+        GC (an existing manifest with no tags, no blobs/metadata dirs).
+        Regardless of which thread wins the race, the artifact directory
+        must exist afterward and must contain the tag written by
+        update_tag -- it must never end up deleted out from under a
+        concurrent write.
+        """
+        rounds = 30
+        errors: list[BaseException] = []
+
+        for round_num in range(rounds):
+            artifact_dir = storage_root / f"race-{round_num}" / "artifact"
+            write_manifest(artifact_dir, Manifest(tags={}))
+            assert artifact_dir.exists()
+
+            barrier = threading.Barrier(2)
+
+            def run_cleanup() -> None:
+                barrier.wait()
+                try:
+                    cleanup_artifact_directories(artifact_dir, storage_root, dry_run=False)
+                except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                    errors.append(exc)
+
+            def run_update_tag() -> None:
+                barrier.wait()
+                try:
+                    update_tag(artifact_dir, "release", "@newhash1")
+                except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=run_cleanup),
+                threading.Thread(target=run_update_tag),
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            assert not errors, f"Round {round_num}: unexpected errors: {errors}"
+
+            # The artifact directory and the concurrently-written tag must
+            # both survive, regardless of which side won the race.
+            assert artifact_dir.exists(), (
+                f"Round {round_num}: artifact directory was lost to a concurrent GC cleanup"
+            )
+            manifest = read_manifest(artifact_dir)
+            assert manifest.tags.get("release") == "@newhash1", (
+                f"Round {round_num}: 'release' tag was lost to a concurrent GC cleanup, "
+                f"tags={manifest.tags}"
+            )

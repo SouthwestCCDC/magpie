@@ -7,7 +7,7 @@ from pathlib import Path
 
 import structlog
 
-from magpie.storage.manifest import read_manifest
+from magpie.storage.manifest import artifact_lock, read_manifest
 from magpie.storage.paths import manifest_path
 
 logger = structlog.get_logger()
@@ -64,6 +64,15 @@ def cleanup_artifact_directories(
     4. Artifact directory if completely empty
     5. Empty parent directories up to storage_root
 
+    The empty/deletable checks and the corresponding deletes are performed
+    under the artifact's exclusive lock (the same lock update_tag()/
+    remove_tag() use). Without this, GC could read a stale, unlocked "no
+    tags" state and then unlink the manifest (and remove the whole artifact
+    directory) after a concurrent tag mutation had already won the lock and
+    written a new tag into it -- silently destroying that update along with
+    the rest of the artifact. Locking here closes that race by making the
+    check-then-delete atomic with respect to manifest mutations.
+
     Args:
         artifact_dir: Path to the artifact directory.
         storage_root: Base storage path (cleanup stops here).
@@ -74,49 +83,58 @@ def cleanup_artifact_directories(
     """
     stats = CleanupStats()
 
-    # Check and remove empty blobs/ directory
-    blobs_dir = artifact_dir / "blobs"
-    if blobs_dir.exists() and is_empty_directory(blobs_dir):
-        rel_path = str(blobs_dir.relative_to(storage_root))
-        stats.empty_blobs_dirs += 1
-        stats.removed_paths.append(rel_path)
-        if not dry_run:
-            logger.debug("cleanup_removing_empty_blobs_dir", path=rel_path)
-            blobs_dir.rmdir()
+    if not artifact_dir.exists():
+        # Already removed (e.g., by a concurrent GC pass). Return early
+        # rather than entering artifact_lock(), which would otherwise
+        # resurrect the directory via mkdir() just to immediately remove it.
+        return stats
 
-    # Check and remove empty metadata/ directory
-    metadata_dir = artifact_dir / "metadata"
-    if metadata_dir.exists() and is_empty_directory(metadata_dir):
-        rel_path = str(metadata_dir.relative_to(storage_root))
-        stats.empty_metadata_dirs += 1
-        stats.removed_paths.append(rel_path)
-        if not dry_run:
-            logger.debug("cleanup_removing_empty_metadata_dir", path=rel_path)
-            metadata_dir.rmdir()
-
-    # Check and remove .magpie if no tags remain
-    manifest_file = manifest_path(artifact_dir)
-    if manifest_file.exists():
-        manifest = read_manifest(artifact_dir)
-        if not manifest.tags:
-            rel_path = str(manifest_file.relative_to(storage_root))
-            stats.empty_manifests += 1
+    with artifact_lock(artifact_dir):
+        # Check and remove empty blobs/ directory
+        blobs_dir = artifact_dir / "blobs"
+        if blobs_dir.exists() and is_empty_directory(blobs_dir):
+            rel_path = str(blobs_dir.relative_to(storage_root))
+            stats.empty_blobs_dirs += 1
             stats.removed_paths.append(rel_path)
             if not dry_run:
-                logger.debug("cleanup_removing_empty_manifest", path=rel_path)
-                manifest_file.unlink()
+                logger.debug("cleanup_removing_empty_blobs_dir", path=rel_path)
+                blobs_dir.rmdir()
 
-    # Check and remove artifact directory if completely empty
-    if artifact_dir.exists() and is_empty_directory(artifact_dir):
-        rel_path = str(artifact_dir.relative_to(storage_root))
-        stats.empty_artifact_dirs += 1
-        stats.removed_paths.append(rel_path)
-        if not dry_run:
-            logger.debug("cleanup_removing_empty_artifact_dir", path=rel_path)
-            artifact_dir.rmdir()
+        # Check and remove empty metadata/ directory
+        metadata_dir = artifact_dir / "metadata"
+        if metadata_dir.exists() and is_empty_directory(metadata_dir):
+            rel_path = str(metadata_dir.relative_to(storage_root))
+            stats.empty_metadata_dirs += 1
+            stats.removed_paths.append(rel_path)
+            if not dry_run:
+                logger.debug("cleanup_removing_empty_metadata_dir", path=rel_path)
+                metadata_dir.rmdir()
 
-        # Clean up empty parent directories up to storage_root
-        _cleanup_empty_parents(artifact_dir.parent, storage_root, dry_run, stats)
+        # Check and remove .magpie if no tags remain. This read happens
+        # under the lock, so it reflects the latest state -- not a snapshot
+        # taken before GC's scan phase.
+        manifest_file = manifest_path(artifact_dir)
+        if manifest_file.exists():
+            manifest = read_manifest(artifact_dir)
+            if not manifest.tags:
+                rel_path = str(manifest_file.relative_to(storage_root))
+                stats.empty_manifests += 1
+                stats.removed_paths.append(rel_path)
+                if not dry_run:
+                    logger.debug("cleanup_removing_empty_manifest", path=rel_path)
+                    manifest_file.unlink()
+
+        # Check and remove artifact directory if completely empty
+        if artifact_dir.exists() and is_empty_directory(artifact_dir):
+            rel_path = str(artifact_dir.relative_to(storage_root))
+            stats.empty_artifact_dirs += 1
+            stats.removed_paths.append(rel_path)
+            if not dry_run:
+                logger.debug("cleanup_removing_empty_artifact_dir", path=rel_path)
+                artifact_dir.rmdir()
+
+            # Clean up empty parent directories up to storage_root
+            _cleanup_empty_parents(artifact_dir.parent, storage_root, dry_run, stats)
 
     return stats
 
