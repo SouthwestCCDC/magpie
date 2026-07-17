@@ -2,14 +2,51 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Generator
 
 import pytest
+import structlog
 
 from magpie.config import MagpieSettings
+
+
+@pytest.fixture(autouse=True)
+def _isolate_logging_state() -> Generator[None, None, None]:
+    """Snapshot and restore global structlog/stdlib logging config around every test.
+
+    structlog.configure() and the stdlib root logger are process-global, so any test
+    that reconfigures them (directly, or via a fixture that calls
+    structlog.reset_defaults()) can leak that state into every test that runs
+    afterward in the same process. reset_defaults() in particular resets structlog to
+    its own *library* defaults -- ConsoleRenderer + PrintLoggerFactory, which writes
+    to stdout -- not to the app's production defaults (JSON to stderr, configured
+    once at import time by magpie.server.app). Nothing re-applies those production
+    defaults afterward, so once a test leaves structlog on library defaults, later
+    tests that log through the app's loggers get console-formatted output mixed into
+    stdout.
+
+    This fixture is declared here (not in a test module) and is autouse, so pytest
+    sets it up before, and tears it down after, any per-module logging fixtures --
+    guaranteeing the snapshot taken here is what's restored, regardless of what
+    happens inside the test or its other fixtures.
+    """
+    structlog_config = structlog.get_config()
+    root_logger = logging.getLogger()
+    root_level = root_logger.level
+    root_handlers = root_logger.handlers[:]
+
+    yield
+
+    structlog.configure(**structlog_config)
+    root_logger.setLevel(root_level)
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    for handler in root_handlers:
+        root_logger.addHandler(handler)
 
 
 @pytest.fixture
