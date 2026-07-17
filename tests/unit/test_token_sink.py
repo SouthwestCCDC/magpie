@@ -5,14 +5,38 @@ from __future__ import annotations
 import os
 import stat
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
-from magpie.auth.token_sink import TokenSinkError, deliver_admin_token
+from magpie.auth.database import get_connection, get_token_by_name, init_database
+from magpie.auth.models import TokenScope
+from magpie.auth.service import TokenExistsError, TokenService
+from magpie.auth.token_sink import TokenSinkError, admin_token_lock, deliver_admin_token
 from magpie.config import MagpieSettings
 
 TOKEN = "mgp_ADMIN_test_token_value_should_never_leak"  # nosec B105 - test fixture, not a real secret
+
+# Bounds for the concurrency tests below: a crashed/deadlocked worker thread
+# should surface as a test failure within a few seconds, not hang the suite.
+_BARRIER_TIMEOUT = 5.0
+_JOIN_TIMEOUT = 10.0
+
+
+def _join_and_assert_exited(threads: list[threading.Thread]) -> None:
+    """Join worker threads with a timeout and assert they actually exited.
+
+    A bare, timeout-less join() would hang the whole suite if a worker
+    deadlocks (e.g. inside admin_token_lock). Joining with a timeout and
+    then asserting liveness turns that failure mode into a fast, clear
+    assertion instead.
+    """
+    for t in threads:
+        t.join(timeout=_JOIN_TIMEOUT)
+    for t in threads:
+        assert not t.is_alive(), f"{t.name} did not exit within {_JOIN_TIMEOUT}s (deadlock?)"
 
 
 @pytest.fixture
@@ -396,3 +420,194 @@ class TestStdoutSink:
         captured = capsys.readouterr()
         assert TOKEN in captured.out
         assert "insecure" in captured.out.lower()
+
+
+class TestAdminTokenLock:
+    """Tests for admin_token_lock(), the mutual-exclusion primitive behind #552."""
+
+    def test_lock_file_created_next_to_database(
+        self, tmp_path: Path, base_settings: MagpieSettings
+    ) -> None:
+        assert not (tmp_path / ".magpie-admin-token.lock").exists()
+
+        with admin_token_lock(base_settings):
+            pass
+
+        assert (tmp_path / ".magpie-admin-token.lock").exists()
+
+    def test_lock_creates_missing_parent_directories(self, tmp_path: Path) -> None:
+        settings = MagpieSettings(
+            storage_path=tmp_path / "storage",
+            database_path=tmp_path / "nested" / "dir" / "magpie.db",
+        )
+
+        with admin_token_lock(settings):
+            pass
+
+        assert (tmp_path / "nested" / "dir" / ".magpie-admin-token.lock").exists()
+
+    def test_lock_is_reentrant_across_sequential_acquisitions(
+        self, base_settings: MagpieSettings
+    ) -> None:
+        """The lock must be released on exit so a later caller can acquire it again."""
+        with admin_token_lock(base_settings):
+            pass
+        with admin_token_lock(base_settings):
+            pass  # would hang if the first acquisition leaked the lock
+
+    def test_lock_serializes_concurrent_critical_sections(
+        self, base_settings: MagpieSettings
+    ) -> None:
+        """Two threads racing for the lock must never be inside it at the same time.
+
+        Each worker records whether it observed the shared "inside" flag
+        already set on entry (which would mean the lock let two holders
+        overlap) and clears it on exit. Runs many rounds, starting both
+        workers at the same instant via a barrier each round to maximize the
+        chance of catching a broken lock.
+        """
+        rounds = 50
+        barrier = threading.Barrier(2)
+        errors: list[Exception] = []
+        overlaps: list[str] = []
+        inside = threading.Event()
+
+        def worker(worker_id: int) -> None:
+            for round_num in range(rounds):
+                try:
+                    barrier.wait(timeout=_BARRIER_TIMEOUT)
+                    with admin_token_lock(base_settings):
+                        if inside.is_set():
+                            overlaps.append(f"worker {worker_id} round {round_num}")
+                        inside.set()
+                        time.sleep(0.001)
+                        inside.clear()
+                except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+        for t in threads:
+            t.start()
+        _join_and_assert_exited(threads)
+
+        assert not errors, f"Unexpected errors: {errors}"
+        assert not overlaps, f"Lock allowed overlapping critical sections: {overlaps}"
+
+
+class TestAdminTokenSinkRaceRegression:
+    """Regression tests for #552: a concurrent unlocked init/rotate could
+    deliver a token to the sink that never became the active, persisted one.
+    """
+
+    def test_concurrent_first_boot_checks_never_both_deliver(self, tmp_path: Path) -> None:
+        """Two threads racing through check-exists -> deliver -> persist
+        (mirroring `magpie-ctl init` on first boot) must not both deliver a
+        candidate -- the loser must observe the token as already existing
+        (under the lock) and deliver nothing at all.
+        """
+        sink_file = tmp_path / "admin-token"
+        settings = MagpieSettings(
+            storage_path=tmp_path / "storage",
+            database_path=tmp_path / "magpie.db",
+            admin_token_sink="file",
+            admin_token_sink_file_path=sink_file,
+        )
+        init_database(settings.database_path)
+        token_service = TokenService(settings)
+
+        barrier = threading.Barrier(2)
+        errors: list[Exception] = []
+        delivered_by: list[int] = []
+
+        def first_boot_init(worker_id: int) -> None:
+            try:
+                barrier.wait(timeout=_BARRIER_TIMEOUT)
+                with admin_token_lock(settings):
+                    conn = get_connection(settings.database_path)
+                    try:
+                        exists = get_token_by_name(conn, "admin") is not None
+                    finally:
+                        conn.close()
+                    if exists:
+                        return
+                    candidate = token_service.generate_plaintext_token(TokenScope.ADMIN)
+                    deliver_admin_token(candidate, settings, action="init")
+                    delivered_by.append(worker_id)
+                    try:
+                        token_service.create_token("admin", TokenScope.ADMIN, candidate)
+                    except TokenExistsError:  # pragma: no cover - defensive, see init.py
+                        pass
+            except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=first_boot_init, args=(i,)) for i in range(2)]
+        for t in threads:
+            t.start()
+        _join_and_assert_exited(threads)
+
+        assert not errors, f"Unexpected errors: {errors}"
+
+        # Exactly one thread must have delivered a candidate at all -- the
+        # locked existence check means the loser sees the token as already
+        # persisted and never delivers a second, doomed-to-lose value.
+        assert len(delivered_by) == 1, f"Expected exactly one delivery, got {delivered_by}"
+
+        # The sink must hold exactly the token that authenticates -- never a
+        # delivered-but-discarded candidate.
+        delivered = sink_file.read_text().strip()
+        info = token_service.validate_token(delivered)
+        assert info is not None, "sink-delivered token must be the active, persisted token"
+        assert info.scope == TokenScope.ADMIN
+
+    def test_concurrent_reset_never_leaves_sink_diverged_from_persisted(
+        self, tmp_path: Path
+    ) -> None:
+        """Two threads racing through deliver -> persist (mirroring
+        `magpie-ctl init --reset-admin-token`) must never leave the sink
+        holding a token that isn't the one persisted as active.
+
+        Runs many rounds to make the invariant check meaningful regardless
+        of thread scheduling: whichever racer's critical section runs last
+        (in the lock's strict total order) determines the final state, and
+        that final state must always be internally consistent.
+        """
+        sink_file = tmp_path / "admin-token"
+        settings = MagpieSettings(
+            storage_path=tmp_path / "storage",
+            database_path=tmp_path / "magpie.db",
+            admin_token_sink="file",
+            admin_token_sink_file_path=sink_file,
+        )
+        init_database(settings.database_path)
+        token_service = TokenService(settings)
+        token_service.create_token("admin", TokenScope.ADMIN)
+
+        rounds = 25
+        barrier = threading.Barrier(2)
+        errors: list[Exception] = []
+
+        def reset_once() -> None:
+            candidate = token_service.generate_plaintext_token(TokenScope.ADMIN)
+            with admin_token_lock(settings):
+                deliver_admin_token(candidate, settings, action="reset")
+                token_service.replace_token("admin", TokenScope.ADMIN, candidate)
+
+        def worker() -> None:
+            for _ in range(rounds):
+                try:
+                    barrier.wait(timeout=_BARRIER_TIMEOUT)
+                    reset_once()
+                except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        _join_and_assert_exited(threads)
+
+        assert not errors, f"Unexpected errors: {errors}"
+
+        delivered = sink_file.read_text().strip()
+        info = token_service.validate_token(delivered)
+        assert info is not None, "sink-delivered token must be the active, persisted token"
+        assert info.scope == TokenScope.ADMIN

@@ -9,7 +9,7 @@ import click
 from magpie.auth.database import get_connection, get_token_by_name, init_database
 from magpie.auth.models import TokenScope
 from magpie.auth.service import TokenError, TokenExistsError, TokenFormatError, TokenService
-from magpie.auth.token_sink import TokenSinkError, deliver_admin_token
+from magpie.auth.token_sink import TokenSinkError, admin_token_lock, deliver_admin_token
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -185,115 +185,127 @@ def init(ctx: CTLContext, reset_admin_token: bool, admin_token: str | None) -> N
             click.echo(f"Error: {error_msg}", err=True)
             raise SystemExit(1)
 
-    if reset_admin_token:
-        # Determine the plaintext to deliver -- nothing is persisted yet.
-        plaintext_candidate = (
-            admin_token
-            if admin_token is not None
-            else token_service.generate_plaintext_token(TokenScope.ADMIN)
-        )
-
-        # Deliver BEFORE touching the database. Fail-closed: on failure, no
-        # DB change has happened at all -- any existing admin token is left
-        # exactly as it was.
-        try:
-            deliver_admin_token(plaintext_candidate, settings, action="reset")
-        except TokenSinkError as e:
-            _abort_on_sink_error(e)
-
-        delivered_sink = settings.admin_token_sink
-        had_existing = _admin_token_exists(settings)
-
-        if delivered_sink == "discard":
-            # Explicit non-retention: the operator's --reset-admin-token
-            # request still means "revoke whatever is there," but the newly
-            # generated value is never persisted -- matching discard's
-            # "retain no usable token" contract.
-            if ctx.debug:
-                click.echo(f"Revoking existing admin token: {ADMIN_TOKEN_NAME}", err=True)
-            token_service.revoke_token(ADMIN_TOKEN_NAME)
-            plaintext_token = None
-            if not is_json_output():
-                click.echo(
-                    f"Revoked existing admin token: {ADMIN_TOKEN_NAME}"
-                    if had_existing
-                    else "No existing admin token found to revoke"
-                )
-                _echo_delivery_status(delivered_sink, settings)
-        else:
-            # Delivery succeeded: atomically revoke-if-present + persist the
-            # delivered value as a single DB transaction.
-            try:
-                token_service.replace_token(ADMIN_TOKEN_NAME, TokenScope.ADMIN, plaintext_candidate)
-            except TokenError as e:
-                _abort_on_persist_error(e)
-            plaintext_token = plaintext_candidate
-            if not is_json_output():
-                click.echo(
-                    f"Revoked existing admin token: {ADMIN_TOKEN_NAME}"
-                    if had_existing
-                    else "No existing admin token found to revoke"
-                )
-                _echo_delivery_status(delivered_sink, settings)
-    else:
-        # First boot only: check existence first (read-only) so a token is
-        # never generated and delivered needlessly when one already exists.
-        if _admin_token_exists(settings):
-            token_already_exists = True
-            if not is_json_output():
-                click.echo("")
-                click.echo("Admin token already exists. Use --reset-admin-token to regenerate.")
-        else:
+    # The whole check-deliver-persist sequence below runs under a single
+    # process-wide lock so concurrent manual invocations of `init` (and
+    # `token rotate admin` in token.py) can't interleave delivery against
+    # persistence -- see admin_token_lock's docstring for the race this
+    # closes.
+    with admin_token_lock(settings):
+        if reset_admin_token:
+            # Determine the plaintext to deliver -- nothing is persisted yet.
             plaintext_candidate = (
                 admin_token
                 if admin_token is not None
                 else token_service.generate_plaintext_token(TokenScope.ADMIN)
             )
 
-            # Deliver BEFORE touching the database. Fail-closed: on failure,
-            # no admin token exists in the database, and the server does
-            # not start (entrypoint.sh removes the incomplete database and
-            # retries on next boot).
+            # Deliver BEFORE touching the database. Fail-closed: on failure, no
+            # DB change has happened at all -- any existing admin token is left
+            # exactly as it was.
             try:
-                deliver_admin_token(plaintext_candidate, settings, action="init")
+                deliver_admin_token(plaintext_candidate, settings, action="reset")
             except TokenSinkError as e:
                 _abort_on_sink_error(e)
 
             delivered_sink = settings.admin_token_sink
+            had_existing = _admin_token_exists(settings)
 
             if delivered_sink == "discard":
-                # Generate-and-immediately-drop: never persisted.
+                # Explicit non-retention: the operator's --reset-admin-token
+                # request still means "revoke whatever is there," but the newly
+                # generated value is never persisted -- matching discard's
+                # "retain no usable token" contract.
+                if ctx.debug:
+                    click.echo(f"Revoking existing admin token: {ADMIN_TOKEN_NAME}", err=True)
+                token_service.revoke_token(ADMIN_TOKEN_NAME)
                 plaintext_token = None
                 if not is_json_output():
+                    click.echo(
+                        f"Revoked existing admin token: {ADMIN_TOKEN_NAME}"
+                        if had_existing
+                        else "No existing admin token found to revoke"
+                    )
                     _echo_delivery_status(delivered_sink, settings)
             else:
+                # Delivery succeeded: atomically revoke-if-present + persist the
+                # delivered value as a single DB transaction.
                 try:
-                    plaintext_token = token_service.create_token(
+                    token_service.replace_token(
                         ADMIN_TOKEN_NAME, TokenScope.ADMIN, plaintext_candidate
                     )
-                except TokenExistsError:
-                    # Lost a narrow race against a concurrent init (only
-                    # possible outside entrypoint.sh's flock-protected first
-                    # boot, e.g. two manual invocations at once). The token
-                    # we just delivered is not the one that ended up active;
-                    # report the existing-token case instead.
-                    token_already_exists = True
+                except TokenError as e:
+                    _abort_on_persist_error(e)
+                plaintext_token = plaintext_candidate
+                if not is_json_output():
+                    click.echo(
+                        f"Revoked existing admin token: {ADMIN_TOKEN_NAME}"
+                        if had_existing
+                        else "No existing admin token found to revoke"
+                    )
+                    _echo_delivery_status(delivered_sink, settings)
+        else:
+            # First boot only: check existence first (read-only, under the
+            # lock) so a token is never generated and delivered needlessly
+            # when one already exists -- including one a concurrent
+            # invocation just finished persisting.
+            if _admin_token_exists(settings):
+                token_already_exists = True
+                if not is_json_output():
+                    click.echo("")
+                    click.echo("Admin token already exists. Use --reset-admin-token to regenerate.")
+            else:
+                plaintext_candidate = (
+                    admin_token
+                    if admin_token is not None
+                    else token_service.generate_plaintext_token(TokenScope.ADMIN)
+                )
+
+                # Deliver BEFORE touching the database. Fail-closed: on failure,
+                # no admin token exists in the database, and the server does
+                # not start (entrypoint.sh removes the incomplete database and
+                # retries on next boot).
+                try:
+                    deliver_admin_token(plaintext_candidate, settings, action="init")
+                except TokenSinkError as e:
+                    _abort_on_sink_error(e)
+
+                delivered_sink = settings.admin_token_sink
+
+                if delivered_sink == "discard":
+                    # Generate-and-immediately-drop: never persisted.
                     plaintext_token = None
-                    delivered_sink = None
-                    if not is_json_output():
-                        click.echo("")
-                        click.echo(
-                            "Admin token already exists (lost a race with a concurrent "
-                            "init). Use --reset-admin-token to regenerate."
-                        )
-                except TokenFormatError as e:  # pragma: no cover - guarded by validation above
-                    if is_json_output():
-                        output_error(ErrorCode.VALIDATION_ERROR, str(e))  # exits; never returns
-                    click.echo(f"Error: {e}", err=True)
-                    raise SystemExit(1)
-                else:
                     if not is_json_output():
                         _echo_delivery_status(delivered_sink, settings)
+                else:
+                    try:
+                        plaintext_token = token_service.create_token(
+                            ADMIN_TOKEN_NAME, TokenScope.ADMIN, plaintext_candidate
+                        )
+                    except TokenExistsError:
+                        # Defensive fallback only -- the lock above means no
+                        # other admin_token_lock-holding caller can have
+                        # created this concurrently. Kept in case some other
+                        # path (e.g. a restored database) persisted a row
+                        # outside this lock. The token we just delivered is
+                        # not the one that ended up active; report the
+                        # existing-token case instead.
+                        token_already_exists = True
+                        plaintext_token = None
+                        delivered_sink = None
+                        if not is_json_output():
+                            click.echo("")
+                            click.echo(
+                                "Admin token already exists (lost a race with a concurrent "
+                                "init). Use --reset-admin-token to regenerate."
+                            )
+                    except TokenFormatError as e:  # pragma: no cover - guarded by validation above
+                        if is_json_output():
+                            output_error(ErrorCode.VALIDATION_ERROR, str(e))  # exits; never returns
+                        click.echo(f"Error: {e}", err=True)
+                        raise SystemExit(1)
+                    else:
+                        if not is_json_output():
+                            _echo_delivery_status(delivered_sink, settings)
 
     # JSON output. The token value is only ever included when sink=stdout was
     # explicitly chosen -- for all other sinks, JSON output (which also goes
