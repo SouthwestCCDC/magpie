@@ -6,7 +6,12 @@ import click
 
 from magpie.cli import CLIContext
 from magpie.cli.commands.parse import ParseError, parse_artifact_ref
-from magpie.cli.errors import handle_response_error, with_network_error_handling
+from magpie.cli.errors import (
+    format_prefix_not_artifact_error,
+    handle_response_error,
+    is_path_prefix,
+    with_network_error_handling,
+)
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -56,7 +61,10 @@ def info(ctx: CLIContext, artifact_ref: str) -> None:
         response = client.get(f"/api/v1/artifacts/{parsed.path}/{parsed.ref}/info")
 
         if response.status_code == 404:
-            msg = f"Artifact not found: {parsed.path}:{parsed.ref}"
+            if is_path_prefix(client, parsed.path):
+                msg = format_prefix_not_artifact_error(parsed.path)
+            else:
+                msg = f"Artifact not found: {parsed.path}:{parsed.ref}"
             if is_json_output():
                 output_error(ErrorCode.NOT_FOUND, msg)
                 return  # output_error never returns, but explicit for clarity

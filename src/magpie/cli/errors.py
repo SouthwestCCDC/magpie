@@ -153,6 +153,48 @@ def handle_response_error(
     handle_http_error(response, operation, token)
 
 
+def is_path_prefix(client: "httpx.Client", path: str) -> bool:
+    """Check whether a path is a browsable prefix rather than an artifact.
+
+    Used after an artifact lookup 404s, to distinguish "this path doesn't
+    exist at all" from "this path is a directory-like prefix with children,
+    not an artifact" -- e.g. `magpie info smoke` when only `smoke/hello`
+    exists.
+
+    Args:
+        client: HTTP client.
+        path: Normalized artifact path that failed to resolve as an artifact.
+
+    Returns:
+        True if the server reports at least one path under this prefix,
+        False otherwise (including if the check itself fails).
+    """
+    try:
+        response = client.get("/api/v1/artifacts", params={"prefix": path, "recursive": False})
+    except httpx.RequestError:
+        return False
+
+    if response.status_code != 200:
+        return False
+
+    try:
+        return bool(response.json().get("paths", []))
+    except json.JSONDecodeError:
+        return False
+
+
+def format_prefix_not_artifact_error(path: str) -> str:
+    """Format the error message shown when a path resolves to a prefix, not an artifact.
+
+    Args:
+        path: The path that was requested.
+
+    Returns:
+        User-facing message pointing the user to `magpie ls <path>/`.
+    """
+    return f'"{path}" is a path prefix, not an artifact -- try: magpie ls {path}/'
+
+
 def _extract_hostname_safely(url: str) -> str:
     """Extract hostname (and optionally port) from URL, never credentials.
 

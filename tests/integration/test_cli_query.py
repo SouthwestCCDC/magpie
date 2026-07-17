@@ -411,6 +411,44 @@ class TestInfoCommand:
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
+    def test_info_on_path_prefix_gives_prefix_aware_error(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Info on a path that is a prefix (has children) points to `ls`, not a bare 404."""
+        upload_test_artifact(api_client, "smoke/hello", b"prefix test content")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "info", "smoke"],
+            )
+
+        assert result.exit_code != 0
+        assert "not an artifact" in result.output
+        assert "magpie ls smoke/" in result.output
+        # Should not surface the implementation-detail default-tag message
+        assert "smoke:latest" not in result.output
+
+    def test_info_on_path_prefix_with_trailing_slash(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """Info on a prefix with a trailing slash gives the same prefix-aware error."""
+        upload_test_artifact(api_client, "smoke/hello", b"prefix test content")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "info", "smoke/"],
+            )
+
+        assert result.exit_code != 0
+        assert "not an artifact" in result.output
+        assert "magpie ls smoke/" in result.output
+
     def test_info_requires_server(self, cli_runner_no_config: CliRunner) -> None:
         """Info without server configured fails with error."""
         result = cli_runner_no_config.invoke(cli, ["info", "test/artifact"])
