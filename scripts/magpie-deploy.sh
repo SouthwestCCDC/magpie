@@ -300,14 +300,33 @@ is_valid_acme_server_url() {
 }
 
 # Validates a whitespace-separated list of IPv4/IPv6 addresses or CIDRs.
-# Word-splits on IFS (space, tab, newline), so an embedded newline is
-# checked per-token like any other separator: an injected non-IP token
-# (e.g. a Caddy directive) fails validation rather than being smuggled
-# through as part of one value.
+#
+# Rejects any control character (including a newline) in the raw value
+# up front, before splitting into tokens. A newline sitting *between* two
+# otherwise-valid tokens (e.g. "10.0.0.0/8\n192.168.1.1") would otherwise
+# pass per-token validation, but it corrupts the generated .env
+# (read_env_file() is line-based -- everything after the first newline in
+# a value becomes a separate, likely-dropped "line") and the Caddyfile's
+# `trusted_proxies static ${TRUSTED_PROXIES}` directive (split across
+# Caddyfile lines). See issue #448.
+#
+# Tokens are split with `read -ra` rather than `for token in $list`: the
+# latter performs pathname expansion (globbing) in addition to
+# word-splitting, so a value containing glob characters (e.g. "*") could
+# validate unpredictably depending on files in the current directory.
+# `read` never globs.
 is_valid_ip_or_cidr_list() {
     local list="$1"
+
+    if [[ "$list" =~ [[:cntrl:]] ]]; then
+        return 1
+    fi
+
+    local -a tokens
+    read -ra tokens <<< "$list"
+
     local token
-    for token in $list; do
+    for token in "${tokens[@]}"; do
         is_valid_ip_or_cidr "$token" || return 1
     done
     return 0

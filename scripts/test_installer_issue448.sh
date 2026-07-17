@@ -23,6 +23,9 @@
 #    (e.g. '|') before it reaches the docker-compose sed patching.
 # 10. IPv4/IPv6 CIDR validation does not misjudge or error on leading-zero
 #     octets/prefixes (bash arithmetic octal gotcha).
+# 11. A newline sitting between two otherwise-valid --trusted-proxies
+#     tokens is rejected up front, not left to per-token validation (which
+#     would pass it, since each half is individually a valid IP/CIDR).
 
 set -uo pipefail
 
@@ -43,6 +46,17 @@ trap cleanup EXIT
 # below with test-local versions.
 # shellcheck source=/dev/null
 source <(sed '/^main "\$@"$/d' "$DEPLOY_SCRIPT")
+
+# Sourcing magpie-deploy.sh above also executes its own top-level
+# `set -euo pipefail`, which would leave `errexit` enabled here. That's
+# unwanted in this test script: several tests intentionally exercise a
+# function's EXPECTED-FAILURE path, and while those calls are wrapped in
+# explicit subshells or `if` conditions (both errexit-safe), a stray
+# unprotected failing command anywhere else could otherwise abort the
+# whole run silently instead of reporting a clear FAIL. Re-assert only the
+# options this test script itself wants.
+set +e
+set -uo pipefail
 
 log() {
     echo "[test] $*"
@@ -395,7 +409,9 @@ EOF
     log "  ✓ no standalone admin_endpoint directive was injected"
 
     local ca_lines
-    ca_lines=$(grep -c '^\s*ca ' "$caddyfile" || true)
+    # [[:space:]] rather than \s -- \s is not a portable whitespace escape
+    # in POSIX basic/extended grep regex (GNU grep treats a literal 's').
+    ca_lines=$(grep -cE '^[[:space:]]*ca ' "$caddyfile" || true)
     if [[ "$ca_lines" -ne 1 ]]; then
         fail "expected exactly one 'ca' directive line, found $ca_lines"
     fi
@@ -479,6 +495,60 @@ test_cidr_leading_zero_octets() {
     log "  ✓ out-of-range CIDR prefix still rejected"
 }
 
+# Test 16: a newline sitting *between* two otherwise-valid IP/CIDR tokens
+# must be rejected. Splitting on IFS whitespace (which includes newline)
+# means each half of "10.0.0.0/8\n192.168.1.1" is individually a valid
+# token, so a purely per-token validator lets the newline through even
+# though every token "looks like" a CIDR (Copilot review finding). Also
+# confirms tokenization no longer globs (`read -ra`, not `for t in $list`).
+test_trusted_proxies_rejects_newline_between_valid_tokens() {
+    log "Test 16: is_valid_ip_or_cidr_list rejects a newline between two valid tokens"
+
+    local hostile
+    hostile=$(printf '10.0.0.0/8\n192.168.1.1')
+    if is_valid_ip_or_cidr_list "$hostile"; then
+        fail "is_valid_ip_or_cidr_list accepted a newline between two otherwise-valid IP/CIDR tokens: $hostile"
+    fi
+    log "  ✓ newline-between-valid-tokens payload rejected"
+
+    if (
+        TLS_MODE=off DOMAIN="" TLS_CERT="" TLS_KEY="" \
+        HTTP_PORT=8080 HTTPS_PORT=8443 \
+        INSTALL_DIR="${TEST_DIR}/install_tp_newline" DATA_DIR="${TEST_DIR}/install_tp_newline/data" \
+        TRUSTED_PROXIES="$hostile" BIND_IP="" ACME_SERVER="" \
+        validate_config
+    ) >/dev/null 2>&1; then
+        fail "validate_config accepted a newline-between-valid-tokens --trusted-proxies value"
+    fi
+    log "  ✓ validate_config rejects it end to end"
+
+    # Exploitability check: even without validation, demonstrate why this
+    # matters -- a newline in TRUSTED_PROXIES corrupts the .env round trip
+    # (read_env_file() is line-based, so everything after the first
+    # embedded newline in a value becomes a separate, dropped "line").
+    local env_test_dir="${TEST_DIR}/tp_newline_env"
+    mkdir -p "${env_test_dir}/etc"
+    (
+        INSTALL_DIR="$env_test_dir" DATA_DIR="${env_test_dir}/data" \
+        HTTP_PORT=8080 HTTPS_PORT=8443 DOMAIN="" TLS_MODE="off" \
+        TRUSTED_PROXIES="$hostile" BIND_IP="" ACME_SERVER="" MAGPIE_VERSION="test" \
+        generate_env_file
+    ) >/dev/null 2>&1
+
+    local parsed_tp
+    parsed_tp=$(
+        declare -A parsed=()
+        read_env_file "${env_test_dir}/etc/.env" parsed
+        echo "${parsed[TRUSTED_PROXIES]:-}"
+    )
+    if [[ "$parsed_tp" == *$'\n'* ]] || [[ "$parsed_tp" == *"192.168.1.1"* ]]; then
+        fail "unexpected: newline survived the .env round trip intact: $parsed_tp"
+    fi
+    log "  ✓ (pre-validation-fix scenario) demonstrated: a newline in TRUSTED_PROXIES" \
+        "silently truncates the value on .env round trip -- config-integrity bug, not RCE," \
+        "now prevented entirely by rejecting the newline up front"
+}
+
 # Run all tests
 log "Running tests for issue #448"
 log ""
@@ -498,6 +568,7 @@ test_generate_caddyfile_no_escape_decoding
 test_uninstall_purge_revalidates_data_dir
 test_update_rejects_hostile_install_dir
 test_cidr_leading_zero_octets
+test_trusted_proxies_rejects_newline_between_valid_tokens
 
 log ""
 log "All tests passed!"
