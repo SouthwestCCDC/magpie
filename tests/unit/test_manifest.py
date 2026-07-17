@@ -312,6 +312,41 @@ class TestArtifactLockRetries:
             with artifact_lock(artifact_dir):
                 pass
 
+    def test_non_directory_at_path_raises_immediately_not_retried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stray plain file at the artifact path fails fast and clearly.
+
+        ``FileExistsError`` from ``mkdir(exist_ok=True)`` can mean either a
+        transient create/remove race (retried above) or a non-directory
+        genuinely occupying the path (not retried -- no amount of retrying
+        turns a file into a directory). This asserts the latter case is
+        distinguished from the former: it raises immediately, with a clear
+        message identifying the actual problem, rather than exhausting the
+        retry loop into a confusing "kept flapping" error.
+        """
+        artifact_dir = tmp_path / "artifact"
+        artifact_dir.write_text("not a directory", encoding="utf-8")
+
+        mkdir_calls = {"count": 0}
+        real_mkdir = Path.mkdir
+
+        def counting_mkdir(
+            path_self: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False
+        ):
+            if path_self == artifact_dir:
+                mkdir_calls["count"] += 1
+            return real_mkdir(path_self, mode, parents=parents, exist_ok=exist_ok)
+
+        monkeypatch.setattr(Path, "mkdir", counting_mkdir)
+
+        with pytest.raises(OSError, match="non-directory") as exc_info:
+            with artifact_lock(artifact_dir):
+                pass
+
+        assert "kept flapping" not in str(exc_info.value)
+        assert mkdir_calls["count"] == 1, "should fail on the first attempt, not retry"
+
 
 class TestConcurrentManifestUpdates:
     """Regression tests for issue #527.

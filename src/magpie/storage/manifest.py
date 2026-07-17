@@ -128,6 +128,14 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
     ``exist_ok=True`` promises. That's retried here too, for the same
     reason and via the same bounded loop.
 
+    ``FileExistsError`` from that same ``mkdir()`` call also fires when a
+    non-directory (a stray plain file) already occupies ``artifact_dir`` --
+    ``exist_ok=True``'s ``is_dir()`` recheck fails, so it re-raises. That
+    case is not a transient create/remove race and retrying cannot fix it,
+    so it's distinguished from the two races above and raised immediately
+    as a clear error instead of being retried into a confusing
+    "kept flapping" message.
+
     Args:
         artifact_dir: Path to artifact directory to lock.
 
@@ -135,12 +143,13 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
         None. The lock is held for the duration of the ``with`` block.
 
     Raises:
-        OSError: If the directory keeps disappearing (or flapping between
-            existing and not) out from under us for
-            ``_LOCK_ACQUIRE_MAX_ATTEMPTS`` consecutive attempts. This would
-            indicate persistent, unusual concurrent create/delete pressure
-            rather than the ordinary multi-caller races this retry loop is
-            meant to absorb.
+        OSError: If a non-directory occupies ``artifact_dir`` (immediate,
+            not retried), or if the directory keeps disappearing (or
+            flapping between existing and not) out from under us for
+            ``_LOCK_ACQUIRE_MAX_ATTEMPTS`` consecutive attempts. The latter
+            would indicate persistent, unusual concurrent create/delete
+            pressure rather than the ordinary multi-caller races this retry
+            loop is meant to absorb.
     """
     fd: int | None = None
     last_error: OSError | None = None
@@ -148,6 +157,14 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
         try:
             artifact_dir.mkdir(parents=True, exist_ok=True)
         except FileExistsError as e:
+            if artifact_dir.exists() and not artifact_dir.is_dir():
+                # A non-directory occupies the path. No amount of retrying
+                # will turn it into a directory, so fail fast and clearly
+                # instead of exhausting the retry loop into a "kept
+                # flapping" message that misdiagnoses the actual problem.
+                raise OSError(
+                    f"Cannot acquire artifact lock: {artifact_dir} exists as a non-directory"
+                ) from e
             # Path.mkdir(exist_ok=True)'s own internal exist_ok recheck lost
             # a race against a concurrent remover. Retry: our next mkdir()
             # attempt will recreate it.
