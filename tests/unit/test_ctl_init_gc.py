@@ -14,6 +14,7 @@ from click.testing import CliRunner
 
 from magpie.config import MagpieSettings
 from magpie.ctl import cli
+from magpie.logging_config import configure_logging
 
 
 @pytest.fixture
@@ -30,6 +31,27 @@ def test_settings(tmp_path: Path) -> MagpieSettings:
         database_path=tmp_path / "magpie.db",
         retention_days=30,
     )
+
+
+@pytest.fixture(autouse=True)
+def _configure_structlog_baseline(test_settings: MagpieSettings) -> None:
+    """Pin structlog to the app's production baseline before every test here.
+
+    Without this, whether a test starts from structlog's unconfigured library
+    defaults (PrintLoggerFactory writing straight to stdout) or the app's
+    production defaults (JSON to stderr, applied by magpie.server.app at
+    import time) depends on whether some other test module happened to
+    import magpie.server.app earlier in the same pytest session -- collection
+    order this module doesn't control. The gc/flush-tag --json-output paths
+    already self-configure structlog before touching stdout, but other
+    commands in this module log through whatever structlog state is active,
+    so an unconfigured baseline can leak stray console-formatted log lines
+    onto the stdout CliRunner captures. Calling configure_logging() here
+    pins that starting state so results don't depend on collection order.
+    The autouse `_isolate_logging_state` fixture in tests/conftest.py
+    restores the pre-test snapshot afterward.
+    """
+    configure_logging(test_settings)
 
 
 def create_artifact_with_blobs(
