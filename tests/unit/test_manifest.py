@@ -11,6 +11,7 @@ import pytest
 from magpie.storage.exceptions import ManifestCorruptError
 from magpie.storage.manifest import (
     Manifest,
+    artifact_lock,
     read_manifest,
     remove_tag,
     update_tag,
@@ -208,6 +209,108 @@ class TestRemoveTag:
         result = remove_tag(artifact_dir, "nonexistent")
 
         assert result.tags == {}
+
+
+class TestArtifactLockRetries:
+    """Regression tests for artifact_lock()'s retry-on-race behavior.
+
+    artifact_lock() acquires its lock via mkdir() followed by os.open(),
+    two separate, non-atomic syscalls. Under adversarial concurrent
+    create/remove pressure on the exact same artifact directory (e.g. two
+    overlapping GC cleanup passes), either step can lose a race:
+
+    - os.open() can hit FileNotFoundError if a concurrent caller removed
+      the directory in the gap after our mkdir().
+    - mkdir(exist_ok=True) itself can raise FileExistsError: its own
+      internal implementation catches EEXIST from os.mkdir() and then
+      rechecks is_dir(), but if a third caller removes the directory again
+      in that narrow window, it re-raises instead of tolerating it.
+
+    Both are retried (bounded) rather than allowed to crash the caller.
+    These tests drive each race deterministically via monkeypatching,
+    rather than relying on real thread scheduling to hit a narrow window.
+    """
+
+    def test_retries_on_open_race(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Retries mkdir+open when os.open() hits FileNotFoundError once.
+
+        Only os.open() calls for our own artifact_dir are intercepted (and
+        only the first one), so unrelated os.open() calls elsewhere in the
+        process during the test (logging, etc.) are unaffected.
+        """
+        import magpie.storage.manifest as manifest_module
+
+        artifact_dir = tmp_path / "artifact"
+        real_open = manifest_module.os.open
+        intercepted = {"done": False}
+
+        def flaky_open(path, flags, mode=0o777, *, dir_fd=None):
+            if not intercepted["done"] and Path(path) == artifact_dir:
+                intercepted["done"] = True
+                raise FileNotFoundError(2, "No such file or directory", str(path))
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        monkeypatch.setattr(manifest_module.os, "open", flaky_open)
+
+        with artifact_lock(artifact_dir):
+            pass
+
+        assert intercepted["done"], "expected the simulated race to actually trigger"
+        assert artifact_dir.exists()
+
+    def test_retries_on_mkdir_race(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Retries mkdir+open when mkdir(exist_ok=True) hits FileExistsError once.
+
+        Only Path.mkdir() calls for our own artifact_dir are intercepted
+        (and only the first one), so unrelated Path.mkdir() calls elsewhere
+        in the process during the test are unaffected.
+        """
+        artifact_dir = tmp_path / "artifact"
+        real_mkdir = Path.mkdir
+        intercepted = {"done": False}
+
+        def flaky_mkdir(
+            path_self: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False
+        ):
+            if not intercepted["done"] and path_self == artifact_dir:
+                intercepted["done"] = True
+                raise FileExistsError(17, "File exists", str(path_self))
+            return real_mkdir(path_self, mode, parents=parents, exist_ok=exist_ok)
+
+        monkeypatch.setattr(Path, "mkdir", flaky_mkdir)
+
+        with artifact_lock(artifact_dir):
+            pass
+
+        assert intercepted["done"], "expected the simulated race to actually trigger"
+        assert artifact_dir.exists()
+
+    def test_raises_clear_error_after_exhausting_retries(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Gives up with a clear OSError if the directory never stops flapping.
+
+        This is not expected to happen from the ordinary two/three-caller
+        races the retry loop is meant to absorb, but the loop must still
+        terminate (not hang or loop forever) and fail loudly rather than
+        with a bare, confusing FileNotFoundError. Only os.open() calls for
+        our own artifact_dir are affected.
+        """
+        import magpie.storage.manifest as manifest_module
+
+        artifact_dir = tmp_path / "artifact"
+        real_open = manifest_module.os.open
+
+        def always_missing_open(path, flags, mode=0o777, *, dir_fd=None):
+            if Path(path) == artifact_dir:
+                raise FileNotFoundError(2, "No such file or directory", str(path))
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        monkeypatch.setattr(manifest_module.os, "open", always_missing_open)
+
+        with pytest.raises(OSError, match="kept flapping"):
+            with artifact_lock(artifact_dir):
+                pass
 
 
 class TestConcurrentManifestUpdates:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -360,6 +361,73 @@ class TestCleanupArtifactDirectories:
 
         # Everything should be cleaned up
         assert not (storage_root / "project").exists()
+
+    def test_cleans_parents_when_artifact_dir_already_removed(self, storage_root: Path) -> None:
+        """Cleans up empty parent directories even if artifact_dir is gone.
+
+        Regression test: cleanup_artifact_directories()'s early-exit guard
+        for an already-nonexistent artifact_dir (added to stop
+        artifact_lock() from resurrecting a removed directory via its own
+        mkdir()) must not also skip step 5 (empty parent directory
+        cleanup). The artifact directory being gone -- whether because we
+        removed it ourselves or a concurrent GC pass got there first -- is
+        exactly the situation in which its parents may have become empty
+        and still need cleaning, per this function's documented contract.
+        """
+        artifact_dir = create_artifact_structure(storage_root, "deep/nested/artifact", tags={})
+        # Simulate the artifact directory (and everything in it) having
+        # already been removed entirely by some other caller before this
+        # cleanup pass runs, leaving only the now-empty parent chain.
+        shutil.rmtree(artifact_dir)
+        assert not artifact_dir.exists()
+        assert (storage_root / "deep" / "nested").exists()
+
+        stats = cleanup_artifact_directories(artifact_dir, storage_root, dry_run=False)
+
+        # We didn't remove the artifact directory ourselves -- it was
+        # already gone -- but its empty parents must still be cleaned up.
+        assert stats.empty_artifact_dirs == 0
+        assert stats.empty_parent_dirs == 2  # nested, deep
+        assert not (storage_root / "deep").exists()
+
+    def test_tolerates_concurrent_removal_of_parent_dir(
+        self, storage_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Parent-directory cleanup tolerates losing a race to another pass.
+
+        Parent directories are shared by every artifact underneath them,
+        so the parent-climbing step isn't covered by artifact_lock()
+        (which is per-artifact). Two concurrent GC passes cleaning sibling
+        artifacts under the same parent can both decide it's empty and
+        race to remove it. This simulates that race deterministically:
+        Path.rmdir() is patched so that, for the specific parent directory
+        under test, a concurrent process is simulated actually removing it
+        first (via the real rmdir), and then FileNotFoundError is raised
+        for our own call -- exactly what a real race would produce. This
+        must be tolerated rather than crashing the whole GC run.
+        """
+        artifact_dir = create_artifact_structure(storage_root, "shared/artifact", tags={})
+        shutil.rmtree(artifact_dir)
+        parent = storage_root / "shared"
+        assert parent.exists()
+
+        real_rmdir = Path.rmdir
+
+        def racy_rmdir(path_self: Path) -> None:
+            if path_self == parent:
+                # Simulate a concurrent GC pass winning the race: the
+                # directory really is removed, but *our* call observes it
+                # as already gone, same as a real race would.
+                real_rmdir(path_self)
+                raise FileNotFoundError(2, "No such file or directory", str(path_self))
+            return real_rmdir(path_self)
+
+        monkeypatch.setattr(Path, "rmdir", racy_rmdir)
+
+        stats = cleanup_artifact_directories(artifact_dir, storage_root, dry_run=False)
+
+        assert not parent.exists()
+        assert stats.empty_parent_dirs == 1
 
 
 class TestConcurrentCleanupVsUpdateTag:

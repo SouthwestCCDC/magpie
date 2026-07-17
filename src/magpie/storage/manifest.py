@@ -119,6 +119,15 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
     concurrent deleter removing the directory in that window just triggers a
     re-mkdir and re-open rather than an uncaught crash.
 
+    ``Path.mkdir(parents=True, exist_ok=True)`` has its own narrow internal
+    race under adversarial concurrent create/remove of the very same path:
+    if its ``os.mkdir()`` raises ``FileExistsError`` (someone else is
+    concurrently creating it too) and then, before its own follow-up
+    ``is_dir()`` check runs, a *third* caller removes the directory again,
+    it re-raises ``FileExistsError`` instead of tolerating it as
+    ``exist_ok=True`` promises. That's retried here too, for the same
+    reason and via the same bounded loop.
+
     Args:
         artifact_dir: Path to artifact directory to lock.
 
@@ -126,16 +135,24 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
         None. The lock is held for the duration of the ``with`` block.
 
     Raises:
-        OSError: If the directory keeps disappearing out from under us for
+        OSError: If the directory keeps disappearing (or flapping between
+            existing and not) out from under us for
             ``_LOCK_ACQUIRE_MAX_ATTEMPTS`` consecutive attempts. This would
-            indicate persistent, unusual concurrent deletion pressure rather
-            than the ordinary two-caller race this retry loop is meant to
-            absorb.
+            indicate persistent, unusual concurrent create/delete pressure
+            rather than the ordinary multi-caller races this retry loop is
+            meant to absorb.
     """
     fd: int | None = None
-    last_error: FileNotFoundError | None = None
+    last_error: OSError | None = None
     for _ in range(_LOCK_ACQUIRE_MAX_ATTEMPTS):
-        artifact_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+        except FileExistsError as e:
+            # Path.mkdir(exist_ok=True)'s own internal exist_ok recheck lost
+            # a race against a concurrent remover. Retry: our next mkdir()
+            # attempt will recreate it.
+            last_error = e
+            continue
         try:
             # O_CLOEXEC prevents the lock fd from leaking into child
             # processes spawned while the lock is held (magpie-ctl shells
@@ -151,7 +168,7 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
     else:
         raise OSError(
             f"Could not acquire artifact lock for {artifact_dir}: directory kept "
-            f"disappearing after {_LOCK_ACQUIRE_MAX_ATTEMPTS} attempts"
+            f"flapping after {_LOCK_ACQUIRE_MAX_ATTEMPTS} attempts"
         ) from last_error
 
     try:

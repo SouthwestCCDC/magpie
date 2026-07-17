@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -83,58 +84,61 @@ def cleanup_artifact_directories(
     """
     stats = CleanupStats()
 
-    if not artifact_dir.exists():
-        # Already removed (e.g., by a concurrent GC pass). Return early
-        # rather than entering artifact_lock(), which would otherwise
-        # resurrect the directory via mkdir() just to immediately remove it.
-        return stats
-
-    with artifact_lock(artifact_dir):
-        # Check and remove empty blobs/ directory
-        blobs_dir = artifact_dir / "blobs"
-        if blobs_dir.exists() and is_empty_directory(blobs_dir):
-            rel_path = str(blobs_dir.relative_to(storage_root))
-            stats.empty_blobs_dirs += 1
-            stats.removed_paths.append(rel_path)
-            if not dry_run:
-                logger.debug("cleanup_removing_empty_blobs_dir", path=rel_path)
-                blobs_dir.rmdir()
-
-        # Check and remove empty metadata/ directory
-        metadata_dir = artifact_dir / "metadata"
-        if metadata_dir.exists() and is_empty_directory(metadata_dir):
-            rel_path = str(metadata_dir.relative_to(storage_root))
-            stats.empty_metadata_dirs += 1
-            stats.removed_paths.append(rel_path)
-            if not dry_run:
-                logger.debug("cleanup_removing_empty_metadata_dir", path=rel_path)
-                metadata_dir.rmdir()
-
-        # Check and remove .magpie if no tags remain. This read happens
-        # under the lock, so it reflects the latest state -- not a snapshot
-        # taken before GC's scan phase.
-        manifest_file = manifest_path(artifact_dir)
-        if manifest_file.exists():
-            manifest = read_manifest(artifact_dir)
-            if not manifest.tags:
-                rel_path = str(manifest_file.relative_to(storage_root))
-                stats.empty_manifests += 1
+    if artifact_dir.exists():
+        with artifact_lock(artifact_dir):
+            # Check and remove empty blobs/ directory
+            blobs_dir = artifact_dir / "blobs"
+            if blobs_dir.exists() and is_empty_directory(blobs_dir):
+                rel_path = str(blobs_dir.relative_to(storage_root))
+                stats.empty_blobs_dirs += 1
                 stats.removed_paths.append(rel_path)
                 if not dry_run:
-                    logger.debug("cleanup_removing_empty_manifest", path=rel_path)
-                    manifest_file.unlink()
+                    logger.debug("cleanup_removing_empty_blobs_dir", path=rel_path)
+                    blobs_dir.rmdir()
 
-        # Check and remove artifact directory if completely empty
-        if artifact_dir.exists() and is_empty_directory(artifact_dir):
-            rel_path = str(artifact_dir.relative_to(storage_root))
-            stats.empty_artifact_dirs += 1
-            stats.removed_paths.append(rel_path)
-            if not dry_run:
-                logger.debug("cleanup_removing_empty_artifact_dir", path=rel_path)
-                artifact_dir.rmdir()
+            # Check and remove empty metadata/ directory
+            metadata_dir = artifact_dir / "metadata"
+            if metadata_dir.exists() and is_empty_directory(metadata_dir):
+                rel_path = str(metadata_dir.relative_to(storage_root))
+                stats.empty_metadata_dirs += 1
+                stats.removed_paths.append(rel_path)
+                if not dry_run:
+                    logger.debug("cleanup_removing_empty_metadata_dir", path=rel_path)
+                    metadata_dir.rmdir()
 
-            # Clean up empty parent directories up to storage_root
-            _cleanup_empty_parents(artifact_dir.parent, storage_root, dry_run, stats)
+            # Check and remove .magpie if no tags remain. This read happens
+            # under the lock, so it reflects the latest state -- not a
+            # snapshot taken before GC's scan phase.
+            manifest_file = manifest_path(artifact_dir)
+            if manifest_file.exists():
+                manifest = read_manifest(artifact_dir)
+                if not manifest.tags:
+                    rel_path = str(manifest_file.relative_to(storage_root))
+                    stats.empty_manifests += 1
+                    stats.removed_paths.append(rel_path)
+                    if not dry_run:
+                        logger.debug("cleanup_removing_empty_manifest", path=rel_path)
+                        manifest_file.unlink()
+
+            # Check and remove artifact directory if completely empty
+            if artifact_dir.exists() and is_empty_directory(artifact_dir):
+                rel_path = str(artifact_dir.relative_to(storage_root))
+                stats.empty_artifact_dirs += 1
+                stats.removed_paths.append(rel_path)
+                if not dry_run:
+                    logger.debug("cleanup_removing_empty_artifact_dir", path=rel_path)
+                    artifact_dir.rmdir()
+
+    # Clean up empty parent directories up to storage_root. This runs
+    # whenever artifact_dir is (now) gone -- whether we just removed it
+    # above, or it was already gone when we were called (e.g. a concurrent
+    # GC pass got there first). The latter case is exactly when a parent
+    # may have become empty and still need cleaning: bailing out early
+    # without running this step would leave the parent chain populated,
+    # violating this function's documented contract to clean up to
+    # storage_root regardless of who deleted the artifact directory itself.
+    if not artifact_dir.exists():
+        _cleanup_empty_parents(artifact_dir.parent, storage_root, dry_run, stats)
 
     return stats
 
@@ -147,6 +151,31 @@ def _cleanup_empty_parents(
 ) -> None:
     """Recursively remove empty parent directories up to storage_root.
 
+    Parent directories are shared by every artifact underneath them, so
+    unlike the per-artifact steps in cleanup_artifact_directories(), this
+    climb is not covered by artifact_lock(). Two concurrent GC passes can
+    both land here for the same directory -- either cleaning sibling
+    artifacts under the same parent, or (since artifact_dir no longer
+    existing is exactly what triggers this climb) two passes racing on the
+    very same already-removed artifact -- and both decide it's empty and
+    try to remove it. There's also a subtler wrinkle: artifact_lock()
+    self-heals a concurrently-deleted artifact directory by recreating it
+    (see its retry loop), and that mkdir() isn't coordinated with this
+    climb at all, so a peer thread reacquiring its lock can repopulate a
+    parent directory in the gap between our emptiness check and our
+    rmdir(), turning what looked like an empty-directory removal into an
+    ENOTEMPTY error.
+
+    Every filesystem check and mutation on `current` below tolerates losing
+    those races instead of crashing the whole GC run:
+    - `current` already gone (ENOENT, at any point): the goal state --
+      `current` being gone -- already holds regardless of who removed it;
+      keep climbing.
+    - `current` repopulated out from under us (ENOTEMPTY, on rmdir()):
+      genuinely no longer empty; undo the optimistic stats bump made just
+      before the rmdir() attempt and stop climbing, exactly as if the
+      up-front emptiness check had found it non-empty.
+
     Args:
         start_dir: Directory to start checking from.
         storage_root: Stop when reaching this directory (never removed).
@@ -156,21 +185,41 @@ def _cleanup_empty_parents(
     current = start_dir
 
     while current != storage_root and current.is_relative_to(storage_root):
-        if not current.exists():
-            # Parent was already removed in a previous iteration
-            current = current.parent
-            continue
+        try:
+            if not current.exists():
+                # Parent was already removed in a previous iteration, or by
+                # a concurrent GC pass.
+                current = current.parent
+                continue
 
-        if not is_empty_directory(current):
-            # Directory is not empty, stop climbing
-            break
+            if not is_empty_directory(current):
+                # Directory is not empty, stop climbing
+                break
 
-        rel_path = str(current.relative_to(storage_root))
-        stats.empty_parent_dirs += 1
-        stats.removed_paths.append(rel_path)
+            rel_path = str(current.relative_to(storage_root))
+            stats.empty_parent_dirs += 1
+            stats.removed_paths.append(rel_path)
 
-        if not dry_run:
-            logger.debug("cleanup_removing_empty_parent_dir", path=rel_path)
-            current.rmdir()
+            if not dry_run:
+                logger.debug("cleanup_removing_empty_parent_dir", path=rel_path)
+                try:
+                    current.rmdir()
+                except OSError as e:
+                    if e.errno != errno.ENOTEMPTY:
+                        raise
+                    # Repopulated between our emptiness check and this
+                    # rmdir() -- e.g. a concurrent artifact_lock() retry
+                    # recreating its own artifact directory under this
+                    # parent. Not actually empty: undo the optimistic
+                    # accounting above and stop climbing.
+                    stats.empty_parent_dirs -= 1
+                    stats.removed_paths.pop()
+                    break
+        except FileNotFoundError:
+            # A concurrent caller (another GC pass, possibly racing on this
+            # exact directory) removed `current` somewhere between our
+            # existence check, our emptiness check's directory scan, or our
+            # own rmdir() call. Tolerate it and keep climbing.
+            pass
 
         current = current.parent
