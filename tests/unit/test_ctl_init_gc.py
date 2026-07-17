@@ -159,7 +159,7 @@ class TestInitCommand:
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
         """Init reports existing token when run twice; sink isn't needed on the second run."""
-        settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
+        settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
         with patch("magpie.ctl.get_settings", return_value=settings):
             # First init creates token
             result1 = cli_runner.invoke(cli, ["init"])
@@ -304,7 +304,7 @@ class TestInitCommand:
     ) -> None:
         """Init --admin-token succeeds but reports when admin token already exists."""
         custom_token = "mgp_ADMIN_custom_token_789"
-        settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
+        settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
 
         with patch("magpie.ctl.get_settings", return_value=settings):
             # First init creates an admin token
@@ -458,6 +458,114 @@ class TestInitAdminTokenSink:
         assert "already exists" in result2.output
         assert first_token not in result2.output
         assert "mgp_ADMIN_" not in result2.output
+
+    def test_first_boot_delivery_failure_persists_no_admin_token(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A failed first-boot delivery leaves no admin token row in the database."""
+        from magpie.auth.database import get_connection, list_tokens
+
+        command = f'{sys.executable} -c "import sys; sys.exit(1)"'
+        settings = test_settings.model_copy(
+            update={"admin_token_sink": "exec", "admin_token_sink_exec_command": command}
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result = cli_runner.invoke(cli, ["init"])
+
+        assert result.exit_code != 0
+
+        conn = get_connection(settings.database_path)
+        try:
+            tokens = list_tokens(conn)
+        finally:
+            conn.close()
+        assert not any(t.name == "admin" for t in tokens)
+
+    def test_discard_first_boot_persists_no_admin_token_row(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """sink=discard on first boot leaves no row for "admin" at all -- not just unusable."""
+        from magpie.auth.database import get_connection, list_tokens
+
+        settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result = cli_runner.invoke(cli, ["init"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+
+        conn = get_connection(settings.database_path)
+        try:
+            tokens = list_tokens(conn)
+        finally:
+            conn.close()
+        assert tokens == []
+
+    def test_reset_delivery_failure_leaves_prior_token_valid(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A failed --reset-admin-token delivery must not destroy the working admin token.
+
+        This is the critical lockout scenario: --reset-admin-token is the
+        documented recovery runbook step, typically run via `docker exec`
+        against an already-running server. If a sink failure revoked the
+        old token before confirming delivery of the new one, the operator
+        would be locked out entirely.
+        """
+        from magpie.auth.service import TokenService
+
+        stdout_settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+        with patch("magpie.ctl.get_settings", return_value=stdout_settings):
+            result1 = cli_runner.invoke(cli, ["init"])
+        match1 = re.search(r"mgp_ADMIN_[A-Za-z0-9_-]+", result1.output)
+        assert match1 is not None
+        original_token = match1.group(0)
+
+        failing_command = f'{sys.executable} -c "import sys; sys.exit(1)"'
+        failing_settings = test_settings.model_copy(
+            update={
+                "admin_token_sink": "exec",
+                "admin_token_sink_exec_command": failing_command,
+            }
+        )
+        with patch("magpie.ctl.get_settings", return_value=failing_settings):
+            result2 = cli_runner.invoke(cli, ["init", "--reset-admin-token"])
+
+        assert result2.exit_code != 0, f"Output: {result2.output}"
+
+        token_service = TokenService(test_settings)
+        assert token_service.validate_token(original_token) is not None
+
+    def test_reset_discard_revokes_old_but_persists_no_new_token(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """--reset-admin-token with sink=discard revokes the old token but persists nothing new."""
+        from magpie.auth.database import get_connection, list_tokens
+        from magpie.auth.service import TokenService
+
+        stdout_settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+        with patch("magpie.ctl.get_settings", return_value=stdout_settings):
+            result1 = cli_runner.invoke(cli, ["init"])
+        match1 = re.search(r"mgp_ADMIN_[A-Za-z0-9_-]+", result1.output)
+        assert match1 is not None
+        original_token = match1.group(0)
+
+        discard_settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
+        with patch("magpie.ctl.get_settings", return_value=discard_settings):
+            result2 = cli_runner.invoke(cli, ["init", "--reset-admin-token"])
+
+        assert result2.exit_code == 0, f"Output: {result2.output}"
+
+        token_service = TokenService(test_settings)
+        assert token_service.validate_token(original_token) is None
+
+        conn = get_connection(test_settings.database_path)
+        try:
+            tokens = list_tokens(conn)
+        finally:
+            conn.close()
+        assert not any(t.name == "admin" for t in tokens)
 
 
 class TestInitJsonOutput:

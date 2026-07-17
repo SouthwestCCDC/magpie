@@ -100,7 +100,8 @@ def _deliver_file(token: str, settings: MagpieSettings) -> None:
     """Write the token to a root-only (0600) file.
 
     Raises:
-        TokenSinkError: If the path is unset or the file can't be written.
+        TokenSinkError: If the path is unset, the file can't be written, or
+            the path is a symlink (rejected -- see O_NOFOLLOW below).
     """
     path = settings.admin_token_sink_file_path
     if path is None:  # pragma: no cover - guarded by config's derive_paths()
@@ -108,11 +109,14 @@ def _deliver_file(token: str, settings: MagpieSettings) -> None:
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        # O_CREAT with mode=0o600 covers the common case; chmod afterward
-        # guarantees 0600 regardless of umask or a pre-existing file's mode.
-        # os.fdopen takes ownership of fd and closes it (even on error) via
-        # the context manager.
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # O_NOFOLLOW rejects the open outright if `path` is a symlink, so a
+        # pre-placed symlink at the configured path can't redirect the
+        # plaintext token to an attacker-controlled location. O_CREAT with
+        # mode=0o600 covers the common case; chmod afterward guarantees 0600
+        # regardless of umask or a pre-existing file's mode. os.fdopen takes
+        # ownership of fd and closes it (even on error) via the context
+        # manager.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(token + "\n")
         os.chmod(path, 0o600)
@@ -151,10 +155,16 @@ def _deliver_exec(token: str, settings: MagpieSettings) -> None:
         raise TokenSinkError(f"admin token exec sink failed to run {argv[0]!r}: {e}") from e
 
     if result.returncode != 0:
-        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        # Deliberately excludes the child's stderr text: the token is on its
+        # stdin, and a command that echoes stdin (or otherwise reflects its
+        # input) on failure could leak the token into this exception's
+        # message -- which callers may then print or log. Report only the
+        # byte count, never the content.
+        stderr_len = len(result.stderr)
         raise TokenSinkError(
             f"admin token exec sink command {argv[0]!r} exited with status "
-            f"{result.returncode}: {stderr or '(no stderr output)'}"
+            f"{result.returncode} ({stderr_len} byte(s) on stderr, omitted from this "
+            "error to avoid the risk of an echoed token leaking into logs)"
         )
 
 

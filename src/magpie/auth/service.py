@@ -125,7 +125,7 @@ class TokenService:
 
         if plaintext_token is None:
             # Generate secure random token
-            plaintext_token = self._generate_plaintext_token(scope)
+            plaintext_token = self.generate_plaintext_token(scope)
         else:
             # Validate provided token has correct prefix
             if scope == TokenScope.ADMIN:
@@ -245,7 +245,9 @@ class TokenService:
         finally:
             conn.close()
 
-    def rotate_token(self, name: str) -> tuple[str, TokenScope] | None:
+    def rotate_token(
+        self, name: str, plaintext_token: str | None = None
+    ) -> tuple[str, TokenScope] | None:
         """Rotate a token by revoking and creating a new one with the same scope.
 
         This is an atomic operation that:
@@ -261,6 +263,12 @@ class TokenService:
 
         Args:
             name: Name of the token to rotate.
+            plaintext_token: Optional pre-generated plaintext to persist instead of
+                generating a new random one. Used by callers (e.g. the admin token's
+                sink-delivery flow) that must generate and successfully *deliver* a
+                token before it's ever written to the database -- see
+                generate_plaintext_token() and magpie.auth.token_sink. Not validated
+                for prefix/format here; callers are responsible for that.
 
         Returns:
             Tuple of (plaintext_token, scope) if rotation succeeded, None if token not found.
@@ -285,7 +293,9 @@ class TokenService:
 
                 # Create and persist new token with same name and scope (without committing)
                 try:
-                    new_plaintext = self._create_and_save_token(conn, name, scope)
+                    new_plaintext = self._create_and_save_token(
+                        conn, name, scope, plaintext_token=plaintext_token
+                    )
                 except sqlite3.IntegrityError as e:
                     # Extremely unlikely hash collision during rotation
                     raise TokenError(
@@ -297,21 +307,59 @@ class TokenService:
         finally:
             conn.close()
 
+    def replace_token(self, name: str, scope: TokenScope, plaintext_token: str) -> None:
+        """Atomically persist an already-generated (and already-delivered) plaintext.
+
+        Deletes any existing token with this name and creates a new one with the
+        given plaintext, in a single transaction -- unlike rotate_token(), this
+        succeeds even if no token with this name currently exists (used by the
+        admin token's --reset-admin-token flow, which may be reviving a token
+        that was never created or was previously revoked).
+
+        Callers must only call this AFTER plaintext_token has already been
+        successfully delivered (e.g. via magpie.auth.token_sink) -- this method
+        never generates a value itself, so there is no risk of persisting a
+        token that wasn't (or couldn't be) delivered.
+
+        Args:
+            name: Token name.
+            scope: Token scope.
+            plaintext_token: Already-generated, already-delivered plaintext to persist.
+
+        Raises:
+            TokenError: If a hash collision occurs during creation (extremely unlikely).
+        """
+        conn = get_connection(self.db_path)
+        try:
+            with conn:
+                delete_token(conn, name, commit=False)
+                try:
+                    self._create_and_save_token(conn, name, scope, plaintext_token=plaintext_token)
+                except sqlite3.IntegrityError as e:
+                    raise TokenError(
+                        f"Failed to replace token '{name}' due to hash collision. Please try again."
+                    ) from e
+        finally:
+            conn.close()
+
     def _create_and_save_token(
         self,
         conn: sqlite3.Connection,
         name: str,
         scope: TokenScope,
+        plaintext_token: str | None = None,
     ) -> str:
         """Create a new token with the given name and scope using an existing connection.
 
-        This helper is used by rotate_token to ensure that token deletion and creation
-        happen within a single database transaction.
+        This helper is used by rotate_token() and replace_token() to ensure that
+        token deletion and creation happen within a single database transaction.
 
         Args:
             conn: Existing database connection.
             name: Token name.
             scope: Token scope.
+            plaintext_token: Optional pre-generated plaintext to persist instead of
+                generating a new random one.
 
         Returns:
             Plaintext token string.
@@ -319,8 +367,10 @@ class TokenService:
         # Validate token name defensively (defense in depth)
         validate_token_name(name)
 
-        # Generate a new secure plaintext token
-        plaintext = self._generate_plaintext_token(scope)
+        # Use the caller-supplied plaintext if given, otherwise generate one
+        plaintext = (
+            plaintext_token if plaintext_token is not None else self.generate_plaintext_token(scope)
+        )
 
         # Hash the token for storage
         token_hash = self._hash_token(plaintext)
@@ -353,8 +403,12 @@ class TokenService:
         """
         return _SCOPE_LEVELS[token_scope] >= _SCOPE_LEVELS[required_scope]
 
-    def _generate_plaintext_token(self, scope: TokenScope) -> str:
-        """Generate a new plaintext token with appropriate prefix.
+    def generate_plaintext_token(self, scope: TokenScope) -> str:
+        """Generate a new plaintext token with appropriate prefix, without persisting it.
+
+        Public so callers can generate-then-deliver-then-persist (e.g. the admin
+        token's sink-delivery flow in magpie.ctl.commands.init/token, which must
+        confirm delivery succeeded before writing anything to the database).
 
         Args:
             scope: Token scope (determines prefix).

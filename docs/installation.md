@@ -46,8 +46,9 @@ Choose one:
 
 - **`exec`** -- pipes the token to an operator-configured command via
   **stdin only** (never argv or env, so it can't leak via `ps` or
-  `/proc/<pid>/environ`). A non-zero exit is a delivery failure and aborts
-  init. This is the general "push into my secret store" mechanism -- e.g.
+  `/proc/<pid>/environ`). A non-zero exit is a delivery failure -- see
+  below for what that aborts, depending on which command triggered it.
+  This is the general "push into my secret store" mechanism -- e.g.
   writing straight into Vault:
   ```bash
   export MAGPIE_ADMIN_TOKEN_SINK=exec
@@ -76,12 +77,19 @@ Choose one:
   docker compose -f docker-compose.prod.yml logs magpie | grep "ADMIN TOKEN"
   ```
 
-Token generation happens **only** on first boot; a delivery failure for
-`file` or `exec` aborts init and the server does not start (a
-generated-but-undelivered token is a liability, not a degraded feature).
-Rotating the admin token (`magpie-ctl init --reset-admin-token` or
-`magpie-ctl token rotate admin`) delivers the new token through the same
-configured sink.
+Token generation happens **only** on first boot. In every case (first-boot
+init, `--reset-admin-token`, and `token rotate admin`) delivery is attempted
+**before** any database change -- a generated-but-undelivered token is a
+liability, not a degraded feature, so nothing is ever persisted or revoked
+until the sink confirms success:
+
+- **First boot:** a `file`/`exec` delivery failure means no admin token
+  exists in the database, and the server does not start (entrypoint.sh
+  removes the incomplete database and retries automatically on next start).
+- **`--reset-admin-token` / `token rotate admin`** (run via `docker exec`
+  against an already-running server): a delivery failure leaves the
+  **existing** admin token completely untouched -- nothing is lost. Fix the
+  sink and simply re-run the command.
 
 A native `vault` sink (writing directly to a Vault path, optionally with
 response-wrapping) is planned for a future release; `exec` already covers

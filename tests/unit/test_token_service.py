@@ -366,15 +366,20 @@ class TestRotateToken:
         assert new_info.scope != TokenScope.ADMIN
 
         # Verify the rotate_token method signature - it should NOT accept a scope parameter
-        # This is a compile-time check via type inspection
+        # (scope is always derived from the existing token, never settable by the caller).
+        # This is a compile-time check via type inspection. It intentionally does NOT
+        # check the full parameter list: rotate_token also accepts an optional
+        # plaintext_token (used by the admin token's deliver-before-persist flow in
+        # magpie.ctl.commands.token) -- that lets a caller supply an already-generated,
+        # already-delivered plaintext, but never lets it choose the scope.
         import inspect
 
         sig = inspect.signature(token_service.rotate_token)
         param_names = list(sig.parameters.keys())
-        # Should only have 'name' parameter (besides self which is implicit)
-        assert param_names == ["name"], (
-            f"rotate_token should only accept 'name' parameter, got: {param_names}"
+        assert "scope" not in param_names, (
+            f"rotate_token must not accept a scope parameter, got: {param_names}"
         )
+        assert "name" in param_names
 
 
 class TestHasScope:

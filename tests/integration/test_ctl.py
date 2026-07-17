@@ -429,10 +429,12 @@ class TestInitAdminTokenSink:
         try:
             tokens = list_tokens(conn)
             admin_scope_tokens = [t for t in tokens if t.scope == TokenScope.ADMIN]
-            # The first-boot "admin" token (generated, then discarded) plus
-            # the newly minted "ops-admin" token.
-            assert len(admin_scope_tokens) == 2
-            assert {t.name for t in admin_scope_tokens} == {"admin", "ops-admin"}
+            # sink=discard retains NO usable admin token: the first-boot
+            # "admin" token is generated, delivery (discard) succeeds
+            # trivially, and it is never persisted at all -- so only the
+            # newly minted "ops-admin" token should exist.
+            assert len(admin_scope_tokens) == 1
+            assert {t.name for t in admin_scope_tokens} == {"ops-admin"}
         finally:
             conn.close()
 

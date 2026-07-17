@@ -76,8 +76,12 @@ class MagpieSettings(BaseSettings):
     # Shell-style command line for sink=exec (parsed with shlex, never run through a
     # shell). The token is piped to the command's stdin only -- never argv or env.
     admin_token_sink_exec_command: str | None = None  # MAGPIE_ADMIN_TOKEN_SINK_EXEC_COMMAND
+    # NOTE: explicit validation_alias because "timeout" alone (the field name,
+    # which env_prefix + field-name derivation would produce as
+    # MAGPIE_ADMIN_TOKEN_SINK_EXEC_TIMEOUT) is ambiguous about units; the
+    # documented/compose-file variable name carries the unit instead.
     admin_token_sink_exec_timeout: float = Field(
-        default=30.0, gt=0.0
+        default=30.0, gt=0.0, validation_alias="MAGPIE_ADMIN_TOKEN_SINK_EXEC_TIMEOUT_SECONDS"
     )  # MAGPIE_ADMIN_TOKEN_SINK_EXEC_TIMEOUT_SECONDS
 
     @field_validator("allowed_cidrs")

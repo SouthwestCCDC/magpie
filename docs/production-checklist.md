@@ -50,8 +50,10 @@ Retrieve the admin token per the chosen sink -- see
 docker compose -f docker-compose.prod.yml exec magpie magpie-ctl init --reset-admin-token
 ```
 The new token is delivered through the same configured `MAGPIE_ADMIN_TOKEN_SINK`
-(not printed to stdout unless `sink=stdout`). If using `sink=discard`, mint a
-fresh admin-scope token directly instead:
+(not printed to stdout unless `sink=stdout`) -- delivery is attempted before
+any database change, so if it fails (e.g. a broken exec command), the prior
+admin token is left completely valid and unchanged; fix the sink and re-run.
+If using `sink=discard`, mint a fresh admin-scope token directly instead:
 ```bash
 docker compose -f docker-compose.prod.yml exec magpie \
   magpie-ctl token create --name ops-admin --scope admin

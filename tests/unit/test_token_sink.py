@@ -112,6 +112,28 @@ class TestFileSink:
         with pytest.raises(TokenSinkError, match="admin token file sink failed to write"):
             deliver_admin_token(TOKEN, settings, action="init")
 
+    def test_symlink_at_target_path_is_rejected(
+        self, tmp_path: Path, base_settings: MagpieSettings
+    ) -> None:
+        """A pre-placed symlink at the configured path must not be followed.
+
+        Otherwise an attacker who can create a symlink at the target path
+        (but not write the target's actual destination directly) could
+        redirect the plaintext token to a location of their choosing.
+        """
+        real_target = tmp_path / "elsewhere" / "not-the-real-path"
+        real_target.parent.mkdir(parents=True)
+        symlink_path = tmp_path / "admin-token"
+        symlink_path.symlink_to(real_target)
+        settings = base_settings.model_copy(
+            update={"admin_token_sink": "file", "admin_token_sink_file_path": symlink_path}
+        )
+
+        with pytest.raises(TokenSinkError, match="admin token file sink failed to write"):
+            deliver_admin_token(TOKEN, settings, action="init")
+
+        assert not real_target.exists()
+
     def test_default_file_path_derived_from_database_path(self, tmp_path: Path) -> None:
         settings = MagpieSettings(
             storage_path=tmp_path / "storage",
@@ -171,6 +193,28 @@ class TestExecSink:
         self, tmp_path: Path, base_settings: MagpieSettings
     ) -> None:
         command = f"{sys.executable} -c \"import sys; sys.stderr.write('boom'); sys.exit(1)\""
+        settings = base_settings.model_copy(
+            update={"admin_token_sink": "exec", "admin_token_sink_exec_command": command}
+        )
+
+        with pytest.raises(TokenSinkError) as exc_info:
+            deliver_admin_token(TOKEN, settings, action="init")
+
+        assert TOKEN not in str(exc_info.value)
+
+    def test_nonzero_exit_does_not_leak_echoed_stdin(
+        self, tmp_path: Path, base_settings: MagpieSettings
+    ) -> None:
+        """A command that echoes its stdin (the token) to stderr must not leak it.
+
+        This is the realistic leak scenario: an operator-configured command
+        that reflects its input back on failure (common for debugging) must
+        never cause the token to end up in TokenSinkError's message, which
+        callers print/log.
+        """
+        command = (
+            f'{sys.executable} -c "import sys; sys.stderr.write(sys.stdin.read()); sys.exit(1)"'
+        )
         settings = base_settings.model_copy(
             update={"admin_token_sink": "exec", "admin_token_sink_exec_command": command}
         )

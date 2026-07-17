@@ -384,8 +384,8 @@ class TestTokenRotateAdminSink:
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
         """Rotating name="admin" aborts with a non-zero exit if no sink is configured."""
-        discard_settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
-        with patch("magpie.ctl.get_settings", return_value=discard_settings):
+        stdout_settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+        with patch("magpie.ctl.get_settings", return_value=stdout_settings):
             init_result = cli_runner.invoke(cli, ["init"])
             assert init_result.exit_code == 0
 
@@ -402,10 +402,15 @@ class TestTokenRotateAdminSink:
         """Rotating name="admin" with a failing exec sink aborts with a non-zero exit."""
         import sys
 
-        discard_settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
-        with patch("magpie.ctl.get_settings", return_value=discard_settings):
+        from magpie.auth.service import TokenService
+
+        stdout_settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+        with patch("magpie.ctl.get_settings", return_value=stdout_settings):
             init_result = cli_runner.invoke(cli, ["init"])
             assert init_result.exit_code == 0
+        match = re.search(r"mgp_ADMIN_[A-Za-z0-9_-]+", init_result.output)
+        assert match is not None
+        original_token = match.group(0)
 
         command = f'{sys.executable} -c "import sys; sys.exit(1)"'
         exec_settings = test_settings.model_copy(
@@ -416,6 +421,76 @@ class TestTokenRotateAdminSink:
 
         assert rotate_result.exit_code != 0, f"Output: {rotate_result.output}"
         assert "mgp_ADMIN_" not in rotate_result.output
+
+        # Critical: the failed rotation must not have destroyed the prior,
+        # working admin token (lockout prevention).
+        token_service = TokenService(test_settings)
+        assert token_service.validate_token(original_token) is not None
+
+    def test_rotate_admin_failure_leaves_no_orphan_row(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A failed rotation leaves exactly the original admin token row -- no orphan."""
+        import sys
+
+        from magpie.auth.database import get_connection, list_tokens
+
+        stdout_settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+        with patch("magpie.ctl.get_settings", return_value=stdout_settings):
+            init_result = cli_runner.invoke(cli, ["init"])
+            assert init_result.exit_code == 0
+
+        conn = get_connection(test_settings.database_path)
+        try:
+            tokens_before = list_tokens(conn)
+        finally:
+            conn.close()
+
+        command = f'{sys.executable} -c "import sys; sys.exit(1)"'
+        exec_settings = test_settings.model_copy(
+            update={"admin_token_sink": "exec", "admin_token_sink_exec_command": command}
+        )
+        with patch("magpie.ctl.get_settings", return_value=exec_settings):
+            rotate_result = cli_runner.invoke(cli, ["token", "rotate", "admin"])
+        assert rotate_result.exit_code != 0
+
+        conn = get_connection(test_settings.database_path)
+        try:
+            tokens_after = list_tokens(conn)
+        finally:
+            conn.close()
+
+        assert [t.token_hash for t in tokens_after] == [t.token_hash for t in tokens_before]
+
+    def test_rotate_admin_discard_revokes_old_persists_nothing_new(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Rotating with sink=discard revokes the old token but persists nothing new."""
+        from magpie.auth.database import get_connection, list_tokens
+        from magpie.auth.service import TokenService
+
+        stdout_settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+        with patch("magpie.ctl.get_settings", return_value=stdout_settings):
+            init_result = cli_runner.invoke(cli, ["init"])
+        match = re.search(r"mgp_ADMIN_[A-Za-z0-9_-]+", init_result.output)
+        assert match is not None
+        original_token = match.group(0)
+
+        discard_settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
+        with patch("magpie.ctl.get_settings", return_value=discard_settings):
+            rotate_result = cli_runner.invoke(cli, ["token", "rotate", "admin"])
+
+        assert rotate_result.exit_code == 0, f"Output: {rotate_result.output}"
+
+        token_service = TokenService(test_settings)
+        assert token_service.validate_token(original_token) is None
+
+        conn = get_connection(test_settings.database_path)
+        try:
+            tokens = list_tokens(conn)
+        finally:
+            conn.close()
+        assert not any(t.name == "admin" for t in tokens)
 
     def test_rotate_admin_json_output_omits_token_for_non_stdout_sink(
         self, cli_runner: CliRunner, test_settings: MagpieSettings, tmp_path: Path
