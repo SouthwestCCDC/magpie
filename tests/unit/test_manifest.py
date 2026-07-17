@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -209,6 +211,90 @@ class TestRemoveTag:
         result = remove_tag(artifact_dir, "nonexistent")
 
         assert result.tags == {}
+
+
+def _is_locked_exclusively(artifact_dir: Path) -> bool:
+    """Probe whether artifact_dir is currently flock()-held exclusively.
+
+    Opens a *second* fd to artifact_dir and attempts a non-blocking
+    exclusive flock. If that fails with EWOULDBLOCK/EAGAIN, some other fd
+    (i.e. artifact_lock()'s own held lock) has it locked already.
+    """
+    probe_fd = os.open(artifact_dir, os.O_RDONLY)
+    try:
+        fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(probe_fd, fcntl.LOCK_UN)
+        return False
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(probe_fd)
+
+
+class TestOnLockedCallback:
+    """Regression tests for issue #547.
+
+    update_tag()/remove_tag() must invoke their on_locked callback while
+    still holding the artifact lock (not after releasing it), so that
+    callers doing further locked work derived from the new manifest --
+    e.g. StorageService's symlink reconciliation -- see a state that can't
+    be raced by a concurrent writer between the manifest write and the
+    follow-up work.
+    """
+
+    def test_update_tag_on_locked_runs_while_lock_held(self, tmp_path: Path) -> None:
+        artifact_dir = tmp_path / "artifact"
+        artifact_dir.mkdir()
+        observed: dict[str, bool] = {}
+
+        def on_locked(manifest: Manifest) -> None:
+            observed["lock_held"] = _is_locked_exclusively(artifact_dir)
+            observed["tag_visible"] = manifest.tags.get("latest") == "@abc12345"
+
+        update_tag(artifact_dir, "latest", "@abc12345", on_locked=on_locked)
+
+        assert observed["lock_held"] is True
+        assert observed["tag_visible"] is True
+
+    def test_remove_tag_on_locked_runs_while_lock_held(self, tmp_path: Path) -> None:
+        artifact_dir = tmp_path / "artifact"
+        write_manifest(artifact_dir, Manifest(tags={"latest": "@abc12345"}))
+        observed: dict[str, bool] = {}
+
+        def on_locked(manifest: Manifest, had_tag: bool) -> None:
+            observed["lock_held"] = _is_locked_exclusively(artifact_dir)
+            observed["had_tag"] = had_tag
+            observed["tag_gone"] = "latest" not in manifest.tags
+
+        remove_tag(artifact_dir, "latest", on_locked=on_locked)
+
+        assert observed["lock_held"] is True
+        assert observed["had_tag"] is True
+        assert observed["tag_gone"] is True
+
+    def test_remove_tag_on_locked_reports_had_tag_false_when_absent(self, tmp_path: Path) -> None:
+        """had_tag reflects the locked read, not merely "call completed"."""
+        artifact_dir = tmp_path / "artifact"
+        write_manifest(artifact_dir, Manifest(tags={"other": "@xyz98765"}))
+        observed: dict[str, bool] = {}
+
+        def on_locked(manifest: Manifest, had_tag: bool) -> None:
+            observed["had_tag"] = had_tag
+
+        remove_tag(artifact_dir, "nonexistent", on_locked=on_locked)
+
+        assert observed["had_tag"] is False
+
+    def test_on_locked_not_required(self, tmp_path: Path) -> None:
+        """Callers that don't pass on_locked are unaffected (back-compat)."""
+        artifact_dir = tmp_path / "artifact"
+        artifact_dir.mkdir()
+
+        result = update_tag(artifact_dir, "latest", "@abc12345")
+        assert result.tags["latest"] == "@abc12345"
+
+        result = remove_tag(artifact_dir, "latest")
+        assert "latest" not in result.tags
 
 
 class TestArtifactLockRetries:

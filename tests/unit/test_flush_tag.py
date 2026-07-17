@@ -304,6 +304,105 @@ class TestFlushTagValidation:
             storage_service.flush_tag("v1@beta!")
 
 
+class TestFlushTagConcurrencyAccuracy:
+    """Regression tests for issue #547 (flush_tag's affected-set staleness).
+
+    flush_tag() finds candidates via an unlocked walk of the whole storage
+    tree (there's no single lock that spans every artifact directory at
+    once), then must confirm each candidate under that artifact's lock
+    before counting it as affected -- otherwise a tag removed by a
+    concurrent caller in the gap between the scan and the confirmation gets
+    misreported as flushed. These tests force that interleaving
+    deterministically via monkeypatching rather than relying on real thread
+    scheduling to hit the narrow window.
+    """
+
+    def test_dry_run_excludes_artifact_untagged_after_scan(
+        self,
+        storage_service: StorageService,
+        test_config: MagpieSettings,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A tag removed between the scan and the locked recheck must not
+        appear in a dry_run report."""
+        import magpie.storage.service as service_module
+
+        _, ref = store_test_artifact(storage_service, "race/artifact", b"content")
+        storage_service.create_tag("race/artifact", ref, "racy-tag")
+
+        artifact_dir = artifact_dir_path(test_config.storage_path, "race/artifact")
+        real_read_manifest = service_module.read_manifest
+        call_count = {"n": 0}
+
+        def racy_read_manifest(path: Path):
+            call_count["n"] += 1
+            if path == artifact_dir and call_count["n"] == 1:
+                # Capture the manifest as the unlocked scan would see it
+                # (tag still present), then simulate a concurrent remover
+                # winning the race immediately afterward, before the
+                # locked recheck below runs.
+                manifest = real_read_manifest(path)
+                storage_service.remove_tag("race/artifact", "racy-tag")
+                return manifest
+            return real_read_manifest(path)
+
+        monkeypatch.setattr(service_module, "read_manifest", racy_read_manifest)
+
+        result = storage_service.flush_tag("racy-tag", dry_run=True)
+
+        assert result.count == 0
+        assert result.affected_artifacts == []
+
+    def test_live_flush_excludes_artifact_untagged_after_scan(
+        self,
+        storage_service: StorageService,
+        test_config: MagpieSettings,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A tag removed between the scan and the locked removal must not
+        appear in the affected-artifacts report (it's already gone)."""
+        import magpie.storage.service as service_module
+
+        _, ref = store_test_artifact(storage_service, "race/artifact", b"content")
+        storage_service.create_tag("race/artifact", ref, "racy-tag")
+
+        artifact_dir = artifact_dir_path(test_config.storage_path, "race/artifact")
+        real_read_manifest = service_module.read_manifest
+        call_count = {"n": 0}
+
+        def racy_read_manifest(path: Path):
+            call_count["n"] += 1
+            if path == artifact_dir and call_count["n"] == 1:
+                manifest = real_read_manifest(path)
+                storage_service.remove_tag("race/artifact", "racy-tag")
+                return manifest
+            return real_read_manifest(path)
+
+        monkeypatch.setattr(service_module, "read_manifest", racy_read_manifest)
+
+        result = storage_service.flush_tag("racy-tag", dry_run=False)
+
+        assert result.count == 0
+        assert result.affected_artifacts == []
+
+    def test_live_flush_still_reports_artifact_actually_flushed(
+        self, storage_service: StorageService, test_config: MagpieSettings
+    ) -> None:
+        """Sanity check: without a concurrent race, a genuinely-flushed
+        artifact is still reported (the accuracy fix isn't over-broad)."""
+        _, ref = store_test_artifact(storage_service, "no-race/artifact", b"content")
+        storage_service.create_tag("no-race/artifact", ref, "stable-tag")
+
+        result = storage_service.flush_tag("stable-tag", dry_run=False)
+
+        assert result.count == 1
+        assert result.affected_artifacts == ["no-race/artifact"]
+
+        artifact_dir = artifact_dir_path(test_config.storage_path, "no-race/artifact")
+        manifest = read_manifest(artifact_dir)
+        assert "stable-tag" not in manifest.tags
+
+
 class TestFlushTagCorruptManifestHandling:
     """Tests that flush_tag skips corrupt manifests rather than crashing the
     entire global walk. Mirrors run_gc()'s handling of the same failure mode

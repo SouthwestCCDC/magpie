@@ -8,7 +8,7 @@ import os
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from pydantic import BaseModel
 
@@ -198,7 +198,13 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
         os.close(fd)
 
 
-def update_tag(artifact_dir: Path, tag_name: str, hash_ref: str) -> Manifest:
+def update_tag(
+    artifact_dir: Path,
+    tag_name: str,
+    hash_ref: str,
+    *,
+    on_locked: Callable[[Manifest], None] | None = None,
+) -> Manifest:
     """Update or create a tag in the manifest.
 
     The read-modify-write cycle is serialized with an exclusive lock on the
@@ -209,6 +215,12 @@ def update_tag(artifact_dir: Path, tag_name: str, hash_ref: str) -> Manifest:
         artifact_dir: Path to artifact directory.
         tag_name: Name of the tag to update/create.
         hash_ref: Hash reference to associate with the tag.
+        on_locked: Optional callback invoked with the updated manifest before
+            the lock is released. ``artifact_lock`` isn't reentrant (a
+            second ``flock()`` from the same process would block against
+            the first), so callers needing to do more locked work derived
+            from the new manifest -- e.g. symlink reconciliation -- must
+            hook in here rather than acquiring the lock again themselves.
 
     Returns:
         Updated Manifest instance.
@@ -217,10 +229,17 @@ def update_tag(artifact_dir: Path, tag_name: str, hash_ref: str) -> Manifest:
         manifest = read_manifest(artifact_dir)
         manifest.tags[tag_name] = hash_ref
         write_manifest(artifact_dir, manifest)
+        if on_locked is not None:
+            on_locked(manifest)
         return manifest
 
 
-def remove_tag(artifact_dir: Path, tag_name: str) -> Manifest:
+def remove_tag(
+    artifact_dir: Path,
+    tag_name: str,
+    *,
+    on_locked: Callable[[Manifest, bool], None] | None = None,
+) -> Manifest:
     """Remove a tag from the manifest.
 
     If the tag doesn't exist, this is a no-op (no error raised). The
@@ -231,12 +250,23 @@ def remove_tag(artifact_dir: Path, tag_name: str) -> Manifest:
     Args:
         artifact_dir: Path to artifact directory.
         tag_name: Name of the tag to remove.
+        on_locked: Optional callback invoked, before the lock is released,
+            with the updated manifest and a bool for whether the tag was
+            actually present (and thus removed) rather than already absent.
+            The presence check happens under the same lock as the removal,
+            so callers that need an accurate "did this actually remove
+            something" answer under concurrency -- rather than an unlocked
+            pre-check racing the removal -- should decide that here. See
+            ``update_tag`` for why this replaces re-acquiring the lock.
 
     Returns:
         Updated Manifest instance.
     """
     with artifact_lock(artifact_dir):
         manifest = read_manifest(artifact_dir)
+        had_tag = tag_name in manifest.tags
         manifest.tags.pop(tag_name, None)  # Remove if exists, no error if missing
         write_manifest(artifact_dir, manifest)
+        if on_locked is not None:
+            on_locked(manifest, had_tag)
         return manifest
