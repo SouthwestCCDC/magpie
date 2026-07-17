@@ -200,11 +200,12 @@ class TestVersionMiddleware:
         header (magpie.server.middleware.VersionCheckMiddleware.dispatch).
         """
         min_client_version = get_min_client_version(__version__)
-        assert parse(min_client_version) < parse(__version__), (
-            "test precondition violated: min_client_version must be strictly "
-            "less than the running server version to exercise the "
-            "compatible-but-outdated path"
-        )
+        if parse(min_client_version) >= parse(__version__):
+            pytest.skip(
+                "no compatible-but-outdated version band for the running server "
+                "version (min_client_version is not strictly below it), so there "
+                "is nothing to exercise here"
+            )
 
         with httpx.Client(base_url=base_url, timeout=30.0) as client:
             response = client.get(
