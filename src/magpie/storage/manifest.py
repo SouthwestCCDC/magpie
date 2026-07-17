@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from pydantic import BaseModel
 
@@ -82,8 +86,42 @@ def write_manifest(artifact_dir: Path, manifest: Manifest) -> None:
         raise
 
 
+@contextmanager
+def _artifact_lock(artifact_dir: Path) -> Iterator[None]:
+    """Acquire an exclusive advisory lock serializing manifest mutations.
+
+    Uses POSIX ``flock`` on the artifact directory itself (rather than on a
+    separate lock file) so that manifest read-modify-write cycles are
+    serialized across threads and processes without leaving behind any extra
+    file. That matters because GC's empty-directory cleanup (see
+    ``storage/cleanup.py``) treats an artifact directory as removable once it
+    has no blobs, metadata, or manifest left; a stray lock file would defeat
+    that check and leak empty directories.
+
+    Args:
+        artifact_dir: Path to artifact directory to lock.
+
+    Yields:
+        None. The lock is held for the duration of the ``with`` block.
+    """
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(artifact_dir, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def update_tag(artifact_dir: Path, tag_name: str, hash_ref: str) -> Manifest:
     """Update or create a tag in the manifest.
+
+    The read-modify-write cycle is serialized with an exclusive lock on the
+    artifact directory, so concurrent callers mutating different tags on the
+    same artifact cannot silently lose each other's updates.
 
     Args:
         artifact_dir: Path to artifact directory.
@@ -93,16 +131,20 @@ def update_tag(artifact_dir: Path, tag_name: str, hash_ref: str) -> Manifest:
     Returns:
         Updated Manifest instance.
     """
-    manifest = read_manifest(artifact_dir)
-    manifest.tags[tag_name] = hash_ref
-    write_manifest(artifact_dir, manifest)
-    return manifest
+    with _artifact_lock(artifact_dir):
+        manifest = read_manifest(artifact_dir)
+        manifest.tags[tag_name] = hash_ref
+        write_manifest(artifact_dir, manifest)
+        return manifest
 
 
 def remove_tag(artifact_dir: Path, tag_name: str) -> Manifest:
     """Remove a tag from the manifest.
 
-    If the tag doesn't exist, this is a no-op (no error raised).
+    If the tag doesn't exist, this is a no-op (no error raised). The
+    read-modify-write cycle is serialized with an exclusive lock on the
+    artifact directory, so concurrent callers mutating different tags on the
+    same artifact cannot silently lose each other's updates.
 
     Args:
         artifact_dir: Path to artifact directory.
@@ -111,7 +153,8 @@ def remove_tag(artifact_dir: Path, tag_name: str) -> Manifest:
     Returns:
         Updated Manifest instance.
     """
-    manifest = read_manifest(artifact_dir)
-    manifest.tags.pop(tag_name, None)  # Remove if exists, no error if missing
-    write_manifest(artifact_dir, manifest)
-    return manifest
+    with _artifact_lock(artifact_dir):
+        manifest = read_manifest(artifact_dir)
+        manifest.tags.pop(tag_name, None)  # Remove if exists, no error if missing
+        write_manifest(artifact_dir, manifest)
+        return manifest

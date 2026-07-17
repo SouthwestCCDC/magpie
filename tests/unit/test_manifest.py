@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -188,6 +189,109 @@ class TestRemoveTag:
         result = remove_tag(artifact_dir, "nonexistent")
 
         assert result.tags == {}
+
+
+class TestConcurrentManifestUpdates:
+    """Regression tests for issue #527.
+
+    Before per-artifact locking was added, update_tag()'s read-modify-write
+    cycle (read_manifest -> mutate dict -> write_manifest) was not
+    serialized. Two concurrent writers setting *different* tags on the same
+    artifact could both read the manifest before either had written, so
+    whichever writer finished last would silently overwrite (and lose) the
+    other's tag. These tests force that interleaving with a barrier and
+    assert no tag is ever lost.
+    """
+
+    def test_concurrent_different_tags_no_lost_update(self, tmp_path: Path) -> None:
+        """Two threads racing to set different tags must both survive.
+
+        Runs many rounds, starting both writers at the same instant via a
+        barrier each round to maximize the chance of the interleaving that
+        caused #527 (both threads reading the manifest before either
+        writes). Every tag set across every round must be present in the
+        final manifest.
+        """
+        artifact_dir = tmp_path / "artifact"
+        artifact_dir.mkdir()
+        rounds = 50
+        barrier = threading.Barrier(2)
+        errors: list[BaseException] = []
+
+        def writer(worker_id: int) -> None:
+            for round_num in range(rounds):
+                barrier.wait()
+                try:
+                    update_tag(
+                        artifact_dir,
+                        f"worker{worker_id}-round{round_num}",
+                        f"@{worker_id}{round_num:07d}",
+                    )
+                except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=writer, args=(worker_id,)) for worker_id in (0, 1)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Unexpected errors during concurrent tag updates: {errors}"
+
+        loaded = read_manifest(artifact_dir)
+        expected_tags = {
+            f"worker{worker_id}-round{round_num}"
+            for worker_id in (0, 1)
+            for round_num in range(rounds)
+        }
+        missing = expected_tags - set(loaded.tags.keys())
+        assert not missing, f"Lost tag updates under concurrency: {sorted(missing)}"
+        assert len(loaded.tags) == len(expected_tags)
+
+    def test_concurrent_update_and_remove_different_tags(self, tmp_path: Path) -> None:
+        """Concurrent update_tag and remove_tag on different tags don't race.
+
+        One worker repeatedly adds a new tag while another repeatedly
+        removes and re-adds a *different*, pre-existing tag. The tag being
+        added by the first worker must never be lost due to the second
+        worker's unrelated read-modify-write cycle.
+        """
+        artifact_dir = tmp_path / "artifact"
+        write_manifest(artifact_dir, Manifest(tags={"stable": "@stable01"}))
+
+        rounds = 50
+        barrier = threading.Barrier(2)
+        errors: list[BaseException] = []
+
+        def adder() -> None:
+            for round_num in range(rounds):
+                barrier.wait()
+                try:
+                    update_tag(artifact_dir, f"new-tag-{round_num}", f"@new{round_num:06d}")
+                except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                    errors.append(exc)
+
+        def remover() -> None:
+            for round_num in range(rounds):
+                barrier.wait()
+                try:
+                    remove_tag(artifact_dir, "stable")
+                    update_tag(artifact_dir, "stable", "@stable01")
+                except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=adder), threading.Thread(target=remover)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Unexpected errors during concurrent updates: {errors}"
+
+        loaded = read_manifest(artifact_dir)
+        assert loaded.tags.get("stable") == "@stable01"
+        missing = {f"new-tag-{i}" for i in range(rounds)} - set(loaded.tags.keys())
+        assert not missing, f"Lost tag updates under concurrency: {sorted(missing)}"
 
 
 class TestCorruptManifest:
