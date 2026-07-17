@@ -64,6 +64,22 @@ class MagpieSettings(BaseSettings):
     # Test endpoints (NEVER enable in production)
     enable_test_endpoints: bool = False  # MAGPIE_ENABLE_TEST_ENDPOINTS
 
+    # Admin bootstrap token delivery (see docs/installation.md "Admin Token Delivery")
+    # No default: an explicit sink choice is required (fail-closed). See
+    # magpie.auth.token_sink for the sinks themselves and their failure semantics.
+    admin_token_sink: Literal["file", "exec", "discard", "stdout"] | None = (
+        None  # MAGPIE_ADMIN_TOKEN_SINK
+    )
+    # Path for sink=file. Defaults to a sibling of database_path (typically /data)
+    # if unset; see derive_paths().
+    admin_token_sink_file_path: Path | None = None  # MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH
+    # Shell-style command line for sink=exec (parsed with shlex, never run through a
+    # shell). The token is piped to the command's stdin only -- never argv or env.
+    admin_token_sink_exec_command: str | None = None  # MAGPIE_ADMIN_TOKEN_SINK_EXEC_COMMAND
+    admin_token_sink_exec_timeout: float = Field(
+        default=30.0, gt=0.0
+    )  # MAGPIE_ADMIN_TOKEN_SINK_EXEC_TIMEOUT_SECONDS
+
     @field_validator("allowed_cidrs")
     @classmethod
     def validate_cidrs(cls, v: str) -> str:
@@ -94,9 +110,11 @@ class MagpieSettings(BaseSettings):
 
     @model_validator(mode="after")
     def derive_paths(self) -> Self:
-        """Derive temp_path from storage_path if not set."""
+        """Derive temp_path and admin_token_sink_file_path if not set."""
         if self.temp_path is None:
             self.temp_path = self.storage_path / ".tmp"
+        if self.admin_token_sink_file_path is None:
+            self.admin_token_sink_file_path = self.database_path.parent / "admin-token"
         return self
 
 
