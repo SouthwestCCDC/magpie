@@ -52,8 +52,9 @@ def _abort_on_sink_error(e: TokenSinkError) -> None:
     """
     if is_json_output():
         output_error(ErrorCode.IO_ERROR, str(e))  # writes to stderr and exits; never returns
-    click.echo(f"Error: {e}", err=True)
-    raise SystemExit(1)
+    else:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
 
 
 def _abort_on_persist_error(e: TokenError) -> None:
@@ -67,8 +68,9 @@ def _abort_on_persist_error(e: TokenError) -> None:
     """
     if is_json_output():
         output_error(ErrorCode.CONFLICT, str(e))  # writes to stderr and exits; never returns
-    click.echo(f"Error: {e}", err=True)
-    raise SystemExit(1)
+    else:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
 
 
 def _echo_delivery_status(sink: str | None, settings: MagpieSettings) -> None:
