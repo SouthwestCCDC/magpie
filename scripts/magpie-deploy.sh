@@ -295,8 +295,20 @@ is_valid_ip_or_cidr() {
 # independently of how the value is later consumed. See issue #448.
 is_valid_acme_server_url() {
     local value="$1"
-    local pattern='^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%!$&()*+,;=:@/-]*)?$'
-    [[ "$value" =~ $pattern ]]
+    local pattern='^https://[A-Za-z0-9.-]+(:([0-9]{1,5}))?(/[A-Za-z0-9._~%!$&()*+,;=:@/-]*)?$'
+    [[ "$value" =~ $pattern ]] || return 1
+
+    # The charset regex alone allows a syntactically-shaped but out-of-range
+    # port (e.g. ":99999", which is 1-5 digits but > 65535) -- that would
+    # pass validation and then produce a Caddyfile Caddy rejects at
+    # install/update time. `10#...` forces base-10 (see the CIDR octet
+    # comment above for why: a leading zero would otherwise be read as
+    # octal by bash arithmetic).
+    local port="${BASH_REMATCH[2]}"
+    if [[ -n "$port" ]]; then
+        (( 10#$port >= 1 && 10#$port <= 65535 )) || return 1
+    fi
+    return 0
 }
 
 # Validates a whitespace-separated list of IPv4/IPv6 addresses or CIDRs.
@@ -520,6 +532,12 @@ read_env_file() {
     local line key value
 
     while IFS= read -r line || [[ -n "$line" ]]; do
+        # Strip a trailing CR so a CRLF-terminated (e.g. Windows-edited)
+        # .env doesn't leave a stray \r embedded in the parsed value (e.g.
+        # TRUSTED_PROXIES=...\r), which downstream validators would then
+        # reject as a control character.
+        line="${line%$'\r'}"
+
         [[ -z "$line" ]] && continue
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
 
@@ -539,7 +557,10 @@ load_existing_config() {
         local -A env_vars=()
         read_env_file "${INSTALL_DIR}/etc/.env" env_vars
 
-        # Map env vars to script variables (only for MAGPIE_* prefixed vars)
+        # Map env vars to script variables. MAGPIE_* prefixed vars map to
+        # their unprefixed script variable name (DATA_DIR, HTTP_PORT,
+        # HTTPS_PORT, DOMAIN); the unprefixed persisted keys below
+        # (TLS_MODE, TRUSTED_PROXIES, BIND_IP, ACME_SERVER) map directly.
         DATA_DIR="${env_vars[MAGPIE_DATA_DIR]:-$DATA_DIR}"
         HTTP_PORT="${env_vars[MAGPIE_HTTP_PORT]:-$HTTP_PORT}"
         HTTPS_PORT="${env_vars[MAGPIE_HTTPS_PORT]:-$HTTPS_PORT}"

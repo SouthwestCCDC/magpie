@@ -33,6 +33,10 @@
 # 14. The "no source .env" test assertion actually detects a reintroduced
 #     source line (verified against the anchoring bug that made it
 #     vacuously pass regardless of whether .env was sourced).
+# 15. is_valid_acme_server_url() rejects an out-of-range port (e.g.
+#     :99999, which is 1-5 digits but > 65535).
+# 16. read_env_file() strips a trailing CR so a CRLF-terminated (e.g.
+#     Windows-edited) .env doesn't leave a stray \r embedded in values.
 
 set -uo pipefail
 
@@ -681,6 +685,72 @@ test_source_env_detection_is_not_vacuous() {
     log "  ✓ pattern correctly detects an indented, reintroduced source of etc/.env"
 }
 
+# Test 20: is_valid_acme_server_url() must reject an out-of-range port. The
+# charset regex alone allows 1-5 digits (e.g. ":99999"), which is
+# syntactically port-shaped but exceeds the valid 1-65535 range and would
+# produce a Caddyfile Caddy rejects.
+test_acme_server_rejects_out_of_range_port() {
+    log "Test 20: is_valid_acme_server_url rejects an out-of-range port"
+
+    if is_valid_acme_server_url "https://ca.example.com:99999/directory"; then
+        fail "is_valid_acme_server_url accepted an out-of-range port (:99999)"
+    fi
+    log "  ✓ port 99999 rejected"
+
+    if is_valid_acme_server_url "https://ca.example.com:65536/directory"; then
+        fail "is_valid_acme_server_url accepted a port one above the valid range (:65536)"
+    fi
+    log "  ✓ port 65536 (one above max) rejected"
+
+    if is_valid_acme_server_url "https://ca.example.com:0/directory"; then
+        fail "is_valid_acme_server_url accepted port 0"
+    fi
+    log "  ✓ port 0 rejected"
+
+    if ! is_valid_acme_server_url "https://ca.example.com:65535/directory"; then
+        fail "is_valid_acme_server_url rejected the maximum valid port (65535)"
+    fi
+    if ! is_valid_acme_server_url "https://ca.example.com:443/directory"; then
+        fail "is_valid_acme_server_url rejected a normal port (443)"
+    fi
+    if ! is_valid_acme_server_url "https://ca.example.com/directory"; then
+        fail "is_valid_acme_server_url rejected a URL with no port at all"
+    fi
+    log "  ✓ valid ports (443, 65535) and no-port URLs still accepted"
+}
+
+# Test 21: read_env_file() must strip a trailing CR so a CRLF-terminated
+# (e.g. Windows-edited) .env doesn't leave a stray \r embedded in parsed
+# values, which downstream validators would then reject as a control
+# character even though the value looks correct.
+test_read_env_file_strips_crlf() {
+    log "Test 21: read_env_file strips trailing CR from CRLF-terminated lines"
+
+    local crlf_env="${TEST_DIR}/crlf.env"
+    printf 'MAGPIE_DATA_DIR=/opt/magpie/data\r\nTRUSTED_PROXIES=10.0.0.0/8\r\nMAGPIE_DOMAIN=magpie.example.com\r\n' > "$crlf_env"
+
+    declare -A parsed=()
+    read_env_file "$crlf_env" parsed
+
+    if [[ "${parsed[TRUSTED_PROXIES]}" == *$'\r'* ]]; then
+        fail "read_env_file left a trailing CR in TRUSTED_PROXIES: $(printf '%q' "${parsed[TRUSTED_PROXIES]}")"
+    fi
+    if [[ "${parsed[TRUSTED_PROXIES]}" != "10.0.0.0/8" ]]; then
+        fail "read_env_file did not parse the CRLF-terminated value correctly: $(printf '%q' "${parsed[TRUSTED_PROXIES]}")"
+    fi
+    log "  ✓ CRLF-terminated value parsed without a stray trailing CR"
+
+    if ! is_valid_ip_or_cidr_list "${parsed[TRUSTED_PROXIES]}"; then
+        fail "the CR-stripped TRUSTED_PROXIES value unexpectedly still fails validation"
+    fi
+    log "  ✓ CR-stripped value passes downstream validation (previously would have failed on the stray control char)"
+
+    if [[ "${parsed[MAGPIE_DOMAIN]}" != "magpie.example.com" ]]; then
+        fail "read_env_file did not parse the last CRLF-terminated value correctly: $(printf '%q' "${parsed[MAGPIE_DOMAIN]}")"
+    fi
+    log "  ✓ last line of a CRLF file also parsed correctly (no CR left even without a trailing LF-only read)"
+}
+
 # Run all tests
 log "Running tests for issue #448"
 log ""
@@ -704,6 +774,8 @@ test_trusted_proxies_rejects_newline_between_valid_tokens
 test_trusted_proxies_allows_tab_separator
 test_domain_single_canonical_key
 test_source_env_detection_is_not_vacuous
+test_acme_server_rejects_out_of_range_port
+test_read_env_file_strips_crlf
 
 log ""
 log "All tests passed!"
