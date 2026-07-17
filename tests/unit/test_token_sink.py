@@ -152,6 +152,41 @@ class TestFileSink:
 
         assert observed_modes == [0o600]
 
+    def test_fchmod_failure_does_not_leak_file_descriptor(
+        self, tmp_path: Path, base_settings: MagpieSettings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If os.fchmod() fails after os.open(), the fd must still be closed.
+
+        Before os.fdopen() takes ownership of the fd, nothing else closes
+        it -- a failure in the fchmod-before-write window would otherwise
+        leak a raw file descriptor.
+        """
+        target = tmp_path / "admin-token"
+        settings = base_settings.model_copy(
+            update={"admin_token_sink": "file", "admin_token_sink_file_path": target}
+        )
+
+        real_open = os.open
+        opened_fds: list[int] = []
+
+        def spying_open(path: object, flags: int, mode: int = 0o777) -> int:
+            fd = real_open(path, flags, mode)  # type: ignore[arg-type]
+            opened_fds.append(fd)
+            return fd
+
+        def failing_fchmod(fd: int, mode: int) -> None:
+            raise OSError("simulated fchmod failure")
+
+        monkeypatch.setattr(os, "open", spying_open)
+        monkeypatch.setattr(os, "fchmod", failing_fchmod)
+
+        with pytest.raises(TokenSinkError):
+            deliver_admin_token(TOKEN, settings, action="init")
+
+        assert len(opened_fds) == 1
+        with pytest.raises(OSError):
+            os.fstat(opened_fds[0])
+
     def test_unwritable_path_raises_token_sink_error(
         self, tmp_path: Path, base_settings: MagpieSettings
     ) -> None:

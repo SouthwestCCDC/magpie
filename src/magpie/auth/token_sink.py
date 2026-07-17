@@ -118,10 +118,16 @@ def _deliver_file(token: str, settings: MagpieSettings) -> None:
         # alone. So fchmod the fd to 0600 BEFORE writing any token bytes,
         # rather than chmod-ing the path afterward: the token is never
         # written into a file with a wider-than-0600 mode, even briefly.
-        # os.fdopen takes ownership of fd and closes it (even on error) via
-        # the context manager.
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-        os.fchmod(fd, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except BaseException:
+            # fd isn't owned by anything yet (os.fdopen hasn't run) -- close
+            # it ourselves so a failure here can't leak a file descriptor.
+            os.close(fd)
+            raise
+        # os.fdopen takes ownership of fd from this point on and closes it
+        # (even on error) via the context manager.
         with os.fdopen(fd, "w") as f:
             f.write(token + "\n")
     except OSError as e:
