@@ -483,7 +483,7 @@ async def upload_artifact(
         # text is logged server-side only, not returned to the client, since it may
         # echo attacker-controlled payload fragments.
         handler.cleanup()
-        logger.warning("multipart parse error", error=str(e))
+        logger.warning("multipart_parse_error", error=str(e))
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Malformed multipart payload",
