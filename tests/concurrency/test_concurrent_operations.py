@@ -845,9 +845,10 @@ class TestAsyncClientConcurrency:
 
         Note: This fixture modifies global FastAPI app state by adding a
         dependency override for get_storage_service and get_magpie_settings.
-        The overrides are cleaned up after the test by removing only the keys
-        we added, preserving any other overrides that may exist (e.g., from
-        conftest.py auth overrides).
+        The prior values (if any) are saved before overriding and restored
+        on cleanup, matching the pattern used by override_auth_dependencies
+        in conftest.py. This avoids clobbering an override that another
+        fixture may have already installed for the same dependency.
         """
 
         def override_storage_service() -> StorageService:
@@ -858,22 +859,37 @@ class TestAsyncClientConcurrency:
 
         from magpie.server.deps import get_magpie_settings
 
+        # Store prior state to restore on cleanup, rather than assuming the
+        # keys were absent beforehand.
+        prior_storage_override = app.dependency_overrides.get(get_storage_service)
+        prior_settings_override = app.dependency_overrides.get(get_magpie_settings)
+
         app.dependency_overrides[get_storage_service] = override_storage_service
         app.dependency_overrides[get_magpie_settings] = override_settings
 
-        # Use ASGI transport for async testing
-        from httpx import ASGITransport
-
-        transport = ASGITransport(app=app)  # type: ignore[arg-type]
-        client = httpx.AsyncClient(transport=transport, base_url="http://test")
-
+        # Construction happens inside the try/finally too: if ASGITransport()
+        # or AsyncClient() itself raised, the overrides installed above would
+        # otherwise never be restored.
+        client: httpx.AsyncClient | None = None
         try:
+            # Use ASGI transport for async testing
+            from httpx import ASGITransport
+
+            transport = ASGITransport(app=app)  # type: ignore[arg-type]
+            client = httpx.AsyncClient(transport=transport, base_url="http://test")
             yield client
         finally:
-            await client.aclose()
-            # Only remove the overrides we added, not all overrides
-            app.dependency_overrides.pop(get_storage_service, None)
-            app.dependency_overrides.pop(get_magpie_settings, None)
+            if client is not None:
+                await client.aclose()
+            # Restore prior overrides instead of unconditionally removing them.
+            if prior_storage_override is None:
+                app.dependency_overrides.pop(get_storage_service, None)
+            else:
+                app.dependency_overrides[get_storage_service] = prior_storage_override
+            if prior_settings_override is None:
+                app.dependency_overrides.pop(get_magpie_settings, None)
+            else:
+                app.dependency_overrides[get_magpie_settings] = prior_settings_override
 
     async def test_concurrent_http_uploads(
         self, http_client: httpx.AsyncClient, test_storage_service: StorageService

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from pydantic import BaseModel
 
@@ -82,8 +86,107 @@ def write_manifest(artifact_dir: Path, manifest: Manifest) -> None:
         raise
 
 
+_LOCK_ACQUIRE_MAX_ATTEMPTS = 5
+
+
+@contextmanager
+def artifact_lock(artifact_dir: Path) -> Iterator[None]:
+    """Acquire an exclusive advisory lock serializing manifest mutations.
+
+    Uses POSIX ``flock`` on the artifact directory itself (rather than on a
+    separate lock file) so that manifest read-modify-write cycles are
+    serialized across threads and processes without leaving behind any extra
+    file. That matters because GC's empty-directory cleanup (see
+    ``storage/cleanup.py``) treats an artifact directory as removable once it
+    has no blobs, metadata, or manifest left; a stray lock file would defeat
+    that check and leak empty directories.
+
+    This lock also guards ``cleanup_artifact_directories()`` in
+    ``storage/cleanup.py``: GC's "is this artifact deletable" check and the
+    resulting manifest unlink / directory rmdir must happen under the same
+    lock ``update_tag``/``remove_tag`` use, or GC can act on a stale read and
+    delete a manifest (and the whole artifact directory) that a concurrent
+    tag mutation just wrote to.
+
+    ``mkdir()`` and ``os.open()`` are two separate, non-atomic syscalls. If
+    two concurrent callers race on the same already-empty artifact (e.g. two
+    overlapping GC cleanup passes), the first can finish its whole locked
+    section -- including deleting the manifest and rmdir'ing the artifact
+    directory -- in the gap between the second caller's ``mkdir()`` and
+    ``os.open()``, so the second caller's ``open()`` would otherwise raise
+    ``FileNotFoundError`` on a directory that no longer exists. This function
+    retries the mkdir+open pair (bounded) on that specific error: a
+    concurrent deleter removing the directory in that window just triggers a
+    re-mkdir and re-open rather than an uncaught crash.
+
+    ``Path.mkdir(parents=True, exist_ok=True)`` has its own narrow internal
+    race under adversarial concurrent create/remove of the very same path:
+    if its ``os.mkdir()`` raises ``FileExistsError`` (someone else is
+    concurrently creating it too) and then, before its own follow-up
+    ``is_dir()`` check runs, a *third* caller removes the directory again,
+    it re-raises ``FileExistsError`` instead of tolerating it as
+    ``exist_ok=True`` promises. That's retried here too, for the same
+    reason and via the same bounded loop.
+
+    Args:
+        artifact_dir: Path to artifact directory to lock.
+
+    Yields:
+        None. The lock is held for the duration of the ``with`` block.
+
+    Raises:
+        OSError: If the directory keeps disappearing (or flapping between
+            existing and not) out from under us for
+            ``_LOCK_ACQUIRE_MAX_ATTEMPTS`` consecutive attempts. This would
+            indicate persistent, unusual concurrent create/delete pressure
+            rather than the ordinary multi-caller races this retry loop is
+            meant to absorb.
+    """
+    fd: int | None = None
+    last_error: OSError | None = None
+    for _ in range(_LOCK_ACQUIRE_MAX_ATTEMPTS):
+        try:
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+        except FileExistsError as e:
+            # Path.mkdir(exist_ok=True)'s own internal exist_ok recheck lost
+            # a race against a concurrent remover. Retry: our next mkdir()
+            # attempt will recreate it.
+            last_error = e
+            continue
+        try:
+            # O_CLOEXEC prevents the lock fd from leaking into child
+            # processes spawned while the lock is held (magpie-ctl shells
+            # out for gc/flush-tag operations); without it, a leaked fd in
+            # a long-lived child would keep the flock held indefinitely.
+            fd = os.open(artifact_dir, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+            break
+        except FileNotFoundError as e:
+            # A concurrent caller deleted artifact_dir between our mkdir()
+            # and open(). Retry: mkdir() will recreate it.
+            last_error = e
+            continue
+    else:
+        raise OSError(
+            f"Could not acquire artifact lock for {artifact_dir}: directory kept "
+            f"flapping after {_LOCK_ACQUIRE_MAX_ATTEMPTS} attempts"
+        ) from last_error
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def update_tag(artifact_dir: Path, tag_name: str, hash_ref: str) -> Manifest:
     """Update or create a tag in the manifest.
+
+    The read-modify-write cycle is serialized with an exclusive lock on the
+    artifact directory, so concurrent callers mutating different tags on the
+    same artifact cannot silently lose each other's updates.
 
     Args:
         artifact_dir: Path to artifact directory.
@@ -93,16 +196,20 @@ def update_tag(artifact_dir: Path, tag_name: str, hash_ref: str) -> Manifest:
     Returns:
         Updated Manifest instance.
     """
-    manifest = read_manifest(artifact_dir)
-    manifest.tags[tag_name] = hash_ref
-    write_manifest(artifact_dir, manifest)
-    return manifest
+    with artifact_lock(artifact_dir):
+        manifest = read_manifest(artifact_dir)
+        manifest.tags[tag_name] = hash_ref
+        write_manifest(artifact_dir, manifest)
+        return manifest
 
 
 def remove_tag(artifact_dir: Path, tag_name: str) -> Manifest:
     """Remove a tag from the manifest.
 
-    If the tag doesn't exist, this is a no-op (no error raised).
+    If the tag doesn't exist, this is a no-op (no error raised). The
+    read-modify-write cycle is serialized with an exclusive lock on the
+    artifact directory, so concurrent callers mutating different tags on the
+    same artifact cannot silently lose each other's updates.
 
     Args:
         artifact_dir: Path to artifact directory.
@@ -111,7 +218,8 @@ def remove_tag(artifact_dir: Path, tag_name: str) -> Manifest:
     Returns:
         Updated Manifest instance.
     """
-    manifest = read_manifest(artifact_dir)
-    manifest.tags.pop(tag_name, None)  # Remove if exists, no error if missing
-    write_manifest(artifact_dir, manifest)
-    return manifest
+    with artifact_lock(artifact_dir):
+        manifest = read_manifest(artifact_dir)
+        manifest.tags.pop(tag_name, None)  # Remove if exists, no error if missing
+        write_manifest(artifact_dir, manifest)
+        return manifest
