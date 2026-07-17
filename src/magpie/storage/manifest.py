@@ -86,6 +86,9 @@ def write_manifest(artifact_dir: Path, manifest: Manifest) -> None:
         raise
 
 
+_LOCK_ACQUIRE_MAX_ATTEMPTS = 5
+
+
 @contextmanager
 def artifact_lock(artifact_dir: Path) -> Iterator[None]:
     """Acquire an exclusive advisory lock serializing manifest mutations.
@@ -105,14 +108,48 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
     delete a manifest (and the whole artifact directory) that a concurrent
     tag mutation just wrote to.
 
+    ``mkdir()`` and ``os.open()`` are two separate, non-atomic syscalls. If
+    two concurrent callers race on the same already-empty artifact (e.g. two
+    overlapping GC cleanup passes), the first can finish its whole locked
+    section -- including deleting the manifest and rmdir'ing the artifact
+    directory -- in the gap between the second caller's ``mkdir()`` and
+    ``os.open()``, so the second caller's ``open()`` would otherwise raise
+    ``FileNotFoundError`` on a directory that no longer exists. This function
+    retries the mkdir+open pair (bounded) on that specific error: a
+    concurrent deleter removing the directory in that window just triggers a
+    re-mkdir and re-open rather than an uncaught crash.
+
     Args:
         artifact_dir: Path to artifact directory to lock.
 
     Yields:
         None. The lock is held for the duration of the ``with`` block.
+
+    Raises:
+        OSError: If the directory keeps disappearing out from under us for
+            ``_LOCK_ACQUIRE_MAX_ATTEMPTS`` consecutive attempts. This would
+            indicate persistent, unusual concurrent deletion pressure rather
+            than the ordinary two-caller race this retry loop is meant to
+            absorb.
     """
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    fd = os.open(artifact_dir, os.O_RDONLY)
+    fd: int | None = None
+    last_error: FileNotFoundError | None = None
+    for _ in range(_LOCK_ACQUIRE_MAX_ATTEMPTS):
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(artifact_dir, os.O_RDONLY)
+            break
+        except FileNotFoundError as e:
+            # A concurrent caller deleted artifact_dir between our mkdir()
+            # and open(). Retry: mkdir() will recreate it.
+            last_error = e
+            continue
+    else:
+        raise OSError(
+            f"Could not acquire artifact lock for {artifact_dir}: directory kept "
+            f"disappearing after {_LOCK_ACQUIRE_MAX_ATTEMPTS} attempts"
+        ) from last_error
+
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         try:

@@ -415,3 +415,131 @@ class TestConcurrentCleanupVsUpdateTag:
                 f"Round {round_num}: 'release' tag was lost to a concurrent GC cleanup, "
                 f"tags={manifest.tags}"
             )
+
+
+class TestConcurrentCleanupVsCleanup:
+    """Regression test for a crash found during re-review of the GC-cleanup
+    lock fix.
+
+    artifact_lock() used to do mkdir() then os.open() as two separate,
+    non-atomic syscalls. If two cleanup_artifact_directories() calls raced
+    on the same already-empty artifact (e.g. two overlapping GC runs), the
+    first to finish could delete the manifest and rmdir the artifact
+    directory in the gap between the second call's mkdir() and os.open(),
+    so the second call's open() would raise FileNotFoundError on a
+    directory that no longer existed -- uncaught, aborting the entire GC
+    run. artifact_lock() now retries the mkdir+open pair (bounded) on that
+    specific error, so a concurrent deleter removing the directory in that
+    window just triggers a re-mkdir and re-open instead of a crash.
+    """
+
+    def test_concurrent_cleanup_vs_cleanup_soak(self, storage_root: Path) -> None:
+        """Many barrier-synchronized cleanup-vs-cleanup rounds don't crash.
+
+        Each round starts from a fresh, fully-deletable artifact directory
+        (manifest with no tags, no blobs/metadata) and fires two
+        cleanup_artifact_directories() calls at the same instant via a
+        barrier. This exercises ordinary OS/GIL scheduling rather than
+        forcing a specific interleaving -- it's a general soak test for
+        concurrent cleanup correctness, not a targeted reproduction of the
+        exact mkdir/open race (see
+        test_concurrent_cleanup_vs_cleanup_deterministic for that).
+        """
+        rounds = 100
+        errors: list[BaseException] = []
+
+        for round_num in range(rounds):
+            artifact_dir = storage_root / f"cleanup-race-{round_num}" / "artifact"
+            write_manifest(artifact_dir, Manifest(tags={}))
+            assert artifact_dir.exists()
+
+            barrier = threading.Barrier(2)
+
+            def run_cleanup() -> None:
+                barrier.wait()
+                try:
+                    cleanup_artifact_directories(artifact_dir, storage_root, dry_run=False)
+                except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=run_cleanup) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            assert not errors, f"Round {round_num}: unexpected errors: {errors}"
+            # Both callers agree the artifact is fully deletable, so
+            # regardless of interleaving, it should end up gone.
+            assert not artifact_dir.exists(), (
+                f"Round {round_num}: artifact directory unexpectedly survived"
+            )
+
+    def test_concurrent_cleanup_vs_cleanup_deterministic(
+        self, storage_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Directly reproduces the mkdir()/open() TOCTOU race.
+
+        Natural OS/GIL scheduling rarely lands a thread switch in the
+        narrow window between artifact_lock()'s mkdir() and os.open() calls
+        (confirmed: hundreds of natural-scheduling rounds in
+        test_concurrent_cleanup_vs_cleanup_soak did not reproduce the bug
+        pre-fix). This test controls the interleaving directly instead:
+        thread A is parked right after its mkdir() (patched os.open blocks
+        before delegating to the real os.open), thread B is then allowed to
+        run cleanup_artifact_directories() to full completion -- deleting
+        the manifest and rmdir'ing the artifact directory -- and only then
+        is thread A released to call the real os.open() against a
+        directory that no longer exists at that instant.
+
+        Before the fix, thread A's os.open() raised FileNotFoundError,
+        uncaught. After the fix, artifact_lock() retries mkdir()+open() on
+        that error and thread A completes without raising.
+        """
+        import magpie.storage.manifest as manifest_module
+
+        artifact_dir = storage_root / "deterministic" / "artifact"
+        write_manifest(artifact_dir, Manifest(tags={}))
+
+        mkdir_done = threading.Event()
+        release_open = threading.Event()
+        real_open = manifest_module.os.open
+        intercepted = {"done": False}
+
+        def patched_open(path, flags, mode=0o777, *, dir_fd=None):
+            # Only intercept the first call against this specific artifact
+            # directory (thread A's); let every other os.open() call
+            # (thread B's, and anything unrelated) through untouched.
+            if not intercepted["done"] and Path(path) == artifact_dir:
+                intercepted["done"] = True
+                mkdir_done.set()
+                assert release_open.wait(timeout=5), "test setup: release_open never signaled"
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        monkeypatch.setattr(manifest_module.os, "open", patched_open)
+
+        errors: list[BaseException] = []
+
+        def thread_a() -> None:
+            try:
+                cleanup_artifact_directories(artifact_dir, storage_root, dry_run=False)
+            except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                errors.append(exc)
+
+        t_a = threading.Thread(target=thread_a)
+        t_a.start()
+
+        # Wait for thread A to be parked between mkdir() and open().
+        assert mkdir_done.wait(timeout=5), "thread A never reached os.open()"
+
+        # Thread B (this thread) runs a full, uninterrupted cleanup pass:
+        # deletes the manifest and rmdir's the artifact directory.
+        cleanup_artifact_directories(artifact_dir, storage_root, dry_run=False)
+        assert not artifact_dir.exists()
+
+        # Release thread A -- its os.open() now targets a directory that B
+        # just removed.
+        release_open.set()
+        t_a.join(timeout=5)
+
+        assert not errors, f"thread A raised despite the concurrent delete: {errors}"
