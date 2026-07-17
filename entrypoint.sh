@@ -86,6 +86,30 @@ fi
 # Export MAGPIE_DATABASE_PATH so magpie-ctl init uses the correct path
 export MAGPIE_DATABASE_PATH="$DB_PATH"
 
+# Ensure the database's parent directory is owned by the runtime UID/GID.
+# With the default MAGPIE_DATABASE_PATH (/data/magpie.db), that directory is /data
+# itself, which the storage-dir block above never touches (it only chowns
+# MAGPIE_STORAGE_PATH, e.g. /data/artifacts). Without this, a non-root RUN_UID
+# that doesn't already own /data can create /data/artifacts but can't create
+# the DB file, and first-boot init fails.
+DB_DIR="$(dirname "$DB_PATH")"
+if [ ! -d "$DB_DIR" ]; then
+    if ! mkdir -p "$DB_DIR"; then
+        echo "Error: Failed to create database directory $DB_DIR" >&2
+        exit 1
+    fi
+fi
+if [ "$RUN_UID" != "0" ]; then
+    DB_DIR_UID=$(stat -c %u "$DB_DIR" 2>/dev/null || echo "")
+    DB_DIR_GID=$(stat -c %g "$DB_DIR" 2>/dev/null || echo "")
+    if [ "$DB_DIR_UID" != "$RUN_UID" ] || [ "$DB_DIR_GID" != "$RUN_GID" ]; then
+        if ! chown "$RUN_UID:$RUN_GID" "$DB_DIR"; then
+            echo "Error: Failed to chown database directory $DB_DIR to $RUN_UID:$RUN_GID (the container may lack permission to change ownership on this mount, e.g. some bind mounts or non-root filesystems)" >&2
+            exit 1
+        fi
+    fi
+fi
+
 # Verify gosu is available before we need it (only required when not running as root)
 if [ "$RUN_UID" != "0" ] && ! command -v gosu >/dev/null 2>&1; then
     echo "Error: gosu is required to drop privileges but was not found in PATH" >&2
