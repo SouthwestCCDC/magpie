@@ -307,6 +307,35 @@ class TestRotateToken:
         # Verify original token still works (wasn't permanently deleted)
         assert token_service.validate_token(original_token) is not None
 
+    def test_rotate_token_rolls_back_on_save_failure(
+        self, token_service: TokenService, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """rotate_token should leave the original token intact if save fails mid-rotation.
+
+        This is a failure-injection test for the atomicity fix: it forces save_token()
+        to raise *after* delete_token() has already run within rotate_token()'s own
+        transaction, then verifies the original token was never actually lost. Unlike
+        test_rotate_token_is_atomic (which exercises raw sqlite3 rollback semantics
+        directly), this drives the failure through rotate_token() itself.
+        """
+        original_token = token_service.create_token("failure-injection", TokenScope.WRITE)
+
+        # Sanity check: original token works before rotation is attempted.
+        assert token_service.validate_token(original_token) is not None
+
+        def _failing_save_token(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("simulated failure during save_token")
+
+        # save_token is imported into the service module's namespace, so patch it there.
+        monkeypatch.setattr("magpie.auth.service.save_token", _failing_save_token)
+
+        with pytest.raises(RuntimeError, match="simulated failure during save_token"):
+            token_service.rotate_token("failure-injection")
+
+        # The delete (which ran before the injected failure) must have been rolled back
+        # by the transaction, so the original token should still exist and still work.
+        assert token_service.validate_token(original_token) is not None
+
     def test_rotate_token_preserves_scope_immutably(self, token_service: TokenService) -> None:
         """rotate_token should always preserve the original token scope.
 

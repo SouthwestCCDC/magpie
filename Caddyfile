@@ -158,17 +158,26 @@
 		@require_auth {
 			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 		}
-		# For allowed IPs: strip client headers and inject synthetic ones (forward_auth skipped)
-		request_header @allowed_ip -X-Magpie-User
-		request_header @allowed_ip -X-Magpie-Scope
-		request_header @allowed_ip X-Magpie-User "cidr-bypass"
-		request_header @allowed_ip X-Magpie-Scope "read"
-		# For non-allowed IPs: run forward_auth to get real headers
-		forward_auth @require_auth magpie:8000 {
-			uri /api/v1/auth/validate
-			copy_headers X-Magpie-User X-Magpie-Scope
+		# route{} forces literal top-to-bottom execution (Caddy's default
+		# directive order would otherwise run forward_auth's copy_headers
+		# before request_header, undoing the strip below). See #525.
+		route {
+			# Strip inbound client-supplied identity headers before any auth
+			# path processes the request. Prevents a client from forging
+			# X-Magpie-User/-Scope regardless of Caddy version or
+			# auth-response shape.
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			# For allowed IPs: inject synthetic headers (forward_auth skipped)
+			request_header @allowed_ip X-Magpie-User "cidr-bypass"
+			request_header @allowed_ip X-Magpie-Scope "read"
+			# For non-allowed IPs: run forward_auth to get real headers
+			forward_auth @require_auth magpie:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy magpie:8000
 		}
-		reverse_proxy magpie:8000
 	}
 
 	# Protected artifact downloads - requires valid Bearer token OR allowed IP
@@ -179,12 +188,20 @@
 		@require_auth {
 			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
 		}
-		# For non-allowed IPs: run forward_auth to validate token
-		# Note: Caddy's file_server serves static files directly; no headers are
-		# forwarded to the backend, so we don't inject synthetic headers for allowed IPs
-		forward_auth @require_auth magpie:8000 {
-			uri /api/v1/auth/validate
-			copy_headers X-Magpie-User X-Magpie-Scope
+		# route{} forces literal top-to-bottom execution so the strip below
+		# always runs before forward_auth's copy_headers (see #525).
+		route {
+			# Strip inbound client-supplied identity headers before
+			# forward_auth validates the request.
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			# For non-allowed IPs: run forward_auth to validate token
+			# Note: Caddy's file_server serves static files directly; no headers are
+			# forwarded to the backend, so we don't inject synthetic headers for allowed IPs
+			forward_auth @require_auth magpie:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
 		}
 		root * /data
 		# Security: Force download of artifact files to prevent XSS from user-uploaded HTML/JS
@@ -200,11 +217,17 @@
 
 	# Upload endpoint - requires write or admin scope
 	handle /api/v1/upload/* {
-		forward_auth magpie:8000 {
-			uri /api/v1/auth/validate
-			copy_headers X-Magpie-User X-Magpie-Scope
+		# route{} forces literal top-to-bottom execution so the strip below
+		# always runs before forward_auth's copy_headers (see #525).
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth magpie:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy magpie:8000
 		}
-		reverse_proxy magpie:8000
 	}
 
 	# Artifact metadata amendment - requires write or admin scope
@@ -215,11 +238,17 @@
 		path_regexp ^/api/v1/artifacts/.+
 	}
 	handle @artifacts_amend {
-		forward_auth magpie:8000 {
-			uri /api/v1/auth/validate
-			copy_headers X-Magpie-User X-Magpie-Scope
+		# route{} forces literal top-to-bottom execution so the strip below
+		# always runs before forward_auth's copy_headers (see #525).
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth magpie:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy magpie:8000
 		}
-		reverse_proxy magpie:8000
 	}
 
 	# Tag mutation endpoints - requires write or admin scope
@@ -232,47 +261,77 @@
 		path_regexp ^/api/v1/artifacts/.+/tags
 	}
 	handle @artifacts_tags {
-		forward_auth magpie:8000 {
-			uri /api/v1/auth/validate
-			copy_headers X-Magpie-User X-Magpie-Scope
+		# route{} forces literal top-to-bottom execution so the strip below
+		# always runs before forward_auth's copy_headers (see #525).
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth magpie:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy magpie:8000
 		}
-		reverse_proxy magpie:8000
 	}
 
 	# Flush tag endpoint - requires admin scope
 	handle /api/v1/tags/* {
-		forward_auth magpie:8000 {
-			uri /api/v1/auth/validate
-			copy_headers X-Magpie-User X-Magpie-Scope
+		# route{} forces literal top-to-bottom execution so the strip below
+		# always runs before forward_auth's copy_headers (see #525).
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth magpie:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy magpie:8000
 		}
-		reverse_proxy magpie:8000
 	}
 
 	# Token management endpoints - requires admin scope
 	handle /api/v1/tokens* {
-		forward_auth magpie:8000 {
-			uri /api/v1/auth/validate
-			copy_headers X-Magpie-User X-Magpie-Scope
+		# route{} forces literal top-to-bottom execution so the strip below
+		# always runs before forward_auth's copy_headers (see #525).
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth magpie:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy magpie:8000
 		}
-		reverse_proxy magpie:8000
 	}
 
 	# GC endpoint - requires admin scope
 	handle /api/v1/gc {
-		forward_auth magpie:8000 {
-			uri /api/v1/auth/validate
-			copy_headers X-Magpie-User X-Magpie-Scope
+		# route{} forces literal top-to-bottom execution so the strip below
+		# always runs before forward_auth's copy_headers (see #525).
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth magpie:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy magpie:8000
 		}
-		reverse_proxy magpie:8000
 	}
 
 	# Status endpoint - requires admin scope
 	handle /api/v1/status {
-		forward_auth magpie:8000 {
-			uri /api/v1/auth/validate
-			copy_headers X-Magpie-User X-Magpie-Scope
+		# route{} forces literal top-to-bottom execution so the strip below
+		# always runs before forward_auth's copy_headers (see #525).
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth magpie:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy magpie:8000
 		}
-		reverse_proxy magpie:8000
 	}
 
 	# =========================================================================
@@ -282,11 +341,17 @@
 	# is implemented in FastAPI route dependencies (require_admin_scope).
 	# Test endpoints also check MAGPIE_ENABLE_TEST_ENDPOINTS before running.
 	handle /api/v1/_test/* {
-		forward_auth magpie:8000 {
-			uri /api/v1/auth/validate
-			copy_headers X-Magpie-User X-Magpie-Scope
+		# route{} forces literal top-to-bottom execution so the strip below
+		# always runs before forward_auth's copy_headers (see #525).
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth magpie:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy magpie:8000
 		}
-		reverse_proxy magpie:8000
 	}
 
 	# =========================================================================

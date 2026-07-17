@@ -4,7 +4,97 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
+
+from magpie.auth.service import TokenService
+from magpie.server.app import app
+from magpie.server.deps import get_token_service
+
+
+class TestFlushEndpointAuth:
+    """Tests for flush endpoint authentication and authorization (#526).
+
+    Flush is the single most destructive operation in the system (removes a tag
+    from every artifact store-wide) and must validate a Bearer token directly via
+    require_admin_scope, matching GC and the token endpoints -- not merely trust
+    the X-Magpie-Scope header the way require_admin_scope_header does.
+    """
+
+    @pytest.fixture
+    def client(self, token_service: TokenService) -> TestClient:
+        """Test client with real Bearer-token auth (no auth dependency overrides).
+
+        Clears the autouse header-trust overrides so the endpoint's actual
+        dependency (require_admin_scope) is exercised end-to-end.
+        """
+        app.dependency_overrides.clear()
+
+        def override_token_service() -> TokenService:
+            return token_service
+
+        app.dependency_overrides[get_token_service] = override_token_service
+        yield TestClient(app, raise_server_exceptions=False)
+        app.dependency_overrides.clear()
+
+    def test_flush_rejects_header_only_admin_scope(self, client: TestClient) -> None:
+        """A forged/trusted X-Magpie-Scope: admin header alone must not authorize flush.
+
+        Regression test for #526: flush previously used require_admin_scope_header,
+        which authorized purely on this header. It must now require a valid Bearer
+        token like every other admin operation.
+        """
+        response = client.post(
+            "/api/v1/tags/some-tag/flush",
+            params={"confirm_walk_filesystem": True},
+            headers={"X-Magpie-Scope": "admin"},
+        )
+
+        assert response.status_code == 401
+
+    def test_flush_requires_authorization_header(self, client: TestClient) -> None:
+        """Flush without any Authorization header returns 401."""
+        response = client.post(
+            "/api/v1/tags/some-tag/flush",
+            params={"confirm_walk_filesystem": True},
+        )
+
+        assert response.status_code == 401
+
+    def test_flush_with_write_bearer_returns_403(
+        self, client: TestClient, write_token: str
+    ) -> None:
+        """Flush with a valid but non-admin Bearer token returns 403."""
+        response = client.post(
+            "/api/v1/tags/some-tag/flush",
+            params={"confirm_walk_filesystem": True},
+            headers={"Authorization": f"Bearer {write_token}"},
+        )
+
+        assert response.status_code == 403
+
+    def test_flush_with_valid_admin_bearer_succeeds(
+        self, client: TestClient, admin_token: str
+    ) -> None:
+        """Flush succeeds when a valid admin Bearer token is presented."""
+        mock_result = {
+            "tag_name": "some-tag",
+            "dry_run": False,
+            "count": 0,
+            "affected_artifacts": [],
+        }
+
+        with patch(
+            "magpie.server.routes.tags.run_ctl_command",
+            new=AsyncMock(return_value=mock_result),
+        ):
+            response = client.post(
+                "/api/v1/tags/some-tag/flush",
+                params={"confirm_walk_filesystem": True},
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+
+        assert response.status_code == 200
 
 
 class TestDryRunPreview:
