@@ -35,6 +35,16 @@ mkdir -p /run
 echo "$RUN_UID:$RUN_GID" > /run/magpie-user
 chmod 644 /run/magpie-user
 
+# Ensure the storage directory exists before lock file resolution.
+# On first boot, /data/artifacts won't exist yet, causing the lock directory
+# to fall back to /data.  Creating it early keeps the lock file co-located
+# with artifacts.
+STORAGE_DIR="${MAGPIE_STORAGE_PATH:-/data/artifacts}"
+if [ ! -d "$STORAGE_DIR" ]; then
+    mkdir -p "$STORAGE_DIR"
+    chown "$RUN_UID:$RUN_GID" "$STORAGE_DIR"
+fi
+
 # Auto-initialize database if it doesn't exist
 # This runs before starting the main service
 # Uses a lock file (held via flock on FD 200) to prevent race conditions when multiple

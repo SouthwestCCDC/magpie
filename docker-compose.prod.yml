@@ -132,9 +132,17 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    # Security hardening
+    # Security hardening: drop all capabilities, then add back only what the
+    # entrypoint needs to write to the /data bind mount (owned by a non-root
+    # host user), create directories, and drop privileges via gosu.  After
+    # gosu switches to the target UID/GID these capabilities have no effect.
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN         # Adjust directory ownership during init
+      - DAC_OVERRIDE  # Write to /data bind mount owned by non-root host user
+      - SETUID        # Required by gosu to switch UID
+      - SETGID        # Required by gosu to switch GID
     # Filesystem is read-only for security; writable paths:
     # - /data: bind mount for artifact storage and database
     # - /run: tmpfs for entrypoint runtime files (magpie-user UID/GID marker)
