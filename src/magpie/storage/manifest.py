@@ -137,7 +137,11 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
     for _ in range(_LOCK_ACQUIRE_MAX_ATTEMPTS):
         artifact_dir.mkdir(parents=True, exist_ok=True)
         try:
-            fd = os.open(artifact_dir, os.O_RDONLY)
+            # O_CLOEXEC prevents the lock fd from leaking into child
+            # processes spawned while the lock is held (magpie-ctl shells
+            # out for gc/flush-tag operations); without it, a leaked fd in
+            # a long-lived child would keep the flock held indefinitely.
+            fd = os.open(artifact_dir, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
             break
         except FileNotFoundError as e:
             # A concurrent caller deleted artifact_dir between our mkdir()

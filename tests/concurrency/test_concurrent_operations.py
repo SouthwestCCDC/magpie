@@ -867,16 +867,20 @@ class TestAsyncClientConcurrency:
         app.dependency_overrides[get_storage_service] = override_storage_service
         app.dependency_overrides[get_magpie_settings] = override_settings
 
-        # Use ASGI transport for async testing
-        from httpx import ASGITransport
-
-        transport = ASGITransport(app=app)  # type: ignore[arg-type]
-        client = httpx.AsyncClient(transport=transport, base_url="http://test")
-
+        # Construction happens inside the try/finally too: if ASGITransport()
+        # or AsyncClient() itself raised, the overrides installed above would
+        # otherwise never be restored.
+        client: httpx.AsyncClient | None = None
         try:
+            # Use ASGI transport for async testing
+            from httpx import ASGITransport
+
+            transport = ASGITransport(app=app)  # type: ignore[arg-type]
+            client = httpx.AsyncClient(transport=transport, base_url="http://test")
             yield client
         finally:
-            await client.aclose()
+            if client is not None:
+                await client.aclose()
             # Restore prior overrides instead of unconditionally removing them.
             if prior_storage_override is None:
                 app.dependency_overrides.pop(get_storage_service, None)

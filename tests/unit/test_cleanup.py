@@ -16,6 +16,25 @@ from magpie.storage.cleanup import (
 )
 from magpie.storage.manifest import Manifest, read_manifest, update_tag, write_manifest
 
+# Bounds for the concurrency tests below: a crashed/deadlocked worker thread
+# should surface as a test failure within a few seconds, not hang the suite.
+_BARRIER_TIMEOUT = 5.0
+_JOIN_TIMEOUT = 10.0
+
+
+def _join_and_assert_exited(threads: list[threading.Thread]) -> None:
+    """Join worker threads with a timeout and assert they actually exited.
+
+    A bare, timeout-less join() would hang the whole suite if a worker
+    deadlocks (e.g. inside artifact_lock). Joining with a timeout and then
+    asserting liveness turns that failure mode into a fast, clear assertion
+    instead.
+    """
+    for t in threads:
+        t.join(timeout=_JOIN_TIMEOUT)
+    for t in threads:
+        assert not t.is_alive(), f"{t.name} did not exit within {_JOIN_TIMEOUT}s (deadlock?)"
+
 
 @pytest.fixture
 def storage_root(tmp_path: Path) -> Path:
@@ -371,7 +390,7 @@ class TestConcurrentCleanupVsUpdateTag:
         concurrent write.
         """
         rounds = 30
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
 
         for round_num in range(rounds):
             artifact_dir = storage_root / f"race-{round_num}" / "artifact"
@@ -381,17 +400,17 @@ class TestConcurrentCleanupVsUpdateTag:
             barrier = threading.Barrier(2)
 
             def run_cleanup() -> None:
-                barrier.wait()
                 try:
+                    barrier.wait(timeout=_BARRIER_TIMEOUT)
                     cleanup_artifact_directories(artifact_dir, storage_root, dry_run=False)
-                except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
                     errors.append(exc)
 
             def run_update_tag() -> None:
-                barrier.wait()
                 try:
+                    barrier.wait(timeout=_BARRIER_TIMEOUT)
                     update_tag(artifact_dir, "release", "@newhash1")
-                except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
                     errors.append(exc)
 
             threads = [
@@ -400,8 +419,7 @@ class TestConcurrentCleanupVsUpdateTag:
             ]
             for t in threads:
                 t.start()
-            for t in threads:
-                t.join()
+            _join_and_assert_exited(threads)
 
             assert not errors, f"Round {round_num}: unexpected errors: {errors}"
 
@@ -446,7 +464,7 @@ class TestConcurrentCleanupVsCleanup:
         test_concurrent_cleanup_vs_cleanup_deterministic for that).
         """
         rounds = 100
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
 
         for round_num in range(rounds):
             artifact_dir = storage_root / f"cleanup-race-{round_num}" / "artifact"
@@ -456,17 +474,16 @@ class TestConcurrentCleanupVsCleanup:
             barrier = threading.Barrier(2)
 
             def run_cleanup() -> None:
-                barrier.wait()
                 try:
+                    barrier.wait(timeout=_BARRIER_TIMEOUT)
                     cleanup_artifact_directories(artifact_dir, storage_root, dry_run=False)
-                except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
                     errors.append(exc)
 
             threads = [threading.Thread(target=run_cleanup) for _ in range(2)]
             for t in threads:
                 t.start()
-            for t in threads:
-                t.join()
+            _join_and_assert_exited(threads)
 
             assert not errors, f"Round {round_num}: unexpected errors: {errors}"
             # Both callers agree the artifact is fully deletable, so
@@ -513,24 +530,26 @@ class TestConcurrentCleanupVsCleanup:
             if not intercepted["done"] and Path(path) == artifact_dir:
                 intercepted["done"] = True
                 mkdir_done.set()
-                assert release_open.wait(timeout=5), "test setup: release_open never signaled"
+                assert release_open.wait(timeout=_BARRIER_TIMEOUT), (
+                    "test setup: release_open never signaled"
+                )
             return real_open(path, flags, mode, dir_fd=dir_fd)
 
         monkeypatch.setattr(manifest_module.os, "open", patched_open)
 
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
 
         def thread_a() -> None:
             try:
                 cleanup_artifact_directories(artifact_dir, storage_root, dry_run=False)
-            except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+            except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
                 errors.append(exc)
 
         t_a = threading.Thread(target=thread_a)
         t_a.start()
 
         # Wait for thread A to be parked between mkdir() and open().
-        assert mkdir_done.wait(timeout=5), "thread A never reached os.open()"
+        assert mkdir_done.wait(timeout=_BARRIER_TIMEOUT), "thread A never reached os.open()"
 
         # Thread B (this thread) runs a full, uninterrupted cleanup pass:
         # deletes the manifest and rmdir's the artifact directory.
@@ -540,6 +559,6 @@ class TestConcurrentCleanupVsCleanup:
         # Release thread A -- its os.open() now targets a directory that B
         # just removed.
         release_open.set()
-        t_a.join(timeout=5)
+        _join_and_assert_exited([t_a])
 
         assert not errors, f"thread A raised despite the concurrent delete: {errors}"

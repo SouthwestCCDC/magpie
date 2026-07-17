@@ -18,6 +18,25 @@ from magpie.storage.manifest import (
 )
 from magpie.storage.paths import manifest_path
 
+# Bounds for the concurrency tests below: a crashed/deadlocked worker thread
+# should surface as a test failure within a few seconds, not hang the suite.
+_BARRIER_TIMEOUT = 5.0
+_JOIN_TIMEOUT = 10.0
+
+
+def _join_and_assert_exited(threads: list[threading.Thread]) -> None:
+    """Join worker threads with a timeout and assert they actually exited.
+
+    A bare, timeout-less join() would hang the whole suite if a worker
+    deadlocks (e.g. inside artifact_lock). Joining with a timeout and then
+    asserting liveness turns that failure mode into a fast, clear assertion
+    instead.
+    """
+    for t in threads:
+        t.join(timeout=_JOIN_TIMEOUT)
+    for t in threads:
+        assert not t.is_alive(), f"{t.name} did not exit within {_JOIN_TIMEOUT}s (deadlock?)"
+
 
 class TestManifestModel:
     """Tests for Manifest Pydantic model."""
@@ -216,25 +235,24 @@ class TestConcurrentManifestUpdates:
         artifact_dir.mkdir()
         rounds = 50
         barrier = threading.Barrier(2)
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
 
         def writer(worker_id: int) -> None:
             for round_num in range(rounds):
-                barrier.wait()
                 try:
+                    barrier.wait(timeout=_BARRIER_TIMEOUT)
                     update_tag(
                         artifact_dir,
                         f"worker{worker_id}-round{round_num}",
                         f"@{worker_id}{round_num:07d}",
                     )
-                except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
                     errors.append(exc)
 
         threads = [threading.Thread(target=writer, args=(worker_id,)) for worker_id in (0, 1)]
         for t in threads:
             t.start()
-        for t in threads:
-            t.join()
+        _join_and_assert_exited(threads)
 
         assert not errors, f"Unexpected errors during concurrent tag updates: {errors}"
 
@@ -261,30 +279,29 @@ class TestConcurrentManifestUpdates:
 
         rounds = 50
         barrier = threading.Barrier(2)
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
 
         def adder() -> None:
             for round_num in range(rounds):
-                barrier.wait()
                 try:
+                    barrier.wait(timeout=_BARRIER_TIMEOUT)
                     update_tag(artifact_dir, f"new-tag-{round_num}", f"@new{round_num:06d}")
-                except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
                     errors.append(exc)
 
         def remover() -> None:
             for round_num in range(rounds):
-                barrier.wait()
                 try:
+                    barrier.wait(timeout=_BARRIER_TIMEOUT)
                     remove_tag(artifact_dir, "stable")
                     update_tag(artifact_dir, "stable", "@stable01")
-                except BaseException as exc:  # noqa: BLE001 - surfaced via assertion below
+                except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
                     errors.append(exc)
 
         threads = [threading.Thread(target=adder), threading.Thread(target=remover)]
         for t in threads:
             t.start()
-        for t in threads:
-            t.join()
+        _join_and_assert_exited(threads)
 
         assert not errors, f"Unexpected errors during concurrent updates: {errors}"
 
