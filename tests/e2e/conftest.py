@@ -154,6 +154,11 @@ def admin_token(docker_services: dict[str, str]) -> str:
     Runs magpie-ctl init inside the container to get the admin token.
     Uses --reset-admin-token to ensure we always get a fresh token, even if
     one already exists (e.g., from cached Docker volumes or incomplete cleanup).
+
+    Overrides MAGPIE_ADMIN_TOKEN_SINK=stdout for just this `docker compose
+    exec` invocation so the token is scraped from stdout below, regardless of
+    docker-compose.yml's own (file-sink) default -- this is the harness
+    reading the token for its own use, not a production delivery path.
     """
     compose_cmd = [
         "docker",
@@ -167,7 +172,17 @@ def admin_token(docker_services: dict[str, str]) -> str:
     # Run magpie-ctl init with --reset-admin-token to ensure we always get a token
     # This handles cases where isolation fails (cached volumes, incomplete cleanup)
     result = subprocess.run(
-        [*compose_cmd, "exec", "-T", "magpie", "magpie-ctl", "init", "--reset-admin-token"],
+        [
+            *compose_cmd,
+            "exec",
+            "-T",
+            "-e",
+            "MAGPIE_ADMIN_TOKEN_SINK=stdout",
+            "magpie",
+            "magpie-ctl",
+            "init",
+            "--reset-admin-token",
+        ],
         cwd=PROJECT_ROOT,
         env=env,
         capture_output=True,
@@ -371,7 +386,8 @@ def cidr_admin_token(cidr_base_url: str) -> str:
     if not token:
         pytest.fail(
             "MAGPIE_CIDR_ADMIN_TOKEN environment variable not set. "
-            "Run 'docker compose exec magpie magpie-ctl init --reset-admin-token' "
+            "Run 'docker compose exec -e MAGPIE_ADMIN_TOKEN_SINK=stdout magpie "
+            "magpie-ctl init --reset-admin-token' "
             "and set the token in the test environment."
         )
 

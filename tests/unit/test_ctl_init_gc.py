@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -93,66 +94,93 @@ def create_artifact_with_blobs(
 
 
 class TestInitCommand:
-    """Tests for init command."""
+    """Tests for init command.
+
+    Most of these tests use sink=stdout explicitly to exercise the
+    delivery path while keeping the token visible in `result.output` for
+    assertions. Sink-specific behavior (file/exec/discard/fail-closed) is
+    covered in TestInitAdminTokenSink below and in test_token_sink.py.
+    """
 
     def test_init_creates_directories(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
         """Init creates storage and temp directories."""
+        settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
         with patch("magpie.ctl.commands.init.CTLContext") as mock_ctx_class:
             # Setup mock
             mock_ctx = mock_ctx_class.return_value
-            mock_ctx.settings = test_settings
+            mock_ctx.settings = settings
             mock_ctx.debug = False
 
-            with patch("magpie.ctl.get_settings", return_value=test_settings):
+            with patch("magpie.ctl.get_settings", return_value=settings):
                 result = cli_runner.invoke(cli, ["init"])
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        assert test_settings.storage_path.exists()
-        assert test_settings.temp_path.exists()
+        assert settings.storage_path.exists()
+        assert settings.temp_path.exists()
 
     def test_init_creates_database(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
         """Init creates SQLite database."""
-        with patch("magpie.ctl.get_settings", return_value=test_settings):
+        settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
+        with patch("magpie.ctl.get_settings", return_value=settings):
             result = cli_runner.invoke(cli, ["init"])
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        assert test_settings.database_path.exists()
+        assert settings.database_path.exists()
         assert "Database initialized" in result.output
 
     def test_init_creates_admin_token(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
-        """Init creates admin token on first run."""
-        with patch("magpie.ctl.get_settings", return_value=test_settings):
+        """Init creates admin token on first run and delivers it via sink=stdout."""
+        settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+        with patch("magpie.ctl.get_settings", return_value=settings):
             result = cli_runner.invoke(cli, ["init"])
 
         assert result.exit_code == 0, f"Output: {result.output}"
         assert "ADMIN TOKEN" in result.output
         assert "mgp_ADMIN_" in result.output
 
+    def test_init_without_sink_configured_fails_closed(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Init aborts (non-zero exit) when no sink is configured; nothing is printed."""
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["init"])
+
+        assert result.exit_code != 0, f"Output: {result.output}"
+        assert "MAGPIE_ADMIN_TOKEN_SINK is not set" in result.output
+        assert "mgp_ADMIN_" not in result.output
+
     def test_init_token_already_exists(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
-        """Init reports existing token when run twice."""
-        with patch("magpie.ctl.get_settings", return_value=test_settings):
+        """Init reports existing token when run twice; sink isn't needed on the second run."""
+        settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+        with patch("magpie.ctl.get_settings", return_value=settings):
             # First init creates token
             result1 = cli_runner.invoke(cli, ["init"])
             assert result1.exit_code == 0
 
-            # Second init should report token exists
+            # Second init should report token exists, even with no sink configured,
+            # since no new token is generated (first-boot-only).
+            no_sink_settings = test_settings.model_copy(
+                update={"database_path": settings.database_path}
+            )
+        with patch("magpie.ctl.get_settings", return_value=no_sink_settings):
             result2 = cli_runner.invoke(cli, ["init"])
-            assert result2.exit_code == 0
+            assert result2.exit_code == 0, f"Output: {result2.output}"
             assert "already exists" in result2.output
 
     def test_init_reset_admin_token_regenerates(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
-        """Init --reset-admin-token regenerates token."""
-        with patch("magpie.ctl.get_settings", return_value=test_settings):
+        """Init --reset-admin-token regenerates token and delivers it via the sink."""
+        settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+        with patch("magpie.ctl.get_settings", return_value=settings):
             # First init creates token
             result1 = cli_runner.invoke(cli, ["init"])
             assert result1.exit_code == 0
@@ -164,7 +192,7 @@ class TestInitCommand:
             # Reset token
             result2 = cli_runner.invoke(cli, ["init", "--reset-admin-token"])
             assert result2.exit_code == 0
-            assert "NEW ADMIN TOKEN" in result2.output
+            assert "ADMIN TOKEN" in result2.output
             assert "Revoked existing" in result2.output
 
             # Extract second token using regex
@@ -175,13 +203,32 @@ class TestInitCommand:
             # Tokens should be different
             assert first_token != second_token
 
+    def test_init_reset_admin_token_fails_closed_without_sink(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """Init --reset-admin-token aborts if no sink is configured for delivery."""
+        settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result1 = cli_runner.invoke(cli, ["init"])
+            assert result1.exit_code == 0
+
+        no_sink_settings = test_settings.model_copy(
+            update={"database_path": settings.database_path}
+        )
+        with patch("magpie.ctl.get_settings", return_value=no_sink_settings):
+            result2 = cli_runner.invoke(cli, ["init", "--reset-admin-token"])
+
+        assert result2.exit_code != 0, f"Output: {result2.output}"
+        assert "MAGPIE_ADMIN_TOKEN_SINK is not set" in result2.output
+
     def test_init_with_custom_admin_token(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
-        """Init accepts custom admin token."""
+        """Init accepts custom admin token and delivers it via sink=stdout."""
         custom_token = "mgp_ADMIN_my_custom_token_123"
+        settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
 
-        with patch("magpie.ctl.get_settings", return_value=test_settings):
+        with patch("magpie.ctl.get_settings", return_value=settings):
             result = cli_runner.invoke(cli, ["init", "--admin-token", custom_token])
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -191,7 +238,7 @@ class TestInitCommand:
         # Verify the token was stored correctly by trying to validate it
         from magpie.auth.service import TokenService
 
-        token_service = TokenService(test_settings)
+        token_service = TokenService(settings)
         token_info = token_service.validate_token(custom_token)
         assert token_info is not None
         assert token_info.name == "admin"
@@ -200,9 +247,11 @@ class TestInitCommand:
     def test_init_with_invalid_token_prefix(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
-        """Init rejects token without correct prefix."""
+        """Init rejects token without correct prefix (checked before sink delivery)."""
         invalid_token = "mgp_wrong_prefix_123"
 
+        # Deliberately no sink configured: format validation must fail before
+        # delivery is ever attempted.
         with patch("magpie.ctl.get_settings", return_value=test_settings):
             result = cli_runner.invoke(cli, ["init", "--admin-token", invalid_token])
 
@@ -224,10 +273,11 @@ class TestInitCommand:
     def test_init_reset_with_custom_token(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
-        """Init --reset-admin-token works with custom token."""
+        """Init --reset-admin-token works with custom token, delivered via sink."""
         custom_token = "mgp_ADMIN_my_new_token_456"
+        settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
 
-        with patch("magpie.ctl.get_settings", return_value=test_settings):
+        with patch("magpie.ctl.get_settings", return_value=settings):
             # First init with random token
             result1 = cli_runner.invoke(cli, ["init"])
             assert result1.exit_code == 0
@@ -237,14 +287,14 @@ class TestInitCommand:
                 cli, ["init", "--reset-admin-token", "--admin-token", custom_token]
             )
             assert result2.exit_code == 0
-            assert "NEW ADMIN TOKEN" in result2.output
+            assert "ADMIN TOKEN" in result2.output
             assert custom_token in result2.output
             assert "Revoked existing" in result2.output
 
         # Verify the custom token is now active
         from magpie.auth.service import TokenService
 
-        token_service = TokenService(test_settings)
+        token_service = TokenService(settings)
         token_info = token_service.validate_token(custom_token)
         assert token_info is not None
         assert token_info.name == "admin"
@@ -254,18 +304,287 @@ class TestInitCommand:
     ) -> None:
         """Init --admin-token succeeds but reports when admin token already exists."""
         custom_token = "mgp_ADMIN_custom_token_789"
+        settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
 
-        with patch("magpie.ctl.get_settings", return_value=test_settings):
+        with patch("magpie.ctl.get_settings", return_value=settings):
             # First init creates an admin token
             result1 = cli_runner.invoke(cli, ["init"])
             assert result1.exit_code == 0
 
-            # Second init with custom token should succeed but report existing admin token
+            # Second init with custom token should succeed but report existing admin token,
+            # even with no sink configured, since nothing new is generated or delivered.
+            no_sink_settings = test_settings.model_copy(
+                update={"database_path": settings.database_path}
+            )
+        with patch("magpie.ctl.get_settings", return_value=no_sink_settings):
             result2 = cli_runner.invoke(cli, ["init", "--admin-token", custom_token])
             assert result2.exit_code == 0, "init should succeed but report token exists"
             assert "already exists" in result2.output, "Should report token already exists"
             # Custom token should NOT be created or displayed
             assert custom_token not in result2.output, "Custom token should not be shown"
+
+
+class TestInitAdminTokenSink:
+    """Tests for MAGPIE_ADMIN_TOKEN_SINK delivery, fail-closed behavior, and discard."""
+
+    def test_file_sink_writes_0600_file(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings, tmp_path: Path
+    ) -> None:
+        """sink=file writes the token to a root-only file and doesn't print it."""
+        import os
+        import stat
+
+        token_file = tmp_path / "admin-token"
+        settings = test_settings.model_copy(
+            update={"admin_token_sink": "file", "admin_token_sink_file_path": token_file}
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result = cli_runner.invoke(cli, ["init"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "mgp_ADMIN_" not in result.output
+        assert token_file.exists()
+        token_value = token_file.read_text().strip()
+        assert token_value.startswith("mgp_ADMIN_")
+        mode = stat.S_IMODE(os.stat(token_file).st_mode)
+        assert mode == 0o600
+
+    def test_file_sink_delivery_failure_aborts_init(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings, tmp_path: Path
+    ) -> None:
+        """A delivery failure for sink=file aborts init with a non-zero exit."""
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory")
+        unwritable_target = blocker / "admin-token"
+        settings = test_settings.model_copy(
+            update={"admin_token_sink": "file", "admin_token_sink_file_path": unwritable_target}
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result = cli_runner.invoke(cli, ["init"])
+
+        assert result.exit_code != 0, f"Output: {result.output}"
+        assert "mgp_ADMIN_" not in result.output
+
+    def test_exec_sink_receives_token_on_stdin(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings, tmp_path: Path
+    ) -> None:
+        """sink=exec pipes the token to the configured command's stdin, not to stdout."""
+        out_file = tmp_path / "captured"
+        command = (
+            f"{sys.executable} -c \"import sys; open('{out_file}', 'w').write(sys.stdin.read())\""
+        )
+        settings = test_settings.model_copy(
+            update={"admin_token_sink": "exec", "admin_token_sink_exec_command": command}
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result = cli_runner.invoke(cli, ["init"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "mgp_ADMIN_" not in result.output
+        assert out_file.read_text().strip().startswith("mgp_ADMIN_")
+
+    def test_exec_sink_nonzero_exit_aborts_init(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A non-zero exit from the exec sink command aborts init with a non-zero exit."""
+        command = f'{sys.executable} -c "import sys; sys.exit(1)"'
+        settings = test_settings.model_copy(
+            update={"admin_token_sink": "exec", "admin_token_sink_exec_command": command}
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result = cli_runner.invoke(cli, ["init"])
+
+        assert result.exit_code != 0, f"Output: {result.output}"
+        assert "mgp_ADMIN_" not in result.output
+
+    def test_discard_sink_retains_no_usable_token_in_output(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """sink=discard succeeds without printing the token anywhere."""
+        settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result = cli_runner.invoke(cli, ["init"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "mgp_ADMIN_" not in result.output
+        assert "discard" in result.output.lower()
+        assert "magpie-ctl token create" in result.output
+
+    def test_discard_sink_token_recoverable_via_token_create(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """After discard, a new usable admin-scope token can be minted via token create."""
+        settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result = cli_runner.invoke(cli, ["init"])
+            assert result.exit_code == 0
+
+            create_result = cli_runner.invoke(
+                cli, ["token", "create", "--name", "ops-admin", "--scope", "admin"]
+            )
+
+        assert create_result.exit_code == 0, f"Output: {create_result.output}"
+        match = re.search(r"mgp_ADMIN_[A-Za-z0-9_-]+", create_result.output)
+        assert match is not None
+
+        from magpie.auth.service import TokenService
+
+        token_service = TokenService(settings)
+        token_info = token_service.validate_token(match.group(0))
+        assert token_info is not None
+        assert token_info.scope.value == "admin"
+
+    def test_first_boot_only_second_init_does_not_regenerate(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A second `init` call (DB already present) never generates/delivers a new token."""
+        settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result1 = cli_runner.invoke(cli, ["init"])
+            match1 = re.search(r"mgp_ADMIN_[A-Za-z0-9_-]+", result1.output)
+            assert match1 is not None
+            first_token = match1.group(0)
+
+            result2 = cli_runner.invoke(cli, ["init"])
+
+        assert result2.exit_code == 0
+        assert "already exists" in result2.output
+        assert first_token not in result2.output
+        assert "mgp_ADMIN_" not in result2.output
+
+    def test_first_boot_delivery_failure_persists_no_admin_token(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A failed first-boot delivery leaves no admin token row in the database."""
+        from magpie.auth.database import get_connection, list_tokens
+
+        command = f'{sys.executable} -c "import sys; sys.exit(1)"'
+        settings = test_settings.model_copy(
+            update={"admin_token_sink": "exec", "admin_token_sink_exec_command": command}
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result = cli_runner.invoke(cli, ["init"])
+
+        assert result.exit_code != 0
+
+        conn = get_connection(settings.database_path)
+        try:
+            tokens = list_tokens(conn)
+        finally:
+            conn.close()
+        assert not any(t.name == "admin" for t in tokens)
+
+    def test_sink_failure_json_output_emits_status_error_not_ok(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A sink-abort in --format json mode emits {"status": "error"}, never "ok".
+
+        A validation error or delivery failure reported as status "ok" could
+        make an automated caller (e.g. the server, parsing this output)
+        believe init succeeded.
+        """
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["--format", "json", "init"])
+
+        assert result.exit_code != 0
+        output = json.loads(result.stderr.strip())
+        assert output["status"] == "error"
+        assert "MAGPIE_ADMIN_TOKEN_SINK is not set" in output["error"]["message"]
+        # And nothing resembling a success payload landed on stdout.
+        assert result.stdout.strip() == ""
+
+    def test_discard_first_boot_persists_no_admin_token_row(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """sink=discard on first boot leaves no row for "admin" at all -- not just unusable."""
+        from magpie.auth.database import get_connection, list_tokens
+
+        settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result = cli_runner.invoke(cli, ["init"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+
+        conn = get_connection(settings.database_path)
+        try:
+            tokens = list_tokens(conn)
+        finally:
+            conn.close()
+        assert tokens == []
+
+    def test_reset_delivery_failure_leaves_prior_token_valid(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A failed --reset-admin-token delivery must not destroy the working admin token.
+
+        This is the critical lockout scenario: --reset-admin-token is the
+        documented recovery runbook step, typically run via `docker exec`
+        against an already-running server. If a sink failure revoked the
+        old token before confirming delivery of the new one, the operator
+        would be locked out entirely.
+        """
+        from magpie.auth.service import TokenService
+
+        stdout_settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+        with patch("magpie.ctl.get_settings", return_value=stdout_settings):
+            result1 = cli_runner.invoke(cli, ["init"])
+        match1 = re.search(r"mgp_ADMIN_[A-Za-z0-9_-]+", result1.output)
+        assert match1 is not None
+        original_token = match1.group(0)
+
+        failing_command = f'{sys.executable} -c "import sys; sys.exit(1)"'
+        failing_settings = test_settings.model_copy(
+            update={
+                "admin_token_sink": "exec",
+                "admin_token_sink_exec_command": failing_command,
+            }
+        )
+        with patch("magpie.ctl.get_settings", return_value=failing_settings):
+            result2 = cli_runner.invoke(cli, ["init", "--reset-admin-token"])
+
+        assert result2.exit_code != 0, f"Output: {result2.output}"
+
+        token_service = TokenService(test_settings)
+        assert token_service.validate_token(original_token) is not None
+
+    def test_reset_discard_revokes_old_but_persists_no_new_token(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """--reset-admin-token with sink=discard revokes the old token but persists nothing new."""
+        from magpie.auth.database import get_connection, list_tokens
+        from magpie.auth.service import TokenService
+
+        stdout_settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+        with patch("magpie.ctl.get_settings", return_value=stdout_settings):
+            result1 = cli_runner.invoke(cli, ["init"])
+        match1 = re.search(r"mgp_ADMIN_[A-Za-z0-9_-]+", result1.output)
+        assert match1 is not None
+        original_token = match1.group(0)
+
+        discard_settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
+        with patch("magpie.ctl.get_settings", return_value=discard_settings):
+            result2 = cli_runner.invoke(cli, ["init", "--reset-admin-token"])
+
+        assert result2.exit_code == 0, f"Output: {result2.output}"
+
+        token_service = TokenService(test_settings)
+        assert token_service.validate_token(original_token) is None
+
+        conn = get_connection(test_settings.database_path)
+        try:
+            tokens = list_tokens(conn)
+        finally:
+            conn.close()
+        assert not any(t.name == "admin" for t in tokens)
 
 
 class TestInitJsonOutput:
@@ -274,25 +593,40 @@ class TestInitJsonOutput:
     def test_init_with_admin_token_json_output(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
-        """Init --admin-token with --format json returns valid JSON with token."""
+        """Init --admin-token with --format json and sink=stdout includes the token."""
         custom_token = "mgp_ADMIN_json_test_token_xyz_abcdefgh"
+        settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
 
-        with patch("magpie.ctl.get_settings", return_value=test_settings):
+        with patch("magpie.ctl.get_settings", return_value=settings):
             result = cli_runner.invoke(
                 cli, ["--format", "json", "init", "--admin-token", custom_token]
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        output = json.loads(result.output.strip())
+        output = json.loads(result.stdout.strip())
         # JSON output wraps in {"status": "ok", "data": {...}}
         assert output["status"] == "ok"
         data = output["data"]
-        # admin_token should be a string when first created
-        assert isinstance(data["admin_token"], str), "admin_token should be string on first init"
         assert data["admin_token"] == custom_token
+        assert data["admin_token_sink"] == "stdout"
         assert "storage_path" in data
         assert "database_path" in data
         assert data["token_already_existed"] is False
+
+    def test_init_json_output_non_stdout_sink_omits_token_value(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """JSON output never includes the token value for non-stdout sinks (it's still stdout)."""
+        settings = test_settings.model_copy(update={"admin_token_sink": "discard"})
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            result = cli_runner.invoke(cli, ["--format", "json", "init"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        output = json.loads(result.stdout.strip())
+        data = output["data"]
+        assert data["admin_token"] is None
+        assert data["admin_token_sink"] == "discard"
 
     def test_init_with_invalid_token_json_output(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
@@ -306,19 +640,19 @@ class TestInitJsonOutput:
             )
 
         assert result.exit_code == 1, f"Output: {result.output}"
-        output = json.loads(result.output.strip())
-        # Error output uses {"status": "ok", "data": {"error": ...}} structure
-        data = output.get("data", output)
-        assert "error" in data
-        assert "mgp_ADMIN_" in data["error"]
+        # output_error() writes {"status": "error", "error": {...}} to stderr.
+        output = json.loads(result.stderr.strip())
+        assert output["status"] == "error"
+        assert "mgp_ADMIN_" in output["error"]["message"]
 
     def test_init_reset_with_custom_token_json_output(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
         """Init --reset-admin-token --admin-token with --format json returns valid JSON."""
         custom_token = "mgp_ADMIN_reset_json_test_456_abcdefgh"
+        settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
 
-        with patch("magpie.ctl.get_settings", return_value=test_settings):
+        with patch("magpie.ctl.get_settings", return_value=settings):
             # First init creates a token
             result1 = cli_runner.invoke(cli, ["init"])
             assert result1.exit_code == 0
@@ -330,7 +664,7 @@ class TestInitJsonOutput:
             )
 
         assert result2.exit_code == 0, f"Output: {result2.output}"
-        output = json.loads(result2.output.strip())
+        output = json.loads(result2.stdout.strip())
         # JSON output wraps in {"status": "ok", "data": {...}}
         assert output["status"] == "ok"
         data = output["data"]
@@ -349,11 +683,10 @@ class TestInitJsonOutput:
             )
 
         assert result.exit_code == 1, f"Output: {result.output}"
-        output = json.loads(result.output.strip())
-        # Error output uses {"status": "ok", "data": {"error": ...}} structure
-        data = output.get("data", output)
-        assert "error" in data
-        assert "too short" in data["error"]
+        # output_error() writes {"status": "error", "error": {...}} to stderr.
+        output = json.loads(result.stderr.strip())
+        assert output["status"] == "error"
+        assert "too short" in output["error"]["message"]
 
 
 class TestGCCommand:
@@ -1011,7 +1344,7 @@ class TestGCJsonOutput:
             result = cli_runner.invoke(cli, ["gc", "--json-output"])
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        output = json.loads(result.output.strip())
+        output = json.loads(result.stdout.strip())
         assert "dry_run" in output
         assert "blobs_deleted" in output
         assert "space_reclaimed_bytes" in output
@@ -1035,7 +1368,7 @@ class TestGCJsonOutput:
             result = cli_runner.invoke(cli, ["gc", "--json-output", "--dry-run"])
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        output = json.loads(result.output.strip())
+        output = json.loads(result.stdout.strip())
         assert output["dry_run"] is True
         assert output["blobs_deleted"] == 1
 
@@ -1056,7 +1389,7 @@ class TestGCJsonOutput:
             result = cli_runner.invoke(cli, ["gc", "--json-output"])
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        output = json.loads(result.output.strip())
+        output = json.loads(result.stdout.strip())
         assert output["dry_run"] is False
         assert output["blobs_deleted"] == 1
         assert output["space_reclaimed_bytes"] > 0
@@ -1070,7 +1403,7 @@ class TestGCJsonOutput:
             result = cli_runner.invoke(cli, ["gc", "--json-output"])
 
         assert result.exit_code == 1
-        output = json.loads(result.output.strip())
+        output = json.loads(result.stdout.strip())
         assert "error" in output
 
     def test_gc_json_output_no_human_readable_text(
@@ -1135,7 +1468,7 @@ class TestGCJsonOutput:
         assert result.exit_code == 1, f"Output: {result.output}"
 
         # Output should be valid JSON with error message
-        output = json.loads(result.output.strip())
+        output = json.loads(result.stdout.strip())
         assert "error" in output
         assert error_message in output["error"]
 
@@ -1199,7 +1532,7 @@ class TestFlushTagCommand:
             result = cli_runner.invoke(cli, ["flush-tag", "release", "--json-output"])
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        output = json.loads(result.output.strip())
+        output = json.loads(result.stdout.strip())
         assert output["tag_name"] == "release"
         assert output["dry_run"] is False
         assert output["count"] == 1
@@ -1222,7 +1555,7 @@ class TestFlushTagCommand:
             result = cli_runner.invoke(cli, ["flush-tag", "release", "--json-output", "--dry-run"])
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        output = json.loads(result.output.strip())
+        output = json.loads(result.stdout.strip())
         assert output["tag_name"] == "release"
         assert output["dry_run"] is True
         assert output["count"] == 1
@@ -1266,5 +1599,5 @@ class TestFlushTagCommand:
             result = cli_runner.invoke(cli, ["flush-tag", "release", "--json-output"])
 
         assert result.exit_code == 1
-        output = json.loads(result.output.strip())
+        output = json.loads(result.stdout.strip())
         assert "error" in output

@@ -77,6 +77,10 @@ def ctl_runner(tmp_path: Path) -> Generator[tuple[CliRunner, Path], None, None]:
         env_overrides={
             "MAGPIE_STORAGE_PATH": str(tmp_path),
             "MAGPIE_DATABASE_PATH": str(tmp_path / "magpie.db"),
+            # sink=stdout keeps the admin token visible in `result.output` for
+            # these tests, matching pre-#387 behavior. Fail-closed / other sink
+            # behavior is covered separately in TestInitAdminTokenSink below.
+            "MAGPIE_ADMIN_TOKEN_SINK": "stdout",
         }
     )
 
@@ -162,7 +166,7 @@ class TestInit:
         result2 = runner.invoke(ctl_cli, ["init", "--reset-admin-token"])
         assert result2.exit_code == 0
         assert "Revoked existing admin token" in result2.output
-        assert "NEW ADMIN TOKEN" in result2.output
+        assert "ADMIN TOKEN" in result2.output
 
         # Extract new token using regex
         match2 = re.search(r"mgp_ADMIN_[A-Za-z0-9_-]+", result2.output)
@@ -218,7 +222,9 @@ class TestInit:
         result = runner.invoke(ctl_cli, ["--format", "json", "init"])
 
         assert result.exit_code == 0
-        response = json.loads(result.output)
+        # Use .stdout (not the mixed .output) since sink=stdout also emits a
+        # warning on stderr in JSON mode; see token_sink._deliver_stdout.
+        response = json.loads(result.stdout)
 
         # Validate top-level structure
         assert isinstance(response, dict), "Response must be a dict"
@@ -234,7 +240,7 @@ class TestInit:
         assert isinstance(data, dict), "data must be a dict"
 
         # Required fields
-        required_keys = {"admin_token", "storage_path", "database_path"}
+        required_keys = {"admin_token", "admin_token_sink", "storage_path", "database_path"}
         assert required_keys.issubset(data.keys()), (
             f"data must contain required keys: {required_keys}"
         )
@@ -245,9 +251,13 @@ class TestInit:
             f"data contains unexpected keys: {set(data.keys()) - allowed_keys}"
         )
 
-        # Validate required field types
+        # Validate required field types. admin_token is only included in the
+        # JSON payload when sink=stdout was explicitly chosen (as it is by
+        # the ctl_runner fixture here) -- for other sinks it's always None,
+        # even in JSON output, since that's still stdout.
         assert isinstance(data["admin_token"], str), "admin_token must be string"
         assert data["admin_token"].startswith("mgp_"), "admin_token must have mgp_ prefix"
+        assert data["admin_token_sink"] == "stdout"
         assert isinstance(data["storage_path"], str), "storage_path must be string"
         assert isinstance(data["database_path"], str), "database_path must be string"
 
@@ -329,6 +339,102 @@ class TestInit:
             assert len(admin_tokens) == 1, (
                 "Concurrent token creation should result in exactly one admin token (race condition safety)"
             )
+        finally:
+            conn.close()
+
+
+class TestInitAdminTokenSink:
+    """Integration tests for MAGPIE_ADMIN_TOKEN_SINK delivery against real filesystem I/O.
+
+    Uses its own EnvCliRunner (rather than the ctl_runner fixture, which sets
+    sink=stdout for the rest of TestInit) so each test controls the sink
+    explicitly.
+    """
+
+    def test_no_sink_configured_fails_closed(self, tmp_path: Path) -> None:
+        """Init aborts with a non-zero exit and no token in output when no sink is set."""
+        get_settings.cache_clear()
+        runner = EnvCliRunner(
+            env_overrides={
+                "MAGPIE_STORAGE_PATH": str(tmp_path),
+                "MAGPIE_DATABASE_PATH": str(tmp_path / "magpie.db"),
+            }
+        )
+        try:
+            result = runner.invoke(ctl_cli, ["init"])
+        finally:
+            get_settings.cache_clear()
+
+        assert result.exit_code != 0, f"Output: {result.output}"
+        assert "MAGPIE_ADMIN_TOKEN_SINK is not set" in result.output
+        assert "mgp_ADMIN_" not in result.output
+        # Storage and database are still created even though delivery failed --
+        # only the admin token itself was not generated/delivered.
+        assert (tmp_path / "magpie.db").exists()
+
+    def test_file_sink_writes_token_to_real_file(self, tmp_path: Path) -> None:
+        """Init with sink=file writes a 0600 file at the configured path."""
+        import os
+        import stat
+
+        token_file = tmp_path / "admin-token"
+        get_settings.cache_clear()
+        runner = EnvCliRunner(
+            env_overrides={
+                "MAGPIE_STORAGE_PATH": str(tmp_path),
+                "MAGPIE_DATABASE_PATH": str(tmp_path / "magpie.db"),
+                "MAGPIE_ADMIN_TOKEN_SINK": "file",
+                "MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH": str(token_file),
+            }
+        )
+        try:
+            result = runner.invoke(ctl_cli, ["init"])
+        finally:
+            get_settings.cache_clear()
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert "mgp_ADMIN_" not in result.output
+        assert token_file.exists()
+        token_value = token_file.read_text().strip()
+        assert token_value.startswith("mgp_ADMIN_")
+        mode = stat.S_IMODE(os.stat(token_file).st_mode)
+        assert mode == 0o600
+
+    def test_discard_sink_then_mint_via_token_create(self, tmp_path: Path) -> None:
+        """Init with sink=discard prints no token; a usable one can be minted later."""
+        get_settings.cache_clear()
+        runner = EnvCliRunner(
+            env_overrides={
+                "MAGPIE_STORAGE_PATH": str(tmp_path),
+                "MAGPIE_DATABASE_PATH": str(tmp_path / "magpie.db"),
+                "MAGPIE_ADMIN_TOKEN_SINK": "discard",
+            }
+        )
+        try:
+            init_result = runner.invoke(ctl_cli, ["init"])
+            assert init_result.exit_code == 0, f"Output: {init_result.output}"
+            assert "mgp_ADMIN_" not in init_result.output
+
+            create_result = runner.invoke(
+                ctl_cli, ["token", "create", "--name", "ops-admin", "--scope", "admin"]
+            )
+        finally:
+            get_settings.cache_clear()
+
+        assert create_result.exit_code == 0, f"Output: {create_result.output}"
+        match = re.search(r"mgp_ADMIN_[A-Za-z0-9_-]+", create_result.output)
+        assert match is not None
+
+        conn = get_connection(tmp_path / "magpie.db")
+        try:
+            tokens = list_tokens(conn)
+            admin_scope_tokens = [t for t in tokens if t.scope == TokenScope.ADMIN]
+            # sink=discard retains NO usable admin token: the first-boot
+            # "admin" token is generated, delivery (discard) succeeds
+            # trivially, and it is never persisted at all -- so only the
+            # newly minted "ops-admin" token should exist.
+            assert len(admin_scope_tokens) == 1
+            assert {t.name for t in admin_scope_tokens} == {"ops-admin"}
         finally:
             conn.close()
 
