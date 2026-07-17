@@ -61,28 +61,56 @@ def flush_tag(
         action = "Would flush" if dry_run else "Flushing"
         click.echo(f"{action} tag '{tag_name}' globally...", err=True)
 
-    # Use StorageService for the actual flush operation
     storage_service = StorageService(settings)
-    try:
-        result = storage_service.flush_tag(tag_name, dry_run=dry_run)
-    except ValidationError as e:
-        if json_output:
+
+    if json_output:
+        # Suppress all structlog output when outputting JSON to keep stdout clean.
+        # Without this, StorageService.flush_tag()'s info-level log events land on
+        # stdout alongside the JSON payload, breaking the server's
+        # run_ctl_command() json.loads() parse of the subprocess output. See gc.py
+        # for the same pattern (this command never got the equivalent fix).
+        from typing import NoReturn
+
+        import structlog
+
+        def drop_all_logs(logger: object, method_name: str, event_dict: dict) -> NoReturn:
+            raise structlog.DropEvent
+
+        structlog.configure(
+            processors=[drop_all_logs],
+            cache_logger_on_first_use=False,
+        )
+
+        try:
+            result = storage_service.flush_tag(tag_name, dry_run=dry_run)
+            output = {
+                "tag_name": result.tag_name,
+                "dry_run": dry_run,
+                "count": result.count,
+                "affected_artifacts": result.affected_artifacts,
+            }
+            click.echo(json.dumps(output))
+        except Exception as e:
+            # Intentionally broad exception handler for subprocess integration:
+            # when called with --json-output by the server's flush-tag endpoint, we
+            # must always output valid JSON so the server can parse the error.
+            # Without this, an exception from anywhere in the (destructive) removal
+            # phase -- not just tag-name validation -- would cause Click to print an
+            # unstructured traceback the server can't parse, and could leave a
+            # partial flush with no JSON signal back to the caller. Mirrors gc.py's
+            # handling of the same subprocess-integration constraint (#209).
             error_data = {"error": str(e)}
             click.echo(json.dumps(error_data))
             raise SystemExit(1)
-        raise click.ClickException(str(e))
-
-    if json_output:
-        output = {
-            "tag_name": result.tag_name,
-            "dry_run": dry_run,
-            "count": result.count,
-            "affected_artifacts": result.affected_artifacts,
-        }
-        click.echo(json.dumps(output))
         return
 
-    # Human-readable output
+    # Human-readable / interactive path: keep validation errors as a clean
+    # ClickException rather than a raw traceback.
+    try:
+        result = storage_service.flush_tag(tag_name, dry_run=dry_run)
+    except ValidationError as e:
+        raise click.ClickException(str(e))
+
     if dry_run:
         click.echo(f"Would remove tag '{tag_name}' from {result.count} artifact(s)")
     else:

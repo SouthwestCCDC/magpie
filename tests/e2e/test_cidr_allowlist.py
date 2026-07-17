@@ -624,6 +624,97 @@ class TestCIDRAllowListTokenInteraction:
 
 @pytest.mark.e2e
 @pytest.mark.slow
+class TestCIDRAllowListForgedHeaders:
+    """Regression guard for #525 on the CIDR-bypass path.
+
+    Even from an IP inside MAGPIE_ALLOWED_CIDRS, a client-forged
+    X-Magpie-User/X-Magpie-Scope header must never be trusted. The
+    @artifacts_read route{} block strips inbound identity headers before
+    deciding whether to inject the synthetic cidr-bypass/read identity or
+    run forward_auth; every other protected route strips them the same way
+    regardless of source IP, since write/admin operations are never
+    CIDR-exempt.
+    """
+
+    def test_forged_admin_scope_on_allowed_read_stays_read_only(
+        self,
+        cidr_http_client: httpx.Client,
+        cidr_authenticated_client: httpx.Client,
+        test_artifact_content: bytes,
+    ) -> None:
+        """A forged X-Magpie-Scope: admin header on the CIDR-bypass read path
+        must not cause any different (elevated) behavior than the synthetic
+        read identity Caddy actually injects."""
+        upload_response = cidr_authenticated_client.post(
+            "/api/v1/upload/cidr-test/forged-header-read",
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+        )
+        assert upload_response.status_code in (200, 201)
+
+        response = cidr_http_client.get(
+            "/api/v1/artifacts?recursive=true",
+            headers={"X-Magpie-Scope": "admin", "X-Magpie-User": "attacker"},
+        )
+        # This route only ever requires read scope, so the request succeeds
+        # regardless -- the point is that the forged "admin" scope is inert:
+        # it neither breaks the read (which the synthetic read identity
+        # grants anyway) nor is it trusted for anything more privileged.
+        assert response.status_code == 200
+
+    def test_forged_headers_cannot_bypass_write_auth_from_allowed_ip(
+        self,
+        cidr_http_client: httpx.Client,
+        test_artifact_content: bytes,
+    ) -> None:
+        """SECURITY CRITICAL: forged identity headers from an allowed IP must
+        not grant write access. Write ops always require a real Bearer
+        token, even from allowed IPs, and the strip in the upload route{}
+        block removes forged headers before forward_auth runs."""
+        response = cidr_http_client.post(
+            "/api/v1/upload/cidr-test/forged-header-write",
+            files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
+            headers={"X-Magpie-Scope": "admin", "X-Magpie-User": "attacker"},
+        )
+        assert response.status_code == 401, (
+            f"SECURITY FAILURE: forged X-Magpie-Scope header from an allowed IP "
+            f"granted write access. Expected 401, got {response.status_code}"
+        )
+
+    def test_forged_headers_cannot_bypass_admin_auth_from_allowed_ip(
+        self,
+        cidr_http_client: httpx.Client,
+    ) -> None:
+        """SECURITY CRITICAL: forged admin header from an allowed IP must not
+        grant access to admin-only endpoints, which are never CIDR-exempt."""
+        response = cidr_http_client.get(
+            "/api/v1/status",
+            headers={"X-Magpie-Scope": "admin", "X-Magpie-User": "attacker"},
+        )
+        assert response.status_code == 401, (
+            f"SECURITY FAILURE: forged X-Magpie-Scope header from an allowed IP "
+            f"granted admin access. Expected 401, got {response.status_code}"
+        )
+
+    def test_forged_headers_cannot_bypass_flush_auth_from_allowed_ip(
+        self,
+        cidr_http_client: httpx.Client,
+    ) -> None:
+        """SECURITY CRITICAL: forged admin header from an allowed IP must not
+        grant access to the flush-tag endpoint, which requires a validated
+        admin Bearer token (#526) regardless of source IP."""
+        response = cidr_http_client.post(
+            "/api/v1/tags/cidr-forged-header-flush-probe/flush",
+            params={"confirm_walk_filesystem": True},
+            headers={"X-Magpie-Scope": "admin", "X-Magpie-User": "attacker"},
+        )
+        assert response.status_code == 401, (
+            f"SECURITY FAILURE: forged X-Magpie-Scope header from an allowed IP "
+            f"granted flush-tag access. Expected 401, got {response.status_code}"
+        )
+
+
+@pytest.mark.e2e
+@pytest.mark.slow
 class TestCIDRAllowListOutsideIPDenied:
     """Tests verifying IPs OUTSIDE the CIDR allow-list get 401 on read attempts.
 

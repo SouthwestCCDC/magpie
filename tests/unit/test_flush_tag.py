@@ -302,3 +302,58 @@ class TestFlushTagValidation:
         """flush_tag should raise ValidationError for tag with special chars."""
         with pytest.raises(ValidationError):
             storage_service.flush_tag("v1@beta!")
+
+
+class TestFlushTagCorruptManifestHandling:
+    """Tests that flush_tag skips corrupt manifests rather than crashing the
+    entire global walk. Mirrors run_gc()'s handling of the same failure mode
+    (magpie/storage/gc.py), which flush_tag previously lacked.
+    """
+
+    def test_flush_tag_skips_corrupt_manifest_and_continues(
+        self, storage_service: StorageService, test_config: MagpieSettings
+    ) -> None:
+        """A corrupt manifest anywhere in storage must not prevent flush_tag
+        from still flushing the tag off readable artifacts."""
+        # A normal, readable artifact with the target tag.
+        _, ref = store_test_artifact(storage_service, "good/artifact", b"good content")
+        storage_service.create_tag("good/artifact", ref, "release")
+
+        # A separate artifact directory with a corrupt .magpie manifest.
+        corrupt_dir = artifact_dir_path(test_config.storage_path, "corrupt/artifact")
+        corrupt_dir.mkdir(parents=True)
+        (corrupt_dir / ".magpie").write_text("{ not valid json }", encoding="utf-8")
+
+        # Should not raise, and should still flush the good artifact.
+        result = storage_service.flush_tag("release")
+
+        assert result.tag_name == "release"
+        assert result.count == 1
+        assert "good/artifact" in result.affected_artifacts
+        assert "corrupt/artifact" not in result.affected_artifacts
+
+        # Verify the tag was actually removed from the good artifact.
+        good_dir = artifact_dir_path(test_config.storage_path, "good/artifact")
+        manifest = read_manifest(good_dir)
+        assert "release" not in manifest.tags
+
+    def test_flush_tag_dry_run_also_skips_corrupt_manifest(
+        self, storage_service: StorageService, test_config: MagpieSettings
+    ) -> None:
+        """dry_run mode must also tolerate a corrupt manifest during the walk."""
+        _, ref = store_test_artifact(storage_service, "good/artifact", b"good content")
+        storage_service.create_tag("good/artifact", ref, "preview-tag")
+
+        corrupt_dir = artifact_dir_path(test_config.storage_path, "corrupt/artifact")
+        corrupt_dir.mkdir(parents=True)
+        (corrupt_dir / ".magpie").write_text("{ not valid json }", encoding="utf-8")
+
+        result = storage_service.flush_tag("preview-tag", dry_run=True)
+
+        assert result.count == 1
+        assert "good/artifact" in result.affected_artifacts
+
+        # dry_run: tag must still be present afterward.
+        good_dir = artifact_dir_path(test_config.storage_path, "good/artifact")
+        manifest = read_manifest(good_dir)
+        assert "preview-tag" in manifest.tags

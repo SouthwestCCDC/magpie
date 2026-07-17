@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING, BinaryIO
 import structlog
 
 from magpie.storage.blob import store_blob, store_blob_from_temp
-from magpie.storage.exceptions import ArtifactNotFoundError, InvalidArtifactPathError
+from magpie.storage.exceptions import (
+    ArtifactNotFoundError,
+    InvalidArtifactPathError,
+    ManifestCorruptError,
+)
 from magpie.storage.hash import short_hash
 from magpie.storage.manifest import read_manifest, remove_tag, update_tag
 from magpie.storage.metadata import (
@@ -486,8 +490,20 @@ class StorageService:
             # Compute artifact path relative to storage_path
             artifact_path = str(artifact_dir.relative_to(self.config.storage_path))
 
-            # Read manifest to check if tag exists
-            manifest = read_manifest(artifact_dir)
+            # Read manifest to check if tag exists. Mirrors gc.py's handling: skip
+            # artifacts with corrupt manifests or I/O errors and continue the walk,
+            # rather than letting one bad artifact fail this global operation for
+            # every other artifact in the tree.
+            try:
+                manifest = read_manifest(artifact_dir)
+            except (ManifestCorruptError, OSError) as e:
+                logger.warning(
+                    "flush_tag_skipping_corrupt_manifest",
+                    artifact_path=artifact_path,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+                continue
 
             if tag_name in manifest.tags:
                 affected_artifacts.append(artifact_path)
