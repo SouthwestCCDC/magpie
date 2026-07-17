@@ -61,6 +61,8 @@ def flush_tag(
         action = "Would flush" if dry_run else "Flushing"
         click.echo(f"{action} tag '{tag_name}' globally...", err=True)
 
+    storage_service = StorageService(settings)
+
     if json_output:
         # Suppress all structlog output when outputting JSON to keep stdout clean.
         # Without this, StorageService.flush_tag()'s info-level log events land on
@@ -79,28 +81,36 @@ def flush_tag(
             cache_logger_on_first_use=False,
         )
 
-    # Use StorageService for the actual flush operation
-    storage_service = StorageService(settings)
-    try:
-        result = storage_service.flush_tag(tag_name, dry_run=dry_run)
-    except ValidationError as e:
-        if json_output:
+        try:
+            result = storage_service.flush_tag(tag_name, dry_run=dry_run)
+            output = {
+                "tag_name": result.tag_name,
+                "dry_run": dry_run,
+                "count": result.count,
+                "affected_artifacts": result.affected_artifacts,
+            }
+            click.echo(json.dumps(output))
+        except Exception as e:
+            # Intentionally broad exception handler for subprocess integration:
+            # when called with --json-output by the server's flush-tag endpoint, we
+            # must always output valid JSON so the server can parse the error.
+            # Without this, an exception from anywhere in the (destructive) removal
+            # phase -- not just tag-name validation -- would cause Click to print an
+            # unstructured traceback the server can't parse, and could leave a
+            # partial flush with no JSON signal back to the caller. Mirrors gc.py's
+            # handling of the same subprocess-integration constraint (#209).
             error_data = {"error": str(e)}
             click.echo(json.dumps(error_data))
             raise SystemExit(1)
-        raise click.ClickException(str(e))
-
-    if json_output:
-        output = {
-            "tag_name": result.tag_name,
-            "dry_run": dry_run,
-            "count": result.count,
-            "affected_artifacts": result.affected_artifacts,
-        }
-        click.echo(json.dumps(output))
         return
 
-    # Human-readable output
+    # Human-readable / interactive path: keep validation errors as a clean
+    # ClickException rather than a raw traceback.
+    try:
+        result = storage_service.flush_tag(tag_name, dry_run=dry_run)
+    except ValidationError as e:
+        raise click.ClickException(str(e))
+
     if dry_run:
         click.echo(f"Would remove tag '{tag_name}' from {result.count} artifact(s)")
     else:

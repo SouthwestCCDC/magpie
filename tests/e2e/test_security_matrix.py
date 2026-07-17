@@ -191,6 +191,7 @@ class TestForgedIdentityHeaders:
             },
         )
         assert upload_response.status_code == 200, upload_response.text
+        uploaded_hash = upload_response.json()["hash"]
 
         info_response = http_client.get(
             "/api/v1/artifacts/security-matrix/identity-spoof-probe",
@@ -198,13 +199,21 @@ class TestForgedIdentityHeaders:
         )
         assert info_response.status_code == 200
         versions = info_response.json()["versions"]
-        assert len(versions) >= 1
-        assert versions[0]["uploaded_by"] == "test-writer", (
+        # list_artifacts() enumerates metadata files via Path.iterdir(), which has
+        # no guaranteed order, so match the version we just uploaded by hash rather
+        # than indexing [0].
+        matching = [v for v in versions if v["hash"] == uploaded_hash]
+        assert len(matching) == 1, (
+            f"Expected exactly one version matching uploaded hash {uploaded_hash!r}, "
+            f"found {len(matching)} in {versions!r}"
+        )
+        uploaded_version = matching[0]
+        assert uploaded_version["uploaded_by"] == "test-writer", (
             f"SECURITY FAILURE: forged X-Magpie-User header overrode the real token "
             f"identity. Expected 'test-writer' (the write_token fixture's real name), "
-            f"got {versions[0]['uploaded_by']!r}."
+            f"got {uploaded_version['uploaded_by']!r}."
         )
-        assert versions[0]["uploaded_by"] != "attacker"
+        assert uploaded_version["uploaded_by"] != "attacker"
 
 
 @pytest.mark.e2e

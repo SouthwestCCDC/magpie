@@ -1101,6 +1101,76 @@ class TestFlushTag:
         manifest_after = read_manifest(artifact_dir)
         assert "preserve" in manifest_after.tags
 
+    def test_flush_tag_corrupt_manifest_handling(self, ctl_runner: tuple[CliRunner, Path]) -> None:
+        """Flush-tag handles corrupt .magpie manifest files gracefully.
+
+        Mirrors TestGC.test_gc_corrupt_manifest_handling: a single unreadable
+        manifest anywhere in storage must not crash the whole global walk, and
+        readable artifacts with the target tag must still be flushed.
+        """
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        # Create a valid, readable artifact with the tag we're about to flush.
+        from magpie.storage.manifest import Manifest, read_manifest, write_manifest
+
+        good_dir = tmp_path / "good-artifact"
+        good_dir.mkdir()
+        (good_dir / "blobs").mkdir()
+        (good_dir / "blobs" / "abc12345").write_bytes(b"good content")
+        write_manifest(good_dir, Manifest(tags={"release": "@abc12345"}))
+
+        # Create an artifact directory with a corrupt manifest alongside it.
+        corrupt_dir = tmp_path / "corrupt-artifact"
+        corrupt_dir.mkdir()
+        (corrupt_dir / ".magpie").write_text("{ this is not valid JSON }", encoding="utf-8")
+
+        # Flush-tag should skip the corrupt manifest and continue, still
+        # flushing the tag from the good artifact.
+        result = runner.invoke(ctl_cli, ["flush-tag", "release"])
+
+        assert result.exit_code == 0, (
+            f"flush-tag should skip corrupt manifest gracefully, got exit "
+            f"{result.exit_code}: {result.output}"
+        )
+        assert "Removed tag 'release' from 1 artifact(s)" in result.output, (
+            "flush-tag should still flush the readable artifact despite the "
+            "corrupt one elsewhere in storage"
+        )
+        assert "good-artifact" in result.output
+
+        # Verify the tag was actually removed from the good artifact.
+        updated_manifest = read_manifest(good_dir)
+        assert "release" not in updated_manifest.tags
+
+    def test_flush_tag_json_output_skips_corrupt_manifest(
+        self, ctl_runner: tuple[CliRunner, Path]
+    ) -> None:
+        """--json-output mode also skips corrupt manifests and still emits
+        clean, parseable JSON (the server subprocess integration path)."""
+        runner, tmp_path = ctl_runner
+        runner.invoke(ctl_cli, ["init"])
+
+        from magpie.storage.manifest import Manifest, write_manifest
+
+        good_dir = tmp_path / "good-artifact"
+        good_dir.mkdir()
+        (good_dir / "blobs").mkdir()
+        (good_dir / "blobs" / "def12345").write_bytes(b"good content")
+        write_manifest(good_dir, Manifest(tags={"release": "@def12345"}))
+
+        corrupt_dir = tmp_path / "corrupt-artifact"
+        corrupt_dir.mkdir()
+        (corrupt_dir / ".magpie").write_text("{ this is not valid JSON }", encoding="utf-8")
+
+        result = runner.invoke(ctl_cli, ["flush-tag", "release", "--json-output"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["tag_name"] == "release"
+        assert data["count"] == 1
+        assert "good-artifact" in data["affected_artifacts"]
+
 
 class TestSync:
     """Integration tests for magpie-ctl sync commands.
