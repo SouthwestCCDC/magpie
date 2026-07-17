@@ -396,6 +396,26 @@ class TestTokenRotateAdminSink:
         assert "mgp_ADMIN_" not in rotate_result.output
         assert "MAGPIE_ADMIN_TOKEN_SINK is not set" in rotate_result.output
 
+    def test_rotate_admin_fails_closed_json_output_emits_status_error(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A sink-abort rotating admin in --format json mode emits status "error", not "ok"."""
+        import json
+
+        stdout_settings = test_settings.model_copy(update={"admin_token_sink": "stdout"})
+        with patch("magpie.ctl.get_settings", return_value=stdout_settings):
+            init_result = cli_runner.invoke(cli, ["init"])
+            assert init_result.exit_code == 0
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            rotate_result = cli_runner.invoke(cli, ["--format", "json", "token", "rotate", "admin"])
+
+        assert rotate_result.exit_code != 0
+        output = json.loads(rotate_result.stderr.strip())
+        assert output["status"] == "error"
+        assert "MAGPIE_ADMIN_TOKEN_SINK is not set" in output["error"]["message"]
+        assert rotate_result.stdout.strip() == ""
+
     def test_rotate_admin_exec_sink_nonzero_exit_aborts(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:

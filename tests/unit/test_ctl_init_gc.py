@@ -482,6 +482,25 @@ class TestInitAdminTokenSink:
             conn.close()
         assert not any(t.name == "admin" for t in tokens)
 
+    def test_sink_failure_json_output_emits_status_error_not_ok(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A sink-abort in --format json mode emits {"status": "error"}, never "ok".
+
+        A validation error or delivery failure reported as status "ok" could
+        make an automated caller (e.g. the server, parsing this output)
+        believe init succeeded.
+        """
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["--format", "json", "init"])
+
+        assert result.exit_code != 0
+        output = json.loads(result.stderr.strip())
+        assert output["status"] == "error"
+        assert "MAGPIE_ADMIN_TOKEN_SINK is not set" in output["error"]["message"]
+        # And nothing resembling a success payload landed on stdout.
+        assert result.stdout.strip() == ""
+
     def test_discard_first_boot_persists_no_admin_token_row(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
@@ -621,11 +640,10 @@ class TestInitJsonOutput:
             )
 
         assert result.exit_code == 1, f"Output: {result.output}"
-        output = json.loads(result.stdout.strip())
-        # Error output uses {"status": "ok", "data": {"error": ...}} structure
-        data = output.get("data", output)
-        assert "error" in data
-        assert "mgp_ADMIN_" in data["error"]
+        # output_error() writes {"status": "error", "error": {...}} to stderr.
+        output = json.loads(result.stderr.strip())
+        assert output["status"] == "error"
+        assert "mgp_ADMIN_" in output["error"]["message"]
 
     def test_init_reset_with_custom_token_json_output(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
@@ -665,11 +683,10 @@ class TestInitJsonOutput:
             )
 
         assert result.exit_code == 1, f"Output: {result.output}"
-        output = json.loads(result.stdout.strip())
-        # Error output uses {"status": "ok", "data": {"error": ...}} structure
-        data = output.get("data", output)
-        assert "error" in data
-        assert "too short" in data["error"]
+        # output_error() writes {"status": "error", "error": {...}} to stderr.
+        output = json.loads(result.stderr.strip())
+        assert output["status"] == "error"
+        assert "too short" in output["error"]["message"]
 
 
 class TestGCCommand:

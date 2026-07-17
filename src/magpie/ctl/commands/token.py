@@ -321,12 +321,14 @@ def token_rotate(ctx: CTLContext, name: str) -> None:
 
         click.echo("")
         click.echo(f"TOKEN ROTATED: {name} (scope: {scope.value})")
-        if sink == "discard":
+        if sink == "file":
+            click.echo(f"Delivered via 'file' sink: {settings.admin_token_sink_file_path}")
+        elif sink == "exec":
+            click.echo("Delivered via 'exec' sink.")
+        elif sink == "discard":
             click.echo("No bootstrap admin token was retained (sink=discard).")
             click.echo("Mint one when ready via an interactive session:")
             click.echo("  magpie-ctl token create --name ops-admin --scope admin")
-        elif sink != "stdout":
-            click.echo(f"Delivered via sink: {sink}")
         return
 
     try:

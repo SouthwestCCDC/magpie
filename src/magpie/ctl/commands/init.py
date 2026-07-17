@@ -173,16 +173,14 @@ def init(ctx: CTLContext, reset_admin_token: bool, admin_token: str | None) -> N
         if not admin_token.startswith("mgp_ADMIN_"):
             error_msg = "Provided token must start with 'mgp_ADMIN_' for admin scope"
             if is_json_output():
-                output_result(CommandResult(data={"error": error_msg}, human_output=""))
-            else:
-                click.echo(f"Error: {error_msg}", err=True)
+                output_error(ErrorCode.VALIDATION_ERROR, error_msg)  # exits; never returns
+            click.echo(f"Error: {error_msg}", err=True)
             raise SystemExit(1)
         if len(admin_token) <= len("mgp_ADMIN_"):
             error_msg = "Provided token is too short (must have content after 'mgp_ADMIN_' prefix)"
             if is_json_output():
-                output_result(CommandResult(data={"error": error_msg}, human_output=""))
-            else:
-                click.echo(f"Error: {error_msg}", err=True)
+                output_error(ErrorCode.VALIDATION_ERROR, error_msg)  # exits; never returns
+            click.echo(f"Error: {error_msg}", err=True)
             raise SystemExit(1)
 
     if reset_admin_token:
@@ -288,9 +286,8 @@ def init(ctx: CTLContext, reset_admin_token: bool, admin_token: str | None) -> N
                         )
                 except TokenFormatError as e:  # pragma: no cover - guarded by validation above
                     if is_json_output():
-                        output_result(CommandResult(data={"error": str(e)}, human_output=""))
-                    else:
-                        click.echo(f"Error: {e}", err=True)
+                        output_error(ErrorCode.VALIDATION_ERROR, str(e))  # exits; never returns
+                    click.echo(f"Error: {e}", err=True)
                     raise SystemExit(1)
                 else:
                     if not is_json_output():
