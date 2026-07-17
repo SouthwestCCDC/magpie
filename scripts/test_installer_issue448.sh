@@ -26,6 +26,13 @@
 # 11. A newline sitting between two otherwise-valid --trusted-proxies
 #     tokens is rejected up front, not left to per-token validation (which
 #     would pass it, since each half is individually a valid IP/CIDR).
+# 12. A tab-separated --trusted-proxies list is still accepted (tab is a
+#     legitimate whitespace separator, not rejected as a control char).
+# 13. generate_env_file() writes a single canonical MAGPIE_DOMAIN key (no
+#     duplicate bare DOMAIN= that load_existing_config() never reads).
+# 14. The "no source .env" test assertion actually detects a reintroduced
+#     source line (verified against the anchoring bug that made it
+#     vacuously pass regardless of whether .env was sourced).
 
 set -uo pipefail
 
@@ -278,8 +285,16 @@ test_load_existing_config_no_execution() {
     fi
     log "  ✓ load_existing_config parses .env without executing it"
 
-    grep -q "^source " "$DEPLOY_SCRIPT" && grep -qE 'source ".*etc/\.env"' "$DEPLOY_SCRIPT" \
-        && fail "magpie-deploy.sh still sources the generated .env file somewhere"
+    # Anchored on start-of-line with no leading whitespace allowed, this
+    # check would never match (magpie-deploy.sh's only literal `source`
+    # invocation, `source /etc/os-release` in check_os(), is indented) --
+    # making the assertion below vacuously true regardless of whether the
+    # .env is sourced. Allow leading whitespace and the `.` dot-command
+    # synonym, and require "etc/.env" on the same line so it stays
+    # specific to the file this test cares about.
+    if grep -qE '(^|[[:space:]])(source|\.)[[:space:]]+.*etc/\.env' "$DEPLOY_SCRIPT"; then
+        fail "magpie-deploy.sh still sources the generated .env file somewhere"
+    fi
     log "  ✓ magpie-deploy.sh no longer sources the generated .env file"
 }
 
@@ -549,6 +564,123 @@ test_trusted_proxies_rejects_newline_between_valid_tokens() {
         "now prevented entirely by rejecting the newline up front"
 }
 
+# Test 17: a horizontal tab is a legitimate whitespace separator for
+# --trusted-proxies (tokenization already splits on it via IFS) and must
+# not be rejected by the control-character guard -- only line breaks
+# (which corrupt the .env/Caddyfile round trip) should be.
+test_trusted_proxies_allows_tab_separator() {
+    log "Test 17: is_valid_ip_or_cidr_list accepts a tab-separated list"
+
+    local tab_list
+    tab_list=$(printf '10.0.0.0/8\t192.168.1.1')
+    if ! is_valid_ip_or_cidr_list "$tab_list"; then
+        fail "is_valid_ip_or_cidr_list rejected a legitimate tab-separated CIDR list (functional regression)"
+    fi
+    log "  ✓ tab-separated list accepted"
+
+    local nl_list
+    nl_list=$(printf '10.0.0.0/8\n192.168.1.1')
+    if is_valid_ip_or_cidr_list "$nl_list"; then
+        fail "is_valid_ip_or_cidr_list accepted a newline-separated list (regression of the #448 fix)"
+    fi
+    log "  ✓ newline-separated list is still rejected"
+}
+
+# Test 18: generate_env_file() must write a single canonical domain key
+# (MAGPIE_DOMAIN); load_existing_config() only ever reads that one. A
+# duplicate bare DOMAIN= key would be silently ignored if an operator
+# edited it, which is confusing -- assert it isn't written, and that the
+# domain still round-trips correctly through the single key.
+test_domain_single_canonical_key() {
+    log "Test 18: generate_env_file/load_existing_config use a single canonical DOMAIN key"
+
+    local install_dir="${TEST_DIR}/domain_key_install"
+    mkdir -p "${install_dir}/etc"
+
+    (
+        INSTALL_DIR="$install_dir" DATA_DIR="${install_dir}/data" \
+        HTTP_PORT=8080 HTTPS_PORT=8443 DOMAIN="magpie.example.com" \
+        TLS_MODE="auto" TRUSTED_PROXIES="" BIND_IP="" ACME_SERVER="" \
+        MAGPIE_VERSION="test" \
+        generate_env_file
+    ) >/dev/null 2>&1
+
+    local env_file="${install_dir}/etc/.env"
+    [[ -f "$env_file" ]] || fail "generate_env_file did not produce a .env file"
+
+    if grep -qE '^DOMAIN=' "$env_file"; then
+        fail "generate_env_file wrote a duplicate bare DOMAIN= key -- edits to it would be silently ignored by load_existing_config"
+    fi
+    log "  ✓ no duplicate bare DOMAIN= key written"
+
+    if ! grep -q '^MAGPIE_DOMAIN=magpie.example.com$' "$env_file"; then
+        fail "generate_env_file did not write the canonical MAGPIE_DOMAIN= key"
+    fi
+    log "  ✓ canonical MAGPIE_DOMAIN= key written"
+
+    # NOTE: variables must be set as standalone assignments here, not
+    # prefixed to the load_existing_config call (`VAR=val load_existing_config`)
+    # -- a prefix assignment is scoped only to that one command and reverts
+    # once it returns, so a later `echo "$DOMAIN"` in the same subshell
+    # would read the pre-call value, not what the function set.
+    local out
+    out=$(
+        (
+            # shellcheck disable=SC2034  # all consumed by load_existing_config(), sourced from magpie-deploy.sh
+            INSTALL_DIR="$install_dir"
+            # shellcheck disable=SC2034
+            DATA_DIR=""
+            # shellcheck disable=SC2034
+            HTTP_PORT=""
+            # shellcheck disable=SC2034
+            HTTPS_PORT=""
+            DOMAIN=""
+            # shellcheck disable=SC2034
+            TLS_MODE=""
+            TRUSTED_PROXIES=""
+            # shellcheck disable=SC2034
+            BIND_IP=""
+            # shellcheck disable=SC2034
+            ACME_SERVER=""
+            load_existing_config
+            echo "DOMAIN=$DOMAIN"
+        )
+    )
+    if [[ "$out" != "DOMAIN=magpie.example.com" ]]; then
+        fail "DOMAIN did not round-trip through load_existing_config: $out"
+    fi
+    log "  ✓ DOMAIN round-trips correctly through the single canonical key"
+}
+
+# Test 19: the "no source .env" assertion (Test 8, above) must actually
+# detect a reintroduced `source`/`.` of the .env file, not just an
+# anchored-at-column-0 pattern that never matches because
+# magpie-deploy.sh's only literal `source` invocation
+# (`source /etc/os-release` in check_os()) is indented. Verify the
+# assertion's regex against a temporary copy with a source line
+# reintroduced, so this specific test can't quietly go vacuous again.
+test_source_env_detection_is_not_vacuous() {
+    log "Test 19: the .env-not-sourced assertion actually detects a reintroduced source line"
+
+    local pattern='(^|[[:space:]])(source|\.)[[:space:]]+.*etc/\.env'
+
+    if grep -qE "$pattern" "$DEPLOY_SCRIPT"; then
+        fail "magpie-deploy.sh currently sources the generated .env file -- investigate before trusting this test"
+    fi
+    log "  ✓ current magpie-deploy.sh does not match the source-detection pattern (expected)"
+
+    local reintroduced="${TEST_DIR}/magpie-deploy-with-source-reintroduced.sh"
+    {
+        cat "$DEPLOY_SCRIPT"
+        echo '    source "${INSTALL_DIR}/etc/.env"  # test-only: simulates a reintroduced vulnerability'
+    } > "$reintroduced"
+
+    if ! grep -qE "$pattern" "$reintroduced"; then
+        fail "the source-detection pattern failed to catch a reintroduced (indented) source of etc/.env -- this assertion would be vacuous again"
+    fi
+    log "  ✓ pattern correctly detects an indented, reintroduced source of etc/.env"
+}
+
 # Run all tests
 log "Running tests for issue #448"
 log ""
@@ -569,6 +701,9 @@ test_uninstall_purge_revalidates_data_dir
 test_update_rejects_hostile_install_dir
 test_cidr_leading_zero_octets
 test_trusted_proxies_rejects_newline_between_valid_tokens
+test_trusted_proxies_allows_tab_separator
+test_domain_single_canonical_key
+test_source_env_detection_is_not_vacuous
 
 log ""
 log "All tests passed!"

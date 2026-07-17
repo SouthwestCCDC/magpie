@@ -301,8 +301,13 @@ is_valid_acme_server_url() {
 
 # Validates a whitespace-separated list of IPv4/IPv6 addresses or CIDRs.
 #
-# Rejects any control character (including a newline) in the raw value
-# up front, before splitting into tokens. A newline sitting *between* two
+# Rejects any control character EXCEPT horizontal tab in the raw value up
+# front, before splitting into tokens. Tab is excluded from the rejection
+# because it's a legitimate whitespace separator for this
+# "whitespace-separated" list (tokenization below already splits on it via
+# IFS) -- rejecting it would be a functional regression for tab-separated
+# input that previously validated. Newline/CR and other control
+# characters are still rejected: a newline sitting *between* two
 # otherwise-valid tokens (e.g. "10.0.0.0/8\n192.168.1.1") would otherwise
 # pass per-token validation, but it corrupts the generated .env
 # (read_env_file() is line-based -- everything after the first newline in
@@ -318,7 +323,8 @@ is_valid_acme_server_url() {
 is_valid_ip_or_cidr_list() {
     local list="$1"
 
-    if [[ "$list" =~ [[:cntrl:]] ]]; then
+    local without_tabs="${list//$'\t'/}"
+    if [[ "$without_tabs" =~ [[:cntrl:]] ]]; then
         return 1
     fi
 
@@ -623,9 +629,11 @@ MAGPIE_LOG_FORMAT=json
 MAGPIE_RETENTION_DAYS=90
 
 # TLS configuration (persisted for Caddyfile regeneration during updates)
-# See issues #340 and #344
+# See issues #340 and #344. MAGPIE_DOMAIN above is the single canonical
+# domain key -- load_existing_config() reads only that one, so there is no
+# separate DOMAIN= key here to avoid a stale/hand-edited duplicate being
+# silently ignored (issue #448).
 TLS_MODE=${TLS_MODE:-}
-DOMAIN=${DOMAIN:-}
 TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
 
 # Network configuration (issue #446)
