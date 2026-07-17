@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import stat
 import sys
 from pathlib import Path
@@ -63,8 +64,6 @@ class TestFileSink:
             update={"admin_token_sink": "file", "admin_token_sink_file_path": target}
         )
 
-        import os
-
         old_umask = os.umask(0o000)
         try:
             deliver_admin_token(TOKEN, settings, action="init")
@@ -96,6 +95,62 @@ class TestFileSink:
         deliver_admin_token(TOKEN, settings, action="rotate")
 
         assert target.read_text().strip() == TOKEN
+
+    def test_preexisting_wide_permissions_are_tightened_to_0600(
+        self, tmp_path: Path, base_settings: MagpieSettings
+    ) -> None:
+        """A pre-existing, world-readable target file must end up 0600.
+
+        os.open's mode=0o600 only applies when a file is newly created --
+        O_TRUNC on a pre-existing file leaves its mode untouched. Simulates
+        an attacker pre-placing a 0666 file at the target path to widen the
+        exposure window before the token is written.
+        """
+        target = tmp_path / "admin-token"
+        target.write_text("stale-value\n")
+        os.chmod(target, 0o666)
+
+        settings = base_settings.model_copy(
+            update={"admin_token_sink": "file", "admin_token_sink_file_path": target}
+        )
+
+        deliver_admin_token(TOKEN, settings, action="init")
+
+        mode = stat.S_IMODE(target.stat().st_mode)
+        assert mode == 0o600
+        assert target.read_text().strip() == TOKEN
+
+    def test_permissions_tightened_before_token_is_written(
+        self, tmp_path: Path, base_settings: MagpieSettings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fd's mode must already be 0600 by the time content is written.
+
+        Directly verifies the ordering (not just the end state): intercepts
+        os.fdopen (called immediately after os.open + os.fchmod, right
+        before the token is written) and asserts the fd's mode is already
+        0600 at that point, even though the target pre-existed with a wider
+        mode.
+        """
+        target = tmp_path / "admin-token"
+        target.write_text("stale-value\n")
+        os.chmod(target, 0o666)
+
+        settings = base_settings.model_copy(
+            update={"admin_token_sink": "file", "admin_token_sink_file_path": target}
+        )
+
+        real_fdopen = os.fdopen
+        observed_modes: list[int] = []
+
+        def spying_fdopen(fd: int, *args: object, **kwargs: object) -> object:
+            observed_modes.append(stat.S_IMODE(os.fstat(fd).st_mode))
+            return real_fdopen(fd, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(os, "fdopen", spying_fdopen)
+
+        deliver_admin_token(TOKEN, settings, action="init")
+
+        assert observed_modes == [0o600]
 
     def test_unwritable_path_raises_token_sink_error(
         self, tmp_path: Path, base_settings: MagpieSettings

@@ -111,15 +111,19 @@ def _deliver_file(token: str, settings: MagpieSettings) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         # O_NOFOLLOW rejects the open outright if `path` is a symlink, so a
         # pre-placed symlink at the configured path can't redirect the
-        # plaintext token to an attacker-controlled location. O_CREAT with
-        # mode=0o600 covers the common case; chmod afterward guarantees 0600
-        # regardless of umask or a pre-existing file's mode. os.fdopen takes
-        # ownership of fd and closes it (even on error) via the context
-        # manager.
+        # plaintext token to an attacker-controlled location. mode=0o600 on
+        # O_CREAT only applies when the file is newly created -- if `path`
+        # already exists (e.g. an attacker pre-placed a 0666 file to widen
+        # the window), O_TRUNC truncates it but leaves its existing mode
+        # alone. So fchmod the fd to 0600 BEFORE writing any token bytes,
+        # rather than chmod-ing the path afterward: the token is never
+        # written into a file with a wider-than-0600 mode, even briefly.
+        # os.fdopen takes ownership of fd and closes it (even on error) via
+        # the context manager.
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(token + "\n")
-        os.chmod(path, 0o600)
     except OSError as e:
         raise TokenSinkError(f"admin token file sink failed to write {path}: {e}") from e
 
