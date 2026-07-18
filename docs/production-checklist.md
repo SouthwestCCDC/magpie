@@ -24,9 +24,10 @@ Before deploying to production:
       address(es), never a broad range. A broad range (e.g. RFC1918) lets any
       client on it spoof `X-Forwarded-For` and bypass `MAGPIE_ALLOWED_CIDRS`.
       See [installation.md](installation.md#trusted-proxies).
-- [ ] If upgrading a fronted deployment to v0.1.6+ and relying on
-      `MAGPIE_ALLOWED_CIDRS`, `MAGPIE_TRUSTED_PROXIES` is set to your proxy's
-      hop -- `magpie-deploy.sh update` warns if it isn't. See
+- [ ] If upgrading a `--tls-mode off` (fronted) deployment to v0.1.6+ and
+      relying on `MAGPIE_ALLOWED_CIDRS`, `MAGPIE_TRUSTED_PROXIES` is set to
+      your proxy's hop -- `magpie-deploy.sh update` prompts (or, with
+      `--noninteractive`, hard-fails) if it isn't. See
       [installation.md](installation.md#upgrading-to-v016).
 
 ## Deploy

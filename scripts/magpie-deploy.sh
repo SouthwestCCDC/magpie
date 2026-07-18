@@ -71,6 +71,13 @@ TRUSTED_PROXIES=""
 # through to the app); it's only loaded so cmd_update can warn when it's
 # paired with an empty MAGPIE_TRUSTED_PROXIES. See issue #579.
 ALLOWED_CIDRS=""
+# Whether MAGPIE_TRUSTED_PROXIES (or the legacy unprefixed TRUSTED_PROXIES)
+# key was present in the existing install's .env at the start of this run,
+# before load_existing_config()'s migration/writeback touches anything.
+# Presence -- even an explicit empty value -- is the deliberate-choice
+# signal cmd_update's issue #579 gate uses to fire only once. See
+# load_existing_config().
+TRUSTED_PROXIES_KEY_PRESENT="false"
 BIND_IP=""
 ACME_SERVER=""
 NONINTERACTIVE="false"
@@ -81,6 +88,11 @@ FOLLOW="false"
 LINES="100"
 FROM_SOURCE="false"
 REQUESTED_RELEASE=""  # from --release; empty means "use the default branch"
+# --accept-empty-trusted-proxies (update only): acknowledges that an empty
+# MAGPIE_TRUSTED_PROXIES is intentional (magpie is directly exposed), so
+# cmd_update's issue #579 gate proceeds instead of prompting/dying. See
+# warn_or_gate_trusted_proxies_for_cidr_allow().
+ACCEPT_EMPTY_TRUSTED_PROXIES="false"
 
 # =============================================================================
 # Helper functions
@@ -624,6 +636,15 @@ load_existing_config() {
         # automatically: only the operator knows the actual upstream hop(s)
         # to scope it to.
         local legacy_broad_default="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+
+        # Captured before either key is read below, purely for
+        # cmd_update's issue #579 gate -- presence (even of an explicit
+        # empty value) means the operator already made a deliberate
+        # MAGPIE_TRUSTED_PROXIES choice, so the gate must not re-fire.
+        if [[ -n "${env_vars[MAGPIE_TRUSTED_PROXIES]+set}" || -n "${env_vars[TRUSTED_PROXIES]+set}" ]]; then
+            TRUSTED_PROXIES_KEY_PRESENT="true"
+        fi
+
         if [[ -n "${env_vars[MAGPIE_TRUSTED_PROXIES]+set}" ]]; then
             TRUSTED_PROXIES="${env_vars[MAGPIE_TRUSTED_PROXIES]}"
         elif [[ -n "${env_vars[TRUSTED_PROXIES]+set}" ]]; then
@@ -1620,18 +1641,55 @@ cmd_install() {
     echo ""
 }
 
-# Advisory, non-blocking warning for cmd_update: if MAGPIE_ALLOWED_CIDRS is
-# set to a real range and MAGPIE_TRUSTED_PROXIES is empty, a fronted
-# deployment's anonymous CIDR-allow reads will silently 401 after the #575
-# change (Caddy no longer honors X-Forwarded-For by default), since
-# client_ip then resolves to the proxy's own hop instead of the real client.
-# Phrased conditionally because this script cannot tell a fronted install
-# apart from a directly-exposed one from .env alone -- for the latter, empty
-# MAGPIE_TRUSTED_PROXIES is already correct and no action is needed. Does
-# not fire when MAGPIE_TRUSTED_PROXIES is already set to something (the
-# legacy-key migration warning above covers the one case where that's still
-# wrong: an unscoped legacy default). See issue #579.
-warn_if_cidr_allow_needs_trusted_proxies() {
+# Interactive prompt for the issue #579 gate below: lets the operator either
+# enter the upstream proxy's hop (sets TRUSTED_PROXIES and returns 0),
+# confirm magpie is directly exposed (leaves TRUSTED_PROXIES empty and
+# returns 0), or decline -- which aborts the update via die(). Deliberately
+# not built on confirm()/prompt_value(): those honor --yes/NONINTERACTIVE
+# defaults, which would let an unrelated --yes (e.g. for uninstall
+# confirmations) silently answer this security-relevant question. Only
+# called when NONINTERACTIVE is already known false.
+prompt_trusted_proxies_for_cidr_allow() {
+    local response
+    read -r -p "[magpie] Upstream proxy hop as seen by magpie's Caddy (e.g. 172.20.0.0/16), or leave blank if magpie is directly exposed: " response
+    if [[ -n "$response" ]]; then
+        TRUSTED_PROXIES="$response"
+        log "Using MAGPIE_TRUSTED_PROXIES=${TRUSTED_PROXIES}."
+        return 0
+    fi
+
+    read -r -p "[magpie] Confirm magpie is directly exposed to the internet with no reverse proxy in front of it [y/N]: " response
+    case "$response" in
+        [yY][eE][sS] | [yY])
+            log "Proceeding with empty MAGPIE_TRUSTED_PROXIES (directly exposed, confirmed interactively)."
+            return 0
+            ;;
+        *)
+            die "Update aborted -- MAGPIE_TRUSTED_PROXIES was not confirmed. Re-run '$SCRIPT_NAME update' and either enter the proxy hop or confirm direct exposure."
+            ;;
+    esac
+}
+
+# Tiered response for cmd_update when MAGPIE_ALLOWED_CIDRS is a real range
+# and MAGPIE_TRUSTED_PROXIES resolves empty, keyed on TLS_MODE as the "am I
+# fronted?" signal (tls-mode off => almost certainly behind an external
+# terminator; auto/manual => magpie is the edge, so empty is likely
+# correct). See issue #579's scope-expansion comment for the full rationale.
+#
+# tls-mode off (HIGH-RISK): if MAGPIE_TRUSTED_PROXIES has never been
+# configured for this install (TRUSTED_PROXIES_KEY_PRESENT is false -- the
+# legacy-key case is already handled by load_existing_config()'s
+# migrate+warn path above and always leaves TRUSTED_PROXIES non-empty, so
+# it can't reach here) and the operator didn't pass --trusted-proxies or
+# --accept-empty-trusted-proxies this run, GATE: prompt interactively, or
+# hard-fail via die() when NONINTERACTIVE. Fires once -- cmd_update's
+# existing MAGPIE_TRUSTED_PROXIES writeback (below, near the legacy-key
+# cleanup) persists whatever TRUSTED_PROXIES resolves to once the gate is
+# satisfied, including an explicit empty value, so TRUSTED_PROXIES_KEY_PRESENT
+# is true on every subsequent run.
+#
+# tls-mode auto/manual (LOWER-RISK): advisory only, never blocks.
+warn_or_gate_trusted_proxies_for_cidr_allow() {
     # 255.255.255.255/32 is the Caddyfile's own placeholder default for an
     # unset MAGPIE_ALLOWED_CIDRS (see Caddyfile.prod's `client_ip
     # {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}`) -- never a real client, so
@@ -1641,8 +1699,36 @@ warn_if_cidr_allow_needs_trusted_proxies() {
     [[ -z "$ALLOWED_CIDRS" || "$ALLOWED_CIDRS" == "$off_sentinel" ]] && return 0
     [[ -n "$TRUSTED_PROXIES" ]] && return 0
 
-    log_warn "MAGPIE_ALLOWED_CIDRS is set but MAGPIE_TRUSTED_PROXIES is empty."
-    log_warn "As of v0.1.6 the built-in Caddy trusts no proxy by default. If magpie is behind a reverse proxy, CIDR-based anonymous reads will NO LONGER match real clients (they will 401) until you set MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to your proxy's hop as seen by magpie's Caddy -- commonly magpie's docker bridge subnet, e.g. 172.20.0.0/16 (or the gateway /32) -- and re-run '$SCRIPT_NAME update'. If magpie is directly exposed (no proxy), no action is needed."
+    if [[ "$TLS_MODE" != "off" ]]; then
+        log_warn "MAGPIE_ALLOWED_CIDRS is set but MAGPIE_TRUSTED_PROXIES is empty."
+        log_warn "As of v0.1.6 the built-in Caddy trusts no proxy by default. If magpie is behind a reverse proxy, CIDR-based anonymous reads will NO LONGER match real clients (they will 401) until you set MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to your proxy's hop as seen by magpie's Caddy -- commonly magpie's docker bridge subnet, e.g. 172.20.0.0/16 (or the gateway /32) -- and re-run '$SCRIPT_NAME update'. If magpie is directly exposed (no proxy), no action is needed."
+        return 0
+    fi
+
+    # tls-mode off from here on -- the high-risk gate.
+    if [[ "$TRUSTED_PROXIES_KEY_PRESENT" == "true" ]]; then
+        # Already a deliberate, persisted choice (even if empty) -- silent.
+        return 0
+    fi
+    if [[ "$ACCEPT_EMPTY_TRUSTED_PROXIES" == "true" ]]; then
+        log "Proceeding with empty MAGPIE_TRUSTED_PROXIES (--accept-empty-trusted-proxies)."
+        return 0
+    fi
+
+    local detected="tls-mode is 'off' and MAGPIE_ALLOWED_CIDRS=${ALLOWED_CIDRS} is set for anonymous CIDR-based reads, but MAGPIE_TRUSTED_PROXIES has never been configured for this install. As of v0.1.6 Caddy trusts no proxy by default, so if magpie sits behind a reverse proxy, the real client IP is lost and every anonymous CIDR read will 401 after this update."
+    local fix="Fix: set MAGPIE_TRUSTED_PROXIES to the upstream reverse proxy's hop as seen by magpie's Caddy -- commonly the docker bridge subnet, e.g. 172.20.0.0/16 (or the gateway /32) -- via --trusted-proxies <value> or by editing ${INSTALL_DIR}/etc/.env, then re-run '$SCRIPT_NAME update'."
+    local bypass="Bypass: if magpie is directly exposed (no reverse proxy), pass --accept-empty-trusted-proxies to proceed with an empty MAGPIE_TRUSTED_PROXIES."
+
+    if [[ "$NONINTERACTIVE" == "true" ]]; then
+        log_error "$detected"
+        log_error "$fix"
+        die "$bypass"
+    fi
+
+    log_warn "$detected"
+    log_warn "$fix"
+    log_warn "$bypass"
+    prompt_trusted_proxies_for_cidr_allow
 }
 
 cmd_update() {
@@ -1673,7 +1759,13 @@ cmd_update() {
 
     verify_installation
     load_existing_config
-    warn_if_cidr_allow_needs_trusted_proxies
+
+    # Resolved here (rather than only in the Caddyfile-regeneration block
+    # below) so the issue #579 tls-mode check below sees the real value for
+    # pre-#345 .env files that predate the TLS_MODE key. Idempotent -- the
+    # Caddyfile block re-applies the same default further down.
+    TLS_MODE="${TLS_MODE:-$DEFAULT_TLS_MODE}"
+    warn_or_gate_trusted_proxies_for_cidr_allow
 
     cd "$INSTALL_DIR"
 
@@ -2004,13 +2096,31 @@ Install options (only used with 'install' command):
                           connecting peer's IP is used). Only set this to
                           the exact upstream hop(s) when Caddy sits behind
                           another reverse proxy (e.g. --tls-mode off);
-                          never a broad range. See issue #575.
+                          never a broad range. See issue #575. Also
+                          accepted by 'update' to satisfy the issue #579
+                          gate below on a fronted install that has never
+                          configured MAGPIE_TRUSTED_PROXIES.
   --noninteractive        Skip interactive prompts (use defaults for all config)
   --force                 Overwrite existing installation
   --from-source           Build image from source instead of pulling from ghcr.io
 
 Update options:
-  --from-source           Rebuild image from source instead of pulling from ghcr.io
+  --from-source                    Rebuild image from source instead of
+                                    pulling from ghcr.io
+  --trusted-proxies CIDR           See Install options above -- also
+                                    applies to 'update'.
+  --accept-empty-trusted-proxies   Acknowledge that an empty
+                                    MAGPIE_TRUSTED_PROXIES is intentional
+                                    (magpie is directly exposed, no reverse
+                                    proxy). Only meaningful when 'update'
+                                    detects --tls-mode off with a real
+                                    MAGPIE_ALLOWED_CIDRS and no
+                                    MAGPIE_TRUSTED_PROXIES ever configured
+                                    for this install -- without it (or
+                                    --trusted-proxies), that combination
+                                    prompts interactively or, with
+                                    --noninteractive, hard-fails the
+                                    update. See issue #579.
 
 Uninstall options:
   --yes, -y               Skip confirmation prompts (auto-confirm uninstall)
@@ -2101,6 +2211,10 @@ parse_args() {
             --trusted-proxies)
                 TRUSTED_PROXIES="$2"
                 shift 2
+                ;;
+            --accept-empty-trusted-proxies)
+                ACCEPT_EMPTY_TRUSTED_PROXIES="true"
+                shift
                 ;;
             --bind-ip)
                 BIND_IP="$2"
