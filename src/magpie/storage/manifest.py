@@ -5,10 +5,11 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import stat
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from pydantic import BaseModel
 
@@ -128,6 +129,14 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
     ``exist_ok=True`` promises. That's retried here too, for the same
     reason and via the same bounded loop.
 
+    ``FileExistsError`` from that same ``mkdir()`` call also fires when a
+    non-directory (a stray plain file) already occupies ``artifact_dir`` --
+    ``exist_ok=True``'s ``is_dir()`` recheck fails, so it re-raises. That
+    case is not a transient create/remove race and retrying cannot fix it,
+    so it's distinguished from the two races above and raised immediately
+    as a clear error instead of being retried into a confusing
+    "kept flapping" message.
+
     Args:
         artifact_dir: Path to artifact directory to lock.
 
@@ -135,12 +144,13 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
         None. The lock is held for the duration of the ``with`` block.
 
     Raises:
-        OSError: If the directory keeps disappearing (or flapping between
-            existing and not) out from under us for
-            ``_LOCK_ACQUIRE_MAX_ATTEMPTS`` consecutive attempts. This would
-            indicate persistent, unusual concurrent create/delete pressure
-            rather than the ordinary multi-caller races this retry loop is
-            meant to absorb.
+        OSError: If a non-directory occupies ``artifact_dir`` (immediate,
+            not retried), or if the directory keeps disappearing (or
+            flapping between existing and not) out from under us for
+            ``_LOCK_ACQUIRE_MAX_ATTEMPTS`` consecutive attempts. The latter
+            would indicate persistent, unusual concurrent create/delete
+            pressure rather than the ordinary multi-caller races this retry
+            loop is meant to absorb.
     """
     fd: int | None = None
     last_error: OSError | None = None
@@ -148,6 +158,27 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
         try:
             artifact_dir.mkdir(parents=True, exist_ok=True)
         except FileExistsError as e:
+            try:
+                # A single stat() call, not separate exists()/is_dir() checks:
+                # two calls would themselves be a TOCTOU race (a peer
+                # recreates the path between the first and second call,
+                # or removes it between them) that could misdiagnose a
+                # transient state as a genuine non-directory.
+                mode = artifact_dir.stat().st_mode
+            except FileNotFoundError:
+                # Vanished between mkdir()'s FileExistsError and our
+                # follow-up stat() -- a concurrent remover raced us here
+                # too. Retry: our next mkdir() attempt will recreate it.
+                last_error = e
+                continue
+            if not stat.S_ISDIR(mode):
+                # A non-directory occupies the path. No amount of retrying
+                # will turn it into a directory, so fail fast and clearly
+                # instead of exhausting the retry loop into a "kept
+                # flapping" message that misdiagnoses the actual problem.
+                raise OSError(
+                    f"Cannot acquire artifact lock: {artifact_dir} exists as a non-directory"
+                ) from e
             # Path.mkdir(exist_ok=True)'s own internal exist_ok recheck lost
             # a race against a concurrent remover. Retry: our next mkdir()
             # attempt will recreate it.
@@ -181,7 +212,13 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
         os.close(fd)
 
 
-def update_tag(artifact_dir: Path, tag_name: str, hash_ref: str) -> Manifest:
+def update_tag(
+    artifact_dir: Path,
+    tag_name: str,
+    hash_ref: str,
+    *,
+    on_locked: Callable[[Manifest], None] | None = None,
+) -> Manifest:
     """Update or create a tag in the manifest.
 
     The read-modify-write cycle is serialized with an exclusive lock on the
@@ -192,6 +229,12 @@ def update_tag(artifact_dir: Path, tag_name: str, hash_ref: str) -> Manifest:
         artifact_dir: Path to artifact directory.
         tag_name: Name of the tag to update/create.
         hash_ref: Hash reference to associate with the tag.
+        on_locked: Optional callback invoked with the updated manifest before
+            the lock is released. ``artifact_lock`` isn't reentrant (a
+            second ``flock()`` from the same process would block against
+            the first), so callers needing to do more locked work derived
+            from the new manifest -- e.g. symlink reconciliation -- must
+            hook in here rather than acquiring the lock again themselves.
 
     Returns:
         Updated Manifest instance.
@@ -200,10 +243,17 @@ def update_tag(artifact_dir: Path, tag_name: str, hash_ref: str) -> Manifest:
         manifest = read_manifest(artifact_dir)
         manifest.tags[tag_name] = hash_ref
         write_manifest(artifact_dir, manifest)
+        if on_locked is not None:
+            on_locked(manifest)
         return manifest
 
 
-def remove_tag(artifact_dir: Path, tag_name: str) -> Manifest:
+def remove_tag(
+    artifact_dir: Path,
+    tag_name: str,
+    *,
+    on_locked: Callable[[Manifest, bool], None] | None = None,
+) -> Manifest:
     """Remove a tag from the manifest.
 
     If the tag doesn't exist, this is a no-op (no error raised). The
@@ -214,12 +264,23 @@ def remove_tag(artifact_dir: Path, tag_name: str) -> Manifest:
     Args:
         artifact_dir: Path to artifact directory.
         tag_name: Name of the tag to remove.
+        on_locked: Optional callback invoked, before the lock is released,
+            with the updated manifest and a bool for whether the tag was
+            actually present (and thus removed) rather than already absent.
+            The presence check happens under the same lock as the removal,
+            so callers that need an accurate "did this actually remove
+            something" answer under concurrency -- rather than an unlocked
+            pre-check racing the removal -- should decide that here. See
+            ``update_tag`` for why this replaces re-acquiring the lock.
 
     Returns:
         Updated Manifest instance.
     """
     with artifact_lock(artifact_dir):
         manifest = read_manifest(artifact_dir)
+        had_tag = tag_name in manifest.tags
         manifest.tags.pop(tag_name, None)  # Remove if exists, no error if missing
         write_manifest(artifact_dir, manifest)
+        if on_locked is not None:
+            on_locked(manifest, had_tag)
         return manifest

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -211,6 +213,90 @@ class TestRemoveTag:
         assert result.tags == {}
 
 
+def _is_locked_exclusively(artifact_dir: Path) -> bool:
+    """Probe whether artifact_dir is currently flock()-held exclusively.
+
+    Opens a *second* fd to artifact_dir and attempts a non-blocking
+    exclusive flock. If that fails with EWOULDBLOCK/EAGAIN, some other fd
+    (i.e. artifact_lock()'s own held lock) has it locked already.
+    """
+    probe_fd = os.open(artifact_dir, os.O_RDONLY)
+    try:
+        fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(probe_fd, fcntl.LOCK_UN)
+        return False
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(probe_fd)
+
+
+class TestOnLockedCallback:
+    """Regression tests for issue #547.
+
+    update_tag()/remove_tag() must invoke their on_locked callback while
+    still holding the artifact lock (not after releasing it), so that
+    callers doing further locked work derived from the new manifest --
+    e.g. StorageService's symlink reconciliation -- see a state that can't
+    be raced by a concurrent writer between the manifest write and the
+    follow-up work.
+    """
+
+    def test_update_tag_on_locked_runs_while_lock_held(self, tmp_path: Path) -> None:
+        artifact_dir = tmp_path / "artifact"
+        artifact_dir.mkdir()
+        observed: dict[str, bool] = {}
+
+        def on_locked(manifest: Manifest) -> None:
+            observed["lock_held"] = _is_locked_exclusively(artifact_dir)
+            observed["tag_visible"] = manifest.tags.get("latest") == "@abc12345"
+
+        update_tag(artifact_dir, "latest", "@abc12345", on_locked=on_locked)
+
+        assert observed["lock_held"] is True
+        assert observed["tag_visible"] is True
+
+    def test_remove_tag_on_locked_runs_while_lock_held(self, tmp_path: Path) -> None:
+        artifact_dir = tmp_path / "artifact"
+        write_manifest(artifact_dir, Manifest(tags={"latest": "@abc12345"}))
+        observed: dict[str, bool] = {}
+
+        def on_locked(manifest: Manifest, had_tag: bool) -> None:
+            observed["lock_held"] = _is_locked_exclusively(artifact_dir)
+            observed["had_tag"] = had_tag
+            observed["tag_gone"] = "latest" not in manifest.tags
+
+        remove_tag(artifact_dir, "latest", on_locked=on_locked)
+
+        assert observed["lock_held"] is True
+        assert observed["had_tag"] is True
+        assert observed["tag_gone"] is True
+
+    def test_remove_tag_on_locked_reports_had_tag_false_when_absent(self, tmp_path: Path) -> None:
+        """had_tag reflects the locked read, not merely "call completed"."""
+        artifact_dir = tmp_path / "artifact"
+        write_manifest(artifact_dir, Manifest(tags={"other": "@xyz98765"}))
+        observed: dict[str, bool] = {}
+
+        def on_locked(manifest: Manifest, had_tag: bool) -> None:
+            observed["had_tag"] = had_tag
+
+        remove_tag(artifact_dir, "nonexistent", on_locked=on_locked)
+
+        assert observed["had_tag"] is False
+
+    def test_on_locked_not_required(self, tmp_path: Path) -> None:
+        """Callers that don't pass on_locked are unaffected (back-compat)."""
+        artifact_dir = tmp_path / "artifact"
+        artifact_dir.mkdir()
+
+        result = update_tag(artifact_dir, "latest", "@abc12345")
+        assert result.tags["latest"] == "@abc12345"
+
+        result = remove_tag(artifact_dir, "latest")
+        assert "latest" not in result.tags
+
+
 class TestArtifactLockRetries:
     """Regression tests for artifact_lock()'s retry-on-race behavior.
 
@@ -311,6 +397,98 @@ class TestArtifactLockRetries:
         with pytest.raises(OSError, match="kept flapping"):
             with artifact_lock(artifact_dir):
                 pass
+
+    def test_non_directory_at_path_raises_immediately_not_retried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stray plain file at the artifact path fails fast and clearly.
+
+        ``FileExistsError`` from ``mkdir(exist_ok=True)`` can mean either a
+        transient create/remove race (retried above) or a non-directory
+        genuinely occupying the path (not retried -- no amount of retrying
+        turns a file into a directory). This asserts the latter case is
+        distinguished from the former: it raises immediately, with a clear
+        message identifying the actual problem, rather than exhausting the
+        retry loop into a confusing "kept flapping" error.
+        """
+        artifact_dir = tmp_path / "artifact"
+        artifact_dir.write_text("not a directory", encoding="utf-8")
+
+        mkdir_calls = {"count": 0}
+        real_mkdir = Path.mkdir
+
+        def counting_mkdir(
+            path_self: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False
+        ):
+            if path_self == artifact_dir:
+                mkdir_calls["count"] += 1
+            return real_mkdir(path_self, mode, parents=parents, exist_ok=exist_ok)
+
+        monkeypatch.setattr(Path, "mkdir", counting_mkdir)
+
+        with pytest.raises(OSError, match="non-directory") as exc_info:
+            with artifact_lock(artifact_dir):
+                pass
+
+        assert "kept flapping" not in str(exc_info.value)
+        assert mkdir_calls["count"] == 1, "should fail on the first attempt, not retry"
+
+    def test_vanished_during_non_directory_check_retries_not_misdiagnosed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A directory that vanishes between mkdir()'s FileExistsError and
+        the non-directory check must route to retry, not a false
+        "non-directory" diagnosis.
+
+        Regression for a TOCTOU race in the non-directory check itself: if
+        it were implemented as two separate calls (e.g. exists() then
+        is_dir()), a peer racing to recreate the directory right as the
+        first call runs, then remove it again before the second call runs,
+        could make each call individually consistent but jointly wrong --
+        misdiagnosing a transient double-removal race (the same class this
+        retry loop exists to absorb, per the overlapping-GC-cleanup
+        scenario documented on artifact_lock()) as a genuine non-directory
+        and failing immediately instead of retrying. The check must be a
+        single atomic stat() so a FileNotFoundError from it is
+        unambiguous: the path is gone, not occupied by a file.
+        """
+        artifact_dir = tmp_path / "artifact"
+        real_mkdir = Path.mkdir
+        real_stat = Path.stat
+
+        mkdir_calls = {"count": 0}
+
+        def flaky_mkdir(
+            path_self: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False
+        ):
+            if path_self == artifact_dir:
+                mkdir_calls["count"] += 1
+                if mkdir_calls["count"] == 1:
+                    raise FileExistsError(17, "File exists", str(path_self))
+            return real_mkdir(path_self, mode, parents=parents, exist_ok=exist_ok)
+
+        stat_calls = {"count": 0}
+
+        def flaky_stat(path_self: Path, *, follow_symlinks: bool = True):
+            if path_self == artifact_dir:
+                stat_calls["count"] += 1
+                if stat_calls["count"] == 1:
+                    # Simulates the directory being removed again by a
+                    # second peer between our mkdir()'s FileExistsError and
+                    # this stat() call.
+                    raise FileNotFoundError(2, "No such file or directory", str(path_self))
+            return real_stat(path_self, follow_symlinks=follow_symlinks)
+
+        monkeypatch.setattr(Path, "mkdir", flaky_mkdir)
+        monkeypatch.setattr(Path, "stat", flaky_stat)
+
+        with artifact_lock(artifact_dir):
+            pass
+
+        assert stat_calls["count"] == 1, "expected the simulated vanish to actually trigger"
+        assert mkdir_calls["count"] >= 2, "expected a retried mkdir() after the vanish"
+        assert artifact_dir.exists()
+        assert artifact_dir.is_dir()
 
 
 class TestConcurrentManifestUpdates:

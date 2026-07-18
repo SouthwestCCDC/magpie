@@ -17,7 +17,7 @@ from magpie.storage.exceptions import (
     ManifestCorruptError,
 )
 from magpie.storage.hash import short_hash
-from magpie.storage.manifest import read_manifest, remove_tag, update_tag
+from magpie.storage.manifest import Manifest, artifact_lock, read_manifest, remove_tag, update_tag
 from magpie.storage.metadata import (
     BlobMetadata,
     read_metadata,
@@ -139,10 +139,16 @@ class StorageService:
 
         # Conditionally update manifest with "latest" tag
         if not no_latest:
-            # Store full hash for verification, symlinks will extract first 8 chars
-            manifest = update_tag(artifact_dir, "latest", full_hash)
-            # Reconcile symlinks to match manifest
-            reconcile_symlinks(artifact_dir, manifest)
+            # Store full hash for verification, symlinks will extract first 8 chars.
+            # Reconcile symlinks under the same artifact_lock as the tag write
+            # (via on_locked) so the on-disk symlinks can't transiently lag the
+            # manifest under concurrent writers.
+            update_tag(
+                artifact_dir,
+                "latest",
+                full_hash,
+                on_locked=lambda manifest: reconcile_symlinks(artifact_dir, manifest),
+            )
 
         # Build artifact info
         tags = self._get_tags_for_hash(artifact_dir, full_hash)
@@ -391,11 +397,16 @@ class StorageService:
         metadata = read_metadata(artifact_dir, short_hash_name)
         full_hash = metadata.hash
 
-        # Update manifest with tag (uses full hash for verification)
-        manifest = update_tag(artifact_dir, tag_name, full_hash)
-
-        # Reconcile symlinks to match manifest
-        reconcile_symlinks(artifact_dir, manifest)
+        # Update manifest with tag (uses full hash for verification). Reconcile
+        # symlinks under the same artifact_lock as the tag write (via on_locked)
+        # so the on-disk symlinks can't transiently lag the manifest under
+        # concurrent writers.
+        update_tag(
+            artifact_dir,
+            tag_name,
+            full_hash,
+            on_locked=lambda manifest: reconcile_symlinks(artifact_dir, manifest),
+        )
 
         # Get all tags pointing to this hash
         tags = self._get_tags_for_hash(artifact_dir, full_hash)
@@ -435,10 +446,44 @@ class StorageService:
 
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
 
-        # Read manifest to check if tag exists
-        manifest = read_manifest(artifact_dir)
+        # artifact_lock() self-heals a concurrently-deleted directory by
+        # recreating it (mkdir(parents=True, exist_ok=True)), which is the
+        # right behavior for an artifact that existed when the caller
+        # started but was deleted mid-operation. It's the wrong behavior
+        # here: an artifact_path that was never created (or was already
+        # fully removed) has nothing to remove a tag from, and taking the
+        # lock would resurrect an empty artifact directory (and manifest)
+        # as a side effect of a no-op. Check existence first and
+        # short-circuit without locking. This check is advisory, not
+        # locked -- a concurrent creator racing us here is the same
+        # accepted moving-target limitation as elsewhere in this module.
+        if not artifact_dir.exists():
+            logger.warning(
+                "tag_not_found",
+                tag_name=tag_name,
+                artifact_path=artifact_path,
+                message="Artifact not found, nothing to remove",
+            )
+            return False
 
-        if tag_name not in manifest.tags:
+        # Remove tag from manifest. Presence is determined by on_locked's
+        # `had_tag`, which is checked under the same artifact_lock as the
+        # removal itself -- not by a separate unlocked read beforehand --
+        # so the True/False this method returns is accurate even when a
+        # concurrent caller removes the same tag in the meantime. Symlink
+        # reconciliation runs under that same lock too (via on_locked), so
+        # the on-disk symlinks can't transiently lag the manifest under
+        # concurrent writers.
+        was_removed = False
+
+        def _on_locked(manifest: Manifest, had_tag: bool) -> None:
+            nonlocal was_removed
+            was_removed = had_tag
+            reconcile_symlinks(artifact_dir, manifest)
+
+        remove_tag(artifact_dir, tag_name, on_locked=_on_locked)
+
+        if not was_removed:
             logger.warning(
                 "tag_not_found",
                 tag_name=tag_name,
@@ -446,12 +491,6 @@ class StorageService:
                 message="Tag not found, nothing to remove",
             )
             return False
-
-        # Remove tag from manifest
-        manifest = remove_tag(artifact_dir, tag_name)
-
-        # Reconcile symlinks to remove the symlink
-        reconcile_symlinks(artifact_dir, manifest)
 
         logger.info(
             "tag_removed",
@@ -505,12 +544,38 @@ class StorageService:
                 )
                 continue
 
-            if tag_name in manifest.tags:
-                affected_artifacts.append(artifact_path)
+            if tag_name not in manifest.tags:
+                continue
 
-                if not dry_run:
-                    # Actually remove the tag
-                    self.remove_tag(artifact_path, tag_name)
+            # The read above is part of an unlocked walk across the whole
+            # storage tree -- there's no single lock spanning every artifact
+            # directory at once -- so it only identifies a *candidate*.
+            # Whether the tag is still present, and thus whether this
+            # artifact belongs in the report, is decided under the artifact
+            # lock below, so a tag mutated elsewhere between the scan and
+            # here isn't misreported as affected.
+            if dry_run:
+                # artifact_lock() self-heals a concurrently-deleted
+                # directory by recreating it -- exactly what a read-only
+                # dry run must never do. If the artifact was deleted
+                # between the scan above and here, it's simply gone (not
+                # affected, nothing to lock); check existence first and
+                # skip without locking rather than resurrecting it. This
+                # check is advisory, not locked, but a since-deleted
+                # artifact genuinely isn't "affected," and a concurrent
+                # re-creation racing this check is the same accepted
+                # moving-target limitation as the scan itself.
+                if not artifact_dir.exists():
+                    continue
+                with artifact_lock(artifact_dir):
+                    if tag_name in read_manifest(artifact_dir).tags:
+                        affected_artifacts.append(artifact_path)
+            elif self.remove_tag(artifact_path, tag_name):
+                # remove_tag() re-checks presence under its own lock and
+                # reports whether it actually removed the tag, so a
+                # concurrent remover winning the race here is correctly
+                # excluded from the report.
+                affected_artifacts.append(artifact_path)
 
         logger.info(
             "tag_flushed",
