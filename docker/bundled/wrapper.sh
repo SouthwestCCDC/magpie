@@ -66,9 +66,14 @@ log "uvicorn started, pid=$UVICORN_PID"
 # --timeout bounds each individual wget attempt (DNS/connect/read
 # combined): without it, a stalled connection (TCP connects but the
 # response never arrives) could block wget indefinitely, defeating the
-# max=60 iteration ceiling and this loop's own signal responsiveness.
-i=0
-max=60
+# max_attempts ceiling and this loop's own signal responsiveness. Because
+# each attempt can now take anywhere from ~0s (instant refusal/response) up
+# to the 3s timeout, attempts is a bound on RETRIES, not wall-clock time --
+# track actual elapsed seconds separately via bash's SECONDS for accurate
+# logging.
+attempts=0
+max_attempts=60
+SECONDS=0
 until wget -q -O /dev/null --timeout=3 http://127.0.0.1:8000/health 2>/dev/null; do
 	if [ "$SHUTTING_DOWN" -eq 1 ]; then
 		log "termination requested during startup, waiting for uvicorn to drain"
@@ -81,22 +86,22 @@ until wget -q -O /dev/null --timeout=3 http://127.0.0.1:8000/health 2>/dev/null;
 		wait "$UVICORN_PID"
 		exit 1
 	fi
-	i=$((i + 1))
-	if [ "$i" -ge "$max" ]; then
+	attempts=$((attempts + 1))
+	if [ "$attempts" -ge "$max_attempts" ]; then
 		if [ "$SHUTTING_DOWN" -eq 1 ]; then
 			log "termination requested during startup, waiting for uvicorn to drain"
 			wait "$UVICORN_PID" 2>/dev/null
 			log "graceful shutdown complete (during startup)"
 			exit 0
 		fi
-		log "uvicorn did not become ready within ${max}s"
+		log "uvicorn did not become ready after ${attempts} attempts (${SECONDS}s elapsed)"
 		kill -TERM "$UVICORN_PID" 2>/dev/null
 		wait "$UVICORN_PID" 2>/dev/null
 		exit 1
 	fi
 	sleep 1
 done
-log "uvicorn ready after ${i}s"
+log "uvicorn ready after ${attempts} attempts (${SECONDS}s elapsed)"
 
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 CADDY_PID=$!
