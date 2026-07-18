@@ -59,8 +59,19 @@ def token_create(ctx: CTLContext, name: str, scope: str) -> None:
     if ctx.debug:
         click.echo(f"Creating token '{name}' with scope '{scope}'...", err=True)
 
+    # A token named "admin" -- regardless of the scope requested here -- can
+    # collide with the break-glass admin token that init/reset/rotate-admin
+    # manage (token names are unique, so creating one contends for the same
+    # row). Serialized with admin_token_lock so this can't land in the
+    # window between one of those commands' sink delivery and its persist,
+    # which would leave the sink holding a value that never became (or is
+    # no longer) the active token. See admin_token_lock's docstring.
     try:
-        plaintext_token = token_service.create_token(name, token_scope)
+        if name == ADMIN_TOKEN_NAME:
+            with admin_token_lock(settings):
+                plaintext_token = token_service.create_token(name, token_scope)
+        else:
+            plaintext_token = token_service.create_token(name, token_scope)
     except ValidationError as e:
         # Token name validation failed
         if is_json_output():
@@ -184,7 +195,15 @@ def token_revoke(ctx: CTLContext, name: str) -> None:
     if ctx.debug:
         click.echo(f"Revoking token '{name}'...", err=True)
 
-    revoked = token_service.revoke_token(name)
+    # Serialized with admin_token_lock when revoking the "admin"-named row --
+    # see the matching comment on token_create for why a concurrent
+    # mutation of that name, not just rotate-admin/init, must be serialized
+    # against the sink deliver-persist critical section.
+    if name == ADMIN_TOKEN_NAME:
+        with admin_token_lock(settings):
+            revoked = token_service.revoke_token(name)
+    else:
+        revoked = token_service.revoke_token(name)
 
     if revoked:
         # JSON output

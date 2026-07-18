@@ -621,3 +621,191 @@ class TestAdminTokenSinkRaceRegression:
         info = token_service.validate_token(delivered)
         assert info is not None, "sink-delivered token must be the active, persisted token"
         assert info.scope == TokenScope.ADMIN
+
+    def test_concurrent_revoke_never_orphans_a_delivered_rotate_candidate(
+        self, tmp_path: Path
+    ) -> None:
+        """A concurrent `token revoke admin` racing `token rotate admin`
+        must not delete the row between rotate's delivery and its persist.
+
+        This is the "rarer variant" noted in #552: rotate looks up the
+        existing admin token, delivers a new candidate to the sink, then
+        persists via an atomic revoke-old+create-new that requires the row
+        it just looked up to still be there. If a concurrent revoke isn't
+        serialized by the same lock, it can delete that row in the gap
+        between rotate's delivery and its persist -- rotate_token() then
+        finds nothing to rotate and returns None, so the already-delivered
+        candidate never becomes active anywhere, yet the sink keeps holding
+        it. With both operations under admin_token_lock, revoke can't run
+        until rotate's whole critical section (including persist) is done,
+        so this can never happen.
+
+        Runs many rounds, re-seeding an admin token at the start of each
+        round so rotate has something to find regardless of which round's
+        race revoke won. Each round uses an Event handshake (rather than
+        relying on scheduler timing) to deterministically force revoke to
+        attempt its delete in the exact delivered-but-not-yet-persisted
+        window: revoke waits for rotate's "delivered" signal before racing
+        for the row, and rotate yields briefly after signaling so revoke
+        gets a real chance to run before rotate's persist call. With the
+        real lock, that yield just means rotate holds the lock a little
+        longer -- revoke still can't acquire it until rotate is done.
+        """
+        sink_file = tmp_path / "admin-token"
+        settings = MagpieSettings(
+            storage_path=tmp_path / "storage",
+            database_path=tmp_path / "magpie.db",
+            admin_token_sink="file",
+            admin_token_sink_file_path=sink_file,
+        )
+        init_database(settings.database_path)
+        token_service = TokenService(settings)
+
+        rounds = 25
+        errors: list[Exception] = []
+        orphaned_candidates: list[str] = []
+
+        def rotate_once(delivered: threading.Event) -> None:
+            with admin_token_lock(settings):
+                conn = get_connection(settings.database_path)
+                try:
+                    existing = get_token_by_name(conn, "admin")
+                finally:
+                    conn.close()
+                if existing is None or existing.scope != TokenScope.ADMIN:
+                    delivered.set()  # unblock revoke_once even when there's nothing to rotate
+                    return
+                candidate = token_service.generate_plaintext_token(TokenScope.ADMIN)
+                deliver_admin_token(candidate, settings, action="rotate")
+                delivered.set()
+                # Yield so a concurrent, unlocked revoke gets a real chance
+                # to run in this window before persistence completes --
+                # without this, the race is real but too narrow to hit
+                # reliably even with the Event handshake above (confirmed
+                # empirically: 1ms wasn't enough for the other thread to be
+                # scheduled and complete its DB write before this resumes;
+                # 20ms reproduces the race reliably).
+                time.sleep(0.02)
+                rotate_result = token_service.rotate_token("admin", plaintext_token=candidate)
+                if rotate_result is None:
+                    # The exact race this test guards against: delivered,
+                    # but the row vanished before persistence could happen.
+                    orphaned_candidates.append(candidate)
+
+        def revoke_once(delivered: threading.Event) -> None:
+            delivered.wait(timeout=_BARRIER_TIMEOUT)
+            with admin_token_lock(settings):
+                token_service.revoke_token("admin")
+
+        for _ in range(rounds):
+            conn = get_connection(settings.database_path)
+            try:
+                exists = get_token_by_name(conn, "admin") is not None
+            finally:
+                conn.close()
+            if not exists:
+                token_service.create_token("admin", TokenScope.ADMIN)
+
+            delivered = threading.Event()
+
+            def run(fn: object) -> None:
+                try:
+                    fn(delivered)  # type: ignore[operator]
+                except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=run, args=(rotate_once,)),
+                threading.Thread(target=run, args=(revoke_once,)),
+            ]
+            for t in threads:
+                t.start()
+            _join_and_assert_exited(threads)
+
+        assert not errors, f"Unexpected errors: {errors}"
+        assert not orphaned_candidates, (
+            f"rotate delivered {len(orphaned_candidates)} candidate(s) that were never "
+            "persisted -- a concurrent revoke was not serialized by admin_token_lock"
+        )
+
+    def test_concurrent_token_create_admin_never_diverges_first_boot_sink(
+        self, tmp_path: Path
+    ) -> None:
+        """A concurrent `token create --name admin --scope admin` racing
+        first-boot `magpie-ctl init` must not leave the sink holding a
+        candidate that isn't the token that ended up persisted.
+
+        Mirrors test_concurrent_first_boot_checks_never_both_deliver, but
+        the second racer is a direct `token create` of the same reserved
+        name instead of a second `init` -- both mutate the same "admin"-
+        named row and so must be serialized by the same lock.
+        """
+        sink_file = tmp_path / "admin-token"
+        settings = MagpieSettings(
+            storage_path=tmp_path / "storage",
+            database_path=tmp_path / "magpie.db",
+            admin_token_sink="file",
+            admin_token_sink_file_path=sink_file,
+        )
+        init_database(settings.database_path)
+        token_service = TokenService(settings)
+
+        barrier = threading.Barrier(2)
+        errors: list[Exception] = []
+        succeeded: list[str] = []
+
+        def first_boot_init() -> None:
+            try:
+                barrier.wait(timeout=_BARRIER_TIMEOUT)
+                with admin_token_lock(settings):
+                    conn = get_connection(settings.database_path)
+                    try:
+                        exists = get_token_by_name(conn, "admin") is not None
+                    finally:
+                        conn.close()
+                    if exists:
+                        return
+                    candidate = token_service.generate_plaintext_token(TokenScope.ADMIN)
+                    deliver_admin_token(candidate, settings, action="init")
+                    try:
+                        token_service.create_token("admin", TokenScope.ADMIN, candidate)
+                        succeeded.append("init")
+                    except TokenExistsError:  # pragma: no cover - defensive, see init.py
+                        pass
+            except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
+                errors.append(exc)
+
+        def token_create_admin() -> None:
+            try:
+                barrier.wait(timeout=_BARRIER_TIMEOUT)
+                with admin_token_lock(settings):
+                    try:
+                        token_service.create_token("admin", TokenScope.ADMIN)
+                        succeeded.append("token_create")
+                    except TokenExistsError:
+                        pass
+            except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=first_boot_init),
+            threading.Thread(target=token_create_admin),
+        ]
+        for t in threads:
+            t.start()
+        _join_and_assert_exited(threads)
+
+        assert not errors, f"Unexpected errors: {errors}"
+
+        # Exactly one of the two must have actually persisted a row -- the
+        # locked existence check means the loser sees the token as already
+        # taken and never wastes (or orphans) a delivered candidate.
+        assert len(succeeded) == 1, f"Expected exactly one winner, got {succeeded}"
+
+        # If init delivered anything to the sink, it must be the token that
+        # actually ended up persisted -- never a discarded candidate.
+        if sink_file.exists():
+            delivered = sink_file.read_text().strip()
+            info = token_service.validate_token(delivered)
+            assert info is not None, "sink holds a token that isn't the active persisted one"
+            assert info.scope == TokenScope.ADMIN
