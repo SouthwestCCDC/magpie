@@ -73,6 +73,8 @@ def _reclaim_host_ownership(image: str, path: Path) -> None:
             "--rm",
             "--entrypoint",
             "sh",
+            "--user",
+            "0:0",
             "-v",
             f"{path}:/data",
             image,
