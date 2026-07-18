@@ -20,12 +20,11 @@ set -euo pipefail
 # environment variable of the same name is read here first, so
 # `MAGPIE_VERSION=vX.Y.Z magpie-deploy.sh install` can still select a
 # version to install even though the name is reused below for a different
-# value once the repo is cloned. GITHUB_REF is also honored (and any
-# "refs/tags/" or "refs/heads/" prefix stripped) so a CI-style ref like
-# "refs/tags/v0.1.3" works too. See issue #559.
+# value once the repo is cloned. GITHUB_REF is also honored. The raw value
+# is used as-is here; resolve_and_validate_version() (defined later, once
+# log_warn/die exist) strips any "refs/tags/"/"refs/heads/" prefix and
+# rejects other ref namespaces. See issue #559.
 REQUESTED_VERSION_ENV="${MAGPIE_VERSION:-${GITHUB_REF:-}}"
-REQUESTED_VERSION_ENV="${REQUESTED_VERSION_ENV#refs/tags/}"
-REQUESTED_VERSION_ENV="${REQUESTED_VERSION_ENV#refs/heads/}"
 
 # =============================================================================
 # Constants
@@ -981,6 +980,14 @@ EOF
 # Repository and image handling
 # =============================================================================
 
+# Extracts the version string from pyproject.toml content on stdin
+# (format: `version = "X.Y.Z"`). Shared by detect_version() (reading the
+# cloned file) and check_requested_image_exists() (reading pyproject.toml
+# fetched directly from GitHub, before any clone happens). See issue #559.
+extract_pyproject_version() {
+    sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' | head -n1
+}
+
 detect_version() {
     # Extract version from pyproject.toml
     # This function should be called after clone_repo() to ensure the repo exists
@@ -990,10 +997,7 @@ detect_version() {
         die "Cannot detect version: pyproject.toml not found at $pyproject"
     fi
 
-    # Extract version using robust sed with extended regex
-    # Format: version = "0.1.0-rc8"
-    # Handles flexible whitespace around = and ensures only first match
-    MAGPIE_VERSION=$(sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$pyproject" | head -n1)
+    MAGPIE_VERSION=$(extract_pyproject_version < "$pyproject")
 
     if [[ -z "$MAGPIE_VERSION" ]]; then
         die "Failed to extract version from $pyproject"
@@ -1002,16 +1006,101 @@ detect_version() {
     log "Detected magpie version: ${MAGPIE_VERSION}"
 }
 
+# Checks whether an image tag exists on ghcr.io, using the registry v2 HTTP
+# API directly rather than `docker manifest inspect` (which requires Docker
+# CLI experimental features enabled on many installs). GHCR issues
+# anonymous pull tokens for public images without credentials.
+#
+# Return codes: 0 = confirmed present, 1 = confirmed absent (HTTP 404 or
+# similar), 2 = undetermined (could not obtain an auth token, e.g. a
+# network hiccup) -- callers should treat 2 as "not verified", not "does
+# not exist". See issue #559.
+ghcr_image_exists() {
+    local image_tag="$1"
+    local image_path="${image_tag%%:*}"
+    local tag="${image_tag##*:}"
+    local repo_path="${image_path#ghcr.io/}"
+
+    local token
+    token=$(curl -fsSL "https://ghcr.io/token?scope=repository:${repo_path}:pull" 2>/dev/null \
+        | sed -nE 's/.*"token"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')
+    [[ -z "$token" ]] && return 2
+
+    # Explicit if/then, not a bare final command: curl -f's own exit codes
+    # (e.g. 22 for an HTTP error response) aren't the 0/1 this function
+    # promises callers, so its result is normalized here rather than
+    # passed through as the function's implicit return value.
+    if curl -fsSL -o /dev/null \
+        -H "Authorization: Bearer ${token}" \
+        -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json" \
+        "https://ghcr.io/v2/${repo_path}/manifests/${tag}"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Pre-validates that a GHCR image is published for the requested version,
+# fetching pyproject.toml directly from GitHub's raw content host (not via
+# a full clone) so an unpublished image is caught before any on-disk
+# change (mkdir, clone_repo, generated config files) is made. Only called
+# for an explicitly requested version/ref -- see resolve_and_validate_version().
+# Skipped for --from-source installs, which never pull a GHCR image. See
+# issue #559.
+check_requested_image_exists() {
+    if [[ "$FROM_SOURCE" == "true" ]]; then
+        return 0
+    fi
+
+    log "Checking that a magpie image is published for ${GITHUB_BRANCH}..."
+    local pyproject_url="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/pyproject.toml"
+    local remote_version
+    if ! remote_version=$(curl -fsSL "$pyproject_url" 2>/dev/null | extract_pyproject_version) || [[ -z "$remote_version" ]]; then
+        die "Could not determine the magpie version for '${GITHUB_BRANCH}' from ${pyproject_url}. Refusing to install."
+    fi
+
+    local image_tag="${GHCR_IMAGE}:${remote_version}"
+    ghcr_image_exists "$image_tag"
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        log "Found image: ${image_tag}"
+    elif [[ $rc -eq 2 ]]; then
+        log_warn "Could not verify image ${image_tag} exists (failed to obtain a GHCR auth token); continuing -- 'docker pull' will fail clearly later if it's missing."
+    else
+        die "No published image found for version '${remote_version}' (ref ${GITHUB_BRANCH}): ${image_tag} does not exist on ghcr.io. Refusing to install."
+    fi
+}
+
 resolve_and_validate_version() {
     # Priority: --version flag (already in REQUESTED_VERSION) > MAGPIE_VERSION
     # / GITHUB_REF env override (captured at script start, before the
     # Constants section repurposed the MAGPIE_VERSION name) > the default
     # branch. See issue #559.
+    local from_cli="true"
     if [[ -z "$REQUESTED_VERSION" ]]; then
         REQUESTED_VERSION="$REQUESTED_VERSION_ENV"
+        from_cli="false"
     fi
 
     if [[ -z "$REQUESTED_VERSION" ]]; then
+        return 0
+    fi
+
+    # Strip common CI-style ref prefixes (e.g. a raw GITHUB_REF of
+    # "refs/tags/v0.1.3"); only tag and branch names are meaningful to
+    # `git clone --branch`. A value still in another ref namespace after
+    # stripping (e.g. "refs/pull/123/merge") is rejected rather than
+    # passed through -- is_valid_git_ref()'s charset allowlist alone
+    # doesn't exclude "refs/..." paths, since '/' is a valid ref
+    # character. See issue #559.
+    REQUESTED_VERSION="${REQUESTED_VERSION#refs/tags/}"
+    REQUESTED_VERSION="${REQUESTED_VERSION#refs/heads/}"
+    if [[ "$REQUESTED_VERSION" == refs/* ]]; then
+        if [[ "$from_cli" == "true" ]]; then
+            die "Invalid --version value: unsupported ref namespace '$REQUESTED_VERSION' (only tags and branches are supported)"
+        fi
+        log_warn "Ignoring version env override in an unsupported ref namespace: $REQUESTED_VERSION_ENV (only tags and branches are supported)"
+        REQUESTED_VERSION=""
         return 0
     fi
 
@@ -1027,6 +1116,8 @@ resolve_and_validate_version() {
         die "Requested version/tag '${GITHUB_BRANCH}' not found in ${GITHUB_REPO} (checked branches and tags)."
     fi
     log "Version ${GITHUB_BRANCH} found"
+
+    check_requested_image_exists
 }
 
 update_repo_to_latest() {
@@ -1858,11 +1949,17 @@ parse_args() {
                 # to install (issue #559). Bare `--version`/`-v` -- with no
                 # following value, or immediately followed by a command
                 # name -- prints this script's own cosmetic version and
-                # exits.
+                # exits, but ONLY while no command has been parsed yet: once
+                # a command is in effect (e.g. `install --version`), a
+                # missing/empty/command-shaped value is a user error and
+                # must die, not silently print-and-exit-0, which would look
+                # like a successful, no-op install to a scripted caller.
                 if [[ $# -ge 2 && "$2" != -* && -n "$2" \
                     && ! "$2" =~ ^(install|update|uninstall|status|logs)$ ]]; then
                     REQUESTED_VERSION="$2"
                     shift 2
+                elif [[ -n "$command" ]]; then
+                    die "--version requires a value, e.g. --version v0.1.4"
                 else
                     echo "$SCRIPT_NAME v${HARDCODED_VERSION}"
                     exit 0
