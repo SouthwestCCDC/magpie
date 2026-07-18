@@ -2014,16 +2014,22 @@ parse_args() {
                 ;;
             --version|-v)
                 # Dual purpose: `install --version vX.Y.Z` selects a release
-                # to install (issue #559). Bare `--version`/`-v` -- with no
-                # following value, or immediately followed by a command
-                # name -- prints this script's own cosmetic version and
-                # exits, but ONLY while no command has been parsed yet: once
-                # a command is in effect (e.g. `install --version`), a
-                # missing/empty/command-shaped value is a user error and
-                # must die, not silently print-and-exit-0, which would look
-                # like a successful, no-op install to a scripted caller.
-                if [[ $# -ge 2 && "$2" != -* && -n "$2" \
-                    && ! "$2" =~ ^(install|update|uninstall|status|logs)$ ]]; then
+                # to install (issue #559). The value is the next token
+                # unless it's missing, empty, or option-shaped (starts with
+                # '-') -- deliberately NOT excluding tokens that happen to
+                # look like a command name (e.g. a branch/tag literally
+                # named "status"): this CLI has exactly one command per
+                # invocation, so once `command` is already set, there's
+                # nothing left for a later token to be mistaken for except
+                # a value.
+                #
+                # Bare `--version`/`-v` -- with no command parsed yet, and
+                # no following value -- still prints this script's own
+                # cosmetic version and exits. Once a command is in effect,
+                # a missing/empty/option-shaped value dies rather than
+                # silently printing-and-exiting, which would look like a
+                # successful, no-op install to a scripted caller.
+                if [[ $# -ge 2 && -n "$2" && "$2" != -* ]]; then
                     REQUESTED_VERSION="$2"
                     shift 2
                 elif [[ -n "$command" ]]; then
