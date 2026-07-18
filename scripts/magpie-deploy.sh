@@ -2212,6 +2212,14 @@ parse_args() {
                 TRUSTED_PROXIES="$2"
                 shift 2
                 ;;
+            # --accept-<specific-thing> is this installer's convention for
+            # acknowledging a SAFETY GATE (a check that stops a security- or
+            # data-affecting mistake, e.g. the trusted-proxies lockout gate
+            # in warn_or_gate_trusted_proxies_for_cidr_allow()) -- never a
+            # blanket --force/--bypass-safety-checks, which would silently
+            # swallow future gates too. See
+            # .github/copilot-instructions.md for the full rationale. Add
+            # new gates' acks the same way.
             --accept-empty-trusted-proxies)
                 ACCEPT_EMPTY_TRUSTED_PROXIES="true"
                 shift
