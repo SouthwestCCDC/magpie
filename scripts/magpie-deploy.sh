@@ -14,16 +14,31 @@
 
 set -euo pipefail
 
+# Env-var form of --release (see parse_args), captured before the
+# Constants section below initializes MAGPIE_VERSION for its own,
+# unrelated purpose (the semver string detected from the cloned
+# pyproject.toml, used to pick the GHCR image tag). An inherited
+# MAGPIE_VERSION environment variable is read here first, so
+# `MAGPIE_VERSION=vX.Y.Z magpie-deploy.sh install` can still select a
+# release even though the name is reused below for a different value once
+# the repo is cloned. GITHUB_REF is also honored. The raw value is used
+# as-is here; resolve_and_validate_release() (defined later, once
+# log_warn/die exist) strips any "refs/tags/"/"refs/heads/" prefix and
+# rejects other ref namespaces. See issue #559.
+REQUESTED_RELEASE_ENV="${MAGPIE_VERSION:-${GITHUB_REF:-}}"
+
 # =============================================================================
 # Constants
 # =============================================================================
 
 SCRIPT_NAME="$(basename "$0")"
 GITHUB_REPO="SouthwestCCDC/magpie"
-GITHUB_BRANCH="default"
+DEFAULT_GITHUB_BRANCH="default"
+GITHUB_BRANCH="$DEFAULT_GITHUB_BRANCH"
 GHCR_IMAGE="ghcr.io/southwestccdc/magpie"
 MAGPIE_VERSION=""  # Dynamically detected from pyproject.toml after cloning repo
-# For --version output before repo clone, display "dev" (cosmetic only).
+# For --version output before repo clone (script's own version, not a
+# release selector), display "dev" (cosmetic only).
 HARDCODED_VERSION="dev"
 
 # Default configuration
@@ -55,6 +70,7 @@ YES="false"
 FOLLOW="false"
 LINES="100"
 FROM_SOURCE="false"
+REQUESTED_RELEASE=""  # from --release; empty means "use the default branch"
 
 # =============================================================================
 # Helper functions
@@ -308,6 +324,22 @@ is_valid_acme_server_url() {
     if [[ -n "$port" ]]; then
         (( 10#$port >= 1 && 10#$port <= 65535 )) || return 1
     fi
+    return 0
+}
+
+# Matches a safe git ref name (branch or tag): alphanumerics, dot,
+# underscore, hyphen, and slash, starting and ending with an alphanumeric.
+# This is a conservative allowlist, not a full `git check-ref-format`
+# implementation -- its job is to keep a user-controlled --release value
+# out of `git clone --branch`/`git fetch` as anything but a literal ref
+# name. In particular it rejects a leading '-' (which `git` would
+# otherwise parse as another option) and '..' or '//' sequences. See
+# issue #559.
+is_valid_git_ref() {
+    local ref="$1"
+    [[ "$ref" =~ ^[A-Za-z0-9]([A-Za-z0-9._/-]*[A-Za-z0-9])?$ ]] || return 1
+    [[ "$ref" == *..* ]] && return 1
+    [[ "$ref" == *//* ]] && return 1
     return 0
 }
 
@@ -950,6 +982,14 @@ EOF
 # Repository and image handling
 # =============================================================================
 
+# Extracts the version string from pyproject.toml content on stdin
+# (format: `version = "X.Y.Z"`). Shared by detect_version() (reading the
+# cloned file) and check_requested_image_exists() (reading pyproject.toml
+# fetched directly from GitHub, before any clone happens). See issue #559.
+extract_pyproject_version() {
+    sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' | head -n1
+}
+
 detect_version() {
     # Extract version from pyproject.toml
     # This function should be called after clone_repo() to ensure the repo exists
@@ -959,16 +999,202 @@ detect_version() {
         die "Cannot detect version: pyproject.toml not found at $pyproject"
     fi
 
-    # Extract version using robust sed with extended regex
-    # Format: version = "0.1.0-rc8"
-    # Handles flexible whitespace around = and ensures only first match
-    MAGPIE_VERSION=$(sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$pyproject" | head -n1)
+    MAGPIE_VERSION=$(extract_pyproject_version < "$pyproject")
 
     if [[ -z "$MAGPIE_VERSION" ]]; then
         die "Failed to extract version from $pyproject"
     fi
 
     log "Detected magpie version: ${MAGPIE_VERSION}"
+}
+
+# Checks whether an image tag exists on ghcr.io, using the registry v2 HTTP
+# API directly rather than `docker manifest inspect` (which requires Docker
+# CLI experimental features enabled on many installs). GHCR issues
+# anonymous pull tokens for public images without credentials.
+#
+# Return codes: 0 = confirmed present (HTTP 200), 1 = confirmed absent
+# (HTTP 404 -- the only status treated as definitive), 2 = undetermined
+# (no auth token, or any other non-200/404 status such as a rate limit or
+# a transient 5xx) -- callers must treat 2 as "not verified", not "does
+# not exist"; only 1 should ever block an install. See issue #559.
+#
+# Every `curl`/pipeline result here is captured via `... || true` (or, for
+# the second curl, deliberate use of %{http_code} instead of -f) rather
+# than left as a function's bare final/first-line command: under this
+# script's `set -euo pipefail`, an unguarded nonzero exit from either would
+# abort the entire installer immediately -- silently, with no die()
+# message -- rather than letting this function return a code for its
+# caller to handle. See issue #559.
+ghcr_image_exists() {
+    local image_tag="$1"
+    local image_path="${image_tag%%:*}"
+    local tag="${image_tag##*:}"
+    local repo_path="${image_path#ghcr.io/}"
+
+    local token
+    token=$(curl -fsSL "https://ghcr.io/token?scope=repository:${repo_path}:pull" 2>/dev/null \
+        | sed -nE 's/.*"token"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p') || true
+    if [[ -z "$token" ]]; then
+        return 2
+    fi
+
+    local http_code
+    http_code=$(curl -sS -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer ${token}" \
+        -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json" \
+        "https://ghcr.io/v2/${repo_path}/manifests/${tag}" 2>/dev/null) || http_code=""
+
+    case "$http_code" in
+        200) return 0 ;;
+        404) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
+# Pre-validates that a GHCR image is published for the requested release,
+# fetching pyproject.toml directly from GitHub's raw content host (not via
+# a full clone) so an unpublished image is caught before any on-disk
+# change (mkdir, clone_repo, generated config files) is made. Only called
+# for an explicitly requested release/ref -- see resolve_and_validate_release().
+# Skipped for --from-source installs, which never pull a GHCR image. Only
+# a confirmed-absent (404) image blocks the install; any inconclusive
+# result (rate limit, transient error, no auth token) warns and lets the
+# eventual `docker pull` be the real gate. See issue #559.
+check_requested_image_exists() {
+    if [[ "$FROM_SOURCE" == "true" ]]; then
+        return 0
+    fi
+
+    # raw.githubusercontent.com/<owner>/<repo>/<ref>/<path> can't
+    # disambiguate a ref containing '/' (e.g. a branch named "release/1.x",
+    # which is_valid_git_ref() permits) from a path segment boundary, so a
+    # slashed ref can't be looked up this way. This only affects slashed
+    # branch names -- release tags (the primary use case, e.g. v0.1.4)
+    # never contain '/'. Skip the pre-check rather than mis-resolving the
+    # URL; the existing clone + pull_or_build_image() flow still validates
+    # the image. See issue #559.
+    if [[ "$GITHUB_BRANCH" == */* ]]; then
+        log_warn "Skipping image pre-check for ref containing '/': ${GITHUB_BRANCH} (will be validated when the image is pulled)"
+        return 0
+    fi
+
+    log "Checking that a magpie image is published for ${GITHUB_BRANCH}..."
+    local pyproject_url="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/pyproject.toml"
+    local remote_version
+    # Best-effort, like the manifest check below: an unreachable
+    # raw.githubusercontent.com or an unparseable response is a transient
+    # condition, not evidence the version is missing. Warn and skip the
+    # image pre-check entirely rather than blocking the install -- the
+    # eventual clone (which detects the version locally from the cloned
+    # pyproject.toml) and docker pull remain the real gates. See #559.
+    if ! remote_version=$(curl -fsSL "$pyproject_url" 2>/dev/null | extract_pyproject_version) || [[ -z "$remote_version" ]]; then
+        log_warn "Could not determine the magpie version for '${GITHUB_BRANCH}' from ${pyproject_url}; skipping the image pre-check -- 'docker pull' will fail clearly later if the image is actually missing."
+        return 0
+    fi
+
+    local image_tag="${GHCR_IMAGE}:${remote_version}"
+    local rc
+    if ghcr_image_exists "$image_tag"; then
+        rc=0
+    else
+        rc=$?
+    fi
+
+    if [[ $rc -eq 0 ]]; then
+        log "Found image: ${image_tag}"
+    elif [[ $rc -eq 1 ]]; then
+        die "No published image found for version '${remote_version}' (ref ${GITHUB_BRANCH}): ${image_tag} does not exist on ghcr.io (confirmed absent). Refusing to install."
+    else
+        log_warn "Could not confirm image ${image_tag} exists (registry check was inconclusive); continuing -- 'docker pull' will fail clearly later if it's actually missing."
+    fi
+}
+
+resolve_and_validate_release() {
+    # Priority: --release flag (already in REQUESTED_RELEASE) > MAGPIE_VERSION
+    # / GITHUB_REF env override (captured at script start, before the
+    # Constants section repurposed the MAGPIE_VERSION name) > the default
+    # branch. See issue #559.
+    local from_cli="true"
+    if [[ -z "$REQUESTED_RELEASE" ]]; then
+        REQUESTED_RELEASE="$REQUESTED_RELEASE_ENV"
+        from_cli="false"
+    fi
+
+    if [[ -z "$REQUESTED_RELEASE" ]]; then
+        return 0
+    fi
+
+    # Strip common CI-style ref prefixes (e.g. a raw GITHUB_REF of
+    # "refs/tags/v0.1.3"); only tag and branch names are meaningful to
+    # `git clone --branch`. A value still in another ref namespace after
+    # stripping (e.g. "refs/pull/123/merge") is rejected rather than
+    # passed through -- is_valid_git_ref()'s charset allowlist alone
+    # doesn't exclude "refs/..." paths, since '/' is a valid ref
+    # character. See issue #559.
+    REQUESTED_RELEASE="${REQUESTED_RELEASE#refs/tags/}"
+    REQUESTED_RELEASE="${REQUESTED_RELEASE#refs/heads/}"
+    if [[ "$REQUESTED_RELEASE" == refs/* ]]; then
+        if [[ "$from_cli" == "true" ]]; then
+            die "Invalid --release value: unsupported ref namespace '$REQUESTED_RELEASE' (only tags and branches are supported)"
+        fi
+        log_warn "Ignoring release env override in an unsupported ref namespace: $REQUESTED_RELEASE_ENV (only tags and branches are supported)"
+        REQUESTED_RELEASE=""
+        return 0
+    fi
+
+    if ! is_valid_git_ref "$REQUESTED_RELEASE"; then
+        die "Invalid --release value: $REQUESTED_RELEASE (must start and end with a letter or digit; only letters, digits, '.', '_', '-', '/' are allowed elsewhere; must not contain '..' or '//')"
+    fi
+
+    GITHUB_BRANCH="$REQUESTED_RELEASE"
+
+    log "Verifying requested release exists: ${GITHUB_BRANCH}..."
+    local repo_url="https://github.com/${GITHUB_REPO}.git"
+
+    # `git ls-remote --exit-code` distinguishes "genuinely no matching ref"
+    # (exit 2) from any other failure (network, DNS, auth, repo access --
+    # typically exit 128, e.g. "Could not resolve host" or "Repository not
+    # found"). Only exit 2 is treated as definitive; every other failure is
+    # best-effort -- warn and continue, letting the eventual `git clone`
+    # (which hits the same remote) be the real gate. See the class of bug
+    # this guards against generally: this pre-check may only hard-block on
+    # a confirmed negative (this exit-2 case, or a confirmed-404 image in
+    # check_requested_image_exists()); every other failure mode along this
+    # path must not turn a transient condition into a false block. See #559.
+    #
+    # Constrained to --heads --tags: an unqualified `ls-remote <pattern>`
+    # matches any ref, including special ones like `HEAD`, so `--release
+    # HEAD` would otherwise pass this check even though `git clone --branch
+    # HEAD` doesn't behave as a normal branch/tag checkout, and is_valid_git_ref()
+    # has no reason to reject the literal string "HEAD" (it's a
+    # syntactically ordinary, alphanumeric ref name). Restricting to heads
+    # and tags means only an actual branch or tag counts as "found". See #559.
+    #
+    # Captured via a plain if/else (NOT `if ! cmd; then ... $? ...`): `!`
+    # negates the exit status that `$?` reports afterwards too (`! false`
+    # leaves `$?` at 0, not false's original 1), so a negated condition
+    # can't be used to recover the original code -- only whether it was
+    # zero. stderr is captured (via `2>&1 >/dev/null`, stdout discarded)
+    # so a transport-failure message can be surfaced. See the same set -e
+    # / error-code-granularity reasoning in ghcr_image_exists(). See #559.
+    local ls_remote_err
+    local ls_remote_rc
+    if ls_remote_err=$(git ls-remote --exit-code --heads --tags "$repo_url" "$GITHUB_BRANCH" 2>&1 >/dev/null); then
+        ls_remote_rc=0
+    else
+        ls_remote_rc=$?
+    fi
+
+    if [[ $ls_remote_rc -eq 2 ]]; then
+        die "Requested release/tag '${GITHUB_BRANCH}' not found in ${GITHUB_REPO} (checked branches and tags)."
+    elif [[ $ls_remote_rc -ne 0 ]]; then
+        log_warn "Could not verify release/tag '${GITHUB_BRANCH}' against ${GITHUB_REPO} (inconclusive: ${ls_remote_err}); continuing -- 'git clone' will fail clearly later if it's actually missing."
+    else
+        log "Release ${GITHUB_BRANCH} found"
+    fi
+
+    check_requested_image_exists
 }
 
 update_repo_to_latest() {
@@ -1134,7 +1360,7 @@ pull_or_build_image() {
         log "Pulling magpie image from container registry..."
         log "  Image: ${image_tag}"
         if ! docker pull "$image_tag"; then
-            die "Failed to pull magpie image from ${image_tag}"
+            die "Failed to pull magpie image from ${image_tag}\nThe image tag is derived from the version in the cloned repo's pyproject.toml (${MAGPIE_VERSION}). If you used --release, confirm a release was published for that version."
         fi
         # Tag as magpie:latest for compose compatibility
         docker tag "$image_tag" magpie:latest
@@ -1276,6 +1502,7 @@ cmd_install() {
     log "Starting magpie installation..."
 
     check_prerequisites
+    resolve_and_validate_release
     gather_config
     validate_config
     check_existing_installation
@@ -1626,7 +1853,18 @@ Commands:
   status      Show service status
   logs        View container logs
 
+Global options:
+  -h, --help              Show this help message and exit
+  -v, --version           Show this installer script's own version and exit
+
 Install options (only used with 'install' command):
+  --release VERSION       Install a specific release/tag instead of the
+                          default branch (e.g. --release v0.1.3). Validates
+                          that the tag/ref exists, and best-effort checks
+                          that its ghcr.io image exists; fails clearly only
+                          when the tag or image is confirmed missing.
+                          Env override: MAGPIE_VERSION or GITHUB_REF.
+                          Default: $DEFAULT_GITHUB_BRANCH branch (latest)
   --install-dir PATH      Installation directory (default: $DEFAULT_INSTALL_DIR)
   --data-dir PATH         Data storage directory (default: INSTALL_DIR/data)
                           Must be an absolute path. Paths under /home are not
@@ -1674,6 +1912,9 @@ Examples:
 
   # Installation with Let's Encrypt
   sudo $SCRIPT_NAME install --tls-mode auto --domain magpie.example.com
+
+  # Install a specific tagged release instead of the default branch
+  sudo $SCRIPT_NAME install --release v0.1.3
 
   # Update existing installation
   sudo $SCRIPT_NAME update
@@ -1783,6 +2024,27 @@ parse_args() {
                 echo "$SCRIPT_NAME v${HARDCODED_VERSION}"
                 exit 0
                 ;;
+            --release)
+                # Selects a release/tag to install (issue #559) -- a
+                # plain option-with-value, distinct from --version/-v
+                # above (which only ever prints this script's own
+                # version and exits).
+                #
+                # Missing value (end of args, or the next token is
+                # option-shaped, starting with '-') and an explicit empty
+                # string both die rather than silently falling through:
+                # an empty REQUESTED_RELEASE is indistinguishable from "no
+                # release requested" in resolve_and_validate_release(),
+                # which would otherwise silently install the default
+                # branch instead of erroring. A value that happens to look
+                # like a command name (e.g. --release status) needs no
+                # special-casing -- it's just a value.
+                if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+                    die "--release requires a value, e.g. --release v0.1.4"
+                fi
+                REQUESTED_RELEASE="$2"
+                shift 2
+                ;;
             -*)
                 die "Unknown option: $1\nUse --help for usage information."
                 ;;
@@ -1796,6 +2058,15 @@ parse_args() {
     if [[ -z "$command" ]]; then
         show_help
         exit 1
+    fi
+
+    # --release selects a release to install and is only meaningful for
+    # 'install' -- the env-var override (MAGPIE_VERSION/GITHUB_REF) is
+    # deliberately not checked here, since it may be set in an operator's
+    # environment for unrelated reasons and shouldn't break other commands.
+    # See issue #559.
+    if [[ -n "$REQUESTED_RELEASE" ]] && [[ "$command" != "install" ]]; then
+        die "--release is only supported by the 'install' command (got: $command)"
     fi
 
     # Execute command
