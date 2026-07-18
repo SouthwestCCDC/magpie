@@ -250,6 +250,12 @@ def token_rotate(ctx: CTLContext, name: str) -> None:
     # single process-wide lock so a concurrent manual `init`/rotate-admin
     # can't interleave delivery against persistence -- see
     # admin_token_lock's docstring for the race this closes.
+    #
+    # Routed on the token's SCOPE, not its name: a token can be named
+    # "admin" without holding admin scope (names only have to be unique),
+    # and only the genuine break-glass admin token -- scope == ADMIN -- may
+    # use the sink. A same-named, non-admin-scope token falls through to the
+    # generic rotate path below like any other token.
     if name == ADMIN_TOKEN_NAME:
         with admin_token_lock(settings):
             conn = get_connection(settings.database_path)
@@ -258,83 +264,82 @@ def token_rotate(ctx: CTLContext, name: str) -> None:
             finally:
                 conn.close()
 
-            if existing is None:
-                msg = f"Token not found: {name}"
-                if is_json_output():
-                    output_error(ErrorCode.NOT_FOUND, msg)
-                else:
-                    raise click.ClickException(msg)
+            if existing is not None and existing.scope == TokenScope.ADMIN:
+                new_plaintext = token_service.generate_plaintext_token(existing.scope)
 
-            new_plaintext = token_service.generate_plaintext_token(existing.scope)
-
-            try:
-                deliver_admin_token(new_plaintext, settings, action="rotate")
-            except TokenSinkError as e:
-                # No DB mutation has happened -- the prior admin token, if any,
-                # remains valid and unchanged.
-                if is_json_output():
-                    output_error(ErrorCode.IO_ERROR, str(e))
-                else:
-                    raise click.ClickException(str(e))
-
-            sink = settings.admin_token_sink
-
-            if sink == "discard":
-                # Explicit non-retention: rotating still means "revoke the old
-                # token" (that's the operator's explicit ask), but the freshly
-                # delivered replacement is never persisted -- matching
-                # discard's "retain no usable token" contract.
-                token_service.revoke_token(name)
-                new_token: str | None = None
-                scope = existing.scope
-            else:
-                # Delivery succeeded: atomically revoke-old + persist the
-                # delivered value as a single DB transaction.
                 try:
-                    rotate_result = token_service.rotate_token(name, plaintext_token=new_plaintext)
-                except TokenError as e:
-                    # Hash collision during persistence (extremely unlikely):
-                    # the value was already delivered but couldn't be written.
+                    deliver_admin_token(new_plaintext, settings, action="rotate")
+                except TokenSinkError as e:
+                    # No DB mutation has happened -- the prior admin token, if any,
+                    # remains valid and unchanged.
                     if is_json_output():
-                        output_error(ErrorCode.CONFLICT, str(e))
+                        output_error(ErrorCode.IO_ERROR, str(e))
                     else:
                         raise click.ClickException(str(e))
-                if rotate_result is None:
-                    # The token was revoked (via the separate `token revoke`
-                    # command, which isn't covered by this lock) between our
-                    # lookup above and this atomic rotate.
-                    msg = f"Token not found: {name}"
-                    if is_json_output():
-                        output_error(ErrorCode.NOT_FOUND, msg)
-                    else:
-                        raise click.ClickException(msg)
-                new_token, scope = rotate_result
 
-            if is_json_output():
-                output_result(
-                    CommandResult(
-                        data={
-                            "token": new_token if sink == "stdout" else None,
-                            "admin_token_sink": sink,
-                            "name": name,
-                            "scope": scope.value,
-                        },
-                        human_output="",
+                sink = settings.admin_token_sink
+
+                if sink == "discard":
+                    # Explicit non-retention: rotating still means "revoke the old
+                    # token" (that's the operator's explicit ask), but the freshly
+                    # delivered replacement is never persisted -- matching
+                    # discard's "retain no usable token" contract.
+                    token_service.revoke_token(name)
+                    new_token: str | None = None
+                    scope = existing.scope
+                else:
+                    # Delivery succeeded: atomically revoke-old + persist the
+                    # delivered value as a single DB transaction.
+                    try:
+                        rotate_result = token_service.rotate_token(
+                            name, plaintext_token=new_plaintext
+                        )
+                    except TokenError as e:
+                        # Hash collision during persistence (extremely unlikely):
+                        # the value was already delivered but couldn't be written.
+                        if is_json_output():
+                            output_error(ErrorCode.CONFLICT, str(e))
+                        else:
+                            raise click.ClickException(str(e))
+                    if rotate_result is None:
+                        # The token was revoked (via the separate `token
+                        # revoke` command, which isn't covered by this lock)
+                        # between our lookup above and this atomic rotate.
+                        msg = f"Token not found: {name}"
+                        if is_json_output():
+                            output_error(ErrorCode.NOT_FOUND, msg)
+                        else:
+                            raise click.ClickException(msg)
+                    new_token, scope = rotate_result
+
+                if is_json_output():
+                    output_result(
+                        CommandResult(
+                            data={
+                                "token": new_token if sink == "stdout" else None,
+                                "admin_token_sink": sink,
+                                "name": name,
+                                "scope": scope.value,
+                            },
+                            human_output="",
+                        )
                     )
-                )
-                return
+                    return
 
-            click.echo("")
-            click.echo(f"TOKEN ROTATED: {name} (scope: {scope.value})")
-            if sink == "file":
-                click.echo(f"Delivered via 'file' sink: {settings.admin_token_sink_file_path}")
-            elif sink == "exec":
-                click.echo("Delivered via 'exec' sink.")
-            elif sink == "discard":
-                click.echo("No bootstrap admin token was retained (sink=discard).")
-                click.echo("Mint one when ready via an interactive session:")
-                click.echo("  magpie-ctl token create --name ops-admin --scope admin")
-            return
+                click.echo("")
+                click.echo(f"TOKEN ROTATED: {name} (scope: {scope.value})")
+                if sink == "file":
+                    click.echo(f"Delivered via 'file' sink: {settings.admin_token_sink_file_path}")
+                elif sink == "exec":
+                    click.echo("Delivered via 'exec' sink.")
+                elif sink == "discard":
+                    click.echo("No bootstrap admin token was retained (sink=discard).")
+                    click.echo("Mint one when ready via an interactive session:")
+                    click.echo("  magpie-ctl token create --name ops-admin --scope admin")
+                return
+            # else: no token named "admin" exists, or one exists with a
+            # non-admin scope -- fall through to the generic rotate path
+            # below, which handles "not found" and rotates/prints normally.
 
     try:
         result = token_service.rotate_token(name)
