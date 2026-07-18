@@ -173,17 +173,19 @@ reads, this changes the client IP Caddy sees: it now reads the real TCP peer
 (your proxy) instead of the original client from `X-Forwarded-For`, so
 CIDR-allow stops matching real clients and those reads start returning 401.
 
-`magpie-deploy.sh update` responds to this in two tiers, keyed on
-`--tls-mode`:
+`magpie-deploy.sh update` responds to this in two tiers, keyed on the
+install's persisted TLS mode (the `TLS_MODE` value already saved in
+`<install>/etc/.env` from when you ran `install` -- not something you pass
+to `update` itself):
 
-- **`--tls-mode off`** (Caddy is HTTP-only, almost certainly behind an
+- **TLS mode `off`** (Caddy is HTTP-only, almost certainly behind an
   external proxy): if `MAGPIE_TRUSTED_PROXIES` has never been configured for
   this install and `MAGPIE_ALLOWED_CIDRS` is set, `update` treats this as
   high-risk. Interactively, it prompts for the proxy's hop (or a
   confirmation that magpie is directly exposed) before proceeding; declining
   aborts the update. With `--noninteractive`, it hard-fails instead of
   proceeding silently -- see the flags below.
-- **`--tls-mode auto`/`manual`** (Caddy faces the internet directly): the
+- **TLS mode `auto`/`manual`** (Caddy faces the internet directly): the
   same `MAGPIE_ALLOWED_CIDRS` set / `MAGPIE_TRUSTED_PROXIES` empty
   combination only prints an advisory warning and the update completes,
   since an empty `MAGPIE_TRUSTED_PROXIES` is the expected, correct value
@@ -193,7 +195,7 @@ This only fires once: as soon as `MAGPIE_TRUSTED_PROXIES` has a value in
 `<install>/etc/.env` -- including an explicit empty one -- `update` treats
 that as your deliberate choice and stops checking.
 
-If you are fronted (`--tls-mode off`):
+If you are fronted (installed with `--tls-mode off`):
 
 1. Determine your proxy's address as seen by magpie's Caddy. Two common ways:
    - `docker network inspect <magpie-network>` and read the `Subnet` field

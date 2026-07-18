@@ -1651,12 +1651,18 @@ cmd_install() {
 # called when NONINTERACTIVE is already known false.
 prompt_trusted_proxies_for_cidr_allow() {
     local response
-    read -r -p "[magpie] Upstream proxy hop as seen by magpie's Caddy (e.g. 172.20.0.0/16), or leave blank if magpie is directly exposed: " response
-    if [[ -n "$response" ]]; then
-        TRUSTED_PROXIES="$response"
-        log "Using MAGPIE_TRUSTED_PROXIES=${TRUSTED_PROXIES}."
-        return 0
-    fi
+    while true; do
+        read -r -p "[magpie] Upstream proxy hop as seen by magpie's Caddy (e.g. 172.20.0.0/16), or leave blank if magpie is directly exposed: " response
+        if [[ -z "$response" ]]; then
+            break
+        fi
+        if is_valid_ip_or_cidr_list "$response"; then
+            TRUSTED_PROXIES="$response"
+            log "Using MAGPIE_TRUSTED_PROXIES=${TRUSTED_PROXIES}."
+            return 0
+        fi
+        log_error "Invalid entry: $response (expected a whitespace-separated list of IPv4/IPv6 addresses or CIDRs, e.g. 172.20.0.0/16). Try again, or leave blank if magpie is directly exposed."
+    done
 
     read -r -p "[magpie] Confirm magpie is directly exposed to the internet with no reverse proxy in front of it [y/N]: " response
     case "$response" in
@@ -1700,8 +1706,14 @@ warn_or_gate_trusted_proxies_for_cidr_allow() {
     [[ -n "$TRUSTED_PROXIES" ]] && return 0
 
     if [[ "$TLS_MODE" != "off" ]]; then
-        log_warn "MAGPIE_ALLOWED_CIDRS is set but MAGPIE_TRUSTED_PROXIES is empty."
-        log_warn "As of v0.1.6 the built-in Caddy trusts no proxy by default. If magpie is behind a reverse proxy, CIDR-based anonymous reads will NO LONGER match real clients (they will 401) until you set MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to your proxy's hop as seen by magpie's Caddy -- commonly magpie's docker bridge subnet, e.g. 172.20.0.0/16 (or the gateway /32) -- and re-run '$SCRIPT_NAME update'. If magpie is directly exposed (no proxy), no action is needed."
+        # Same "key present = deliberate choice" signal the gate below
+        # uses -- once an explicit empty MAGPIE_TRUSTED_PROXIES= is
+        # persisted (e.g. by a prior --tls-mode off run, or hand-edited),
+        # don't nag a settled install on every subsequent update.
+        if [[ "$TRUSTED_PROXIES_KEY_PRESENT" != "true" ]]; then
+            log_warn "MAGPIE_ALLOWED_CIDRS is set but MAGPIE_TRUSTED_PROXIES is empty."
+            log_warn "As of v0.1.6 the built-in Caddy trusts no proxy by default. If magpie is behind a reverse proxy, CIDR-based anonymous reads will NO LONGER match real clients (they will 401) until you set MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to your proxy's hop as seen by magpie's Caddy -- commonly magpie's docker bridge subnet, e.g. 172.20.0.0/16 (or the gateway /32) -- and re-run '$SCRIPT_NAME update'. If magpie is directly exposed (no proxy), no action is needed."
+        fi
         return 0
     fi
 
@@ -2112,9 +2124,11 @@ Update options:
   --accept-empty-trusted-proxies   Acknowledge that an empty
                                     MAGPIE_TRUSTED_PROXIES is intentional
                                     (magpie is directly exposed, no reverse
-                                    proxy). Only meaningful when 'update'
-                                    detects --tls-mode off with a real
-                                    MAGPIE_ALLOWED_CIDRS and no
+                                    proxy). Only meaningful when this
+                                    install's persisted TLS mode (set at
+                                    install time, not a flag on 'update')
+                                    is 'off' and 'update' finds a real
+                                    MAGPIE_ALLOWED_CIDRS with no
                                     MAGPIE_TRUSTED_PROXIES ever configured
                                     for this install -- without it (or
                                     --trusted-proxies), that combination
