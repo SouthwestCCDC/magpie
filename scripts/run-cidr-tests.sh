@@ -127,6 +127,7 @@ set +e
 docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml \
   exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner-outside \
   pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied \
+  tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListForgedForwardedFor \
   tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListTokenInteraction::test_outside_cidr_with_valid_read_token \
   tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListTokenInteraction::test_outside_cidr_with_valid_write_token \
   "${PYTEST_ARGS[@]}"

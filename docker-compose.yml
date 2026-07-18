@@ -27,6 +27,9 @@ services:
       - caddy_config:/config
     environment:
       - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-}
+      # Trusted proxy IPs/CIDRs whose X-Forwarded-For header Caddy honors.
+      # Default: empty (trust no proxy). See Caddyfile and issue #575.
+      - MAGPIE_TRUSTED_PROXIES=${MAGPIE_TRUSTED_PROXIES:-}
     depends_on:
       - magpie
     restart: unless-stopped

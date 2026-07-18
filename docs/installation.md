@@ -133,6 +133,36 @@ Key environment variables (see [.env.example](../.env.example) for all):
 - `MAGPIE_RETENTION_DAYS` - GC retention period (default: 90)
 - `MAGPIE_DEBUG` - Verbose logging (default: false; never in production)
 - `MAGPIE_ADMIN_TOKEN_SINK` - Admin bootstrap token delivery: `file`/`exec`/`discard`/`stdout` (required in production, no default; see [Admin Token Delivery](#admin-token-delivery) above)
+- `MAGPIE_ALLOWED_CIDRS` - CIDR ranges allowed to bypass auth for read-only access (default: none)
+- `MAGPIE_TRUSTED_PROXIES` - IPs/CIDRs whose `X-Forwarded-For` Caddy trusts (default: none; see [Trusted Proxies](#trusted-proxies) below)
+
+## Trusted Proxies
+
+Caddy determines the client IP used by `MAGPIE_ALLOWED_CIDRS` (and shown in
+access logs) from the real TCP connection, unless `MAGPIE_TRUSTED_PROXIES`
+names the immediate peer as a trusted proxy -- in which case it instead reads
+the client IP from that peer's `X-Forwarded-For` header.
+
+**Default is empty: no proxy is trusted.** If Caddy is directly internet-facing
+(the standard `docker-compose.prod.yml` setup, terminating TLS itself), leave
+this unset -- the real connecting peer's IP is always correct.
+
+Only set `MAGPIE_TRUSTED_PROXIES` if Caddy sits behind another reverse proxy or
+load balancer that you control, and scope it to the exact address(es) of that
+proxy -- never a broad range. Any client positioned within a trusted range can
+set `X-Forwarded-For` and have Caddy believe it, which would let it satisfy
+`MAGPIE_ALLOWED_CIDRS` without a bearer token:
+
+```bash
+export MAGPIE_TRUSTED_PROXIES="10.3.3.10"
+docker compose -f docker-compose.prod.yml up -d
+```
+
+The [`magpie-deploy.sh` installer](../scripts/magpie-deploy.sh)'s `--tls-mode
+off` mode (Caddy running HTTP-only behind an external proxy) prompts for this
+interactively via `--trusted-proxies`; `--tls-mode auto`/`manual` (Caddy
+directly facing the internet) always default to trusting nothing. See issue
+[#575](https://github.com/SouthwestCCDC/magpie/issues/575).
 
 Next: [Production Checklist](production-checklist.md) → [User Guide](user-guide.md) → [Backup & Restore](backup-restore.md)
 

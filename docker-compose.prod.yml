@@ -15,11 +15,15 @@
 #   MAGPIE_DATA_DIR   - Host path for data directory (default: ./data)
 #
 # Optional Environment Variables:
-#   MAGPIE_HTTP_PORT  - External HTTP port (default: 80)
-#   MAGPIE_HTTPS_PORT - External HTTPS port (default: 443)
-#   AUTHENTIK_HOST    - Authentik server hostname for SSO
-#                       (e.g., authentik.example.com)
-#                       See docs/authentik-setup.md for setup instructions
+#   MAGPIE_HTTP_PORT       - External HTTP port (default: 80)
+#   MAGPIE_HTTPS_PORT      - External HTTPS port (default: 443)
+#   MAGPIE_ALLOWED_CIDRS   - CIDR ranges allowed to bypass auth for reads (default: none)
+#   MAGPIE_TRUSTED_PROXIES - IPs/CIDRs whose X-Forwarded-For is honored (default: none --
+#                            trust no proxy). Only needed if Caddy sits behind another
+#                            reverse proxy. See issue #575.
+#   AUTHENTIK_HOST         - Authentik server hostname for SSO
+#                            (e.g., authentik.example.com)
+#                            See docs/authentik-setup.md for setup instructions
 #
 # TLS Configuration:
 #   By default, Caddy uses Let's Encrypt for automatic TLS certificates.
@@ -64,6 +68,13 @@ services:
       # To enable this feature, set one or more real CIDRs, e.g.:
       # MAGPIE_ALLOWED_CIDRS=10.0.0.0/8,192.168.1.0/24
       - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-255.255.255.255/32}
+      # Trusted proxy IPs/CIDRs whose X-Forwarded-For header Caddy honors
+      # when determining the client IP used by MAGPIE_ALLOWED_CIDRS above.
+      # Default: empty (trust no proxy; the real connecting peer's IP is
+      # used). Only set this to the exact upstream hop(s) if Caddy sits
+      # behind another reverse proxy -- never a broad range. See
+      # Caddyfile.prod and issue #575.
+      - MAGPIE_TRUSTED_PROXIES=${MAGPIE_TRUSTED_PROXIES:-}
       # Optional: Authentik SSO integration for browser access to /artifacts/*
       # See docs/authentik-setup.md for setup instructions
       - AUTHENTIK_HOST=${AUTHENTIK_HOST:-}

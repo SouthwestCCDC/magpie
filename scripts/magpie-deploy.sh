@@ -46,7 +46,12 @@ DEFAULT_INSTALL_DIR="/opt/magpie"
 DEFAULT_TLS_MODE="off"
 DEFAULT_HTTP_PORT="8080"
 DEFAULT_HTTPS_PORT="8443"
-DEFAULT_TRUSTED_PROXIES="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+# Trust no proxy by default -- Caddy uses the real connecting peer's IP.
+# Only set (via --trusted-proxies or the interactive prompt for --tls-mode
+# off) to the exact upstream hop(s) when Caddy sits behind another reverse
+# proxy. A broad range here would let any client on it spoof
+# X-Forwarded-For and defeat MAGPIE_ALLOWED_CIDRS. See issue #575.
+DEFAULT_TRUSTED_PROXIES=""
 
 # =============================================================================
 # Global variables (populated during config)
@@ -355,9 +360,12 @@ is_valid_git_ref() {
 # otherwise-valid tokens (e.g. "10.0.0.0/8\n192.168.1.1") would otherwise
 # pass per-token validation, but it corrupts the generated .env
 # (read_env_file() is line-based -- everything after the first newline in
-# a value becomes a separate, likely-dropped "line") and the Caddyfile's
-# `trusted_proxies static ${TRUSTED_PROXIES}` directive (split across
-# Caddyfile lines). See issue #448.
+# a value becomes a separate, likely-dropped "line"). MAGPIE_TRUSTED_PROXIES
+# reaches Caddy's `trusted_proxies static {$MAGPIE_TRUSTED_PROXIES:}`
+# directive as a single process environment variable (via docker-compose,
+# not baked into the Caddyfile text), so a corrupted .env is the actual
+# failure mode here rather than a split Caddyfile directive. See issues
+# #448 and #575.
 #
 # Tokens are split with `read -ra` rather than `for token in $list`: the
 # latter performs pathname expansion (globbing) in addition to
@@ -592,17 +600,34 @@ load_existing_config() {
         # Map env vars to script variables. MAGPIE_* prefixed vars map to
         # their unprefixed script variable name (DATA_DIR, HTTP_PORT,
         # HTTPS_PORT, DOMAIN); the unprefixed persisted keys below
-        # (TLS_MODE, TRUSTED_PROXIES, BIND_IP, ACME_SERVER) map directly.
+        # (TLS_MODE, BIND_IP, ACME_SERVER) map directly.
         DATA_DIR="${env_vars[MAGPIE_DATA_DIR]:-$DATA_DIR}"
         HTTP_PORT="${env_vars[MAGPIE_HTTP_PORT]:-$HTTP_PORT}"
         HTTPS_PORT="${env_vars[MAGPIE_HTTPS_PORT]:-$HTTPS_PORT}"
         DOMAIN="${env_vars[MAGPIE_DOMAIN]:-$DOMAIN}"
-        # TLS_MODE, TRUSTED_PROXIES, BIND_IP, and ACME_SERVER are stored
-        # without a MAGPIE_ prefix (see generate_env_file); map directly.
         TLS_MODE="${env_vars[TLS_MODE]:-$TLS_MODE}"
-        TRUSTED_PROXIES="${env_vars[TRUSTED_PROXIES]:-$TRUSTED_PROXIES}"
         BIND_IP="${env_vars[BIND_IP]:-$BIND_IP}"
         ACME_SERVER="${env_vars[ACME_SERVER]:-$ACME_SERVER}"
+
+        # MAGPIE_TRUSTED_PROXIES (issue #575) replaces the pre-#575
+        # unprefixed TRUSTED_PROXIES key. Prefer the new key; fall back to
+        # migrating the old one so an existing installation's configured
+        # value survives an `update` unchanged (never silently narrowed to
+        # empty here -- that could break a fronted deployment relying on
+        # it). If the migrated legacy value is exactly the old overly-broad
+        # default this issue fixes, warn loudly rather than fix it
+        # automatically: only the operator knows the actual upstream hop(s)
+        # to scope it to.
+        local legacy_broad_default="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+        if [[ -n "${env_vars[MAGPIE_TRUSTED_PROXIES]+set}" ]]; then
+            TRUSTED_PROXIES="${env_vars[MAGPIE_TRUSTED_PROXIES]}"
+        elif [[ -n "${env_vars[TRUSTED_PROXIES]+set}" ]]; then
+            TRUSTED_PROXIES="${env_vars[TRUSTED_PROXIES]}"
+            if [[ "$TRUSTED_PROXIES" == "$legacy_broad_default" ]]; then
+                log_warn "Migrating pre-#575 TRUSTED_PROXIES from ${INSTALL_DIR}/etc/.env: it is set to the old overly-broad default ($legacy_broad_default), which lets any client on those ranges spoof X-Forwarded-For and bypass MAGPIE_ALLOWED_CIDRS."
+                log_warn "Edit MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to the exact upstream reverse proxy address(es) in front of this install (or leave it empty to trust none), then run '$SCRIPT_NAME update' to regenerate the Caddyfile."
+            fi
+        fi
     fi
 }
 
@@ -652,9 +677,18 @@ gather_config() {
         HTTPS_PORT="$DEFAULT_HTTPS_PORT"
     fi
 
-    # Trusted proxies
+    # Trusted proxies (X-Forwarded-For). Only relevant when Caddy sits
+    # behind another reverse proxy -- typically a --tls-mode off (HTTP-only)
+    # deployment fronted by an external proxy/load balancer. Prompt only in
+    # that case; --tls-mode auto/manual means Caddy faces the internet
+    # directly, so the empty (trust nothing) default is always correct
+    # there. See issue #575.
     if [[ -z "$TRUSTED_PROXIES" ]]; then
-        TRUSTED_PROXIES="$DEFAULT_TRUSTED_PROXIES"
+        if [[ "$TLS_MODE" == "off" ]]; then
+            prompt_value "Trusted proxy IP(s) (space-separated; the exact upstream reverse proxy in front of magpie, if any -- leave blank to trust none)" "$DEFAULT_TRUSTED_PROXIES" TRUSTED_PROXIES
+        else
+            TRUSTED_PROXIES="$DEFAULT_TRUSTED_PROXIES"
+        fi
     fi
 }
 
@@ -687,7 +721,13 @@ MAGPIE_RETENTION_DAYS=90
 # separate DOMAIN= key here to avoid a stale/hand-edited duplicate being
 # silently ignored (issue #448).
 TLS_MODE=${TLS_MODE:-}
-TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
+
+# Trusted proxy IPs/CIDRs whose X-Forwarded-For header Caddy honors.
+# Persisted with the MAGPIE_ prefix (unlike TLS_MODE/BIND_IP/ACME_SERVER
+# above) because docker-compose passes it straight through to the caddy
+# container as MAGPIE_TRUSTED_PROXIES, which Caddy itself reads via the
+# trusted_proxies directive in the Caddyfile -- see issue #575.
+MAGPIE_TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
 
 # Network configuration (issue #446)
 BIND_IP=${BIND_IP:-}
@@ -725,7 +765,16 @@ generate_caddyfile() {
 # Docker maps host:${HTTP_PORT} -> container:80
 
 EOF
-            # Copy the global options block, adding trusted_proxies
+            # Copy the global options block, adding trusted_proxies.
+            #
+            # trusted_proxies reads {$MAGPIE_TRUSTED_PROXIES:} -- a literal
+            # Caddy env-var placeholder, NOT bash-interpolated here (note
+            # the escaped \$ below) -- so Caddy resolves it from its own
+            # container's environment at config-load time, same as
+            # Caddyfile.prod. That environment variable comes from .env via
+            # docker-compose's `MAGPIE_TRUSTED_PROXIES=${MAGPIE_TRUSTED_PROXIES:-}`
+            # (see docker-compose.yml), not from this script directly.
+            # Default is empty: trust no proxy. See issue #575.
             cat >> "$dest_caddyfile" << EOF
 {
 	log {
@@ -736,7 +785,7 @@ EOF
 	admin off
 
 	servers {
-		trusted_proxies static ${TRUSTED_PROXIES}
+		trusted_proxies static {\$MAGPIE_TRUSTED_PROXIES:}
 	}
 }
 
@@ -1663,6 +1712,21 @@ cmd_update() {
             die "Fix or remove the invalid value(s) in ${INSTALL_DIR}/etc/.env, or reinstall."
         fi
 
+        # `update` never regenerates .env (only `install` calls
+        # generate_env_file()), so a pre-#575 install's .env may still only
+        # have the legacy unprefixed TRUSTED_PROXIES key that
+        # load_existing_config() just migrated into this script's
+        # TRUSTED_PROXIES variable above. That in-memory value alone is not
+        # enough: docker-compose reads .env directly (not through this
+        # script) and substitutes MAGPIE_TRUSTED_PROXIES specifically into
+        # the caddy container's environment. Write the canonical key back
+        # to .env now so the regenerated Caddyfile and the running
+        # container agree. See issue #575.
+        if ! grep -q '^MAGPIE_TRUSTED_PROXIES=' "${INSTALL_DIR}/etc/.env" 2>/dev/null; then
+            log "Persisting MAGPIE_TRUSTED_PROXIES=${TRUSTED_PROXIES} to ${INSTALL_DIR}/etc/.env (migrated from legacy TRUSTED_PROXIES key)"
+            printf 'MAGPIE_TRUSTED_PROXIES=%s\n' "$TRUSTED_PROXIES" >> "${INSTALL_DIR}/etc/.env"
+        fi
+
         # Regenerate the Caddyfile using the configured (or defaulted) TLS settings
         if declare -F generate_caddyfile >/dev/null 2>&1; then
             generate_caddyfile
@@ -1882,7 +1946,12 @@ Install options (only used with 'install' command):
   --acme-server URL       Custom ACME server URL (only with --tls-mode auto)
                           Example: --acme-server https://ca.example.com/acme/acme/directory
                           Default: Let's Encrypt
-  --trusted-proxies CIDR  Trusted proxy CIDRs (default: RFC1918 ranges)
+  --trusted-proxies CIDR  Space-separated IPs/CIDRs whose X-Forwarded-For
+                          header Caddy trusts (default: none -- the real
+                          connecting peer's IP is used). Only set this to
+                          the exact upstream hop(s) when Caddy sits behind
+                          another reverse proxy (e.g. --tls-mode off);
+                          never a broad range. See issue #575.
   --noninteractive        Skip interactive prompts (use defaults for all config)
   --force                 Overwrite existing installation
   --from-source           Build image from source instead of pulling from ghcr.io

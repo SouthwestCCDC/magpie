@@ -797,3 +797,50 @@ class TestCIDRAllowListOutsideIPDenied:
         response = cidr_outside_http_client.get("/health")
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
+
+
+@pytest.mark.e2e
+@pytest.mark.slow
+class TestCIDRAllowListForgedForwardedFor:
+    """Regression guard for #575: a spoofed X-Forwarded-For must not
+    satisfy the CIDR bypass unless it comes from a source Caddy actually
+    trusts (MAGPIE_TRUSTED_PROXIES). The default docker-compose.yml leaves
+    that variable empty, so Caddy must use the real connecting peer's IP
+    and ignore this header entirely -- even though external-net
+    (192.168.100.0/24, the network test-runner-outside sits on) falls
+    within the private ranges the pre-#575 Caddyfile trusted by default.
+    """
+
+    def test_outside_ip_cannot_bypass_via_forged_x_forwarded_for(
+        self,
+        cidr_outside_http_client: httpx.Client,
+    ) -> None:
+        """SECURITY CRITICAL: a client on external-net (not in
+        MAGPIE_ALLOWED_CIDRS) must not be able to spoof an
+        X-Forwarded-For address inside the allowed range (172.18.0.0/24)
+        to bypass authentication."""
+        response = cidr_outside_http_client.get(
+            "/api/v1/artifacts",
+            headers={"X-Forwarded-For": "172.18.0.99"},
+        )
+        assert response.status_code == 401, (
+            f"SECURITY FAILURE: forged X-Forwarded-For from outside CIDR "
+            f"bypassed authentication. Expected 401, got {response.status_code}. "
+            f"Caddy must not trust X-Forwarded-For from an untrusted proxy "
+            f"(MAGPIE_TRUSTED_PROXIES)."
+        )
+
+    def test_outside_ip_cannot_download_via_forged_x_forwarded_for(
+        self,
+        cidr_outside_http_client: httpx.Client,
+    ) -> None:
+        """Same regression guard for the static-file download route."""
+        response = cidr_outside_http_client.get(
+            "/artifacts/test/artifact/@12345678",
+            headers={"X-Forwarded-For": "172.18.0.99"},
+        )
+        assert response.status_code == 401, (
+            f"SECURITY FAILURE: forged X-Forwarded-For from outside CIDR "
+            f"bypassed authentication on artifact download. Expected 401, "
+            f"got {response.status_code}."
+        )
