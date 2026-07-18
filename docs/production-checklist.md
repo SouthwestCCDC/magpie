@@ -19,6 +19,11 @@ Before deploying to production:
 - [ ] Admin token delivered and stored securely via the configured sink (or
       intentionally discarded, with a mint-later plan)
 - [ ] HTTPS enabled (automatic via Let's Encrypt)
+- [ ] `MAGPIE_TRUSTED_PROXIES` left unset unless Caddy sits behind another
+      reverse proxy you control -- if it does, set it to that proxy's exact
+      address(es), never a broad range. A broad range (e.g. RFC1918) lets any
+      client on it spoof `X-Forwarded-For` and bypass `MAGPIE_ALLOWED_CIDRS`.
+      See [installation.md](installation.md#trusted-proxies).
 
 ## Deploy
 ```bash

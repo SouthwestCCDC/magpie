@@ -128,7 +128,26 @@
 #   - Read-only infrastructure tools
 #
 # SECURITY NOTE: Only add trusted network ranges. IPs in the allowed list
-# can read all artifacts without authentication.
+# can read all artifacts without authentication. MAGPIE_ALLOWED_CIDRS is
+# matched against Caddy's notion of the client IP, which trusted_proxies
+# below controls -- see that directive for why this matters.
+#
+# =============================================================================
+# TRUSTED PROXIES (X-Forwarded-For)
+# =============================================================================
+#
+# Environment variable configuration:
+#   MAGPIE_TRUSTED_PROXIES - Space-separated list of IPs/CIDRs whose
+#                             X-Forwarded-For header Caddy honors when
+#                             determining the client IP used above.
+#                             Default: empty (trust no proxy; the real
+#                             connecting peer's IP is always used)
+#
+# Any client positioned within a trusted range can set X-Forwarded-For and
+# have Caddy believe it, so this must be scoped to the exact upstream hop(s)
+# in front of Caddy (e.g. a fronting reverse proxy), never a broad private
+# range -- a broad range lets any client on that range spoof its source IP
+# and satisfy MAGPIE_ALLOWED_CIDRS above without a token. See issue #575.
 #
 # =============================================================================
 
@@ -151,7 +170,7 @@
 	admin off
 
 	servers {
-		trusted_proxies static private_ranges
+		trusted_proxies static {$MAGPIE_TRUSTED_PROXIES:}
 	}
 }
 

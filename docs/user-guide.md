@@ -76,6 +76,7 @@ Server configuration uses environment variables with the `MAGPIE_` prefix. See `
 | `MAGPIE_OTEL_SERVICE_NAME` | `magpie` | Service name for OpenTelemetry traces |
 | **Security** | | |
 | `MAGPIE_ALLOWED_CIDRS` | *(empty)* | Comma-separated CIDR ranges for read-only IP allow-listing (e.g., `10.0.0.0/8,192.168.1.0/24`). Requests from these IPs can read artifacts without bearer tokens. Write operations still require tokens. |
+| `MAGPIE_TRUSTED_PROXIES` | *(empty)* | Space-separated IPs/CIDRs whose `X-Forwarded-For` header Caddy trusts when determining the client IP used by `MAGPIE_ALLOWED_CIDRS` above. Default trusts no proxy (real connecting peer's IP is used). Only set this to the exact upstream hop(s) if Caddy sits behind another reverse proxy -- never a broad range, which would let clients on it spoof their source IP. See [installation.md](installation.md#trusted-proxies). |
 | `AUTHENTIK_HOST` | *(none)* | Authentik server hostname for SSO browser access to `/artifacts/*` (e.g., `authentik.example.com`). API access via bearer tokens continues to work. See `docs/authentik-setup.md`. |
 | **Docker Compose Only** | | |
 | `MAGPIE_DATA_DIR` | `./data` | Host directory for data storage (mounted at `/data` in containers). Only used by `docker-compose.yml`, not the application. |
@@ -196,6 +197,7 @@ Requires `MAGPIE_S3_BUCKET` and AWS credentials.
 
 - **Token scopes are global** - Cannot restrict tokens to specific paths; use separate instances for strict isolation
 - **IP allow-list is global** - `MAGPIE_ALLOWED_CIDRS` bypasses auth for entire server
+- **Trusted proxies must be scoped tightly** - `MAGPIE_TRUSTED_PROXIES` controls which upstream hop(s) Caddy trusts to set `X-Forwarded-For`; a broad range lets any client on it spoof its source IP and bypass `MAGPIE_ALLOWED_CIDRS`
 - **No built-in rate limiting** - Deploy behind Cloudflare or use Caddy's rate_limit plugin
 - **Tokens don't expire** - Rotate tokens quarterly: `magpie-ctl token revoke old-token` + `token create`
 
