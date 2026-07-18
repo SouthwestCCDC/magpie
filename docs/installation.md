@@ -179,9 +179,10 @@ the update still completes, since an empty `MAGPIE_TRUSTED_PROXIES` is
 correct for a directly-exposed deployment. If you are fronted:
 
 1. Determine your proxy's address as seen by magpie's Caddy. Two common ways:
-   - `docker network inspect <magpie-network>` and read the gateway address
+   - `docker network inspect <magpie-network>` and read the `Subnet` field
      (if the proxy hops in via magpie's own docker bridge, this is usually a
-     /16, e.g. `172.20.0.0/16`, or the gateway `/32` alone).
+     /16, e.g. `172.20.0.0/16`); for a tighter scope, use the `Gateway`
+     field instead as a `/32`.
    - Check the inner Caddy access log's `remote_ip` field for a request you
      know came through the proxy.
 2. Set `MAGPIE_TRUSTED_PROXIES` in `<install>/etc/.env` to that address,

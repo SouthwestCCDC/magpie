@@ -69,7 +69,7 @@ TRUSTED_PROXIES=""
 # Read-only mirror of MAGPIE_ALLOWED_CIDRS from an existing install's .env --
 # this script never sets or persists it (docker-compose passes it straight
 # through to the app); it's only loaded so cmd_update can warn when it's
-# paired with an empty TRUSTED_PROXIES. See issue #579.
+# paired with an empty MAGPIE_TRUSTED_PROXIES. See issue #579.
 ALLOWED_CIDRS=""
 BIND_IP=""
 ACME_SERVER=""
