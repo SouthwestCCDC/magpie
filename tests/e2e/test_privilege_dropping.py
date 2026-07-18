@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import warnings
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,47 @@ def _extract_id_output(stdout: str) -> tuple[int, int]:
 
     # Take the last two numeric lines (in case there's extra output before)
     return int(numeric_lines[-2]), int(numeric_lines[-1])
+
+
+def _reclaim_host_ownership(image: str, path: Path) -> None:
+    """Restore host-user ownership of a bind-mounted directory.
+
+    entrypoint.sh chowns /data to the runtime MAGPIE_UID/MAGPIE_GID (see #536),
+    which leaves the host temp dir unremovable by the (unprivileged) test
+    runner when that UID/GID doesn't match the host user. Bypasses
+    entrypoint.sh -- which would just re-chown as the detected/dropped user --
+    by running as root directly via --entrypoint.
+
+    Called from ``finally`` blocks, so a failure here must not raise (that
+    would mask a real assertion failure from the same block) -- surfaced as a
+    warning instead. A failed reclaim leaves the temp dir root-owned, which
+    will make ``TemporaryDirectory``'s own cleanup fail right after this
+    returns; the warning is what explains that follow-on failure.
+    """
+    result = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "sh",
+            "--user",
+            "0:0",
+            "-v",
+            f"{path}:/data",
+            image,
+            "-c",
+            f"chown -R {os.getuid()}:{os.getgid()} /data",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        warnings.warn(
+            f"Failed to reclaim host ownership of {path} (exit {result.returncode}): "
+            f"{result.stderr.strip()}. The temp dir may be left root-owned.",
+            stacklevel=2,
+        )
 
 
 @pytest.mark.e2e
@@ -172,6 +214,7 @@ class TestPrivilegeDropping:
                 )
 
             finally:
+                _reclaim_host_ownership("magpie-privtest-env:latest", temp_path)
                 # Cleanup
                 subprocess.run(
                     ["docker", "rmi", "magpie-privtest-env:latest"],
@@ -390,9 +433,81 @@ class TestPrivilegeDropping:
                 )
 
             finally:
+                _reclaim_host_ownership("magpie-privtest-userfile:latest", temp_path)
                 # Cleanup
                 subprocess.run(
                     ["docker", "rmi", "magpie-privtest-userfile:latest"],
+                    capture_output=True,
+                )
+
+    def test_container_custom_uid_initializes_db_at_default_path(self) -> None:
+        """Regression test for #536.
+
+        entrypoint.sh chowned /data/artifacts but never /data itself, so a
+        custom MAGPIE_UID that doesn't already own /data could create the
+        storage dir but not /data/magpie.db (the default
+        MAGPIE_DATABASE_PATH) -- first-boot init failed. Neither artifacts/
+        nor magpie.db is pre-created here, so this exercises the real
+        first-boot init path end to end.
+        """
+        with tempfile.TemporaryDirectory(prefix="magpie_privtest_dbinit_") as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Build the image
+            subprocess.run(
+                ["docker", "build", "-t", "magpie-privtest-dbinit:latest", "."],
+                cwd=PROJECT_ROOT,
+                check=True,
+                capture_output=True,
+            )
+
+            try:
+                # A UID unlikely to match temp_path's host ownership.
+                test_uid = 6000
+                test_gid = 6001
+
+                result = subprocess.run(
+                    [
+                        "docker",
+                        "run",
+                        "--rm",
+                        "-e",
+                        f"MAGPIE_UID={test_uid}",
+                        "-e",
+                        f"MAGPIE_GID={test_gid}",
+                        "-e",
+                        "MAGPIE_ADMIN_TOKEN_SINK=discard",
+                        "-v",
+                        f"{temp_path}:/data",
+                        "magpie-privtest-dbinit:latest",
+                        "sh",
+                        "-c",
+                        "test -f /data/magpie.db && stat -c '%u %g' /data/magpie.db",
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+
+                assert result.returncode == 0, (
+                    "Container failed to initialize the DB at the default path with a "
+                    f"custom MAGPIE_UID. stdout={result.stdout!r} stderr={result.stderr!r}"
+                )
+
+                lines = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+                actual_uid, actual_gid = (int(part) for part in lines[-1].split())
+
+                assert actual_uid == test_uid, (
+                    f"magpie.db owned by UID {actual_uid}, expected {test_uid}"
+                )
+                assert actual_gid == test_gid, (
+                    f"magpie.db owned by GID {actual_gid}, expected {test_gid}"
+                )
+
+            finally:
+                _reclaim_host_ownership("magpie-privtest-dbinit:latest", temp_path)
+                # Cleanup: remove test image
+                subprocess.run(
+                    ["docker", "rmi", "magpie-privtest-dbinit:latest"],
                     capture_output=True,
                 )
 
@@ -523,6 +638,7 @@ class TestPrivilegeDropping:
                 )
 
             finally:
+                _reclaim_host_ownership("magpie-privtest-mixed:latest", temp_path)
                 # Cleanup
                 subprocess.run(
                     ["docker", "rmi", "magpie-privtest-mixed:latest"],
