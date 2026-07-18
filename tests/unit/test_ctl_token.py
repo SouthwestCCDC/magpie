@@ -512,6 +512,34 @@ class TestTokenRotateAdminSink:
             conn.close()
         assert not any(t.name == "admin" for t in tokens)
 
+    def test_rotate_non_admin_scope_token_named_admin_does_not_use_sink(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings, tmp_path: Path
+    ) -> None:
+        """A token literally named "admin" but with non-admin scope rotates
+        through the generic path (regression test for #554): the
+        sink-routing special case must key on scope, not name.
+        """
+        token_file = tmp_path / "admin-token"
+        settings = test_settings.model_copy(
+            update={"admin_token_sink": "file", "admin_token_sink_file_path": token_file}
+        )
+
+        with patch("magpie.ctl.get_settings", return_value=settings):
+            create_result = cli_runner.invoke(
+                cli, ["token", "create", "--name", "admin", "--scope", "read"]
+            )
+            assert create_result.exit_code == 0, f"Output: {create_result.output}"
+
+            rotate_result = cli_runner.invoke(cli, ["token", "rotate", "admin"])
+
+        assert rotate_result.exit_code == 0, f"Output: {rotate_result.output}"
+        # Printed directly like any generic rotate -- never routed through
+        # the admin-token sink.
+        match = re.search(r"mgp_[A-Za-z0-9_-]+", rotate_result.output)
+        assert match is not None
+        assert not match.group(0).startswith("mgp_ADMIN_")
+        assert not token_file.exists()
+
     def test_rotate_admin_json_output_omits_token_for_non_stdout_sink(
         self, cli_runner: CliRunner, test_settings: MagpieSettings, tmp_path: Path
     ) -> None:

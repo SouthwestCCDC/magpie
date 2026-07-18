@@ -21,11 +21,13 @@ the intended behavior, not a failure.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import shlex
 import subprocess  # nosec B404 - operator-configured command, no shell=True, token via stdin only
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterator
 
 import click
 
@@ -40,6 +42,55 @@ class TokenSinkError(RuntimeError):
 
     Never includes the token value in its message.
     """
+
+
+_ADMIN_TOKEN_LOCK_FILENAME = ".magpie-admin-token.lock"  # nosec B105 - filename, not a password
+
+
+@contextlib.contextmanager
+def admin_token_lock(settings: MagpieSettings) -> Iterator[None]:
+    """Serialize the admin token check-deliver-persist critical section.
+
+    ``entrypoint.sh``'s automatic first-boot init is already flock-protected
+    at the shell level, but nothing prevents an operator from running
+    ``magpie-ctl init`` or ``magpie-ctl token rotate admin`` manually, more
+    than once, at the same time (both are documented, supported `docker exec`
+    commands). Without this lock, two concurrent invocations can each pass
+    their own existence check, both generate and deliver a candidate token,
+    and only one of them wins database persistence -- leaving the sink
+    holding a value that was delivered but never became the active token.
+
+    Callers must acquire this lock BEFORE the existence check and hold it
+    for the entire deliver-then-persist sequence, so that a second racing
+    invocation either blocks until the first is fully committed (and then
+    observes the token as already existing, delivering nothing at all) or
+    is itself the sole deliverer.
+
+    Uses POSIX ``flock`` on a dedicated lock file colocated with the
+    database (rather than the database file itself, which callers may need
+    to open independently) -- blocks until the lock is available, with no
+    timeout, matching ``storage.manifest.artifact_lock``'s precedent
+    elsewhere in this codebase. The lock file is created if absent and left
+    in place; it holds no content and is safe to leave behind indefinitely.
+
+    Args:
+        settings: MagpieSettings providing database_path, which determines
+            the lock file's location.
+
+    Yields:
+        None. The lock is held for the duration of the ``with`` block.
+    """
+    lock_path = settings.database_path.parent / _ADMIN_TOKEN_LOCK_FILENAME
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0), 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def deliver_admin_token(token: str, settings: MagpieSettings, *, action: str) -> None:
@@ -142,7 +193,7 @@ def _deliver_exec(token: str, settings: MagpieSettings) -> None:
             times out, or exits non-zero.
     """
     command = settings.admin_token_sink_exec_command
-    if not command:  # pragma: no cover - guarded by caller in practice
+    if not command:
         raise TokenSinkError("MAGPIE_ADMIN_TOKEN_SINK_EXEC_COMMAND is not set for sink=exec")
 
     try:
