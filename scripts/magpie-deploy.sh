@@ -14,17 +14,18 @@
 
 set -euo pipefail
 
-# Captured before the Constants section below initializes MAGPIE_VERSION for
-# its own purpose (the semver string detected from the cloned
+# Env-var form of --release (see parse_args), captured before the
+# Constants section below initializes MAGPIE_VERSION for its own,
+# unrelated purpose (the semver string detected from the cloned
 # pyproject.toml, used to pick the GHCR image tag). An inherited
-# environment variable of the same name is read here first, so
+# MAGPIE_VERSION environment variable is read here first, so
 # `MAGPIE_VERSION=vX.Y.Z magpie-deploy.sh install` can still select a
-# version to install even though the name is reused below for a different
-# value once the repo is cloned. GITHUB_REF is also honored. The raw value
-# is used as-is here; resolve_and_validate_version() (defined later, once
+# release even though the name is reused below for a different value once
+# the repo is cloned. GITHUB_REF is also honored. The raw value is used
+# as-is here; resolve_and_validate_release() (defined later, once
 # log_warn/die exist) strips any "refs/tags/"/"refs/heads/" prefix and
 # rejects other ref namespaces. See issue #559.
-REQUESTED_VERSION_ENV="${MAGPIE_VERSION:-${GITHUB_REF:-}}"
+REQUESTED_RELEASE_ENV="${MAGPIE_VERSION:-${GITHUB_REF:-}}"
 
 # =============================================================================
 # Constants
@@ -36,7 +37,8 @@ DEFAULT_GITHUB_BRANCH="default"
 GITHUB_BRANCH="$DEFAULT_GITHUB_BRANCH"
 GHCR_IMAGE="ghcr.io/southwestccdc/magpie"
 MAGPIE_VERSION=""  # Dynamically detected from pyproject.toml after cloning repo
-# For --version output before repo clone, display "dev" (cosmetic only).
+# For --version output before repo clone (script's own version, not a
+# release selector), display "dev" (cosmetic only).
 HARDCODED_VERSION="dev"
 
 # Default configuration
@@ -68,7 +70,7 @@ YES="false"
 FOLLOW="false"
 LINES="100"
 FROM_SOURCE="false"
-REQUESTED_VERSION=""  # from --version; empty means "use the default branch"
+REQUESTED_RELEASE=""  # from --release; empty means "use the default branch"
 
 # =============================================================================
 # Helper functions
@@ -328,7 +330,7 @@ is_valid_acme_server_url() {
 # Matches a safe git ref name (branch or tag): alphanumerics, dot,
 # underscore, hyphen, and slash, starting and ending with an alphanumeric.
 # This is a conservative allowlist, not a full `git check-ref-format`
-# implementation -- its job is to keep a user-controlled --version value
+# implementation -- its job is to keep a user-controlled --release value
 # out of `git clone --branch`/`git fetch` as anything but a literal ref
 # name. In particular it rejects a leading '-' (which `git` would
 # otherwise parse as another option) and '..' or '//' sequences. See
@@ -1050,11 +1052,11 @@ ghcr_image_exists() {
     esac
 }
 
-# Pre-validates that a GHCR image is published for the requested version,
+# Pre-validates that a GHCR image is published for the requested release,
 # fetching pyproject.toml directly from GitHub's raw content host (not via
 # a full clone) so an unpublished image is caught before any on-disk
 # change (mkdir, clone_repo, generated config files) is made. Only called
-# for an explicitly requested version/ref -- see resolve_and_validate_version().
+# for an explicitly requested release/ref -- see resolve_and_validate_release().
 # Skipped for --from-source installs, which never pull a GHCR image. Only
 # a confirmed-absent (404) image blocks the install; any inconclusive
 # result (rate limit, transient error, no auth token) warns and lets the
@@ -1108,18 +1110,18 @@ check_requested_image_exists() {
     fi
 }
 
-resolve_and_validate_version() {
-    # Priority: --version flag (already in REQUESTED_VERSION) > MAGPIE_VERSION
+resolve_and_validate_release() {
+    # Priority: --release flag (already in REQUESTED_RELEASE) > MAGPIE_VERSION
     # / GITHUB_REF env override (captured at script start, before the
     # Constants section repurposed the MAGPIE_VERSION name) > the default
     # branch. See issue #559.
     local from_cli="true"
-    if [[ -z "$REQUESTED_VERSION" ]]; then
-        REQUESTED_VERSION="$REQUESTED_VERSION_ENV"
+    if [[ -z "$REQUESTED_RELEASE" ]]; then
+        REQUESTED_RELEASE="$REQUESTED_RELEASE_ENV"
         from_cli="false"
     fi
 
-    if [[ -z "$REQUESTED_VERSION" ]]; then
+    if [[ -z "$REQUESTED_RELEASE" ]]; then
         return 0
     fi
 
@@ -1130,24 +1132,24 @@ resolve_and_validate_version() {
     # passed through -- is_valid_git_ref()'s charset allowlist alone
     # doesn't exclude "refs/..." paths, since '/' is a valid ref
     # character. See issue #559.
-    REQUESTED_VERSION="${REQUESTED_VERSION#refs/tags/}"
-    REQUESTED_VERSION="${REQUESTED_VERSION#refs/heads/}"
-    if [[ "$REQUESTED_VERSION" == refs/* ]]; then
+    REQUESTED_RELEASE="${REQUESTED_RELEASE#refs/tags/}"
+    REQUESTED_RELEASE="${REQUESTED_RELEASE#refs/heads/}"
+    if [[ "$REQUESTED_RELEASE" == refs/* ]]; then
         if [[ "$from_cli" == "true" ]]; then
-            die "Invalid --version value: unsupported ref namespace '$REQUESTED_VERSION' (only tags and branches are supported)"
+            die "Invalid --release value: unsupported ref namespace '$REQUESTED_RELEASE' (only tags and branches are supported)"
         fi
-        log_warn "Ignoring version env override in an unsupported ref namespace: $REQUESTED_VERSION_ENV (only tags and branches are supported)"
-        REQUESTED_VERSION=""
+        log_warn "Ignoring release env override in an unsupported ref namespace: $REQUESTED_RELEASE_ENV (only tags and branches are supported)"
+        REQUESTED_RELEASE=""
         return 0
     fi
 
-    if ! is_valid_git_ref "$REQUESTED_VERSION"; then
-        die "Invalid --version value: $REQUESTED_VERSION (must start and end with a letter or digit; only letters, digits, '.', '_', '-', '/' are allowed elsewhere; must not contain '..' or '//')"
+    if ! is_valid_git_ref "$REQUESTED_RELEASE"; then
+        die "Invalid --release value: $REQUESTED_RELEASE (must start and end with a letter or digit; only letters, digits, '.', '_', '-', '/' are allowed elsewhere; must not contain '..' or '//')"
     fi
 
-    GITHUB_BRANCH="$REQUESTED_VERSION"
+    GITHUB_BRANCH="$REQUESTED_RELEASE"
 
-    log "Verifying requested version exists: ${GITHUB_BRANCH}..."
+    log "Verifying requested release exists: ${GITHUB_BRANCH}..."
     local repo_url="https://github.com/${GITHUB_REPO}.git"
 
     # `git ls-remote --exit-code` distinguishes "genuinely no matching ref"
@@ -1177,11 +1179,11 @@ resolve_and_validate_version() {
     fi
 
     if [[ $ls_remote_rc -eq 2 ]]; then
-        die "Requested version/tag '${GITHUB_BRANCH}' not found in ${GITHUB_REPO} (checked branches and tags)."
+        die "Requested release/tag '${GITHUB_BRANCH}' not found in ${GITHUB_REPO} (checked branches and tags)."
     elif [[ $ls_remote_rc -ne 0 ]]; then
-        log_warn "Could not verify version/tag '${GITHUB_BRANCH}' against ${GITHUB_REPO} (inconclusive: ${ls_remote_err}); continuing -- 'git clone' will fail clearly later if it's actually missing."
+        log_warn "Could not verify release/tag '${GITHUB_BRANCH}' against ${GITHUB_REPO} (inconclusive: ${ls_remote_err}); continuing -- 'git clone' will fail clearly later if it's actually missing."
     else
-        log "Version ${GITHUB_BRANCH} found"
+        log "Release ${GITHUB_BRANCH} found"
     fi
 
     check_requested_image_exists
@@ -1350,7 +1352,7 @@ pull_or_build_image() {
         log "Pulling magpie image from container registry..."
         log "  Image: ${image_tag}"
         if ! docker pull "$image_tag"; then
-            die "Failed to pull magpie image from ${image_tag}\nThe image tag is derived from the version in the cloned repo's pyproject.toml (${MAGPIE_VERSION}). If you used --version, confirm a release was published for that version."
+            die "Failed to pull magpie image from ${image_tag}\nThe image tag is derived from the version in the cloned repo's pyproject.toml (${MAGPIE_VERSION}). If you used --release, confirm a release was published for that version."
         fi
         # Tag as magpie:latest for compose compatibility
         docker tag "$image_tag" magpie:latest
@@ -1492,7 +1494,7 @@ cmd_install() {
     log "Starting magpie installation..."
 
     check_prerequisites
-    resolve_and_validate_version
+    resolve_and_validate_release
     gather_config
     validate_config
     check_existing_installation
@@ -1846,12 +1848,10 @@ Commands:
 Global options:
   -h, --help              Show this help message and exit
   -v, --version           Show this installer script's own version and exit
-                          (with 'install --version vX.Y.Z', selects a magpie
-                          release to install instead -- see below)
 
 Install options (only used with 'install' command):
-  --version VERSION       Install a specific release/tag instead of the
-                          default branch (e.g. --version v0.1.3). Validates
+  --release VERSION       Install a specific release/tag instead of the
+                          default branch (e.g. --release v0.1.3). Validates
                           that the tag/ref exists, and best-effort checks
                           that its ghcr.io image exists; fails clearly only
                           when the tag or image is confirmed missing.
@@ -1906,7 +1906,7 @@ Examples:
   sudo $SCRIPT_NAME install --tls-mode auto --domain magpie.example.com
 
   # Install a specific tagged release instead of the default branch
-  sudo $SCRIPT_NAME install --version v0.1.3
+  sudo $SCRIPT_NAME install --release v0.1.3
 
   # Update existing installation
   sudo $SCRIPT_NAME update
@@ -2013,31 +2013,29 @@ parse_args() {
                 exit 0
                 ;;
             --version|-v)
-                # Dual purpose: `install --version vX.Y.Z` selects a release
-                # to install (issue #559). The value is the next token
-                # unless it's missing, empty, or option-shaped (starts with
-                # '-') -- deliberately NOT excluding tokens that happen to
-                # look like a command name (e.g. a branch/tag literally
-                # named "status"): this CLI has exactly one command per
-                # invocation, so once `command` is already set, there's
-                # nothing left for a later token to be mistaken for except
-                # a value.
+                echo "$SCRIPT_NAME v${HARDCODED_VERSION}"
+                exit 0
+                ;;
+            --release)
+                # Selects a release/tag to install (issue #559) -- a
+                # plain option-with-value, distinct from --version/-v
+                # above (which only ever prints this script's own
+                # version and exits).
                 #
-                # Bare `--version`/`-v` -- with no command parsed yet, and
-                # no following value -- still prints this script's own
-                # cosmetic version and exits. Once a command is in effect,
-                # a missing/empty/option-shaped value dies rather than
-                # silently printing-and-exiting, which would look like a
-                # successful, no-op install to a scripted caller.
-                if [[ $# -ge 2 && -n "$2" && "$2" != -* ]]; then
-                    REQUESTED_VERSION="$2"
-                    shift 2
-                elif [[ -n "$command" ]]; then
-                    die "--version requires a value, e.g. --version v0.1.4"
-                else
-                    echo "$SCRIPT_NAME v${HARDCODED_VERSION}"
-                    exit 0
+                # Missing value (end of args, or the next token is
+                # option-shaped, starting with '-') and an explicit empty
+                # string both die rather than silently falling through:
+                # an empty REQUESTED_RELEASE is indistinguishable from "no
+                # release requested" in resolve_and_validate_release(),
+                # which would otherwise silently install the default
+                # branch instead of erroring. A value that happens to look
+                # like a command name (e.g. --release status) needs no
+                # special-casing -- it's just a value.
+                if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+                    die "--release requires a value, e.g. --release v0.1.4"
                 fi
+                REQUESTED_RELEASE="$2"
+                shift 2
                 ;;
             -*)
                 die "Unknown option: $1\nUse --help for usage information."
@@ -2054,13 +2052,13 @@ parse_args() {
         exit 1
     fi
 
-    # --version selects a release to install and is only meaningful for
+    # --release selects a release to install and is only meaningful for
     # 'install' -- the env-var override (MAGPIE_VERSION/GITHUB_REF) is
     # deliberately not checked here, since it may be set in an operator's
     # environment for unrelated reasons and shouldn't break other commands.
     # See issue #559.
-    if [[ -n "$REQUESTED_VERSION" ]] && [[ "$command" != "install" ]]; then
-        die "--version is only supported by the 'install' command (got: $command)"
+    if [[ -n "$REQUESTED_RELEASE" ]] && [[ "$command" != "install" ]]; then
+        die "--release is only supported by the 'install' command (got: $command)"
     fi
 
     # Execute command
