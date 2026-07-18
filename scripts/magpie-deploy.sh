@@ -389,6 +389,20 @@ is_valid_git_ref() {
 # word-splitting, so a value containing glob characters (e.g. "*") could
 # validate unpredictably depending on files in the current directory.
 # `read` never globs.
+# Strips leading/trailing whitespace from a value. Used wherever an
+# operator-editable value (typically from .env) feeds a boolean/comparison
+# decision -- e.g. the issue #579 gate's "is this set?" checks -- so a
+# whitespace-only or whitespace-padded value is never mistaken for
+# meaningfully non-empty, or misses an exact-match comparison it should
+# have hit. Matches how the application itself treats MAGPIE_ALLOWED_CIDRS
+# (config.py strips each comma-separated segment).
+trim_whitespace() {
+    local var="$1"
+    var="${var#"${var%%[![:space:]]*}"}"
+    var="${var%"${var##*[![:space:]]}"}"
+    printf '%s' "$var"
+}
+
 is_valid_ip_or_cidr_list() {
     local list="$1"
 
@@ -638,15 +652,22 @@ load_existing_config() {
         local legacy_broad_default="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 
         if [[ -n "${env_vars[MAGPIE_TRUSTED_PROXIES]+set}" ]]; then
-            TRUSTED_PROXIES="${env_vars[MAGPIE_TRUSTED_PROXIES]}"
-            # The new prefixed key is only ever written by this script's
-            # own writeback (below, once the operator has satisfied the
-            # gate) or a deliberate hand-edit -- its presence, at any
-            # value including empty, is always the "already configured"
-            # signal cmd_update's issue #579 gate looks for.
-            TRUSTED_PROXIES_KEY_PRESENT="true"
+            local raw_trusted_proxies="${env_vars[MAGPIE_TRUSTED_PROXIES]}"
+            TRUSTED_PROXIES="$(trim_whitespace "$raw_trusted_proxies")"
+            # This script's own writeback (below) only ever persists
+            # either a real, already-trimmed value or a truly
+            # zero-length "" (the deliberate-empty marker for a
+            # confirmed direct-exposure choice) -- never whitespace
+            # padding. So a RAW value that is whitespace-only (nonzero
+            # length, but trims to empty) is not something this script
+            # would have written itself; treat it as anomalous /
+            # unconfigured rather than trusting it as deliberate, so the
+            # gate still fires instead of silently trusting garbage.
+            if [[ -z "$raw_trusted_proxies" || -n "$TRUSTED_PROXIES" ]]; then
+                TRUSTED_PROXIES_KEY_PRESENT="true"
+            fi
         elif [[ -n "${env_vars[TRUSTED_PROXIES]+set}" ]]; then
-            TRUSTED_PROXIES="${env_vars[TRUSTED_PROXIES]}"
+            TRUSTED_PROXIES="$(trim_whitespace "${env_vars[TRUSTED_PROXIES]}")"
             if [[ "$TRUSTED_PROXIES" == "$legacy_broad_default" ]]; then
                 log_warn "Migrating pre-#575 TRUSTED_PROXIES from ${INSTALL_DIR}/etc/.env: it is set to the old overly-broad default ($legacy_broad_default), which lets any client on those ranges spoof X-Forwarded-For and bypass MAGPIE_ALLOWED_CIDRS."
                 log_warn "Edit MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to the exact upstream reverse proxy address(es) in front of this install (or leave it empty to trust none), then run '$SCRIPT_NAME update' to regenerate the Caddyfile."
@@ -663,6 +684,9 @@ load_existing_config() {
             # legacy value is already handled above (migrated forward,
             # warned if it's the broad default) and must not also trip
             # the gate.
+            # Already trimmed above, so a whitespace-only legacy value
+            # (dead config, same as truly empty) doesn't fool this into
+            # "true".
             if [[ -n "$TRUSTED_PROXIES" ]]; then
                 TRUSTED_PROXIES_KEY_PRESENT="true"
             fi
@@ -671,8 +695,10 @@ load_existing_config() {
         # MAGPIE_ALLOWED_CIDRS is never written by this script (only read
         # here, for cmd_update's issue #579 warning below) -- it reaches
         # docker-compose/Caddy straight from .env, which the operator edits
-        # directly.
-        ALLOWED_CIDRS="${env_vars[MAGPIE_ALLOWED_CIDRS]:-}"
+        # directly. Trimmed to match how the application itself treats it
+        # (config.py strips each comma-separated segment, so a
+        # whitespace-only value is equivalent to unset there too).
+        ALLOWED_CIDRS="$(trim_whitespace "${env_vars[MAGPIE_ALLOWED_CIDRS]:-}")"
     fi
 }
 
@@ -1663,21 +1689,23 @@ cmd_install() {
 # confirmations) silently answer this security-relevant question. Only
 # called when NONINTERACTIVE is already known false.
 prompt_trusted_proxies_for_cidr_allow() {
-    local response
+    local response trimmed
     while true; do
         read -r -p "[magpie] Upstream proxy hop as seen by magpie's Caddy (e.g. 172.20.0.0/16), or leave blank if magpie is directly exposed: " response
-        # Whitespace-only counts as blank too -- is_valid_ip_or_cidr_list
-        # tokenizes an all-whitespace string to zero tokens and would
-        # otherwise accept it as a trivially "valid" empty list, silently
-        # persisting an empty MAGPIE_TRUSTED_PROXIES for what may have been
-        # a fat-fingered proxy hop. Blank must always land on the explicit
+        # trim_whitespace() makes a whitespace-only entry count as blank
+        # too -- is_valid_ip_or_cidr_list tokenizes an all-whitespace
+        # string to zero tokens and would otherwise accept it as a
+        # trivially "valid" empty list, silently persisting an empty
+        # MAGPIE_TRUSTED_PROXIES for what may have been a fat-fingered
+        # proxy hop. Blank must always land on the explicit
         # direct-exposure confirmation below, never be silently accepted
         # here.
-        if [[ -z "$response" || "$response" =~ ^[[:space:]]+$ ]]; then
+        trimmed="$(trim_whitespace "$response")"
+        if [[ -z "$trimmed" ]]; then
             break
         fi
-        if is_valid_ip_or_cidr_list "$response"; then
-            TRUSTED_PROXIES="$response"
+        if is_valid_ip_or_cidr_list "$trimmed"; then
+            TRUSTED_PROXIES="$trimmed"
             log "Using MAGPIE_TRUSTED_PROXIES=${TRUSTED_PROXIES}."
             return 0
         fi
@@ -1704,14 +1732,18 @@ prompt_trusted_proxies_for_cidr_allow() {
 #
 # tls-mode off (HIGH-RISK): if MAGPIE_TRUSTED_PROXIES has never been
 # configured for this install (TRUSTED_PROXIES_KEY_PRESENT is false --
-# load_existing_config() only sets it true for the new prefixed key at any
-# value, or a legacy unprefixed key with a real non-empty value, which is
-# already migrated forward with a warning above. A present-but-EMPTY
-# legacy key deliberately leaves it false: pre-#575 Caddy trusted the
-# hardcoded private_ranges regardless of that key, so an empty legacy
-# value was dead config, not a real "trust nothing" choice, and this gate
-# must still fire for it) and the operator didn't pass --trusted-proxies or
-# --accept-empty-trusted-proxies this run, GATE: prompt interactively, or
+# load_existing_config() only sets it true for the new prefixed key with a
+# real value or a truly zero-length "" (the exact deliberate-empty marker
+# this script's own writeback produces -- a whitespace-only prefixed value
+# is neither, so it's treated as anomalous/unconfigured, not trusted), or
+# a legacy unprefixed key with a real non-empty (after trimming) value,
+# which is already migrated forward with a warning above. A present-but-
+# EMPTY-or-whitespace-only legacy key deliberately leaves it false:
+# pre-#575 Caddy trusted the hardcoded private_ranges regardless of that
+# key, so an empty legacy value was dead config, not a real "trust
+# nothing" choice, and this gate must still fire for it) and the operator
+# didn't pass --trusted-proxies or --accept-empty-trusted-proxies this
+# run, GATE: prompt interactively, or
 # hard-fail via die() when NONINTERACTIVE. Fires once -- cmd_update's
 # existing MAGPIE_TRUSTED_PROXIES writeback (below, near the legacy-key
 # cleanup) persists whatever TRUSTED_PROXIES resolves to once the gate is
@@ -1720,6 +1752,11 @@ prompt_trusted_proxies_for_cidr_allow() {
 #
 # tls-mode auto/manual (LOWER-RISK): advisory only, never blocks.
 warn_or_gate_trusted_proxies_for_cidr_allow() {
+    # ALLOWED_CIDRS and TRUSTED_PROXIES are already whitespace-trimmed by
+    # load_existing_config() (via trim_whitespace()), so the emptiness/
+    # sentinel checks below are safe against a whitespace-only .env value
+    # without needing to re-trim here.
+    #
     # 255.255.255.255/32 is the Caddyfile's own placeholder default for an
     # unset MAGPIE_ALLOWED_CIDRS (see Caddyfile.prod's `client_ip
     # {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}`) -- never a real client, so
