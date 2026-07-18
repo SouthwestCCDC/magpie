@@ -1852,8 +1852,9 @@ Global options:
 Install options (only used with 'install' command):
   --version VERSION       Install a specific release/tag instead of the
                           default branch (e.g. --version v0.1.3). Validates
-                          that the tag and its ghcr.io image both exist
-                          before installing; fails clearly if not.
+                          that the tag/ref exists, and best-effort checks
+                          that its ghcr.io image exists; fails clearly only
+                          when the tag or image is confirmed missing.
                           Env override: MAGPIE_VERSION or GITHUB_REF.
                           Default: $DEFAULT_GITHUB_BRANCH branch (latest)
   --install-dir PATH      Installation directory (default: $DEFAULT_INSTALL_DIR)
