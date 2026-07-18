@@ -62,9 +62,14 @@ log "uvicorn started, pid=$UVICORN_PID"
 # first and reap-and-exit-0 (graceful) instead of falling through to the
 # fail-fast exit 1 -- otherwise a legitimate stop during startup gets
 # misreported as a crash.
+#
+# --timeout bounds each individual wget attempt (DNS/connect/read
+# combined): without it, a stalled connection (TCP connects but the
+# response never arrives) could block wget indefinitely, defeating the
+# max=60 iteration ceiling and this loop's own signal responsiveness.
 i=0
 max=60
-until wget -q -O /dev/null http://127.0.0.1:8000/health 2>/dev/null; do
+until wget -q -O /dev/null --timeout=3 http://127.0.0.1:8000/health 2>/dev/null; do
 	if [ "$SHUTTING_DOWN" -eq 1 ]; then
 		log "termination requested during startup, waiting for uvicorn to drain"
 		wait "$UVICORN_PID" 2>/dev/null
