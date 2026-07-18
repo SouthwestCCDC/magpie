@@ -8,6 +8,8 @@ process actually crashing (SIGKILL) must still fail the container (exit 1).
 
 from __future__ import annotations
 
+import fcntl
+import os
 import subprocess
 import tempfile
 import time
@@ -81,38 +83,48 @@ class TestBundledImageShutdownClassification:
         before becoming ready" -- a signal arriving during that window caused
         term_handler to kill uvicorn, which the poll loop then misreported
         as a crash.
+
+        The startup window is forced open deterministically rather than
+        relied on via a sleep: entrypoint.sh serializes first-boot DB init
+        with `flock -x -w 30 200` on `{storage_dir}/.magpie-init.lock`. That
+        file lives under the bind-mounted /data volume, so a host-held
+        exclusive flock on the same path (same inode, shared through the
+        bind mount) blocks entrypoint.sh before it ever execs uvicorn --
+        uvicorn cannot answer /health while the host holds this lock, so
+        wrapper.sh's startup gate is guaranteed to still be open when
+        `docker stop` is issued below.
         """
         name = "magpie-bundled-e2e-midstop"
         with tempfile.TemporaryDirectory(prefix="magpie_bundled_midstop_") as tmp:
             _cleanup(name)
+            data_dir = Path(tmp)
+            artifacts_dir = data_dir / "artifacts"
+            artifacts_dir.mkdir(parents=True)
+            # Matches entrypoint.sh's LOCK_DIR resolution for the no-
+            # MAGPIE_STORAGE_PATH case: LOCK_DIR=/data/artifacts (already
+            # exists, since we just created it), DB_LOCK_FILE=LOCK_DIR/.magpie-init.lock.
+            lock_path = artifacts_dir / ".magpie-init.lock"
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
             try:
-                _run_container(bundled_image, Path(tmp), name)
-                # Stop well inside the startup window: wrapper.sh's poll loop
-                # allows up to 60s, and this repo's own smoke testing shows
-                # steady-state (both processes up) isn't reached for several
-                # seconds -- 0.3s is comfortably inside the startup gate.
-                time.sleep(0.3)
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                _run_container(bundled_image, data_dir, name)
                 subprocess.run(["docker", "stop", name], check=True, capture_output=True)
                 assert _exit_code(name) == 0, (
                     "docker stop during startup should exit 0 (graceful), "
                     "not report the container as failed"
                 )
-                # Exit code 0 alone isn't sufficient proof: on a fast/warm-cache
-                # boot, uvicorn could become ready before the stop above lands,
-                # in which case this test would exit the post-steady-state path
-                # (also exit 0) without ever exercising the during-startup
-                # branch it exists to guard. Assert wrapper.sh's
-                # startup-specific log line to confirm the right branch ran.
                 logs = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
                 log_text = logs.stdout + logs.stderr
                 assert "graceful shutdown complete (during startup)" in log_text, (
                     "expected wrapper.sh's during-startup shutdown log line -- "
-                    "its absence means uvicorn became ready before docker stop "
-                    "landed, so this test didn't actually exercise the "
-                    "startup-window shutdown path it's meant to guard:\n"
-                    f"{log_text}"
+                    "its absence means the host-held flock didn't actually "
+                    "block entrypoint.sh's DB init as intended, so this test "
+                    "didn't exercise the startup-window shutdown path it's "
+                    f"meant to guard:\n{log_text}"
                 )
             finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
                 _cleanup(name)
 
     def test_kill_uvicorn_after_ready_still_fails_fast(self, bundled_image: str) -> None:
