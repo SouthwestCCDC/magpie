@@ -1011,10 +1011,19 @@ detect_version() {
 # CLI experimental features enabled on many installs). GHCR issues
 # anonymous pull tokens for public images without credentials.
 #
-# Return codes: 0 = confirmed present, 1 = confirmed absent (HTTP 404 or
-# similar), 2 = undetermined (could not obtain an auth token, e.g. a
-# network hiccup) -- callers should treat 2 as "not verified", not "does
-# not exist". See issue #559.
+# Return codes: 0 = confirmed present (HTTP 200), 1 = confirmed absent
+# (HTTP 404 -- the only status treated as definitive), 2 = undetermined
+# (no auth token, or any other non-200/404 status such as a rate limit or
+# a transient 5xx) -- callers must treat 2 as "not verified", not "does
+# not exist"; only 1 should ever block an install. See issue #559.
+#
+# Every `curl`/pipeline result here is captured via `... || true` (or, for
+# the second curl, deliberate use of %{http_code} instead of -f) rather
+# than left as a function's bare final/first-line command: under this
+# script's `set -euo pipefail`, an unguarded nonzero exit from either would
+# abort the entire installer immediately -- silently, with no die()
+# message -- rather than letting this function return a code for its
+# caller to handle. See issue #559.
 ghcr_image_exists() {
     local image_tag="$1"
     local image_path="${image_tag%%:*}"
@@ -1023,21 +1032,22 @@ ghcr_image_exists() {
 
     local token
     token=$(curl -fsSL "https://ghcr.io/token?scope=repository:${repo_path}:pull" 2>/dev/null \
-        | sed -nE 's/.*"token"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')
-    [[ -z "$token" ]] && return 2
+        | sed -nE 's/.*"token"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p') || true
+    if [[ -z "$token" ]]; then
+        return 2
+    fi
 
-    # Explicit if/then, not a bare final command: curl -f's own exit codes
-    # (e.g. 22 for an HTTP error response) aren't the 0/1 this function
-    # promises callers, so its result is normalized here rather than
-    # passed through as the function's implicit return value.
-    if curl -fsSL -o /dev/null \
+    local http_code
+    http_code=$(curl -sS -o /dev/null -w '%{http_code}' \
         -H "Authorization: Bearer ${token}" \
         -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json" \
-        "https://ghcr.io/v2/${repo_path}/manifests/${tag}"; then
-        return 0
-    else
-        return 1
-    fi
+        "https://ghcr.io/v2/${repo_path}/manifests/${tag}" 2>/dev/null) || http_code=""
+
+    case "$http_code" in
+        200) return 0 ;;
+        404) return 1 ;;
+        *) return 2 ;;
+    esac
 }
 
 # Pre-validates that a GHCR image is published for the requested version,
@@ -1045,10 +1055,25 @@ ghcr_image_exists() {
 # a full clone) so an unpublished image is caught before any on-disk
 # change (mkdir, clone_repo, generated config files) is made. Only called
 # for an explicitly requested version/ref -- see resolve_and_validate_version().
-# Skipped for --from-source installs, which never pull a GHCR image. See
-# issue #559.
+# Skipped for --from-source installs, which never pull a GHCR image. Only
+# a confirmed-absent (404) image blocks the install; any inconclusive
+# result (rate limit, transient error, no auth token) warns and lets the
+# eventual `docker pull` be the real gate. See issue #559.
 check_requested_image_exists() {
     if [[ "$FROM_SOURCE" == "true" ]]; then
+        return 0
+    fi
+
+    # raw.githubusercontent.com/<owner>/<repo>/<ref>/<path> can't
+    # disambiguate a ref containing '/' (e.g. a branch named "release/1.x",
+    # which is_valid_git_ref() permits) from a path segment boundary, so a
+    # slashed ref can't be looked up this way. This only affects slashed
+    # branch names -- release tags (the primary use case, e.g. v0.1.4)
+    # never contain '/'. Skip the pre-check rather than mis-resolving the
+    # URL; the existing clone + pull_or_build_image() flow still validates
+    # the image. See issue #559.
+    if [[ "$GITHUB_BRANCH" == */* ]]; then
+        log_warn "Skipping image pre-check for ref containing '/': ${GITHUB_BRANCH} (will be validated when the image is pulled)"
         return 0
     fi
 
@@ -1060,14 +1085,19 @@ check_requested_image_exists() {
     fi
 
     local image_tag="${GHCR_IMAGE}:${remote_version}"
-    ghcr_image_exists "$image_tag"
-    local rc=$?
+    local rc
+    if ghcr_image_exists "$image_tag"; then
+        rc=0
+    else
+        rc=$?
+    fi
+
     if [[ $rc -eq 0 ]]; then
         log "Found image: ${image_tag}"
-    elif [[ $rc -eq 2 ]]; then
-        log_warn "Could not verify image ${image_tag} exists (failed to obtain a GHCR auth token); continuing -- 'docker pull' will fail clearly later if it's missing."
+    elif [[ $rc -eq 1 ]]; then
+        die "No published image found for version '${remote_version}' (ref ${GITHUB_BRANCH}): ${image_tag} does not exist on ghcr.io (confirmed absent). Refusing to install."
     else
-        die "No published image found for version '${remote_version}' (ref ${GITHUB_BRANCH}): ${image_tag} does not exist on ghcr.io. Refusing to install."
+        log_warn "Could not confirm image ${image_tag} exists (registry check was inconclusive); continuing -- 'docker pull' will fail clearly later if it's actually missing."
     fi
 }
 
