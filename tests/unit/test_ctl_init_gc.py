@@ -34,7 +34,10 @@ def test_settings(tmp_path: Path) -> MagpieSettings:
 
 
 @pytest.fixture(autouse=True)
-def _configure_structlog_baseline(test_settings: MagpieSettings) -> None:
+def _configure_structlog_baseline(
+    test_settings: MagpieSettings,
+    _isolate_logging_state: None,
+) -> None:
     """Pin structlog to the app's production baseline before every test here.
 
     Without this, whether a test starts from structlog's unconfigured library
@@ -48,8 +51,16 @@ def _configure_structlog_baseline(test_settings: MagpieSettings) -> None:
     so an unconfigured baseline can leak stray console-formatted log lines
     onto the stdout CliRunner captures. Calling configure_logging() here
     pins that starting state so results don't depend on collection order.
-    The autouse `_isolate_logging_state` fixture in tests/conftest.py
-    restores the pre-test snapshot afterward.
+
+    This fixture requests tests/conftest.py's autouse `_isolate_logging_state`
+    fixture as an explicit parameter (rather than relying on it merely being
+    autouse) so pytest is forced to set up that fixture -- and take its
+    pre-test snapshot -- before this one configures structlog. Pytest does
+    not guarantee ordering between independent same-scope autouse fixtures
+    on its own; an explicit dependency is what pins it. Without that
+    dependency, the snapshot could be taken *after* configure_logging() has
+    already run, so teardown would restore the configured baseline instead
+    of the true pre-test state and leak logging config into later tests.
     """
     configure_logging(test_settings)
 
