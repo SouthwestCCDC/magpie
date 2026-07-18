@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import stat
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -157,7 +158,20 @@ def artifact_lock(artifact_dir: Path) -> Iterator[None]:
         try:
             artifact_dir.mkdir(parents=True, exist_ok=True)
         except FileExistsError as e:
-            if artifact_dir.exists() and not artifact_dir.is_dir():
+            try:
+                # A single stat() call, not separate exists()/is_dir() checks:
+                # two calls would themselves be a TOCTOU race (a peer
+                # recreates the path between the first and second call,
+                # or removes it between them) that could misdiagnose a
+                # transient state as a genuine non-directory.
+                mode = artifact_dir.stat().st_mode
+            except FileNotFoundError:
+                # Vanished between mkdir()'s FileExistsError and our
+                # follow-up stat() -- a concurrent remover raced us here
+                # too. Retry: our next mkdir() attempt will recreate it.
+                last_error = e
+                continue
+            if not stat.S_ISDIR(mode):
                 # A non-directory occupies the path. No amount of retrying
                 # will turn it into a directory, so fail fast and clearly
                 # instead of exhausting the retry loop into a "kept

@@ -433,6 +433,63 @@ class TestArtifactLockRetries:
         assert "kept flapping" not in str(exc_info.value)
         assert mkdir_calls["count"] == 1, "should fail on the first attempt, not retry"
 
+    def test_vanished_during_non_directory_check_retries_not_misdiagnosed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A directory that vanishes between mkdir()'s FileExistsError and
+        the non-directory check must route to retry, not a false
+        "non-directory" diagnosis.
+
+        Regression for a TOCTOU race in the non-directory check itself: if
+        it were implemented as two separate calls (e.g. exists() then
+        is_dir()), a peer racing to recreate the directory right as the
+        first call runs, then remove it again before the second call runs,
+        could make each call individually consistent but jointly wrong --
+        misdiagnosing a transient double-removal race (the same class this
+        retry loop exists to absorb, per the overlapping-GC-cleanup
+        scenario documented on artifact_lock()) as a genuine non-directory
+        and failing immediately instead of retrying. The check must be a
+        single atomic stat() so a FileNotFoundError from it is
+        unambiguous: the path is gone, not occupied by a file.
+        """
+        artifact_dir = tmp_path / "artifact"
+        real_mkdir = Path.mkdir
+        real_stat = Path.stat
+
+        mkdir_calls = {"count": 0}
+
+        def flaky_mkdir(
+            path_self: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False
+        ):
+            if path_self == artifact_dir:
+                mkdir_calls["count"] += 1
+                if mkdir_calls["count"] == 1:
+                    raise FileExistsError(17, "File exists", str(path_self))
+            return real_mkdir(path_self, mode, parents=parents, exist_ok=exist_ok)
+
+        stat_calls = {"count": 0}
+
+        def flaky_stat(path_self: Path, *, follow_symlinks: bool = True):
+            if path_self == artifact_dir:
+                stat_calls["count"] += 1
+                if stat_calls["count"] == 1:
+                    # Simulates the directory being removed again by a
+                    # second peer between our mkdir()'s FileExistsError and
+                    # this stat() call.
+                    raise FileNotFoundError(2, "No such file or directory", str(path_self))
+            return real_stat(path_self, follow_symlinks=follow_symlinks)
+
+        monkeypatch.setattr(Path, "mkdir", flaky_mkdir)
+        monkeypatch.setattr(Path, "stat", flaky_stat)
+
+        with artifact_lock(artifact_dir):
+            pass
+
+        assert stat_calls["count"] == 1, "expected the simulated vanish to actually trigger"
+        assert mkdir_calls["count"] >= 2, "expected a retried mkdir() after the vanish"
+        assert artifact_dir.exists()
+        assert artifact_dir.is_dir()
+
 
 class TestConcurrentManifestUpdates:
     """Regression tests for issue #527.
