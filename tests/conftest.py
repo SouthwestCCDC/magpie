@@ -14,9 +14,16 @@ import structlog
 from magpie.config import MagpieSettings
 from magpie.logging_config import configure_logging
 
-# Settings used only to pin structlog's starting configuration; values other than
-# the logging-relevant fields (log_format, debug, otel_enabled) are irrelevant.
-_STRUCTLOG_BASELINE_SETTINGS = MagpieSettings()
+# Settings used only to pin structlog's starting configuration. configure_logging()
+# reads only log_format, debug, and otel_enabled, so those are the fields fixed here.
+# Built via model_construct() rather than MagpieSettings() so the baseline is hermetic:
+# model_construct() bypasses BaseSettings' env-var/.env-file/validation machinery
+# entirely, so the pinned baseline can't shift based on ambient MAGPIE_* env vars or a
+# developer's local .env, and an unrelated malformed MAGPIE_* value can't break test
+# collection here.
+_STRUCTLOG_BASELINE_SETTINGS = MagpieSettings.model_construct(
+    log_format="json", debug=False, otel_enabled=False
+)
 
 
 @pytest.fixture(autouse=True)
