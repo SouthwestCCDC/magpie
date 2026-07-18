@@ -1653,7 +1653,14 @@ prompt_trusted_proxies_for_cidr_allow() {
     local response
     while true; do
         read -r -p "[magpie] Upstream proxy hop as seen by magpie's Caddy (e.g. 172.20.0.0/16), or leave blank if magpie is directly exposed: " response
-        if [[ -z "$response" ]]; then
+        # Whitespace-only counts as blank too -- is_valid_ip_or_cidr_list
+        # tokenizes an all-whitespace string to zero tokens and would
+        # otherwise accept it as a trivially "valid" empty list, silently
+        # persisting an empty MAGPIE_TRUSTED_PROXIES for what may have been
+        # a fat-fingered proxy hop. Blank must always land on the explicit
+        # direct-exposure confirmation below, never be silently accepted
+        # here.
+        if [[ -z "$response" || "$response" =~ ^[[:space:]]+$ ]]; then
             break
         fi
         if is_valid_ip_or_cidr_list "$response"; then
