@@ -1080,8 +1080,15 @@ check_requested_image_exists() {
     log "Checking that a magpie image is published for ${GITHUB_BRANCH}..."
     local pyproject_url="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/pyproject.toml"
     local remote_version
+    # Best-effort, like the manifest check below: an unreachable
+    # raw.githubusercontent.com or an unparseable response is a transient
+    # condition, not evidence the version is missing. Warn and skip the
+    # image pre-check entirely rather than blocking the install -- the
+    # eventual clone (which detects the version locally from the cloned
+    # pyproject.toml) and docker pull remain the real gates. See #559.
     if ! remote_version=$(curl -fsSL "$pyproject_url" 2>/dev/null | extract_pyproject_version) || [[ -z "$remote_version" ]]; then
-        die "Could not determine the magpie version for '${GITHUB_BRANCH}' from ${pyproject_url}. Refusing to install."
+        log_warn "Could not determine the magpie version for '${GITHUB_BRANCH}' from ${pyproject_url}; skipping the image pre-check -- 'docker pull' will fail clearly later if the image is actually missing."
+        return 0
     fi
 
     local image_tag="${GHCR_IMAGE}:${remote_version}"
@@ -1135,7 +1142,7 @@ resolve_and_validate_version() {
     fi
 
     if ! is_valid_git_ref "$REQUESTED_VERSION"; then
-        die "Invalid --version value: $REQUESTED_VERSION (must be a valid git ref/tag name: letters, digits, '.', '_', '-', '/' only)"
+        die "Invalid --version value: $REQUESTED_VERSION (must start and end with a letter or digit; only letters, digits, '.', '_', '-', '/' are allowed elsewhere; must not contain '..' or '//')"
     fi
 
     GITHUB_BRANCH="$REQUESTED_VERSION"
@@ -1146,8 +1153,13 @@ resolve_and_validate_version() {
     # `git ls-remote --exit-code` distinguishes "genuinely no matching ref"
     # (exit 2) from any other failure (network, DNS, auth, repo access --
     # typically exit 128, e.g. "Could not resolve host" or "Repository not
-    # found"). Treating every non-zero exit as "not found" would misreport
-    # a transport failure as a missing tag.
+    # found"). Only exit 2 is treated as definitive; every other failure is
+    # best-effort -- warn and continue, letting the eventual `git clone`
+    # (which hits the same remote) be the real gate. See the class of bug
+    # this guards against generally: this pre-check may only hard-block on
+    # a confirmed negative (this exit-2 case, or a confirmed-404 image in
+    # check_requested_image_exists()); every other failure mode along this
+    # path must not turn a transient condition into a false block. See #559.
     #
     # Captured via a plain if/else (NOT `if ! cmd; then ... $? ...`): `!`
     # negates the exit status that `$?` reports afterwards too (`! false`
@@ -1167,9 +1179,10 @@ resolve_and_validate_version() {
     if [[ $ls_remote_rc -eq 2 ]]; then
         die "Requested version/tag '${GITHUB_BRANCH}' not found in ${GITHUB_REPO} (checked branches and tags)."
     elif [[ $ls_remote_rc -ne 0 ]]; then
-        die "Failed to verify requested version/tag '${GITHUB_BRANCH}' against ${GITHUB_REPO} -- this is a connectivity/access failure, not a confirmed missing tag: ${ls_remote_err}"
+        log_warn "Could not verify version/tag '${GITHUB_BRANCH}' against ${GITHUB_REPO} (inconclusive: ${ls_remote_err}); continuing -- 'git clone' will fail clearly later if it's actually missing."
+    else
+        log "Version ${GITHUB_BRANCH} found"
     fi
-    log "Version ${GITHUB_BRANCH} found"
 
     check_requested_image_exists
 }
