@@ -460,28 +460,36 @@ class TestAdminTokenLock:
     ) -> None:
         """Two threads racing for the lock must never be inside it at the same time.
 
-        Each worker records whether it observed the shared "inside" flag
-        already set on entry (which would mean the lock let two holders
-        overlap) and clears it on exit. Runs many rounds, starting both
-        workers at the same instant via a barrier each round to maximize the
-        chance of catching a broken lock.
+        Tracks occupancy with a plain threading.Lock-guarded counter --
+        incremented on entry, decremented on exit, both under the counter's
+        own lock so the read-check-write is atomic (unlike a bare
+        threading.Event, where "is it set" and "set it" are two separate,
+        independently racy operations that could both observe False and
+        both proceed even with a broken admin_token_lock). Records the
+        highest occupancy ever observed; with a real mutual-exclusion lock
+        this must stay at 1, and with a no-op/broken lock it will exceed 1.
+        Runs many rounds, starting both workers at the same instant via a
+        barrier each round to maximize the chance of catching a broken lock.
         """
         rounds = 50
         barrier = threading.Barrier(2)
         errors: list[Exception] = []
-        overlaps: list[str] = []
-        inside = threading.Event()
+        occupancy_guard = threading.Lock()
+        occupancy = 0
+        max_occupancy = 0
 
         def worker(worker_id: int) -> None:
+            nonlocal occupancy, max_occupancy
             for round_num in range(rounds):
                 try:
                     barrier.wait(timeout=_BARRIER_TIMEOUT)
                     with admin_token_lock(base_settings):
-                        if inside.is_set():
-                            overlaps.append(f"worker {worker_id} round {round_num}")
-                        inside.set()
+                        with occupancy_guard:
+                            occupancy += 1
+                            max_occupancy = max(max_occupancy, occupancy)
                         time.sleep(0.001)
-                        inside.clear()
+                        with occupancy_guard:
+                            occupancy -= 1
                 except Exception as exc:  # noqa: BLE001 - surfaced via assertion below
                     errors.append(exc)
 
@@ -491,7 +499,9 @@ class TestAdminTokenLock:
         _join_and_assert_exited(threads)
 
         assert not errors, f"Unexpected errors: {errors}"
-        assert not overlaps, f"Lock allowed overlapping critical sections: {overlaps}"
+        assert max_occupancy == 1, (
+            f"Lock allowed overlapping critical sections: max_occupancy={max_occupancy}"
+        )
 
 
 class TestAdminTokenSinkRaceRegression:
