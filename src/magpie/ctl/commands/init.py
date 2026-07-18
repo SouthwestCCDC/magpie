@@ -175,15 +175,21 @@ def init(ctx: CTLContext, reset_admin_token: bool, admin_token: str | None) -> N
         if not admin_token.startswith("mgp_ADMIN_"):
             error_msg = "Provided token must start with 'mgp_ADMIN_' for admin scope"
             if is_json_output():
-                output_error(ErrorCode.VALIDATION_ERROR, error_msg)  # exits; never returns
-            click.echo(f"Error: {error_msg}", err=True)
-            raise SystemExit(1)
+                output_error(
+                    ErrorCode.VALIDATION_ERROR, error_msg
+                )  # writes to stderr and exits; never returns
+            else:
+                click.echo(f"Error: {error_msg}", err=True)
+                raise SystemExit(1)
         if len(admin_token) <= len("mgp_ADMIN_"):
             error_msg = "Provided token is too short (must have content after 'mgp_ADMIN_' prefix)"
             if is_json_output():
-                output_error(ErrorCode.VALIDATION_ERROR, error_msg)  # exits; never returns
-            click.echo(f"Error: {error_msg}", err=True)
-            raise SystemExit(1)
+                output_error(
+                    ErrorCode.VALIDATION_ERROR, error_msg
+                )  # writes to stderr and exits; never returns
+            else:
+                click.echo(f"Error: {error_msg}", err=True)
+                raise SystemExit(1)
 
     # The whole check-deliver-persist sequence below runs under a single
     # process-wide lock so concurrent manual invocations of `init` (and

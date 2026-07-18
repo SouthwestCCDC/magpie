@@ -193,7 +193,7 @@ def _deliver_exec(token: str, settings: MagpieSettings) -> None:
             times out, or exits non-zero.
     """
     command = settings.admin_token_sink_exec_command
-    if not command:  # pragma: no cover - guarded by caller in practice
+    if not command:
         raise TokenSinkError("MAGPIE_ADMIN_TOKEN_SINK_EXEC_COMMAND is not set for sink=exec")
 
     try:
