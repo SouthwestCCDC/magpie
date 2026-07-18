@@ -13,7 +13,11 @@ from fastapi.testclient import TestClient
 from magpie.cli import cli
 from magpie.cli.commands.parse import parse_artifact_ref
 from magpie.storage.service import StorageService
-from tests.integration.conftest import MockClientWithDownload, MockStreamResponse
+from tests.integration.conftest import (
+    MockClientWithDownload,
+    MockStreamResponse,
+    upload_test_artifact,
+)
 
 # Patch path for get_client - must match where it's imported/used in the CLI module
 # Since CLIContext imports get_client from magpie.cli.client, we patch there
@@ -347,6 +351,52 @@ class TestGetCommand:
 
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
+
+    def test_get_with_bad_ref_on_existing_artifact_is_not_a_prefix(
+        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path
+    ) -> None:
+        """A real artifact with a nonexistent tag/ref must not be misreported as a prefix."""
+        upload_test_artifact(api_client, "test/badref", b"real artifact content")
+        output_file = tmp_path / "badref.bin"
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    "test/badref:nonexistent-tag",
+                    "-o",
+                    str(output_file),
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "Artifact not found: test/badref:nonexistent-tag" in result.output
+        assert "not an artifact" not in result.output
+
+    def test_get_on_path_prefix_gives_prefix_aware_error(
+        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path
+    ) -> None:
+        """Get on a path that is a prefix (has children) points to `ls`, not a bare 404."""
+        upload_test_artifact(api_client, "smoke/hello", b"prefix test content")
+        output_file = tmp_path / "smoke.bin"
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "get", "smoke", "-o", str(output_file)],
+            )
+
+        assert result.exit_code != 0
+        assert "not an artifact" in result.output
+        assert "magpie ls smoke/" in result.output
+        assert "smoke:latest" not in result.output
 
     def test_get_by_hash_ref_uses_blobs_path(
         self,

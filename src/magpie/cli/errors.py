@@ -153,6 +153,59 @@ def handle_response_error(
     handle_http_error(response, operation, token)
 
 
+def is_path_prefix(client: "httpx.Client", path: str) -> bool:
+    """Check whether a path is a browsable prefix rather than an artifact.
+
+    Used after an artifact lookup 404s, to distinguish "this path doesn't
+    exist at all" from "this path is a directory-like prefix with children,
+    not an artifact" -- e.g. `magpie info smoke` when only `smoke/hello`
+    exists.
+
+    The listing endpoint returns the path itself when it IS an artifact (e.g.
+    `magpie info existing/artifact:badtag`, where the artifact exists but the
+    ref doesn't), so only entries strictly under `<path>/` count as children --
+    the exact path is excluded to avoid misreporting a real artifact with a
+    bad ref as a path prefix.
+
+    Args:
+        client: HTTP client.
+        path: Normalized artifact path that failed to resolve as an artifact.
+
+    Returns:
+        True if the server reports at least one path under this prefix,
+        False otherwise (including if the check itself fails).
+    """
+    try:
+        response = client.get("/api/v1/artifacts", params={"prefix": path, "recursive": False})
+    except httpx.RequestError:
+        return False
+
+    if response.status_code != 200:
+        return False
+
+    try:
+        paths = response.json().get("paths", [])
+    except (ValueError, AttributeError):
+        # ValueError covers json.JSONDecodeError (its base class); AttributeError
+        # covers a response body that's valid JSON but not a dict (e.g. a list).
+        return False
+
+    prefix_marker = path.rstrip("/") + "/"
+    return any(p.startswith(prefix_marker) for p in paths)
+
+
+def format_prefix_not_artifact_error(path: str) -> str:
+    """Format the error message shown when a path resolves to a prefix, not an artifact.
+
+    Args:
+        path: The path that was requested.
+
+    Returns:
+        User-facing message pointing the user to `magpie ls <path>/`.
+    """
+    return f'"{path}" is a path prefix, not an artifact -- try: magpie ls {path}/'
+
+
 def _extract_hostname_safely(url: str) -> str:
     """Extract hostname (and optionally port) from URL, never credentials.
 

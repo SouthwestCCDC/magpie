@@ -89,7 +89,7 @@ class TestGetServer:
     def test_cli_override_takes_precedence(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Test that CLI override takes precedence over env and config."""
+        """Test that CLI override takes precedence over config."""
         config_file = tmp_path / "config.toml"
         config_file.write_text('[client]\nserver = "https://config.example.com"')
         monkeypatch.setenv("MAGPIE_SERVER", "https://env.example.com")
@@ -98,17 +98,22 @@ class TestGetServer:
 
         assert result == "https://cli.example.com"
 
-    def test_env_var_takes_precedence_over_config(
+    def test_env_var_is_not_read_directly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Test that env var takes precedence over config file."""
+        """MAGPIE_SERVER resolution happens in Click's envvar handling, not here.
+
+        Click resolves MAGPIE_SERVER into cli_override before get_server() is
+        called, so a bare call with cli_override=None must fall through to the
+        config file rather than reading the env var itself.
+        """
         config_file = tmp_path / "config.toml"
         config_file.write_text('[client]\nserver = "https://config.example.com"')
         monkeypatch.setenv("MAGPIE_SERVER", "https://env.example.com")
 
         result = get_server(cli_override=None, config_path=config_file)
 
-        assert result == "https://env.example.com"
+        assert result == "https://config.example.com"
 
     def test_config_file_used_when_no_override(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -140,7 +145,7 @@ class TestGetToken:
     def test_cli_override_takes_precedence(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Test that CLI override takes precedence over env and config."""
+        """Test that CLI override takes precedence over config."""
         config_file = tmp_path / "config.toml"
         config_file.write_text('[client]\ntoken = "mgp_config"')
         monkeypatch.setenv("MAGPIE_TOKEN", "mgp_env")
@@ -149,17 +154,22 @@ class TestGetToken:
 
         assert result == "mgp_cli"
 
-    def test_env_var_takes_precedence_over_config(
+    def test_env_var_is_not_read_directly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Test that env var takes precedence over config file."""
+        """MAGPIE_TOKEN resolution happens in Click's envvar handling, not here.
+
+        Click resolves MAGPIE_TOKEN into cli_override before get_token() is
+        called, so a bare call with cli_override=None must fall through to the
+        config file rather than reading the env var itself.
+        """
         config_file = tmp_path / "config.toml"
         config_file.write_text('[client]\ntoken = "mgp_config"')
         monkeypatch.setenv("MAGPIE_TOKEN", "mgp_env")
 
         result = get_token(cli_override=None, config_path=config_file)
 
-        assert result == "mgp_env"
+        assert result == "mgp_config"
 
     def test_config_file_used_when_no_override(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

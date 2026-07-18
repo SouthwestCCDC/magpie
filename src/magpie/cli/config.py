@@ -73,10 +73,14 @@ def get_server(
 ) -> str:
     """Get server URL with proper precedence.
 
-    Precedence: CLI override > MAGPIE_SERVER env var > config file > default.
+    Precedence: CLI override > config file > default.
+
+    The MAGPIE_SERVER env var is not read here: the `--server` Click option
+    declares `envvar="MAGPIE_SERVER"`, so Click already resolves it into
+    `cli_override` before this function is called.
 
     Args:
-        cli_override: Value from --server CLI option.
+        cli_override: Value from --server CLI option (or MAGPIE_SERVER env var).
         config_path: Optional config file path for testing.
 
     Returns:
@@ -84,10 +88,6 @@ def get_server(
     """
     if cli_override:
         return cli_override
-
-    env_server = os.environ.get("MAGPIE_SERVER")
-    if env_server:
-        return env_server
 
     config = load_config(config_path)
     return config.client.server
@@ -99,10 +99,14 @@ def get_token(
 ) -> str:
     """Get auth token with proper precedence.
 
-    Precedence: CLI override > MAGPIE_TOKEN env var > config file > default.
+    Precedence: CLI override > config file > default.
+
+    The MAGPIE_TOKEN env var is not read here: the `--token` Click option
+    declares `envvar="MAGPIE_TOKEN"`, so Click already resolves it into
+    `cli_override` before this function is called.
 
     Args:
-        cli_override: Value from --token CLI option.
+        cli_override: Value from --token CLI option (or MAGPIE_TOKEN env var).
         config_path: Optional config file path for testing.
 
     Returns:
@@ -110,10 +114,6 @@ def get_token(
     """
     if cli_override:
         return cli_override
-
-    env_token = os.environ.get("MAGPIE_TOKEN")
-    if env_token:
-        return env_token
 
     config = load_config(config_path)
     return config.client.token
