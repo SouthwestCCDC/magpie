@@ -12,6 +12,18 @@ import pytest
 import structlog
 
 from magpie.config import MagpieSettings
+from magpie.logging_config import configure_logging
+
+# Settings used only to pin structlog's starting configuration. configure_logging()
+# reads only log_format, debug, and otel_enabled, so those are the fields fixed here.
+# Built via model_construct() rather than MagpieSettings() so the baseline is hermetic:
+# model_construct() bypasses BaseSettings' env-var/.env-file/validation machinery
+# entirely, so the pinned baseline can't shift based on ambient MAGPIE_* env vars or a
+# developer's local .env, and an unrelated malformed MAGPIE_* value can't break test
+# collection here.
+_STRUCTLOG_BASELINE_SETTINGS = MagpieSettings.model_construct(
+    log_format="json", debug=False, otel_enabled=False
+)
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +59,35 @@ def _isolate_logging_state() -> Generator[None, None, None]:
         root_logger.removeHandler(handler)
     for handler in root_handlers:
         root_logger.addHandler(handler)
+
+
+@pytest.fixture(autouse=True)
+def _pin_structlog_baseline(_isolate_logging_state: None) -> None:
+    """Pin structlog to the app's production baseline before every test, globally.
+
+    Whether a test starts from structlog's unconfigured library defaults
+    (PrintLoggerFactory writing straight to stdout, bypassing stdlib logging
+    entirely) or the app's production defaults (stdlib LoggerFactory, JSON to
+    stderr, normally applied by magpie.server.app at import time) otherwise
+    depends on whether some earlier test in the same pytest session happened to
+    import magpie.server.app -- collection-order dependence that affects any
+    test asserting on logged output, including via caplog (which only sees
+    records that flow through stdlib logging, so it silently sees nothing under
+    library defaults). Calling configure_logging() here pins that starting
+    state for every test, uniformly, so no individual module needs its own copy
+    of this fixture.
+
+    This fixture requests `_isolate_logging_state` as an explicit parameter
+    (rather than relying on both being autouse) so pytest is forced to set up
+    that fixture -- and take its pre-test snapshot -- before this one
+    configures structlog. Pytest does not guarantee ordering between
+    independent same-scope autouse fixtures on its own; an explicit dependency
+    is what pins it. Without that dependency, the snapshot could be taken
+    *after* configure_logging() has already run here, so teardown would
+    restore the pinned baseline instead of the true pre-test state and leak
+    logging config into later tests.
+    """
+    configure_logging(_STRUCTLOG_BASELINE_SETTINGS)
 
 
 @pytest.fixture
