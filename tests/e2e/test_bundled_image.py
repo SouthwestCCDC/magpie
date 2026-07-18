@@ -152,8 +152,9 @@ class TestBundledImageShutdownClassification:
                 else:
                     pytest.fail("container did not reach steady state (caddy never started)")
 
-                # Match the exact second argv element (the uvicorn script path),
-                # not a substring search -- a substring search here would also
+                # Match an exact argv field (the uvicorn script path) via
+                # grep -x against each null-split /proc/*/cmdline field, not
+                # a substring search -- a substring search here would also
                 # match this very docker-exec command's own argv, since its
                 # shell script text contains the same path literally.
                 uvicorn_pid = subprocess.run(
