@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import warnings
 from pathlib import Path
 
 import pytest
@@ -58,8 +59,14 @@ def _reclaim_host_ownership(image: str, path: Path) -> None:
     runner when that UID/GID doesn't match the host user. Bypasses
     entrypoint.sh -- which would just re-chown as the detected/dropped user --
     by running as root directly via --entrypoint.
+
+    Called from ``finally`` blocks, so a failure here must not raise (that
+    would mask a real assertion failure from the same block) -- surfaced as a
+    warning instead. A failed reclaim leaves the temp dir root-owned, which
+    will make ``TemporaryDirectory``'s own cleanup fail right after this
+    returns; the warning is what explains that follow-on failure.
     """
-    subprocess.run(
+    result = subprocess.run(
         [
             "docker",
             "run",
@@ -73,7 +80,14 @@ def _reclaim_host_ownership(image: str, path: Path) -> None:
             f"chown -R {os.getuid()}:{os.getgid()} /data",
         ],
         capture_output=True,
+        text=True,
     )
+    if result.returncode != 0:
+        warnings.warn(
+            f"Failed to reclaim host ownership of {path} (exit {result.returncode}): "
+            f"{result.stderr.strip()}. The temp dir may be left root-owned.",
+            stacklevel=2,
+        )
 
 
 @pytest.mark.e2e
