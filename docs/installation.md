@@ -164,6 +164,34 @@ interactively via `--trusted-proxies`; `--tls-mode auto`/`manual` (Caddy
 directly facing the internet) always default to trusting nothing. See issue
 [#575](https://github.com/SouthwestCCDC/magpie/issues/575).
 
+## Upgrading to v0.1.6
+
+As of v0.1.6, Caddy trusts no proxy by default (see [Trusted
+Proxies](#trusted-proxies) above). If your deployment sits behind a reverse
+proxy or load balancer and relies on `MAGPIE_ALLOWED_CIDRS` for token-less
+reads, this changes the client IP Caddy sees: it now reads the real TCP peer
+(your proxy) instead of the original client from `X-Forwarded-For`, so
+CIDR-allow stops matching real clients and those reads start returning 401.
+
+`magpie-deploy.sh update` prints an advisory warning when it detects this
+combination (`MAGPIE_ALLOWED_CIDRS` set, `MAGPIE_TRUSTED_PROXIES` empty) --
+the update still completes, since an empty `MAGPIE_TRUSTED_PROXIES` is
+correct for a directly-exposed deployment. If you are fronted:
+
+1. Determine your proxy's address as seen by magpie's Caddy. Two common ways:
+   - `docker network inspect <magpie-network>` and read the gateway address
+     (if the proxy hops in via magpie's own docker bridge, this is usually a
+     /16, e.g. `172.20.0.0/16`, or the gateway `/32` alone).
+   - Check the inner Caddy access log's `remote_ip` field for a request you
+     know came through the proxy.
+2. Set `MAGPIE_TRUSTED_PROXIES` in `<install>/etc/.env` to that address,
+   scoped as tightly as you can (a `/32` if you know the exact hop; only
+   widen to a subnet like the bridge `/16` if the hop varies).
+3. Re-run `magpie-deploy.sh update` to regenerate the Caddyfile.
+
+If magpie is directly exposed (no proxy in front of it), no action is
+needed -- the empty default is already correct.
+
 Next: [Production Checklist](production-checklist.md) → [User Guide](user-guide.md) → [Backup & Restore](backup-restore.md)
 
 ---

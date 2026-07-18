@@ -66,6 +66,11 @@ HTTPS_PORT=""
 TLS_CERT=""
 TLS_KEY=""
 TRUSTED_PROXIES=""
+# Read-only mirror of MAGPIE_ALLOWED_CIDRS from an existing install's .env --
+# this script never sets or persists it (docker-compose passes it straight
+# through to the app); it's only loaded so cmd_update can warn when it's
+# paired with an empty TRUSTED_PROXIES. See issue #579.
+ALLOWED_CIDRS=""
 BIND_IP=""
 ACME_SERVER=""
 NONINTERACTIVE="false"
@@ -628,6 +633,12 @@ load_existing_config() {
                 log_warn "Edit MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to the exact upstream reverse proxy address(es) in front of this install (or leave it empty to trust none), then run '$SCRIPT_NAME update' to regenerate the Caddyfile."
             fi
         fi
+
+        # MAGPIE_ALLOWED_CIDRS is never written by this script (only read
+        # here, for cmd_update's issue #579 warning below) -- it reaches
+        # docker-compose/Caddy straight from .env, which the operator edits
+        # directly.
+        ALLOWED_CIDRS="${env_vars[MAGPIE_ALLOWED_CIDRS]:-}"
     fi
 }
 
@@ -1609,6 +1620,31 @@ cmd_install() {
     echo ""
 }
 
+# Advisory, non-blocking warning for cmd_update: if MAGPIE_ALLOWED_CIDRS is
+# set to a real range and MAGPIE_TRUSTED_PROXIES is empty, a fronted
+# deployment's anonymous CIDR-allow reads will silently 401 after the #575
+# change (Caddy no longer honors X-Forwarded-For by default), since
+# client_ip then resolves to the proxy's own hop instead of the real client.
+# Phrased conditionally because this script cannot tell a fronted install
+# apart from a directly-exposed one from .env alone -- for the latter, empty
+# MAGPIE_TRUSTED_PROXIES is already correct and no action is needed. Does
+# not fire when MAGPIE_TRUSTED_PROXIES is already set to something (the
+# legacy-key migration warning above covers the one case where that's still
+# wrong: an unscoped legacy default). See issue #579.
+warn_if_cidr_allow_needs_trusted_proxies() {
+    # 255.255.255.255/32 is the Caddyfile's own placeholder default for an
+    # unset MAGPIE_ALLOWED_CIDRS (see Caddyfile.prod's `client_ip
+    # {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}`) -- never a real client, so
+    # treat it the same as empty.
+    local off_sentinel="255.255.255.255/32"
+
+    [[ -z "$ALLOWED_CIDRS" || "$ALLOWED_CIDRS" == "$off_sentinel" ]] && return 0
+    [[ -n "$TRUSTED_PROXIES" ]] && return 0
+
+    log_warn "MAGPIE_ALLOWED_CIDRS is set but MAGPIE_TRUSTED_PROXIES is empty."
+    log_warn "As of v0.1.6 the built-in Caddy trusts no proxy by default. If magpie is behind a reverse proxy, CIDR-based anonymous reads will NO LONGER match real clients (they will 401) until you set MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to your proxy's hop as seen by magpie's Caddy -- commonly magpie's docker bridge subnet, e.g. 172.20.0.0/16 (or the gateway /32) -- and re-run update. If magpie is directly exposed (no proxy), no action is needed."
+}
+
 cmd_update() {
     log "Updating magpie..."
 
@@ -1637,6 +1673,7 @@ cmd_update() {
 
     verify_installation
     load_existing_config
+    warn_if_cidr_allow_needs_trusted_proxies
 
     cd "$INSTALL_DIR"
 
