@@ -2132,9 +2132,9 @@ Update options:
                                     MAGPIE_TRUSTED_PROXIES is intentional
                                     (magpie is directly exposed, no reverse
                                     proxy). Only meaningful when this
-                                    install's persisted TLS mode (set at
-                                    install time, not a flag on 'update')
-                                    is 'off' and 'update' finds a real
+                                    install's configured TLS mode
+                                    (persisted in INSTALL_DIR/etc/.env) is
+                                    'off' and 'update' finds a real
                                     MAGPIE_ALLOWED_CIDRS with no
                                     MAGPIE_TRUSTED_PROXIES ever configured
                                     for this install -- without it (or

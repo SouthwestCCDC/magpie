@@ -174,9 +174,7 @@ reads, this changes the client IP Caddy sees: it now reads the real TCP peer
 CIDR-allow stops matching real clients and those reads start returning 401.
 
 `magpie-deploy.sh update` responds to this in two tiers, keyed on the
-install's persisted TLS mode (the `TLS_MODE` value already saved in
-`<install>/etc/.env` from when you ran `install` -- not something you pass
-to `update` itself):
+install's configured TLS mode (persisted in `<install>/etc/.env`):
 
 - **TLS mode `off`** (Caddy is HTTP-only, almost certainly behind an
   external proxy): if `MAGPIE_TRUSTED_PROXIES` has never been configured for
