@@ -62,6 +62,11 @@ setup_origin() {
     git init --bare -b trunk "$origin_dir" >/dev/null 2>&1
     local seed_dir="${origin_dir}.seed"
     git clone -q "$origin_dir" "$seed_dir" 2>/dev/null
+    # Local (not global) identity: this test must be self-contained and
+    # pass on a machine/CI runner with no global git user.name/user.email
+    # configured.
+    git -C "$seed_dir" config user.email "test@example.com"
+    git -C "$seed_dir" config user.name "magpie test"
     (
         cd "$seed_dir" || exit 1
         git commit -q --allow-empty -m "c1 (tagged release)"
