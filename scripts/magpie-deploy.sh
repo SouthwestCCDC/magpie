@@ -1163,6 +1163,14 @@ resolve_and_validate_release() {
     # check_requested_image_exists()); every other failure mode along this
     # path must not turn a transient condition into a false block. See #559.
     #
+    # Constrained to --heads --tags: an unqualified `ls-remote <pattern>`
+    # matches any ref, including special ones like `HEAD`, so `--release
+    # HEAD` would otherwise pass this check even though `git clone --branch
+    # HEAD` doesn't behave as a normal branch/tag checkout, and is_valid_git_ref()
+    # has no reason to reject the literal string "HEAD" (it's a
+    # syntactically ordinary, alphanumeric ref name). Restricting to heads
+    # and tags means only an actual branch or tag counts as "found". See #559.
+    #
     # Captured via a plain if/else (NOT `if ! cmd; then ... $? ...`): `!`
     # negates the exit status that `$?` reports afterwards too (`! false`
     # leaves `$?` at 0, not false's original 1), so a negated condition
@@ -1172,7 +1180,7 @@ resolve_and_validate_release() {
     # / error-code-granularity reasoning in ghcr_image_exists(). See #559.
     local ls_remote_err
     local ls_remote_rc
-    if ls_remote_err=$(git ls-remote --exit-code "$repo_url" "$GITHUB_BRANCH" 2>&1 >/dev/null); then
+    if ls_remote_err=$(git ls-remote --exit-code --heads --tags "$repo_url" "$GITHUB_BRANCH" 2>&1 >/dev/null); then
         ls_remote_rc=0
     else
         ls_remote_rc=$?
