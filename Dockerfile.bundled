@@ -15,7 +15,10 @@
 # This does not replace the two-container docker-compose.prod.yml topology
 # yet (see #561 for the migration); it is the image only.
 
-ARG CADDY_VERSION=2.10.2
+# 2.11.2+ required: GHSA-7r4p-vjf4-gxv4 (CVE-2026-30851, CVSS 8.1) affects
+# v2.10.0-v2.11.1. #525's X-Magpie-* header strip treats "the inner Caddy
+# runs a patched build" as a load-bearing invariant.
+ARG CADDY_VERSION=2.11.4
 
 FROM caddy:${CADDY_VERSION}-alpine AS caddy-src
 
@@ -84,7 +87,12 @@ RUN chmod +x /usr/local/bin/healthcheck.sh /wrapper.sh
 
 EXPOSE 80
 
-HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=3 \
+# start-period covers the worst-case cold start: wrapper.sh's startup gate
+# waits up to 60s for uvicorn to answer /health, and entrypoint.sh's
+# first-boot DB init can itself block up to 30s on `flock -x -w 30` (e.g.
+# concurrent container starts racing for /data) before uvicorn is even
+# exec'd -- ~90s worst case, plus a small buffer.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=95s --retries=3 \
     CMD ["/usr/local/bin/healthcheck.sh"]
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/wrapper.sh"]

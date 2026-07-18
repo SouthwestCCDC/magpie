@@ -46,9 +46,22 @@ log "uvicorn started, pid=$UVICORN_PID"
 # Startup-ordering gate: block until uvicorn answers /health, so caddy never
 # starts accepting connections while the backend is still coming up (no 502
 # window).
+#
+# A termination signal can arrive during this window too (e.g. a fast
+# `docker stop` right after `docker run`): term_handler above already sent
+# uvicorn SIGTERM, so both exit branches below must check $SHUTTING_DOWN
+# first and reap-and-exit-0 (graceful) instead of falling through to the
+# fail-fast exit 1 -- otherwise a legitimate stop during startup gets
+# misreported as a crash.
 i=0
 max=60
 until wget -q -O /dev/null http://127.0.0.1:8000/health 2>/dev/null; do
+	if [ "$SHUTTING_DOWN" -eq 1 ]; then
+		log "termination requested during startup, waiting for uvicorn to drain"
+		wait "$UVICORN_PID" 2>/dev/null
+		log "graceful shutdown complete (during startup)"
+		exit 0
+	fi
 	if ! kill -0 "$UVICORN_PID" 2>/dev/null; then
 		log "uvicorn exited before becoming ready"
 		wait "$UVICORN_PID"
@@ -56,6 +69,12 @@ until wget -q -O /dev/null http://127.0.0.1:8000/health 2>/dev/null; do
 	fi
 	i=$((i + 1))
 	if [ "$i" -ge "$max" ]; then
+		if [ "$SHUTTING_DOWN" -eq 1 ]; then
+			log "termination requested during startup, waiting for uvicorn to drain"
+			wait "$UVICORN_PID" 2>/dev/null
+			log "graceful shutdown complete (during startup)"
+			exit 0
+		fi
 		log "uvicorn did not become ready within ${max}s"
 		kill -TERM "$UVICORN_PID" 2>/dev/null
 		wait "$UVICORN_PID" 2>/dev/null
