@@ -1,0 +1,236 @@
+# Magpie bundled single-container image -- internal Caddyfile
+#
+# Baked into the image (not operator-facing, not mounted). Caddy is an
+# implementation detail inside the container: the internal static server and
+# auth gate in front of uvicorn on 127.0.0.1:8000 (same container, loopback
+# only). See issue #309's 2026-07-18 decision comment and issue #586.
+#
+# This carries forward Caddyfile.prod's auth-gate logic unchanged
+# (forward_auth, X-Magpie-* header strip #525, CIDR bypass, Content-
+# Disposition, security headers), with two differences from Caddyfile.prod:
+#   1. No site TLS block / MAGPIE_DOMAIN. This container terminates plain
+#      HTTP on :80; an external reverse proxy is expected to terminate TLS
+#      in front of it and add its own HSTS header (this Caddyfile does not
+#      send one, since it has no way to know whether the connection in
+#      front of it is actually HTTPS).
+#   2. Upstreams point at 127.0.0.1:8000 (uvicorn in the same container)
+#      instead of the `magpie:8000` compose service name.
+#
+# Environment variable configuration:
+#   MAGPIE_ALLOWED_CIDRS - CIDR ranges allowed to bypass bearer token auth
+#     for read-only operations (GET /api/v1/artifacts*, GET /artifacts/*).
+#     Write and admin operations still require a token. Default: none.
+#   MAGPIE_TRUSTED_PROXIES - space-separated IPs/CIDRs whose
+#     X-Forwarded-For header Caddy honors when determining the client IP
+#     used by MAGPIE_ALLOWED_CIDRS above. Default: empty (trust no proxy).
+#     Must be scoped to the exact upstream hop(s) in front of this
+#     container -- never a broad range. See issue #575.
+
+{
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+	admin off
+	servers {
+		trusted_proxies static {$MAGPIE_TRUSTED_PROXIES:}
+	}
+}
+
+:80 {
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		X-XSS-Protection "1; mode=block"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		-Server
+	}
+
+	# Health check endpoint - used by container orchestration
+	handle /health {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# Auth validation endpoint - must be public (used by forward_auth itself)
+	handle /api/v1/auth/validate {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# Public artifacts - no authentication required
+	handle /artifacts/public/* {
+		root * /data
+		@public_artifact_file {
+			file {
+				try_files {path}
+			}
+		}
+		header @public_artifact_file Content-Disposition "attachment"
+		file_server browse
+	}
+
+	# Artifact read operations (GET only) - requires valid Bearer token OR allowed IP
+	@artifacts_read {
+		method GET
+		path /api/v1/artifacts*
+	}
+	handle @artifacts_read {
+		@allowed_ip {
+			client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
+		}
+		@require_auth {
+			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
+		}
+		# route{} forces literal top-to-bottom execution (Caddy's default
+		# directive order would otherwise run forward_auth's copy_headers
+		# before request_header, undoing the strip below). See #525.
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			request_header @allowed_ip X-Magpie-User "cidr-bypass"
+			request_header @allowed_ip X-Magpie-Scope "read"
+			forward_auth @require_auth 127.0.0.1:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy 127.0.0.1:8000
+		}
+	}
+
+	# Protected artifact downloads - requires valid Bearer token OR allowed IP
+	handle /artifacts/* {
+		@require_auth {
+			not client_ip {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}
+		}
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth @require_auth 127.0.0.1:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+		}
+		root * /data
+		@artifact_file {
+			file {
+				try_files {path}
+			}
+		}
+		header @artifact_file Content-Disposition "attachment"
+		file_server browse
+	}
+
+	# Upload endpoint - requires write or admin scope
+	handle /api/v1/upload/* {
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth 127.0.0.1:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy 127.0.0.1:8000
+		}
+	}
+
+	# Artifact metadata amendment - requires write or admin scope
+	@artifacts_amend {
+		method PATCH
+		path_regexp ^/api/v1/artifacts/.+
+	}
+	handle @artifacts_amend {
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth 127.0.0.1:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy 127.0.0.1:8000
+		}
+	}
+
+	# Tag mutation endpoints - requires write or admin scope
+	@artifacts_tags {
+		method POST DELETE
+		path_regexp ^/api/v1/artifacts/.+/tags
+	}
+	handle @artifacts_tags {
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth 127.0.0.1:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy 127.0.0.1:8000
+		}
+	}
+
+	# Flush tag endpoint - requires admin scope
+	@tags_flush {
+		method POST
+		path /api/v1/tags/*/flush
+	}
+	handle @tags_flush {
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth 127.0.0.1:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy 127.0.0.1:8000
+		}
+	}
+
+	# Token management endpoints - requires admin scope
+	handle /api/v1/tokens* {
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth 127.0.0.1:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy 127.0.0.1:8000
+		}
+	}
+
+	# GC endpoint - requires admin scope
+	handle /api/v1/gc {
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth 127.0.0.1:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy 127.0.0.1:8000
+		}
+	}
+
+	# Status endpoint - requires admin scope
+	handle /api/v1/status {
+		route {
+			request_header -X-Magpie-User
+			request_header -X-Magpie-Scope
+			forward_auth 127.0.0.1:8000 {
+				uri /api/v1/auth/validate
+				copy_headers X-Magpie-User X-Magpie-Scope
+			}
+			reverse_proxy 127.0.0.1:8000
+		}
+	}
+
+	# Redirect root to artifact browser
+	handle / {
+		redir * /artifacts/ permanent
+	}
+
+	# Fallback
+	handle {
+		respond "Not Found" 404
+	}
+}
