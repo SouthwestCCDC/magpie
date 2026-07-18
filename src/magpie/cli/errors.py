@@ -161,6 +161,12 @@ def is_path_prefix(client: "httpx.Client", path: str) -> bool:
     not an artifact" -- e.g. `magpie info smoke` when only `smoke/hello`
     exists.
 
+    The listing endpoint returns the path itself when it IS an artifact (e.g.
+    `magpie info existing/artifact:badtag`, where the artifact exists but the
+    ref doesn't), so only entries strictly under `<path>/` count as children --
+    the exact path is excluded to avoid misreporting a real artifact with a
+    bad ref as a path prefix.
+
     Args:
         client: HTTP client.
         path: Normalized artifact path that failed to resolve as an artifact.
@@ -178,9 +184,14 @@ def is_path_prefix(client: "httpx.Client", path: str) -> bool:
         return False
 
     try:
-        return bool(response.json().get("paths", []))
-    except json.JSONDecodeError:
+        paths = response.json().get("paths", [])
+    except (ValueError, AttributeError):
+        # ValueError covers json.JSONDecodeError (its base class); AttributeError
+        # covers a response body that's valid JSON but not a dict (e.g. a list).
         return False
+
+    prefix_marker = path.rstrip("/") + "/"
+    return any(p.startswith(prefix_marker) for p in paths)
 
 
 def format_prefix_not_artifact_error(path: str) -> str:

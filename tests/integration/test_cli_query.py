@@ -411,6 +411,30 @@ class TestInfoCommand:
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
+    def test_info_with_bad_ref_on_existing_artifact_is_not_a_prefix(
+        self, cli_runner: CliRunner, api_client: TestClient
+    ) -> None:
+        """A real artifact with a nonexistent tag/ref must not be misreported as a prefix.
+
+        The listing endpoint returns the path itself (not just children) when it
+        IS an artifact, so this guards against is_path_prefix() mistaking that
+        self-match for a child and claiming the artifact is "a path prefix, not
+        an artifact" when it's actually just missing the requested ref.
+        """
+        upload_test_artifact(api_client, "test/badref", b"real artifact content")
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                ["--server", "http://test", "info", "test/badref:nonexistent-tag"],
+            )
+
+        assert result.exit_code != 0
+        assert "Artifact not found: test/badref:nonexistent-tag" in result.output
+        assert "not an artifact" not in result.output
+
     def test_info_on_path_prefix_gives_prefix_aware_error(
         self, cli_runner: CliRunner, api_client: TestClient
     ) -> None:

@@ -352,6 +352,32 @@ class TestGetCommand:
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
+    def test_get_with_bad_ref_on_existing_artifact_is_not_a_prefix(
+        self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path
+    ) -> None:
+        """A real artifact with a nonexistent tag/ref must not be misreported as a prefix."""
+        upload_test_artifact(api_client, "test/badref", b"real artifact content")
+        output_file = tmp_path / "badref.bin"
+
+        with patch(PATCH_GET_CLIENT) as mock_get_client:
+            mock_get_client.return_value = api_client
+
+            result = cli_runner.invoke(
+                cli,
+                [
+                    "--server",
+                    "http://test",
+                    "get",
+                    "test/badref:nonexistent-tag",
+                    "-o",
+                    str(output_file),
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "Artifact not found: test/badref:nonexistent-tag" in result.output
+        assert "not an artifact" not in result.output
+
     def test_get_on_path_prefix_gives_prefix_aware_error(
         self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path
     ) -> None:
