@@ -13,6 +13,7 @@ import os
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Generator
 
@@ -94,7 +95,11 @@ class TestBundledImageShutdownClassification:
         wrapper.sh's startup gate is guaranteed to still be open when
         `docker stop` is issued below.
         """
-        name = "magpie-bundled-e2e-midstop"
+        # Unique suffix: hard-coded names could collide if tests ever run in
+        # parallel (pytest-xdist, or multiple CI jobs sharing a Docker
+        # daemon), with one run's `docker stop`/`docker rm` clobbering
+        # another's container.
+        name = f"magpie-bundled-e2e-midstop-{uuid.uuid4().hex[:8]}"
         with tempfile.TemporaryDirectory(prefix="magpie_bundled_midstop_") as tmp:
             _cleanup(name)
             data_dir = Path(tmp)
@@ -132,7 +137,7 @@ class TestBundledImageShutdownClassification:
         still fail the container (exit 1) -- guards against over-correcting
         the startup-window fix above into swallowing genuine crashes.
         """
-        name = "magpie-bundled-e2e-killuvicorn"
+        name = f"magpie-bundled-e2e-killuvicorn-{uuid.uuid4().hex[:8]}"
         with tempfile.TemporaryDirectory(prefix="magpie_bundled_killuvicorn_") as tmp:
             _cleanup(name)
             try:
