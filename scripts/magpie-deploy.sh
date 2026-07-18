@@ -637,21 +637,34 @@ load_existing_config() {
         # to scope it to.
         local legacy_broad_default="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 
-        # Captured before either key is read below, purely for
-        # cmd_update's issue #579 gate -- presence (even of an explicit
-        # empty value) means the operator already made a deliberate
-        # MAGPIE_TRUSTED_PROXIES choice, so the gate must not re-fire.
-        if [[ -n "${env_vars[MAGPIE_TRUSTED_PROXIES]+set}" || -n "${env_vars[TRUSTED_PROXIES]+set}" ]]; then
-            TRUSTED_PROXIES_KEY_PRESENT="true"
-        fi
-
         if [[ -n "${env_vars[MAGPIE_TRUSTED_PROXIES]+set}" ]]; then
             TRUSTED_PROXIES="${env_vars[MAGPIE_TRUSTED_PROXIES]}"
+            # The new prefixed key is only ever written by this script's
+            # own writeback (below, once the operator has satisfied the
+            # gate) or a deliberate hand-edit -- its presence, at any
+            # value including empty, is always the "already configured"
+            # signal cmd_update's issue #579 gate looks for.
+            TRUSTED_PROXIES_KEY_PRESENT="true"
         elif [[ -n "${env_vars[TRUSTED_PROXIES]+set}" ]]; then
             TRUSTED_PROXIES="${env_vars[TRUSTED_PROXIES]}"
             if [[ "$TRUSTED_PROXIES" == "$legacy_broad_default" ]]; then
                 log_warn "Migrating pre-#575 TRUSTED_PROXIES from ${INSTALL_DIR}/etc/.env: it is set to the old overly-broad default ($legacy_broad_default), which lets any client on those ranges spoof X-Forwarded-For and bypass MAGPIE_ALLOWED_CIDRS."
                 log_warn "Edit MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to the exact upstream reverse proxy address(es) in front of this install (or leave it empty to trust none), then run '$SCRIPT_NAME update' to regenerate the Caddyfile."
+            fi
+            # Unlike the prefixed key above, a present legacy key only
+            # counts as "already configured" when it carries a real,
+            # non-empty value -- pre-#575, Caddy trusted the hardcoded
+            # private_ranges regardless of this key, so an empty legacy
+            # TRUSTED_PROXIES was dead config, not a deliberate "trust
+            # nothing" choice. Leaving TRUSTED_PROXIES_KEY_PRESENT false
+            # here lets the issue #579 gate fire for exactly the
+            # deployments that were silently relying on private_ranges and
+            # would otherwise break unnoticed on upgrade. A non-empty
+            # legacy value is already handled above (migrated forward,
+            # warned if it's the broad default) and must not also trip
+            # the gate.
+            if [[ -n "$TRUSTED_PROXIES" ]]; then
+                TRUSTED_PROXIES_KEY_PRESENT="true"
             fi
         fi
 
@@ -1690,10 +1703,14 @@ prompt_trusted_proxies_for_cidr_allow() {
 # correct). See issue #579's scope-expansion comment for the full rationale.
 #
 # tls-mode off (HIGH-RISK): if MAGPIE_TRUSTED_PROXIES has never been
-# configured for this install (TRUSTED_PROXIES_KEY_PRESENT is false -- the
-# legacy-key case is already handled by load_existing_config()'s
-# migrate+warn path above and always leaves TRUSTED_PROXIES non-empty, so
-# it can't reach here) and the operator didn't pass --trusted-proxies or
+# configured for this install (TRUSTED_PROXIES_KEY_PRESENT is false --
+# load_existing_config() only sets it true for the new prefixed key at any
+# value, or a legacy unprefixed key with a real non-empty value, which is
+# already migrated forward with a warning above. A present-but-EMPTY
+# legacy key deliberately leaves it false: pre-#575 Caddy trusted the
+# hardcoded private_ranges regardless of that key, so an empty legacy
+# value was dead config, not a real "trust nothing" choice, and this gate
+# must still fire for it) and the operator didn't pass --trusted-proxies or
 # --accept-empty-trusted-proxies this run, GATE: prompt interactively, or
 # hard-fail via die() when NONINTERACTIVE. Fires once -- cmd_update's
 # existing MAGPIE_TRUSTED_PROXIES writeback (below, near the legacy-key
