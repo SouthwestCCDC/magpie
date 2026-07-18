@@ -103,6 +103,22 @@ Resolved design questions:
 - **Forward auth:** `GET /api/v1/auth/validate`, returns 200/401
 - **Token management:** Both `magpie-ctl token` CLI and REST API
 
+## Installer Safety-Gate Acknowledgment Convention
+
+`scripts/magpie-deploy.sh` safety gates -- checks that stop a security- or
+data-affecting mistake, e.g. the trusted-proxies lockout gate on `update`
+(issue #579) -- are acknowledged with a NAMED, specific flag:
+`--accept-<specific-thing>` (e.g. `--accept-empty-trusted-proxies`), never a
+blanket `--force`/`--bypass-safety-checks`. A named ack is self-documenting
+in a playbook (it records what was acknowledged and why), contains the
+blast radius to that one decision, and -- critically -- a blanket bypass
+would silently swallow future gates too, defeating the point of an
+intentional gate. Some gates may deliberately have no bypass at all.
+Routine confirmations (overwrite prompts, uninstall, etc.) are not safety
+gates and keep using the existing `--yes`/`--force`/`--noninteractive`.
+Where applicable, an ack should persist (e.g. by writing the acknowledged
+value to `.env`) so the gate fires once, not on every run.
+
 ## Commands
 
 ```bash
