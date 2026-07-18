@@ -1,0 +1,98 @@
+# syntax=docker/dockerfile:1
+#
+# Magpie bundled single-container image (#309 Phase 1, issue #586).
+#
+# Bundles Caddy (internal auth gate / static server, see
+# docker/bundled/Caddyfile) and uvicorn into a single image. tini is PID 1;
+# it execs docker/bundled/wrapper.sh, which starts both processes in order
+# (uvicorn first, then Caddy once uvicorn answers /health), fails the whole
+# container fast if either process exits on its own, and drains both
+# cleanly on SIGTERM/`docker stop`.
+#
+# Externally the container exposes one plain-HTTP port (80); TLS
+# termination is left to whatever reverse proxy fronts it.
+#
+# This does not replace the two-container docker-compose.prod.yml topology
+# yet (see #561 for the migration); it is the image only.
+
+# 2.11.2+ required: GHSA-7r4p-vjf4-gxv4 (CVE-2026-30851, CVSS 8.1) affects
+# v2.10.0-v2.11.1. #525's X-Magpie-* header strip treats "the inner Caddy
+# runs a patched build" as a load-bearing invariant.
+ARG CADDY_VERSION=2.11.4
+
+FROM caddy:${CADDY_VERSION}-alpine AS caddy-src
+
+FROM python:3.13-slim AS base
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Install dependencies (cached layer)
+FROM base AS deps
+COPY pyproject.toml uv.lock* ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Final image
+FROM base AS runtime
+COPY --from=deps /app/.venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+
+# gosu (privilege drop, reused from entrypoint.sh), tini (PID 1), curl
+# (healthcheck.sh + AWS CLI installer below), wget (wrapper.sh's readiness
+# poll), unzip (AWS CLI installer, purged again below)
+# hadolint ignore=DL3008
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gosu tini curl wget ca-certificates unzip && \
+    rm -rf /var/lib/apt/lists/* && \
+    gosu nobody true && gosu 1000:1000 true
+
+# Install AWS CLI v2 for S3 sync operations (multi-arch support)
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64) aws_arch="x86_64" ;; \
+        arm64) aws_arch="aarch64" ;; \
+        *) echo "Unsupported architecture for AWS CLI: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsS "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    rm -rf awscliv2.zip aws && \
+    apt-get purge -y unzip && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Caddy binary, copied from the official Caddy alpine image
+COPY --from=caddy-src /usr/bin/caddy /usr/bin/caddy
+
+COPY src/ ./src/
+COPY pyproject.toml uv.lock README.md ./
+
+# Install the project itself
+RUN uv sync --frozen --no-dev
+
+# Entrypoint handles dropping privileges to the correct user
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Wrapper for magpie-ctl that drops privileges when invoked via docker exec
+COPY magpie-ctl-wrapper.sh /usr/local/bin/magpie-ctl
+RUN chmod +x /usr/local/bin/magpie-ctl
+
+COPY docker/bundled/Caddyfile /etc/caddy/Caddyfile
+COPY docker/bundled/healthcheck.sh /usr/local/bin/healthcheck.sh
+COPY docker/bundled/wrapper.sh /wrapper.sh
+RUN chmod +x /usr/local/bin/healthcheck.sh /wrapper.sh
+
+EXPOSE 80
+
+# start-period covers the worst-case cold start: wrapper.sh's startup gate
+# waits up to 60s for uvicorn to answer /health, and entrypoint.sh's
+# first-boot DB init can itself block up to 30s on `flock -x -w 30` (e.g.
+# concurrent container starts racing for /data) before uvicorn is even
+# exec'd -- ~90s worst case, plus a small buffer.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=95s --retries=3 \
+    CMD ["/usr/local/bin/healthcheck.sh"]
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/wrapper.sh"]
