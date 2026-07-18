@@ -97,6 +97,21 @@ class TestBundledImageShutdownClassification:
                     "docker stop during startup should exit 0 (graceful), "
                     "not report the container as failed"
                 )
+                # Exit code 0 alone isn't sufficient proof: on a fast/warm-cache
+                # boot, uvicorn could become ready before the stop above lands,
+                # in which case this test would exit the post-steady-state path
+                # (also exit 0) without ever exercising the during-startup
+                # branch it exists to guard. Assert wrapper.sh's
+                # startup-specific log line to confirm the right branch ran.
+                logs = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
+                log_text = logs.stdout + logs.stderr
+                assert "graceful shutdown complete (during startup)" in log_text, (
+                    "expected wrapper.sh's during-startup shutdown log line -- "
+                    "its absence means uvicorn became ready before docker stop "
+                    "landed, so this test didn't actually exercise the "
+                    "startup-window shutdown path it's meant to guard:\n"
+                    f"{log_text}"
+                )
             finally:
                 _cleanup(name)
 
