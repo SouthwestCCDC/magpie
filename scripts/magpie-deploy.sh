@@ -1751,12 +1751,35 @@ prompt_trusted_proxies_for_cidr_allow() {
 # is true on every subsequent run.
 #
 # tls-mode auto/manual (LOWER-RISK): advisory only, never blocks.
+#
+# Whitespace-only input from ANY source (a --trusted-proxies " " CLI flag,
+# a whitespace-only MAGPIE_TRUSTED_PROXIES in .env, or a whitespace-only
+# answer at the interactive prompt) normalizes to empty at this function's
+# canonical normalization point (or, for the interactive prompt, at its
+# own point of assignment) -- so it is indistinguishable from "never
+# configured" and correctly reaches the GATE above for a tls-mode off
+# install with a real MAGPIE_ALLOWED_CIDRS, exactly as it should: a
+# fronted deployment can't have silently trusted a value that's actually
+# blank.
 warn_or_gate_trusted_proxies_for_cidr_allow() {
-    # ALLOWED_CIDRS and TRUSTED_PROXIES are already whitespace-trimmed by
-    # load_existing_config() (via trim_whitespace()), so the emptiness/
-    # sentinel checks below are safe against a whitespace-only .env value
-    # without needing to re-trim here.
-    #
+    # Canonical normalization point: by the time this function runs, both
+    # non-interactive sources of TRUSTED_PROXIES -- the --trusted-proxies
+    # CLI flag (parse_args, before cmd_update starts) and .env
+    # (load_existing_config(), just called by cmd_update) -- have already
+    # resolved into the global TRUSTED_PROXIES, and ALLOWED_CIDRS only ever
+    # comes from .env. Re-trimming (idempotent; load_existing_config()
+    # already trims its own .env reads) here, once, in the globals
+    # themselves, guarantees every check below AND every consumer later in
+    # cmd_update (validate_network_config, the MAGPIE_TRUSTED_PROXIES
+    # writeback, generate_caddyfile) sees a canonical, whitespace-safe
+    # value regardless of which source produced it -- no per-call-site
+    # trimming needed anywhere else. The third source, the interactive
+    # prompt below, runs strictly after this point and already trims its
+    # own input before assigning TRUSTED_PROXIES, so its result is
+    # inherently already canonical too.
+    TRUSTED_PROXIES="$(trim_whitespace "$TRUSTED_PROXIES")"
+    ALLOWED_CIDRS="$(trim_whitespace "$ALLOWED_CIDRS")"
+
     # 255.255.255.255/32 is the Caddyfile's own placeholder default for an
     # unset MAGPIE_ALLOWED_CIDRS (see Caddyfile.prod's `client_ip
     # {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}`) -- never a real client, so
