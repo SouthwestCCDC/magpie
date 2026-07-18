@@ -83,6 +83,17 @@ else
     DB_PATH="/data/magpie.db"
 fi
 
+# Require an absolute DB_PATH: dirname of a relative path (e.g. "magpie.db")
+# resolves to "." -- the container's working directory -- which the mkdir/chown
+# block below would then create and chown instead of failing safely.
+case "$DB_PATH" in
+    /*) ;;
+    *)
+        echo "Error: MAGPIE_DATABASE_PATH must be an absolute path (got: $DB_PATH)" >&2
+        exit 1
+        ;;
+esac
+
 # Export MAGPIE_DATABASE_PATH so magpie-ctl init uses the correct path
 export MAGPIE_DATABASE_PATH="$DB_PATH"
 
