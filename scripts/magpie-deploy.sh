@@ -1727,6 +1727,22 @@ cmd_update() {
             printf 'MAGPIE_TRUSTED_PROXIES=%s\n' "$TRUSTED_PROXIES" >> "${INSTALL_DIR}/etc/.env"
         fi
 
+        # Drop the stale legacy unprefixed TRUSTED_PROXIES= key now that its
+        # value is guaranteed to be carried forward in MAGPIE_TRUSTED_PROXIES
+        # (either already present above, or just written by the block above)
+        # -- it's never read by docker-compose, so leaving it in place is
+        # harmless but confusing clutter for an operator hand-inspecting
+        # .env. Gated on MAGPIE_TRUSTED_PROXIES actually being present so the
+        # value is never dropped without first being carried forward.
+        # Anchored on the key at line start (^TRUSTED_PROXIES=, which does
+        # not match ^MAGPIE_TRUSTED_PROXIES=) so this never touches an
+        # unrelated line that merely contains the substring.
+        if grep -q '^MAGPIE_TRUSTED_PROXIES=' "${INSTALL_DIR}/etc/.env" 2>/dev/null \
+            && grep -q '^TRUSTED_PROXIES=' "${INSTALL_DIR}/etc/.env" 2>/dev/null; then
+            log "Removing stale legacy TRUSTED_PROXIES key from ${INSTALL_DIR}/etc/.env (superseded by MAGPIE_TRUSTED_PROXIES)"
+            sed -i '/^TRUSTED_PROXIES=/d' "${INSTALL_DIR}/etc/.env"
+        fi
+
         # Regenerate the Caddyfile using the configured (or defaulted) TLS settings
         if declare -F generate_caddyfile >/dev/null 2>&1; then
             generate_caddyfile
