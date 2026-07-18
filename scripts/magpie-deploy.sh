@@ -1142,8 +1142,32 @@ resolve_and_validate_version() {
 
     log "Verifying requested version exists: ${GITHUB_BRANCH}..."
     local repo_url="https://github.com/${GITHUB_REPO}.git"
-    if ! git ls-remote --exit-code "$repo_url" "$GITHUB_BRANCH" &>/dev/null; then
+
+    # `git ls-remote --exit-code` distinguishes "genuinely no matching ref"
+    # (exit 2) from any other failure (network, DNS, auth, repo access --
+    # typically exit 128, e.g. "Could not resolve host" or "Repository not
+    # found"). Treating every non-zero exit as "not found" would misreport
+    # a transport failure as a missing tag.
+    #
+    # Captured via a plain if/else (NOT `if ! cmd; then ... $? ...`): `!`
+    # negates the exit status that `$?` reports afterwards too (`! false`
+    # leaves `$?` at 0, not false's original 1), so a negated condition
+    # can't be used to recover the original code -- only whether it was
+    # zero. stderr is captured (via `2>&1 >/dev/null`, stdout discarded)
+    # so a transport-failure message can be surfaced. See the same set -e
+    # / error-code-granularity reasoning in ghcr_image_exists(). See #559.
+    local ls_remote_err
+    local ls_remote_rc
+    if ls_remote_err=$(git ls-remote --exit-code "$repo_url" "$GITHUB_BRANCH" 2>&1 >/dev/null); then
+        ls_remote_rc=0
+    else
+        ls_remote_rc=$?
+    fi
+
+    if [[ $ls_remote_rc -eq 2 ]]; then
         die "Requested version/tag '${GITHUB_BRANCH}' not found in ${GITHUB_REPO} (checked branches and tags)."
+    elif [[ $ls_remote_rc -ne 0 ]]; then
+        die "Failed to verify requested version/tag '${GITHUB_BRANCH}' against ${GITHUB_REPO} -- this is a connectivity/access failure, not a confirmed missing tag: ${ls_remote_err}"
     fi
     log "Version ${GITHUB_BRANCH} found"
 
