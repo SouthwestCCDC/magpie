@@ -383,7 +383,7 @@ wheels = [
 
 [[package]]
 name = "magpie"
-version = "0.1.5"
+version = "0.1.6rc1"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
