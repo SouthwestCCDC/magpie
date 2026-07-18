@@ -402,6 +402,52 @@ class TestFlushTagConcurrencyAccuracy:
         manifest = read_manifest(artifact_dir)
         assert "stable-tag" not in manifest.tags
 
+    def test_dry_run_does_not_recreate_deleted_artifact_dir(
+        self,
+        storage_service: StorageService,
+        test_config: MagpieSettings,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A candidate whose artifact directory is deleted mid-scan must not
+        be resurrected by the dry_run locked recheck.
+
+        artifact_lock() self-heals a concurrently-deleted directory by
+        recreating it via mkdir(parents=True, exist_ok=True) -- correct for
+        an artifact that existed when the caller started but was deleted
+        mid-operation, but exactly what a read-only dry run must never do
+        to a since-deleted artifact.
+        """
+        import shutil
+
+        import magpie.storage.service as service_module
+
+        _, ref = store_test_artifact(storage_service, "vanish/artifact", b"content")
+        storage_service.create_tag("vanish/artifact", ref, "racy-tag")
+
+        artifact_dir = artifact_dir_path(test_config.storage_path, "vanish/artifact")
+        real_read_manifest = service_module.read_manifest
+        call_count = {"n": 0}
+
+        def racy_read_manifest(path: Path):
+            call_count["n"] += 1
+            if path == artifact_dir and call_count["n"] == 1:
+                # Capture the manifest as the unlocked scan would see it
+                # (tag still present), then simulate the whole artifact
+                # being deleted immediately afterward, before the
+                # dry_run recheck below runs.
+                manifest = real_read_manifest(path)
+                shutil.rmtree(artifact_dir)
+                return manifest
+            return real_read_manifest(path)
+
+        monkeypatch.setattr(service_module, "read_manifest", racy_read_manifest)
+
+        result = storage_service.flush_tag("racy-tag", dry_run=True)
+
+        assert result.count == 0
+        assert result.affected_artifacts == []
+        assert not artifact_dir.exists(), "dry_run must not recreate a deleted artifact directory"
+
 
 class TestFlushTagCorruptManifestHandling:
     """Tests that flush_tag skips corrupt manifests rather than crashing the

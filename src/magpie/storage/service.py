@@ -446,6 +446,26 @@ class StorageService:
 
         artifact_dir = artifact_dir_path(self.config.storage_path, artifact_path)
 
+        # artifact_lock() self-heals a concurrently-deleted directory by
+        # recreating it (mkdir(parents=True, exist_ok=True)), which is the
+        # right behavior for an artifact that existed when the caller
+        # started but was deleted mid-operation. It's the wrong behavior
+        # here: an artifact_path that was never created (or was already
+        # fully removed) has nothing to remove a tag from, and taking the
+        # lock would resurrect an empty artifact directory (and manifest)
+        # as a side effect of a no-op. Check existence first and
+        # short-circuit without locking. This check is advisory, not
+        # locked -- a concurrent creator racing us here is the same
+        # accepted moving-target limitation as elsewhere in this module.
+        if not artifact_dir.exists():
+            logger.warning(
+                "tag_not_found",
+                tag_name=tag_name,
+                artifact_path=artifact_path,
+                message="Artifact not found, nothing to remove",
+            )
+            return False
+
         # Remove tag from manifest. Presence is determined by on_locked's
         # `had_tag`, which is checked under the same artifact_lock as the
         # removal itself -- not by a separate unlocked read beforehand --
@@ -535,6 +555,18 @@ class StorageService:
             # lock below, so a tag mutated elsewhere between the scan and
             # here isn't misreported as affected.
             if dry_run:
+                # artifact_lock() self-heals a concurrently-deleted
+                # directory by recreating it -- exactly what a read-only
+                # dry run must never do. If the artifact was deleted
+                # between the scan above and here, it's simply gone (not
+                # affected, nothing to lock); check existence first and
+                # skip without locking rather than resurrecting it. This
+                # check is advisory, not locked, but a since-deleted
+                # artifact genuinely isn't "affected," and a concurrent
+                # re-creation racing this check is the same accepted
+                # moving-target limitation as the scan itself.
+                if not artifact_dir.exists():
+                    continue
                 with artifact_lock(artifact_dir):
                     if tag_name in read_manifest(artifact_dir).tags:
                         affected_artifacts.append(artifact_path)

@@ -201,6 +201,28 @@ class TestRemoveTag:
 
         assert result is False
 
+    def test_remove_tag_on_nonexistent_artifact_does_not_create_dir(
+        self, storage_service: StorageService, test_config: MagpieSettings
+    ) -> None:
+        """remove_tag on an artifact_path that was never created must stay
+        a no-op, not resurrect an artifact directory.
+
+        artifact_lock() self-heals a concurrently-deleted directory by
+        recreating it via mkdir(parents=True, exist_ok=True) -- correct
+        while removing a tag from an artifact that does exist, but wrong
+        for an artifact_path with no directory at all: locking it would
+        create an empty artifact directory (and manifest) as a side
+        effect of what should be a tag-not-found no-op.
+        """
+        artifact_path = "never/existed"
+        artifact_dir = artifact_dir_path(test_config.storage_path, artifact_path)
+        assert not artifact_dir.exists()
+
+        result = storage_service.remove_tag(artifact_path, "some-tag")
+
+        assert result is False
+        assert not artifact_dir.exists(), "remove_tag must not create an artifact directory"
+
 
 class TestTagSymlinks:
     """Tests for symlink creation/removal during tag operations."""
