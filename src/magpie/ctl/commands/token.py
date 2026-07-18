@@ -321,9 +321,11 @@ def token_rotate(ctx: CTLContext, name: str) -> None:
                         else:
                             raise click.ClickException(str(e))
                     if rotate_result is None:
-                        # The token was revoked (via the separate `token
-                        # revoke` command, which isn't covered by this lock)
-                        # between our lookup above and this atomic rotate.
+                        # Defensive only: `token revoke` on this name also
+                        # takes admin_token_lock, so a concurrent admin
+                        # revoke can't interleave between our lookup above
+                        # and this atomic rotate. Reachable only if the row
+                        # vanished some other way (e.g. a restored database).
                         msg = f"Token not found: {name}"
                         if is_json_output():
                             output_error(ErrorCode.NOT_FOUND, msg)
