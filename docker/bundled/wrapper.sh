@@ -63,18 +63,22 @@ log "uvicorn started, pid=$UVICORN_PID"
 # fail-fast exit 1 -- otherwise a legitimate stop during startup gets
 # misreported as a crash.
 #
-# --timeout bounds each individual wget attempt (DNS/connect/read
-# combined): without it, a stalled connection (TCP connects but the
-# response never arrives) could block wget indefinitely, defeating the
-# max_attempts ceiling and this loop's own signal responsiveness. Because
-# each attempt can now take anywhere from ~0s (instant refusal/response) up
-# to the 3s timeout, attempts is a bound on RETRIES, not wall-clock time --
-# track actual elapsed seconds separately via bash's SECONDS for accurate
-# logging.
+# --timeout bounds each individual wget connection attempt (DNS/connect/
+# read combined): without it, a stalled connection (TCP connects but the
+# response never arrives) could block wget indefinitely. --tries=1 is
+# required alongside it: wget retries internally by default (20 times) for
+# anything that isn't a fatal error like connection-refused -- and a
+# timeout is exactly the kind of failure it WOULD retry, so without
+# --tries=1 a single call could silently retry for up to 20 * 3s = 60s
+# before returning, defeating both the max_attempts ceiling below and this
+# loop's own signal responsiveness. Because each attempt can now take
+# anywhere from ~0s (instant refusal/response) up to the 3s timeout,
+# attempts is a bound on RETRIES, not wall-clock time -- track actual
+# elapsed seconds separately via bash's SECONDS for accurate logging.
 attempts=0
 max_attempts=60
 SECONDS=0
-until wget -q -O /dev/null --timeout=3 http://127.0.0.1:8000/health 2>/dev/null; do
+until wget -q -O /dev/null --timeout=3 --tries=1 http://127.0.0.1:8000/health 2>/dev/null; do
 	if [ "$SHUTTING_DOWN" -eq 1 ]; then
 		log "termination requested during startup, waiting for uvicorn to drain"
 		wait "$UVICORN_PID" 2>/dev/null
