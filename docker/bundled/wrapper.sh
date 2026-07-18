@@ -41,6 +41,15 @@ trap term_handler TERM INT
 /entrypoint.sh /app/.venv/bin/uvicorn magpie.server.app:app \
 	--host 127.0.0.1 --port 8000 &
 UVICORN_PID=$!
+# Close the narrow race where term_handler ran between the `&` above and
+# this assignment: term_handler's own kill would have been a no-op then
+# (UVICORN_PID was still empty), so catch up now that the PID is known --
+# otherwise a later `wait "$UVICORN_PID"` could block on a process that was
+# never actually signaled, hanging `docker stop` until Docker's own SIGKILL
+# timeout.
+if [ "$SHUTTING_DOWN" -eq 1 ]; then
+	kill -TERM "$UVICORN_PID" 2>/dev/null
+fi
 log "uvicorn started, pid=$UVICORN_PID"
 
 # Startup-ordering gate: block until uvicorn answers /health, so caddy never
@@ -86,6 +95,12 @@ log "uvicorn ready after ${i}s"
 
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 CADDY_PID=$!
+# Same race as uvicorn's above: catch up on a signal that arrived before
+# CADDY_PID was captured, so a later `wait "$CADDY_PID"` can't hang on an
+# unsignaled process.
+if [ "$SHUTTING_DOWN" -eq 1 ]; then
+	kill -TERM "$CADDY_PID" 2>/dev/null
+fi
 log "caddy started, pid=$CADDY_PID"
 
 # Block until whichever child exits first (or until a trapped signal

@@ -55,7 +55,7 @@ RUN set -eux; \
         arm64) aws_arch="aarch64" ;; \
         *) echo "Unsupported architecture for AWS CLI: $arch" >&2; exit 1 ;; \
     esac; \
-    curl "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip" -o "awscliv2.zip" && \
+    curl -fsS "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip" -o "awscliv2.zip" && \
     unzip awscliv2.zip && \
     ./aws/install && \
     rm -rf awscliv2.zip aws && \
