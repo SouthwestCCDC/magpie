@@ -81,6 +81,17 @@ quiet_clone() {
     git -c advice.detachedHead=false clone -q "$@" 2>/dev/null
 }
 
+# git silently ignores --depth for a plain local filesystem path (only
+# `warning: --depth is ignored in local clones; use file:// instead.` --
+# swallowed by quiet_clone's stderr redirect), so a "shallow" clone built
+# from a bare path is not actually shallow and wouldn't exercise the
+# shallow-specific behavior issue #582 is about. Cloning via a file:// URL
+# makes git honor --depth like a real network clone would. Returns the
+# file:// form of a local path.
+as_file_url() {
+    printf 'file://%s' "$1"
+}
+
 # Test 1: a tag-only shallow clone (simulates `install --release v0.1.5`)
 # can be updated to latest trunk.
 test_release_install_can_update() {
@@ -90,10 +101,16 @@ test_release_install_can_update() {
     local install_dir="${TEST_DIR}/t1-install"
     setup_origin "$origin_dir"
     mkdir -p "$install_dir"
-    quiet_clone --depth 1 --branch v0.1.5 "$origin_dir" "${install_dir}/repo"
+    quiet_clone --depth 1 --branch v0.1.5 "$(as_file_url "$origin_dir")" "${install_dir}/repo"
 
-    # Confirm the precondition this test is guarding against: no
-    # origin/trunk remote-tracking ref exists yet.
+    # Confirm the preconditions this test is guarding against: the clone is
+    # genuinely shallow (the case this issue is about), and no origin/trunk
+    # remote-tracking ref exists yet.
+    if [[ "$(git -C "${install_dir}/repo" rev-parse --is-shallow-repository)" != "true" ]]; then
+        fail "test setup invalid: clone is not shallow -- this test would not exercise issue #582's shallow tag-only case"
+    fi
+    log "  precondition confirmed: clone is shallow"
+
     if git -C "${install_dir}/repo" rev-parse origin/trunk >/dev/null 2>&1; then
         fail "test setup invalid: origin/trunk unexpectedly already resolves in a fresh tag-only clone"
     fi
@@ -128,7 +145,7 @@ test_repeated_update_is_idempotent() {
     local install_dir="${TEST_DIR}/t2-install"
     setup_origin "$origin_dir"
     mkdir -p "$install_dir"
-    quiet_clone --depth 1 --branch v0.1.5 "$origin_dir" "${install_dir}/repo"
+    quiet_clone --depth 1 --branch v0.1.5 "$(as_file_url "$origin_dir")" "${install_dir}/repo"
 
     local i rc
     for i in 1 2 3; do
@@ -158,7 +175,7 @@ test_branch_install_still_updates() {
     local install_dir="${TEST_DIR}/t3-install"
     setup_origin "$origin_dir"
     mkdir -p "$install_dir"
-    quiet_clone --depth 1 --branch trunk "$origin_dir" "${install_dir}/repo"
+    quiet_clone --depth 1 --branch trunk "$(as_file_url "$origin_dir")" "${install_dir}/repo"
 
     local latest_rev
     latest_rev=$(git -C "$origin_dir" rev-parse trunk)
