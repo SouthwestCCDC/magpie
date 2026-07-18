@@ -1320,6 +1320,20 @@ resolve_and_validate_release() {
 update_repo_to_latest() {
     # Update repository to latest code from remote branch
     # Expects repo to already exist at ${INSTALL_DIR}/repo
+
+    # `install --release <tag>` clones with `--depth 1 --branch <tag>`. When
+    # <tag> is an actual tag (not a branch), git's implied --single-branch
+    # scopes remote.origin.fetch to that tag alone and never creates an
+    # origin/<branch> remote-tracking ref, so `reset --hard origin/$GITHUB_BRANCH`
+    # below would fail with "unknown revision". Explicitly (re)scoping the
+    # tracked branch here makes origin/$GITHUB_BRANCH resolvable regardless of
+    # how the repo was originally cloned. Uses the non-additive form so
+    # repeated `update` runs don't accumulate duplicate refspec entries in
+    # .git/config; a normal branch clone already tracks $GITHUB_BRANCH, so
+    # this is a no-op there. See issue #582.
+    if ! git -C "${INSTALL_DIR}/repo" remote set-branches origin "$GITHUB_BRANCH"; then
+        die "Failed to configure remote tracking for branch $GITHUB_BRANCH"
+    fi
     if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "$GITHUB_BRANCH"; then
         die "Failed to fetch latest repository code"
     fi
