@@ -340,9 +340,13 @@ class TestBundledImageNonRootCaddy:
     """
 
     def test_supervisor_and_children_run_as_non_root(self, bundled_image: str) -> None:
-        """tini, wrapper.sh, uvicorn, and caddy must all be owned by the
-        same non-root uid (not root), and Caddy must be reachable on
-        :8080. No process runs as root in this configuration.
+        """In steady state, tini, wrapper.sh, uvicorn, and caddy must all
+        be owned by the same non-root uid (not root), and Caddy must be
+        reachable on :8080. This is a steady-state guarantee, not an
+        instantaneous one: wrapper.sh briefly runs as root, as PID 1,
+        before it execs gosu+tini -- that root prelude just isn't one of
+        the long-lived processes this test (via `docker top`, taken well
+        after startup) can observe.
         """
         name = f"magpie-bundled-e2e-nonroot-{uuid.uuid4().hex[:8]}"
         with tempfile.TemporaryDirectory(prefix="magpie_bundled_nonroot_") as tmp:
