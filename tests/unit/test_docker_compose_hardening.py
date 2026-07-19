@@ -103,7 +103,11 @@ def test_admin_token_sink_has_no_compose_level_default():
     """
     service = _load_compose(COMPOSE_FILE)["services"]["magpie"]
     env = _env_dict(service)
-    sink = env.get("MAGPIE_ADMIN_TOKEN_SINK", "")
+    assert "MAGPIE_ADMIN_TOKEN_SINK" in env, (
+        "MAGPIE_ADMIN_TOKEN_SINK must be defined in the operator compose file (so "
+        "operators can see and configure it), just with no Compose-level default"
+    )
+    sink = env["MAGPIE_ADMIN_TOKEN_SINK"]
     assert ":-" not in sink and ":?" not in sink, (
         "MAGPIE_ADMIN_TOKEN_SINK must have no Compose-level default or required-var "
         f"guard in the operator compose file -- got: {sink!r}"

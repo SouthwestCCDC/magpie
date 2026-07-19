@@ -57,10 +57,10 @@ services:
       # docker-compose.override.yml supplies a default for the same key --
       # the override's value never gets a chance to rescue it (verified
       # against a real `docker compose config`, not assumed). The blank
-      # passthrough below still fails closed: MagpieSettings' `env_ignore_
-      # empty=True` treats the resulting blank string the same as unset,
-      # and deliver_admin_token() raises a clear, specific error and
-      # refuses to start serving if the sink ends up unconfigured -- an
+      # passthrough below still fails closed: MagpieSettings'
+      # `env_ignore_empty=True` treats the resulting blank string the same
+      # as unset, and deliver_admin_token() raises a clear, specific error
+      # and refuses to start serving if the sink ends up unconfigured -- an
       # operator running this file bare (no override) with no
       # MAGPIE_ADMIN_TOKEN_SINK set gets a failed, non-zero-exit container
       # with that message in its logs, not a silently-running server.
