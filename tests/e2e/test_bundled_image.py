@@ -43,6 +43,24 @@ def bundled_image() -> Generator[str, None, None]:
     subprocess.run(["docker", "rmi", IMAGE_TAG], capture_output=True)
 
 
+def _own_uid_gid_args() -> list[str]:
+    """`-e MAGPIE_UID=<ours>`/`-e MAGPIE_GID=<ours>` for the current process.
+
+    Explicit (not relying on wrapper.sh's own auto-detection from /data's
+    ownership) so tests asserting "runs as non-root" are deterministic
+    regardless of what uid happens to own the test's tempdir in a given
+    environment (e.g. pytest running as literal root would otherwise make
+    RUN_UID legitimately resolve to 0, a false test failure, not an image
+    bug). Uses the *current* process's own uid/gid rather than a
+    hardcoded constant like 1000: a hardcoded value only coincidentally
+    matches the invoking user on some hosts, and on any host where it
+    doesn't, the container chowns everything under the tempdir to that
+    mismatched uid, orphaning it from pytest's own cleanup (a real CI
+    failure this caused once already).
+    """
+    return ["-e", f"MAGPIE_UID={os.getuid()}", "-e", f"MAGPIE_GID={os.getgid()}"]
+
+
 def _run_container(
     image: str, data_dir: Path, name: str, extra_args: list[str] | None = None
 ) -> None:
@@ -306,7 +324,12 @@ class TestBundledImageNonRootCaddy:
         with tempfile.TemporaryDirectory(prefix="magpie_bundled_nonroot_") as tmp:
             _cleanup(name)
             try:
-                _run_container(bundled_image, Path(tmp), name, extra_args=["-p", "0:8080"])
+                _run_container(
+                    bundled_image,
+                    Path(tmp),
+                    name,
+                    extra_args=["-p", "0:8080", *_own_uid_gid_args()],
+                )
                 _wait_for_log(name, "caddy started")
 
                 tini_user = _docker_top_user(name, "tini")
@@ -390,22 +413,17 @@ class TestBundledImageNonRootCaddy:
             _cleanup(name)
             _cleanup(init_name)
             try:
-                # Deliberately no MAGPIE_UID/MAGPIE_GID here: leaving them
-                # unset lets the container auto-detect the runtime uid
-                # from data_dir's own ownership (i.e. whoever is running
-                # this test), so the containers chown everything under
-                # data_dir back to that same uid -- required for
-                # TemporaryDirectory's own cleanup to have permission to
-                # remove it afterwards. A hardcoded uid here (e.g. 1000)
-                # would only coincidentally match the invoking user on
-                # some hosts and silently break teardown (PermissionError
-                # during rmtree) on any host where it doesn't -- this bit
-                # a CI run where the runner's uid isn't 1000.
+                # MAGPIE_UID/MAGPIE_GID explicitly set to the *current*
+                # process's own uid/gid (see _own_uid_gid_args) -- both
+                # for deterministic behavior (not dependent on whatever
+                # uid happens to own the tempdir in a given environment)
+                # and so TemporaryDirectory's own cleanup can still remove
+                # what the containers chowned under it afterwards.
                 #
                 # First boot: full default capabilities, provisioning the
                 # bind-mounted /data (see docstring -- this step needs
                 # DAC_OVERRIDE, which the restart below deliberately omits).
-                _run_container(bundled_image, data_dir, init_name)
+                _run_container(bundled_image, data_dir, init_name, extra_args=_own_uid_gid_args())
                 _wait_for_log(init_name, "caddy started")
                 subprocess.run(["docker", "stop", init_name], check=True, capture_output=True)
                 _cleanup(init_name)
@@ -417,6 +435,7 @@ class TestBundledImageNonRootCaddy:
                     extra_args=[
                         "-p",
                         "0:8080",
+                        *_own_uid_gid_args(),
                         "--cap-drop",
                         "ALL",
                         "--cap-add",
