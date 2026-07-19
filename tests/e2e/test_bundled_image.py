@@ -291,8 +291,16 @@ def _published_port(name: str, container_port: str = "8080/tcp") -> str:
     return port
 
 
-def _docker_top_user(name: str, comm: str) -> str | None:
-    """Return the USER field docker top reports for a process matching `comm` exactly."""
+def _docker_top_user(name: str, *comm_candidates: str) -> str | None:
+    """Return the USER field docker top reports for a process matching any of
+    `comm_candidates` exactly.
+
+    Accepts multiple candidates because `docker top`'s COMMAND column for a
+    shebang script (e.g. `/wrapper.sh`, `#!/bin/bash`) isn't guaranteed to
+    show the script's own basename across Docker/kernel versions -- it can
+    show the interpreter's instead (`bash`). There's only one such process
+    in this container, so matching either name unambiguously identifies it.
+    """
     result = subprocess.run(
         ["docker", "top", name, "-o", "pid,user,comm"],
         check=True,
@@ -301,7 +309,7 @@ def _docker_top_user(name: str, comm: str) -> str | None:
     )
     for line in result.stdout.strip().splitlines()[1:]:  # skip header row
         parts = line.split(None, 2)
-        if len(parts) == 3 and parts[2] == comm:
+        if len(parts) == 3 and parts[2] in comm_candidates:
             return parts[1]
     return None
 
@@ -333,7 +341,7 @@ class TestBundledImageNonRootCaddy:
                 _wait_for_log(name, "caddy started")
 
                 tini_user = _docker_top_user(name, "tini")
-                wrapper_user = _docker_top_user(name, "wrapper.sh")
+                wrapper_user = _docker_top_user(name, "wrapper.sh", "bash")
                 uvicorn_user = _docker_top_user(name, "uvicorn")
                 caddy_user = _docker_top_user(name, "caddy")
                 assert tini_user is not None, "could not find tini in `docker top` output"

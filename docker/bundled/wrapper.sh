@@ -6,11 +6,17 @@
 # can do -- chown /data, chown /var/lib/caddy) runs first, and this same
 # script then re-execs itself dropped to the non-root runtime uid via
 # gosu. Everything from that point on -- DB init, uvicorn, caddy, and the
-# rest of this supervisor -- runs as that uid, not root (issue #591): no
-# process in this container runs as root in steady state except tini
-# itself (PID 1, kept root purely for zombie reaping, which needs no
-# privilege). uvicorn and caddy are launched directly (no per-child gosu)
-# since the whole supervisor is already at the target uid by then.
+# rest of this supervisor -- runs as that uid, not root (issue #591), in
+# the normal case where the resolved uid is non-root: no process in this
+# container runs as root in steady state except tini itself (PID 1, kept
+# root purely for zombie reaping, which needs no privilege). If the
+# resolved uid is 0 (e.g. a fresh, still-root-owned volume with no
+# MAGPIE_UID set -- entrypoint.sh's own documented "no privilege drop
+# needed" case), there is nothing to drop to and everything continues as
+# root instead; this is an explicit, intentional fallback, not the
+# steady-state default. uvicorn and caddy are launched directly (no
+# per-child gosu) since the whole supervisor is already at the target
+# uid by then.
 #
 # The root prelude intentionally duplicates a small amount of
 # entrypoint.sh's setup logic (uid resolution, /data ownership fixups)
@@ -166,10 +172,23 @@ if [ "$(id -u)" = "0" ]; then
 	# Publish for magpie-ctl-wrapper.sh (docker exec ... magpie-ctl ...):
 	# nothing else in this script needs it post-drop anymore, since
 	# uvicorn and caddy are both launched directly as this same uid
-	# rather than individually gosu'd.
-	mkdir -p /run
-	echo "$RUN_UID:$RUN_GID" >/run/magpie-user
-	chmod 644 /run/magpie-user
+	# rather than individually gosu'd. Checked explicitly (not just
+	# best-effort) because a silent failure here would leave
+	# magpie-ctl-wrapper.sh unable to find the runtime uid later --
+	# falling back to running docker-exec'd magpie-ctl invocations as
+	# raw root instead of erroring clearly.
+	if ! mkdir -p /run; then
+		log "error: failed to create /run"
+		exit 1
+	fi
+	if ! echo "$RUN_UID:$RUN_GID" >/run/magpie-user; then
+		log "error: failed to write /run/magpie-user"
+		exit 1
+	fi
+	if ! chmod 644 /run/magpie-user; then
+		log "error: failed to chmod /run/magpie-user"
+		exit 1
+	fi
 
 	magpie_resolve_storage_paths
 	magpie_fixup_ownership
@@ -190,7 +209,18 @@ if [ "$(id -u)" = "0" ]; then
 			exit 1
 		fi
 		log "root setup complete, dropping to $RUN_UID:$RUN_GID"
+		# shellcheck disable=SC2093  # intentional: the log+exit below is
+		# an explicit failure path for when exec itself fails, not dead
+		# code left behind by mistake.
 		exec gosu "$RUN_UID:$RUN_GID" "$0" "$@"
+		# Only reached if exec itself failed (it replaces the process on
+		# success, so nothing after it runs then) -- e.g. gosu couldn't
+		# perform the setuid/setgid syscalls. Without this, falling
+		# through would run the entire rest of this script -- the
+		# post-drop supervisor body -- as root, silently defeating the
+		# whole point of the drop.
+		log "error: exec gosu failed to drop privileges to $RUN_UID:$RUN_GID"
+		exit 1
 	fi
 fi
 
