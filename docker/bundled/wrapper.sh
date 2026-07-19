@@ -397,6 +397,21 @@ until wget -q -O /dev/null --timeout=3 --tries=1 http://127.0.0.1:8000/health 2>
 done
 log "uvicorn ready after ${attempts} attempts (${SECONDS}s elapsed)"
 
+# /var/lib/caddy is baked into the image root-owned; the root prelude
+# above is what normally chowns it to this uid. If that prelude was
+# skipped (container started non-root directly, e.g. `docker run --user
+# <uid>`), this directory is still root-owned and Caddy can't write its
+# autosave config into it -- checked explicitly here, with an actionable
+# message, rather than letting Caddy itself fail deep inside its own
+# startup with a less clear error.
+if ! mkdir -p /var/lib/caddy/data /var/lib/caddy/config 2>/dev/null ||
+	! [ -w /var/lib/caddy/data ] || ! [ -w /var/lib/caddy/config ]; then
+	log "error: /var/lib/caddy is not writable by uid $(id -u) -- if this container was started non-root directly (skipping the root prelude), either start it as root once so the prelude can provision /var/lib/caddy, or pre-create and chown /var/lib/caddy to this uid before starting"
+	kill -TERM "$UVICORN_PID" 2>/dev/null
+	wait "$UVICORN_PID" 2>/dev/null
+	exit 1
+fi
+
 export XDG_DATA_HOME=/var/lib/caddy/data
 export XDG_CONFIG_HOME=/var/lib/caddy/config
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
