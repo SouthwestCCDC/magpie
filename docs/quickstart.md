@@ -9,14 +9,16 @@ Get Magpie running in 5 minutes using the installer script.
 ```bash
 git clone https://github.com/SouthwestCCDC/magpie
 cd magpie
-sudo ./scripts/magpie-deploy.sh install --tls-mode off --noninteractive
+sudo ./scripts/magpie-deploy.sh install --noninteractive
 # Copy the admin token from install output. If lost, reset with:
 # docker exec -it magpie-magpie-1 magpie-ctl init --reset-admin-token
 ```
 
-Use `--tls-mode off` for local testing or behind a reverse proxy. For Let's Encrypt: `--tls-mode auto --domain magpie.example.com`.
+Magpie serves plain HTTP only -- it does not terminate TLS itself. For a
+public deployment, put a reverse proxy (nginx, Caddy, a cloud load
+balancer, etc.) in front of it and forward to `http://127.0.0.1:$HTTP_PORT`.
 
-See [Installation Guide](installation.md) for TLS options and advanced configuration.
+See [Installation Guide](installation.md) for advanced configuration.
 
 ## 2. Install Client
 
@@ -62,7 +64,7 @@ magpie info builds/app:latest
 
 ## Next Steps
 
-- [Installation Guide](installation.md) - Advanced deployment options and TLS configuration
+- [Installation Guide](installation.md) - Advanced deployment options and reverse-proxy setup
 - [User Guide](user-guide.md) - Complete CLI reference
 - [Production Checklist](production-checklist.md) - Pre-deployment verification
 
