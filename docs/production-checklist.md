@@ -41,8 +41,15 @@ Before deploying to production:
 ```bash
 export MAGPIE_DATA_DIR=/path/to/persistent/storage
 export MAGPIE_ADMIN_TOKEN_SINK=file   # or exec / discard / stdout
-docker compose up -d
+docker compose -f docker-compose.yml up -d
 ```
+
+`-f docker-compose.yml` pins the canonical operator file explicitly -- a
+bare `docker compose up` from a repo checkout auto-merges
+`docker-compose.override.yml` (the local-development overlay: builds from
+source, defaults the admin-token sink, enables test endpoints), which must
+never run in production. Every `docker compose` command on this page pins
+it the same way.
 
 Retrieve the admin token per the chosen sink -- see
 [installation.md](installation.md#admin-token-delivery) for the `file`,
@@ -63,7 +70,7 @@ Retrieve the admin token per the chosen sink -- see
 
 **Recover admin token if lost:**
 ```bash
-docker compose exec magpie magpie-ctl init --reset-admin-token
+docker compose -f docker-compose.yml exec magpie magpie-ctl init --reset-admin-token
 ```
 The new token is delivered through the same configured `MAGPIE_ADMIN_TOKEN_SINK`
 (not printed to stdout unless `sink=stdout`) -- delivery is attempted before
@@ -71,7 +78,7 @@ any database change, so if it fails (e.g. a broken exec command), the prior
 admin token is left completely valid and unchanged; fix the sink and re-run.
 If using `sink=discard`, mint a fresh admin-scope token directly instead:
 ```bash
-docker compose exec magpie \
+docker compose -f docker-compose.yml exec magpie \
   magpie-ctl token create --name ops-admin --scope admin
 ```
 

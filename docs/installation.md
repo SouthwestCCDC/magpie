@@ -15,8 +15,16 @@ Server runs at `http://localhost:8080` (change via `MAGPIE_HTTP_PORT`).
 ```bash
 export MAGPIE_DATA_DIR=/srv/magpie/data
 export MAGPIE_ADMIN_TOKEN_SINK=file   # required -- see Admin Token Delivery below
-docker compose up -d
+docker compose -f docker-compose.yml up -d
 ```
+
+`-f docker-compose.yml` pins the canonical operator file explicitly -- a
+bare `docker compose up` from a repo checkout auto-merges
+`docker-compose.override.yml` (the local-development overlay: builds from
+source, defaults the admin-token sink, enables test endpoints), which is
+correct for [Quick Start (Development)](#quick-start-development) above
+but must never run in production. Every `docker compose` command on this
+page pins it the same way.
 
 Magpie serves plain HTTP only on `MAGPIE_HTTP_PORT` (default 8080) -- it
 does not terminate TLS itself. Put a reverse proxy (nginx, another Caddy, a
@@ -166,7 +174,7 @@ would let it satisfy `MAGPIE_ALLOWED_CIDRS` without a bearer token:
 
 ```bash
 export MAGPIE_TRUSTED_PROXIES="10.3.3.10"
-docker compose up -d
+docker compose -f docker-compose.yml up -d
 ```
 
 The [`magpie-deploy.sh` installer](../scripts/magpie-deploy.sh) prompts
