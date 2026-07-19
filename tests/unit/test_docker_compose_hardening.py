@@ -42,6 +42,24 @@ def _env_dict(service: dict) -> dict[str, str]:
     if a file ever switched shapes, blinding every assertion below that
     reads this dict without raising an error.
 
+    In the mapping form, YAML parses unquoted scalars to native Python
+    types (bool/int/float/None), not strings -- coercion below matches
+    Compose's OWN stringification of each, verified directly against
+    `docker compose config` on a throwaway file, not assumed:
+      - bool -> lowercase `"true"`/`"false"` (NOT Python's `str(True)` ==
+        `"True"` -- checked before the generic branch, since `bool` is a
+        subclass of `int` in Python and would otherwise silently fall
+        through to it).
+      - int/float -> plain literal string form (`123` -> `"123"`), which
+        Python's `str()` already matches.
+      - null (an explicit `KEY:` or `KEY: null` entry) -> Compose's own
+        "pass this var through from the invoking shell's environment"
+        sentinel, distinct from an explicit blank string, but with no
+        `${...}` string content to inspect either way -- treated as `""`
+        here since every assertion using this dict only cares about
+        presence and `:-`/`:?` syntax, both of which a blank string
+        satisfies identically to a true pass-through sentinel.
+
     Raw ${VAR:-default}/${VAR:?msg} substitution syntax is preserved
     as-is (not interpolated) -- these assertions check the *shape* of the
     directive (has a default vs. requires a value), not a resolved value.
@@ -50,7 +68,12 @@ def _env_dict(service: dict) -> dict[str, str]:
     env: dict[str, str] = {}
     if isinstance(raw, dict):
         for key, value in raw.items():
-            env[key] = "" if value is None else str(value)
+            if value is None:
+                env[key] = ""
+            elif isinstance(value, bool):
+                env[key] = "true" if value else "false"
+            else:
+                env[key] = str(value)
     else:
         for entry in raw:
             key, _, value = entry.partition("=")
@@ -70,6 +93,31 @@ def test_env_dict_handles_both_list_and_mapping_forms():
     expected = {"FOO": "${FOO:-bar}", "BAZ": "qux"}
     assert _env_dict(list_form) == expected
     assert _env_dict(mapping_form) == expected
+
+
+def test_env_dict_mapping_form_scalar_coercion_matches_compose():
+    """Every unquoted YAML scalar type the mapping form can produce must be
+    coerced to what Compose itself would resolve it to -- each case here
+    verified against a real `docker compose config` run, not assumed.
+    """
+    mapping_form = {
+        "environment": {
+            "BOOL_TRUE": True,
+            "BOOL_FALSE": False,
+            "INT_VAL": 123,
+            "FLOAT_VAL": 1.5,
+            "NULL_VAL": None,
+            "STR_VAL": "hello",
+        }
+    }
+    assert _env_dict(mapping_form) == {
+        "BOOL_TRUE": "true",
+        "BOOL_FALSE": "false",
+        "INT_VAL": "123",
+        "FLOAT_VAL": "1.5",
+        "NULL_VAL": "",
+        "STR_VAL": "hello",
+    }
 
 
 def test_operator_compose_has_single_magpie_service():
