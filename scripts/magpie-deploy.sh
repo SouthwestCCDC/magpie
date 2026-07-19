@@ -43,15 +43,20 @@ HARDCODED_VERSION="dev"
 
 # Default configuration
 DEFAULT_INSTALL_DIR="/opt/magpie"
-DEFAULT_TLS_MODE="off"
 DEFAULT_HTTP_PORT="8080"
-DEFAULT_HTTPS_PORT="8443"
-# Trust no proxy by default -- Caddy uses the real connecting peer's IP.
-# Only set (via --trusted-proxies or the interactive prompt for --tls-mode
-# off) to the exact upstream hop(s) when Caddy sits behind another reverse
-# proxy. A broad range here would let any client on it spoof
-# X-Forwarded-For and defeat MAGPIE_ALLOWED_CIDRS. See issue #575.
+# Trust no proxy by default -- the bundled Caddy uses the real connecting
+# peer's IP. Only set (via --trusted-proxies or the interactive prompt) to
+# the exact upstream hop(s) when it sits behind another reverse proxy. A
+# broad range here would let any client on it spoof X-Forwarded-For and
+# defeat MAGPIE_ALLOWED_CIDRS. See issue #575.
 DEFAULT_TRUSTED_PROXIES=""
+# The bundled compose file has no Compose-level default for this (fail-
+# closed) -- the installer always supplies one so a fresh install or an
+# update never boot-loops. 'file' is the frictionless choice for a
+# self-managed install; operators who want exec/discard/stdout edit .env
+# afterwards. See docs/installation.md "Admin Token Delivery".
+DEFAULT_ADMIN_TOKEN_SINK="file"
+DEFAULT_ADMIN_TOKEN_SINK_FILE_PATH="/data/admin-token"
 
 # =============================================================================
 # Global variables (populated during config)
@@ -59,27 +64,34 @@ DEFAULT_TRUSTED_PROXIES=""
 
 INSTALL_DIR=""
 DATA_DIR=""
-TLS_MODE=""
-DOMAIN=""
 HTTP_PORT=""
-HTTPS_PORT=""
-TLS_CERT=""
-TLS_KEY=""
 TRUSTED_PROXIES=""
+# Whether --trusted-proxies was passed explicitly on this run (as opposed to
+# TRUSTED_PROXIES having been populated only by load_existing_config()'s
+# legacy-key migration). Distinguishes an operator's deliberate override
+# from a passive carry-forward so cmd_update's .env surgery can update an
+# already-persisted MAGPIE_TRUSTED_PROXIES in place instead of leaving it
+# untouched. See issue #583.
+TRUSTED_PROXIES_FROM_CLI="false"
 # Read-only mirror of MAGPIE_ALLOWED_CIDRS from an existing install's .env --
 # this script never sets or persists it (docker-compose passes it straight
-# through to the app); it's only loaded so cmd_update can warn when it's
-# paired with an empty MAGPIE_TRUSTED_PROXIES. See issue #579.
+# through to the app); it's only loaded so cmd_update/cmd_install can warn
+# or gate when it's paired with an empty MAGPIE_TRUSTED_PROXIES. See issue
+# #579.
 ALLOWED_CIDRS=""
 # Whether MAGPIE_TRUSTED_PROXIES (or the legacy unprefixed TRUSTED_PROXIES)
 # key was present in the existing install's .env at the start of this run,
 # before load_existing_config()'s migration/writeback touches anything.
 # Presence -- even an explicit empty value -- is the deliberate-choice
-# signal cmd_update's issue #579 gate uses to fire only once. See
+# signal the issue #579 gate uses to fire only once. See
 # load_existing_config().
 TRUSTED_PROXIES_KEY_PRESENT="false"
 BIND_IP=""
-ACME_SERVER=""
+# Read-only detection of a persisted (pre-0.2.0) TLS_MODE from an existing
+# install's .env -- never used to drive any generated config, only to
+# decide whether cmd_update's tier-2 deprecation gate fires. See
+# load_existing_config() and cmd_update().
+PERSISTED_TLS_MODE=""
 NONINTERACTIVE="false"
 FORCE="false"
 PURGE="false"
@@ -88,11 +100,16 @@ FOLLOW="false"
 LINES="100"
 FROM_SOURCE="false"
 REQUESTED_RELEASE=""  # from --release; empty means "use the default branch"
-# --accept-empty-trusted-proxies (update only): acknowledges that an empty
+# --accept-empty-trusted-proxies: acknowledges that an empty
 # MAGPIE_TRUSTED_PROXIES is intentional (magpie is directly exposed), so
-# cmd_update's issue #579 gate proceeds instead of prompting/dying. See
+# the issue #579 gate proceeds instead of prompting/dying. See
 # warn_or_gate_trusted_proxies_for_cidr_allow().
 ACCEPT_EMPTY_TRUSTED_PROXIES="false"
+# --accept-builtin-tls-removed (update only): acknowledges that this
+# install's persisted TLS_MODE shows it was terminating TLS itself before
+# v0.2.0's bundled image (which never does) replaces it. See cmd_update()'s
+# tier-2 deprecation gate.
+ACCEPT_BUILTIN_TLS_REMOVED="false"
 
 # =============================================================================
 # Helper functions
@@ -102,8 +119,12 @@ log() {
     echo "[magpie] $*"
 }
 
+# `echo -e` (not plain `echo`) so a `\n` embedded in a die()/log_error()
+# message renders as an actual line break instead of a literal backslash-n
+# -- several call sites below build multi-line messages this way. See
+# issue #161.
 log_error() {
-    echo "[magpie] ERROR: $*" >&2
+    echo -e "[magpie] ERROR: $*" >&2
 }
 
 log_warn() {
@@ -267,15 +288,6 @@ check_prerequisites() {
 # newlines, braces), not to certify that a value is a *routable* hostname
 # or IP address.
 
-# Matches a syntactically valid DNS hostname: labels of alphanumerics and
-# hyphens (not starting/ending with a hyphen), separated by dots. Excludes
-# every character that would let a value act as regex, sed script, or shell
-# metacharacters ('/', '\', '$', backtick, ';', '&', newline, etc.).
-is_valid_domain() {
-    local domain="$1"
-    [[ "$domain" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]]
-}
-
 # Matches a single IPv4 address, optionally with a /NN CIDR prefix.
 is_valid_ipv4_cidr() {
     local value="$1"
@@ -318,35 +330,6 @@ is_valid_ipv6_cidr() {
 is_valid_ip_or_cidr() {
     local value="$1"
     is_valid_ipv4_cidr "$value" || is_valid_ipv6_cidr "$value"
-}
-
-# Matches an https:// URL using only an allowlisted RFC 3986-ish charset
-# for the authority and path. This is a strict ALLOWLIST (not a denylist of
-# specific bytes like whitespace/braces): it excludes every character not
-# explicitly permitted, including backslash. That matters because the
-# value is later interpolated into an awk program via ENVIRON (not `-v`),
-# but a denylist alone is not enough defense in depth -- `awk -v x=value`
-# decodes backslash escapes (`\n`, octal `\173`/`\175`/`\040`, etc.) in the
-# assigned value *before* the awk program runs, so a denylist that checks
-# only for literal whitespace/braces can be bypassed with escape sequences
-# that decode into them. Excluding backslash here closes that off
-# independently of how the value is later consumed. See issue #448.
-is_valid_acme_server_url() {
-    local value="$1"
-    local pattern='^https://[A-Za-z0-9.-]+(:([0-9]{1,5}))?(/[A-Za-z0-9._~%!$&()*+,;=:@/-]*)?$'
-    [[ "$value" =~ $pattern ]] || return 1
-
-    # The charset regex alone allows a syntactically-shaped but out-of-range
-    # port (e.g. ":99999", which is 1-5 digits but > 65535) -- that would
-    # pass validation and then produce a Caddyfile Caddy rejects at
-    # install/update time. `10#...` forces base-10 (see the CIDR octet
-    # comment above for why: a leading zero would otherwise be read as
-    # octal by bash arithmetic).
-    local port="${BASH_REMATCH[2]}"
-    if [[ -n "$port" ]]; then
-        (( 10#$port >= 1 && 10#$port <= 65535 )) || return 1
-    fi
-    return 0
 }
 
 # Matches a safe git ref name (branch or tag): alphanumerics, dot,
@@ -439,16 +422,12 @@ validate_path_value() {
     fi
 }
 
-# Validates DOMAIN, TRUSTED_PROXIES, BIND_IP, and ACME_SERVER format.
-# Called both during install (via validate_config) and update (to
-# re-validate values loaded from an existing .env before they're used to
-# regenerate the Caddyfile). Appends to the caller's 'errors' array (relies
-# on bash's dynamic scoping of locals). See issue #448.
+# Validates TRUSTED_PROXIES and BIND_IP format. Called both during install
+# (via validate_config) and update (to re-validate values loaded from an
+# existing .env before they're written back). Appends to the caller's
+# 'errors' array (relies on bash's dynamic scoping of locals). See issue
+# #448.
 validate_network_config() {
-    if [[ -n "$DOMAIN" ]] && ! is_valid_domain "$DOMAIN"; then
-        errors+=("Invalid domain: $DOMAIN (must be a valid hostname, e.g. magpie.example.com)")
-    fi
-
     if [[ -n "$TRUSTED_PROXIES" ]] && ! is_valid_ip_or_cidr_list "$TRUSTED_PROXIES"; then
         errors+=("Invalid --trusted-proxies: $TRUSTED_PROXIES (must be a whitespace-separated list of IPv4/IPv6 addresses or CIDRs)")
     fi
@@ -458,58 +437,19 @@ validate_network_config() {
             errors+=("Invalid --bind-ip: $BIND_IP (must be a single IPv4 or IPv6 address, no CIDR prefix)")
         fi
     fi
-
-    if [[ -n "$ACME_SERVER" ]] && ! is_valid_acme_server_url "$ACME_SERVER"; then
-        errors+=("Invalid --acme-server: $ACME_SERVER (must be an https:// URL using only RFC 3986 host/path characters; no whitespace, braces, or backslashes)")
-    fi
 }
 
 validate_config() {
     local errors=()
-
-    # TLS mode validation
-    case "$TLS_MODE" in
-        off|auto|manual) ;;
-        *) errors+=("Invalid TLS mode: $TLS_MODE (must be off, auto, or manual)") ;;
-    esac
-
-    # Domain required for TLS
-    if [[ "$TLS_MODE" != "off" ]] && [[ -z "$DOMAIN" ]]; then
-        errors+=("Domain is required for TLS mode '$TLS_MODE'")
-    fi
-
-    # ACME server only valid with auto TLS mode
-    if [[ -n "$ACME_SERVER" ]] && [[ "$TLS_MODE" != "auto" ]]; then
-        errors+=("--acme-server can only be used with --tls-mode auto (current mode: $TLS_MODE)")
-    fi
-
-    # Certificate paths for manual TLS
-    if [[ "$TLS_MODE" == "manual" ]]; then
-        if [[ -z "$TLS_CERT" ]]; then
-            errors+=("TLS certificate path required for manual TLS mode (--tls-cert)")
-        elif [[ ! -f "$TLS_CERT" ]]; then
-            errors+=("TLS certificate not found: $TLS_CERT")
-        fi
-
-        if [[ -z "$TLS_KEY" ]]; then
-            errors+=("TLS key path required for manual TLS mode (--tls-key)")
-        elif [[ ! -f "$TLS_KEY" ]]; then
-            errors+=("TLS key not found: $TLS_KEY")
-        fi
-    fi
 
     # Port validation
     if ! [[ "$HTTP_PORT" =~ ^[0-9]+$ ]] || (( HTTP_PORT < 1 || HTTP_PORT > 65535 )); then
         errors+=("Invalid HTTP port: $HTTP_PORT")
     fi
 
-    if ! [[ "$HTTPS_PORT" =~ ^[0-9]+$ ]] || (( HTTPS_PORT < 1 || HTTPS_PORT > 65535 )); then
-        errors+=("Invalid HTTPS port: $HTTPS_PORT")
-    fi
-
-    # Network value validation (DOMAIN, TRUSTED_PROXIES, BIND_IP, ACME_SERVER)
-    # These values later flow into the generated .env and Caddyfile, so they
-    # must be validated here, before any file is generated. See issue #448.
+    # Network value validation (TRUSTED_PROXIES, BIND_IP). These values
+    # later flow into the generated .env, so they must be validated here,
+    # before any file is generated. See issue #448.
     validate_network_config
 
     # Directory validation
@@ -628,17 +568,26 @@ load_existing_config() {
         local -A env_vars=()
         read_env_file "${INSTALL_DIR}/etc/.env" env_vars
 
-        # Map env vars to script variables. MAGPIE_* prefixed vars map to
-        # their unprefixed script variable name (DATA_DIR, HTTP_PORT,
-        # HTTPS_PORT, DOMAIN); the unprefixed persisted keys below
-        # (TLS_MODE, BIND_IP, ACME_SERVER) map directly.
         DATA_DIR="${env_vars[MAGPIE_DATA_DIR]:-$DATA_DIR}"
         HTTP_PORT="${env_vars[MAGPIE_HTTP_PORT]:-$HTTP_PORT}"
-        HTTPS_PORT="${env_vars[MAGPIE_HTTPS_PORT]:-$HTTPS_PORT}"
-        DOMAIN="${env_vars[MAGPIE_DOMAIN]:-$DOMAIN}"
-        TLS_MODE="${env_vars[TLS_MODE]:-$TLS_MODE}"
-        BIND_IP="${env_vars[BIND_IP]:-$BIND_IP}"
-        ACME_SERVER="${env_vars[ACME_SERVER]:-$ACME_SERVER}"
+
+        # Read-only detection for cmd_update's tier-2 deprecation gate: a
+        # persisted TLS_MODE of auto|manual means this install was
+        # terminating TLS itself before v0.2.0's bundled image (which never
+        # does) replaces it. This key is never written by generate_env_file()
+        # or otherwise used to drive any generated config -- see cmd_update().
+        PERSISTED_TLS_MODE="$(trim_whitespace "${env_vars[TLS_MODE]:-}")"
+
+        # MAGPIE_BIND_IP (current, prefixed) with a fallback to the legacy
+        # unprefixed BIND_IP key (pre-dates the MAGPIE_ prefix convention;
+        # see issue #575's TRUSTED_PROXIES precedent below) so an existing
+        # install's --bind-ip setting survives an update unchanged.
+        # cmd_update migrates the legacy key forward in its .env surgery.
+        if [[ -n "${env_vars[MAGPIE_BIND_IP]+set}" ]]; then
+            BIND_IP="$(trim_whitespace "${env_vars[MAGPIE_BIND_IP]}")"
+        elif [[ -n "${env_vars[BIND_IP]+set}" ]]; then
+            BIND_IP="$(trim_whitespace "${env_vars[BIND_IP]}")"
+        fi
 
         # MAGPIE_TRUSTED_PROXIES (issue #575) replaces the pre-#575
         # unprefixed TRUSTED_PROXIES key. Prefer the new key; fall back to
@@ -670,7 +619,7 @@ load_existing_config() {
             TRUSTED_PROXIES="$(trim_whitespace "${env_vars[TRUSTED_PROXIES]}")"
             if [[ "$TRUSTED_PROXIES" == "$legacy_broad_default" ]]; then
                 log_warn "Migrating pre-#575 TRUSTED_PROXIES from ${INSTALL_DIR}/etc/.env: it is set to the old overly-broad default ($legacy_broad_default), which lets any client on those ranges spoof X-Forwarded-For and bypass MAGPIE_ALLOWED_CIDRS."
-                log_warn "Edit MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to the exact upstream reverse proxy address(es) in front of this install (or leave it empty to trust none), then run '$SCRIPT_NAME update' to regenerate the Caddyfile."
+                log_warn "Edit MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to the exact upstream reverse proxy address(es) in front of this install (or leave it empty to trust none), then run '$SCRIPT_NAME update'."
             fi
             # Unlike the prefixed key above, a present legacy key only
             # counts as "already configured" when it carries a real,
@@ -720,46 +669,19 @@ gather_config() {
         prompt_value "Data storage directory" "$DATA_DIR" DATA_DIR
     fi
 
-    # TLS mode
-    if [[ -z "$TLS_MODE" ]]; then
-        prompt_choice "TLS mode" "off auto manual" "$DEFAULT_TLS_MODE" TLS_MODE
-    fi
-
-    # Domain (if TLS enabled)
-    if [[ "$TLS_MODE" != "off" ]] && [[ -z "$DOMAIN" ]]; then
-        prompt_value "Domain name (e.g., magpie.example.com)" "" DOMAIN
-    fi
-
-    # Certificate paths (if manual TLS)
-    if [[ "$TLS_MODE" == "manual" ]]; then
-        if [[ -z "$TLS_CERT" ]]; then
-            prompt_value "TLS certificate path" "" TLS_CERT
-        fi
-        if [[ -z "$TLS_KEY" ]]; then
-            prompt_value "TLS private key path" "" TLS_KEY
-        fi
-    fi
-
-    # Ports
+    # HTTP port
     if [[ -z "$HTTP_PORT" ]]; then
         HTTP_PORT="$DEFAULT_HTTP_PORT"
     fi
-    if [[ -z "$HTTPS_PORT" ]]; then
-        HTTPS_PORT="$DEFAULT_HTTPS_PORT"
-    fi
 
-    # Trusted proxies (X-Forwarded-For). Only relevant when Caddy sits
-    # behind another reverse proxy -- typically a --tls-mode off (HTTP-only)
-    # deployment fronted by an external proxy/load balancer. Prompt only in
-    # that case; --tls-mode auto/manual means Caddy faces the internet
-    # directly, so the empty (trust nothing) default is always correct
-    # there. See issue #575.
+    # Trusted proxies (X-Forwarded-For). The bundled image serves plain
+    # HTTP only and never terminates TLS itself (see issue #309's
+    # 2026-07-18 decision) -- every deployment is expected to sit behind an
+    # external TLS-terminating reverse proxy, so this is always relevant
+    # (unlike the pre-0.2.0 two-container topology, where it only mattered
+    # for a --tls-mode off install). See issue #575.
     if [[ -z "$TRUSTED_PROXIES" ]]; then
-        if [[ "$TLS_MODE" == "off" ]]; then
-            prompt_value "Trusted proxy IP(s) (space-separated; the exact upstream reverse proxy in front of magpie, if any -- leave blank to trust none)" "$DEFAULT_TRUSTED_PROXIES" TRUSTED_PROXIES
-        else
-            TRUSTED_PROXIES="$DEFAULT_TRUSTED_PROXIES"
-        fi
+        prompt_value "Trusted proxy IP(s) (space-separated; the exact upstream reverse proxy in front of magpie, if any -- leave blank to trust none)" "$DEFAULT_TRUSTED_PROXIES" TRUSTED_PROXIES
     fi
 }
 
@@ -778,236 +700,36 @@ generate_env_file() {
 # Docker Compose settings
 MAGPIE_DATA_DIR=${DATA_DIR}
 MAGPIE_HTTP_PORT=${HTTP_PORT}
-MAGPIE_HTTPS_PORT=${HTTPS_PORT}
-MAGPIE_DOMAIN=${DOMAIN:-}
+# Host IP the published port binds to. Empty/unset = all interfaces
+# (0.0.0.0). See --bind-ip.
+MAGPIE_BIND_IP=${BIND_IP:-}
+# Pinned to the transitional -bundled image tag (a single container
+# running Caddy + uvicorn -- see issue #309's 2026-07-18 decision). The
+# canonical docker-compose.yml has no default for this key that resolves
+# to a real, installer-compatible image, so it must always be set here.
+MAGPIE_IMAGE=${GHCR_IMAGE}:${MAGPIE_VERSION}-bundled
 
 # Server settings
-MAGPIE_DEBUG=false
 MAGPIE_LOG_FORMAT=json
 MAGPIE_RETENTION_DAYS=90
 
-# TLS configuration (persisted for Caddyfile regeneration during updates)
-# See issues #340 and #344. MAGPIE_DOMAIN above is the single canonical
-# domain key -- load_existing_config() reads only that one, so there is no
-# separate DOMAIN= key here to avoid a stale/hand-edited duplicate being
-# silently ignored (issue #448).
-TLS_MODE=${TLS_MODE:-}
+# Admin bootstrap token delivery -- REQUIRED by the canonical compose file
+# (fail-closed, no Compose-level default there by design; an unset value
+# here means the container exits non-zero at boot). 'file' writes a
+# root-only file at MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH inside the
+# bind-mounted data directory, readable on the host at
+# ${DATA_DIR}/admin-token. See docs/installation.md "Admin Token Delivery"
+# for the exec/discard/stdout alternatives.
+MAGPIE_ADMIN_TOKEN_SINK=${DEFAULT_ADMIN_TOKEN_SINK}
+MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH=${DEFAULT_ADMIN_TOKEN_SINK_FILE_PATH}
 
-# Trusted proxy IPs/CIDRs whose X-Forwarded-For header Caddy honors.
-# Persisted with the MAGPIE_ prefix (unlike TLS_MODE/BIND_IP/ACME_SERVER
-# above) because docker-compose passes it straight through to the caddy
-# container as MAGPIE_TRUSTED_PROXIES, which Caddy itself reads via the
-# trusted_proxies directive in the Caddyfile -- see issue #575.
+# Trusted proxy IPs/CIDRs whose X-Forwarded-For header the bundled Caddy
+# honors when determining the client IP used by MAGPIE_ALLOWED_CIDRS.
+# Default: empty (trust no proxy; the real connecting peer's IP is used).
+# Only set this to the exact upstream hop(s) -- never a broad range. See
+# issue #575.
 MAGPIE_TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
-
-# Network configuration (issue #446)
-BIND_IP=${BIND_IP:-}
-ACME_SERVER=${ACME_SERVER:-}
 EOF
-}
-
-generate_caddyfile() {
-    # Generate Caddyfile by copying and patching Caddyfile.prod from repo
-    # This ensures route definitions stay in sync with the canonical source
-    # See issue #156 for planned templating improvements
-
-    local source_caddyfile="${INSTALL_DIR}/repo/Caddyfile.prod"
-    local dest_caddyfile="${INSTALL_DIR}/etc/Caddyfile"
-
-    if [[ ! -f "$source_caddyfile" ]]; then
-        die "Caddyfile.prod not found in cloned repo: $source_caddyfile"
-    fi
-
-    log "Generating Caddyfile (TLS mode: ${TLS_MODE})..."
-
-    case "$TLS_MODE" in
-        off)
-            # HTTP-only mode for running behind a reverse proxy
-            # - Replace site address with http://:80
-            # - Add trusted_proxies for client IP preservation
-            # - Remove HSTS header (not applicable to HTTP)
-
-            # Start with header comment
-            cat > "$dest_caddyfile" << EOF
-# Magpie Caddyfile - TLS Mode: off (HTTP only, behind reverse proxy)
-# Generated by magpie-deploy.sh v${MAGPIE_VERSION} from Caddyfile.prod
-#
-# Caddy listens on port 80 inside the container.
-# Docker maps host:${HTTP_PORT} -> container:80
-
-EOF
-            # Copy the global options block, adding trusted_proxies.
-            #
-            # trusted_proxies reads {$MAGPIE_TRUSTED_PROXIES:} -- a literal
-            # Caddy env-var placeholder, NOT bash-interpolated here (note
-            # the escaped \$ below) -- so Caddy resolves it from its own
-            # container's environment at config-load time, same as
-            # Caddyfile.prod. That environment variable comes from .env via
-            # docker-compose's `MAGPIE_TRUSTED_PROXIES=${MAGPIE_TRUSTED_PROXIES:-}`
-            # (see docker-compose.yml), not from this script directly.
-            # Default is empty: trust no proxy. See issue #575.
-            cat >> "$dest_caddyfile" << EOF
-{
-	log {
-		output stdout
-		format json
-		level INFO
-	}
-	admin off
-
-	servers {
-		trusted_proxies static {\$MAGPIE_TRUSTED_PROXIES:}
-	}
-}
-
-EOF
-            # Extract the site block contents (everything between the site address and final closing brace)
-            # and wrap it with http://:80
-            echo "http://:80 {" >> "$dest_caddyfile"
-
-            # Extract route definitions from Caddyfile.prod (skip global block and site address)
-            # Start after the site block opening, end before final closing brace
-            # Use awk to properly track brace nesting depth (issue #273)
-            #
-            # Depth tracking explanation:
-            # - The site block line "{$MAGPIE_DOMAIN} {" is SKIPPED with 'next', so we never count
-            #   its opening brace. This is intentional: we want the CONTENT inside the block.
-            # - We start at depth=0 (inside the site block, but before any nested blocks)
-            # - Each nested block (header {}, handle {}, etc.) increments/decrements depth
-            # - The internal content is balanced (each { has a matching }), so depth returns to 0
-            # - The final closing brace of the site block (line 398) has no matching opener
-            #   (since we skipped line 136), so it decrements depth to -1
-            # - depth==-1 signals we've found the site block's closing brace
-            #
-            # Known limitation: Braces inside quoted strings (e.g., JSON responses) would be
-            # counted. The current Caddyfile.prod has no such cases. If this becomes an issue,
-            # a more sophisticated parser would be needed.
-            awk '
-                /^{\$MAGPIE_DOMAIN}/ {
-                    in_site_block = 1
-                    depth = 0
-                    next
-                }
-                in_site_block {
-                    # Count opening and closing braces
-                    for (i = 1; i <= length($0); i++) {
-                        c = substr($0, i, 1)
-                        if (c == "{") depth++
-                        if (c == "}") depth--
-                    }
-
-                    # If depth returns to -1, we found the final closing brace
-                    if (depth == -1) {
-                        exit
-                    }
-
-                    # Skip HSTS header (not applicable to HTTP-only mode)
-                    if ($0 !~ /Strict-Transport-Security/) {
-                        print
-                    }
-                }
-            ' "$source_caddyfile" >> "$dest_caddyfile"
-
-            echo "}" >> "$dest_caddyfile"
-            ;;
-
-        auto)
-            # Automatic TLS (Let's Encrypt or custom ACME server)
-            # - Replace {$MAGPIE_DOMAIN} with the actual domain
-            # - Add a custom ACME server if configured
-            #
-            # DOMAIN and ACME_SERVER are substituted with bash's own literal
-            # string replacement and matched with awk -v (not sed), and are
-            # validated (validate_config/validate_network_config) before
-            # this ever runs, so neither value is interpreted as a regex or
-            # sed script. See issue #448.
-            local content
-            content="$(cat "$source_caddyfile")"
-            content="${content//\{\$MAGPIE_DOMAIN\}/$DOMAIN}"
-            printf '%s\n' "$content" > "$dest_caddyfile"
-
-            if [[ -n "$ACME_SERVER" ]]; then
-                # Insert a tls block with the custom ACME server directly
-                # after the site address line.
-                #
-                # ACME_SERVER is passed via ENVIRON, not `awk -v`: `-v`
-                # decodes backslash escapes (\n, octal \173/\175/\040, ...)
-                # in the assigned value before the awk program ever runs,
-                # which would let an escape-encoded payload with zero
-                # literal blocked bytes decode into real braces/newlines
-                # here -- even though it passed the ACME_SERVER allowlist.
-                # ENVIRON does not decode escapes. This is deliberately
-                # belt-and-suspenders with the strict allowlist in
-                # is_valid_acme_server_url(), which rejects backslashes
-                # outright. See issue #448.
-                ACME_SERVER="$ACME_SERVER" awk -v site="${DOMAIN} {" '
-                    BEGIN { acme = ENVIRON["ACME_SERVER"] }
-                    {
-                        print
-                        if ($0 == site) {
-                            print "\ttls {"
-                            print "\t\tca " acme
-                            print "\t}"
-                        }
-                    }
-                ' "$dest_caddyfile" > "${dest_caddyfile}.tmp"
-                mv "${dest_caddyfile}.tmp" "$dest_caddyfile"
-            fi
-
-            # Add generation header
-            {
-                echo "# Generated by magpie-deploy.sh v${MAGPIE_VERSION} (TLS mode: auto)"
-                cat "$dest_caddyfile"
-            } > "${dest_caddyfile}.tmp"
-            mv "${dest_caddyfile}.tmp" "$dest_caddyfile"
-            ;;
-
-        manual)
-            # Manual TLS with user-provided certificates
-            # - Copy certs to install dir so they're managed with the installation
-            # - Replace {$MAGPIE_DOMAIN} with the actual domain
-            # - Add tls directive with container paths
-            #
-            # DOMAIN is substituted with bash's own literal string
-            # replacement and matched with awk -v (not sed), and is
-            # validated (validate_config/validate_network_config) before
-            # this ever runs. See issue #448.
-
-            # Copy certificates to installation directory
-            local tls_dir="${INSTALL_DIR}/etc/tls"
-            mkdir -p "$tls_dir"
-            log "Copying TLS certificates to ${tls_dir}..."
-            cp "$TLS_CERT" "${tls_dir}/cert.pem"
-            cp "$TLS_KEY" "${tls_dir}/key.pem"
-            chmod 644 "${tls_dir}/cert.pem"
-            chmod 600 "${tls_dir}/key.pem"
-
-            local content
-            content="$(cat "$source_caddyfile")"
-            content="${content//\{\$MAGPIE_DOMAIN\}/$DOMAIN}"
-            printf '%s\n' "$content" > "$dest_caddyfile"
-
-            # Add tls directive with container paths (certs mounted at /etc/caddy/tls/)
-            awk -v site="${DOMAIN} {" '
-                {
-                    print
-                    if ($0 == site) {
-                        print "\ttls /etc/caddy/tls/cert.pem /etc/caddy/tls/key.pem"
-                    }
-                }
-            ' "$dest_caddyfile" > "${dest_caddyfile}.tmp"
-            mv "${dest_caddyfile}.tmp" "$dest_caddyfile"
-
-            # Add generation header
-            {
-                echo "# Generated by magpie-deploy.sh v${MAGPIE_VERSION} (TLS mode: manual)"
-                cat "$dest_caddyfile"
-            } > "${dest_caddyfile}.tmp"
-            mv "${dest_caddyfile}.tmp" "$dest_caddyfile"
-            ;;
-    esac
-
-    log "Caddyfile generated at ${dest_caddyfile}"
 }
 
 generate_systemd_service() {
@@ -1029,8 +751,16 @@ Type=simple
 WorkingDirectory=${INSTALL_DIR}
 EnvironmentFile=${INSTALL_DIR}/etc/.env
 
-ExecStart=/usr/bin/docker compose --env-file ${INSTALL_DIR}/etc/.env up --no-build
-ExecStop=/usr/bin/docker compose --env-file ${INSTALL_DIR}/etc/.env down
+# -f pins the canonical operator file explicitly -- docker-compose.override.yml
+# (the dev-only from-source build overlay) is never copied into INSTALL_DIR
+# by clone_repo()/cmd_update(), but pinning here is belt-and-suspenders
+# against a bare `docker compose` auto-merging one if it ever showed up.
+ExecStart=/usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env up --no-build
+# --remove-orphans: on a 2->1 topology swap (a v0.1.x install's leftover
+# 'caddy' container), the old sidecar has no matching service in the
+# current docker-compose.yml and would otherwise be left running,
+# orphaned, after this stops the 'magpie' service. See issue #232.
+ExecStop=/usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env down --remove-orphans
 
 Restart=always
 RestartSec=10
@@ -1064,7 +794,7 @@ WorkingDirectory=${INSTALL_DIR}
 # Use flock to prevent concurrent runs. If GC is already running, flock exits
 # immediately. Unlike ConditionPathExists, flock automatically handles stale
 # lock files from crashed processes.
-ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose --env-file ${INSTALL_DIR}/etc/.env run --rm -T magpie magpie-ctl gc --quiet
+ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env run --rm -T magpie magpie-ctl gc --quiet
 
 StandardOutput=journal
 StandardError=journal
@@ -1213,7 +943,12 @@ check_requested_image_exists() {
         return 0
     fi
 
-    local image_tag="${GHCR_IMAGE}:${remote_version}"
+    # The transitional -bundled tag (issue #594) is the only image this
+    # installer runs -- see generate_env_file()/pull_or_build_image(). The
+    # primary <version> tag (still the two-container topology) is not
+    # installer-compatible; checking it here would pass while the actual
+    # `docker pull` of the -bundled tag below still fails.
+    local image_tag="${GHCR_IMAGE}:${remote_version}-bundled"
     local rc
     if ghcr_image_exists "$image_tag"; then
         rc=0
@@ -1356,157 +1091,143 @@ clone_repo() {
         die "Failed to clone repository from $repo_url"
     fi
 
-    # Copy compose files to install directory
+    # Copy only the canonical operator compose file. docker-compose.override.yml
+    # (the dev-only from-source build overlay that a bare `docker compose up`
+    # auto-merges inside a repo checkout) must never reach a real
+    # deployment -- every docker-compose invocation in this script pins
+    # -f docker-compose.yml as defense in depth against that. See
+    # docker-compose.yml's own header comment.
     cp "${repo_dir}/docker-compose.yml" "${INSTALL_DIR}/"
-    cp "${repo_dir}/docker-compose.prod.yml" "${INSTALL_DIR}/" 2>/dev/null || true
 
     log "Repository cloned successfully"
 }
 
-patch_compose_for_caddyfile() {
-    # Patch docker-compose.yml to mount our generated Caddyfile
-    log "Patching Docker Compose for custom Caddyfile..."
+# Idempotently sets KEY=value in a KEY=value .env file: replaces the
+# existing line in place if present (anchored on ^KEY=, so a line that
+# merely contains "KEY=" elsewhere in its value is never touched), or
+# appends a new KEY=value line if absent. Every value reaching this
+# function has already passed this script's own charset validators
+# (is_valid_ip_or_cidr_list, validate_path_value) or is one of this
+# script's own fixed literals (an image ref built from GHCR_IMAGE/
+# MAGPIE_VERSION, "file", a fixed path) -- none can contain the `|` sed
+# delimiter used below, `&`, or a backslash, so none can escape the
+# replacement text. See issue #448's sed-injection precedent and issue
+# #583 (the bug this helper fixes: cmd_update previously only ever wrote
+# MAGPIE_TRUSTED_PROXIES when the key was absent).
+upsert_env_key() {
+    local env_file="$1"
+    local key="$2"
+    local value="$3"
 
-    local compose_file="${INSTALL_DIR}/docker-compose.yml"
-    local pattern="./Caddyfile:/etc/caddy/Caddyfile:ro"
-
-    # Validate that the pattern exists before patching
-    # Use -F for fixed string matching (. is literal, not regex wildcard)
-    if ! grep -qF "$pattern" "$compose_file"; then
-        die "Cannot patch docker-compose.yml: expected Caddyfile mount pattern not found.\nExpected: $pattern"
-    fi
-
-    # Replace the Caddyfile mount path
-    sed -i "s|./Caddyfile:/etc/caddy/Caddyfile:ro|${INSTALL_DIR}/etc/Caddyfile:/etc/caddy/Caddyfile:ro|g" \
-        "$compose_file"
-
-    # Validate that the replacement succeeded
-    if grep -qF "$pattern" "$compose_file"; then
-        die "Failed to patch docker-compose.yml: Caddyfile mount pattern was not replaced"
-    fi
-
-    if ! grep -qF "${INSTALL_DIR}/etc/Caddyfile:/etc/caddy/Caddyfile:ro" "$compose_file"; then
-        die "Failed to patch docker-compose.yml: new Caddyfile mount path not found after replacement"
+    if grep -q "^${key}=" "$env_file" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${value}|" "$env_file"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$env_file"
     fi
 }
 
-patch_compose_for_tls_certs() {
-    # Add TLS certificate mount for manual TLS mode
-    # Only called when TLS_MODE=manual
+# Removes a KEY= line from a .env file if present (anchored the same way as
+# upsert_env_key() above). No-op if the key isn't there. Used by cmd_update
+# to drop keys the canonical compose file no longer reads.
+strip_env_key() {
+    local env_file="$1"
+    local key="$2"
 
-    if [[ "$TLS_MODE" != "manual" ]]; then
-        return 0
+    if grep -q "^${key}=" "$env_file" 2>/dev/null; then
+        log "Removing ${key} from ${env_file} (no longer used)"
+        sed -i "/^${key}=/d" "$env_file"
     fi
-
-    log "Patching Docker Compose for TLS certificates..."
-
-    local compose_file="${INSTALL_DIR}/docker-compose.yml"
-    local caddyfile_mount="${INSTALL_DIR}/etc/Caddyfile:/etc/caddy/Caddyfile:ro"
-    local tls_mount="${INSTALL_DIR}/etc/tls:/etc/caddy/tls:ro"
-
-    # Add TLS mount after the Caddyfile mount in the caddy service
-    if grep -q "$tls_mount" "$compose_file"; then
-        log "TLS mount already present in docker-compose.yml"
-        return 0
-    fi
-
-    # Insert TLS mount line after the Caddyfile mount
-    sed -i "s|${caddyfile_mount}|${caddyfile_mount}\n      - ${tls_mount}|g" "$compose_file"
-
-    # Verify the mount was added
-    if ! grep -q "$tls_mount" "$compose_file"; then
-        die "Failed to add TLS certificate mount to docker-compose.yml"
-    fi
-
-    log "TLS certificate mount added to docker-compose.yml"
 }
 
-patch_compose_for_https_port() {
-    # Remove HTTPS port mapping when TLS is off
-    #
-    # When TLS mode is off, Caddy does not listen on port 443 — the HTTPS port
-    # mapping serves no purpose and causes bind failures if the port is already
-    # in use on the host (e.g. port 8443 occupied by Authentik).
-    #
-    # Docker Compose has no native way to conditionally include a port mapping
-    # based on an env var value (the :-default syntax always maps the port), so
-    # we patch the file directly.
-    #
-    # See issue #506.
+# cmd_update's .env surgery: `update` never regenerates .env wholesale
+# (only `install` calls generate_env_file()) -- this edits the operator's
+# persisted file in place. Reads the globals TRUSTED_PROXIES, BIND_IP, and
+# TRUSTED_PROXIES_FROM_CLI (already resolved by load_existing_config()/
+# parse_args()/the trusted-proxies gate, all of which cmd_update calls
+# before this). Factored out of cmd_update() so it's independently
+# testable without needing a real git repo or Docker (see
+# scripts/test_installer_v020.sh).
+reconcile_env_file_for_update() {
+    local env_file="$1"
 
-    if [[ "$TLS_MODE" != "off" ]]; then
-        return 0
+    # Strip keys the canonical compose file no longer reads (the pre-0.2.0
+    # two-container topology's TLS configuration).
+    strip_env_key "$env_file" "MAGPIE_DOMAIN"
+    strip_env_key "$env_file" "MAGPIE_HTTPS_PORT"
+    strip_env_key "$env_file" "TLS_MODE"
+    strip_env_key "$env_file" "ACME_SERVER"
+    strip_env_key "$env_file" "TLS_CERT"
+    strip_env_key "$env_file" "TLS_KEY"
+
+    # Add the fail-closed admin-token-sink keys if this .env predates them
+    # (issue #387/#595) -- never clobber an operator's existing exec/discard
+    # choice; only add what's missing.
+    if ! grep -q '^MAGPIE_ADMIN_TOKEN_SINK=' "$env_file" 2>/dev/null; then
+        log "Adding MAGPIE_ADMIN_TOKEN_SINK=${DEFAULT_ADMIN_TOKEN_SINK} to ${env_file} (required by the canonical compose file; not previously set)"
+        upsert_env_key "$env_file" "MAGPIE_ADMIN_TOKEN_SINK" "$DEFAULT_ADMIN_TOKEN_SINK"
+    fi
+    if ! grep -q '^MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH=' "$env_file" 2>/dev/null; then
+        upsert_env_key "$env_file" "MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH" "$DEFAULT_ADMIN_TOKEN_SINK_FILE_PATH"
     fi
 
-    log "TLS mode is off — removing HTTPS port mapping from Docker Compose..."
-
-    local compose_file="${INSTALL_DIR}/docker-compose.yml"
-
-    # Remove the HTTPS port line entirely.
-    # This runs before patch_compose_for_bind_ip, so the line still has its
-    # original form: - "${MAGPIE_HTTPS_PORT:-8443}:443"
-    sed -i '/"\${MAGPIE_HTTPS_PORT:-[0-9]*}:443"/d' "$compose_file"
-
-    # Verify the line is gone
-    if grep -q 'MAGPIE_HTTPS_PORT' "$compose_file"; then
-        die "Failed to remove HTTPS port mapping from docker-compose.yml"
+    # Migrate legacy unprefixed BIND_IP (issue #446) forward to
+    # MAGPIE_BIND_IP now that the canonical compose reads the prefixed key
+    # (see docker-compose.yml's ports line); also covers a fresh
+    # --bind-ip override passed on this run.
+    upsert_env_key "$env_file" "MAGPIE_BIND_IP" "${BIND_IP:-}"
+    if grep -q '^BIND_IP=' "$env_file" 2>/dev/null; then
+        log "Removing stale legacy BIND_IP key from ${env_file} (superseded by MAGPIE_BIND_IP)"
+        sed -i '/^BIND_IP=/d' "$env_file"
     fi
 
-    log "HTTPS port mapping removed (TLS off — port 443 will not be mapped to host)"
-}
-
-patch_compose_for_bind_ip() {
-    # Patch port bindings to use specific IP address
-    # Only called when BIND_IP is set
-
-    if [[ -z "$BIND_IP" ]]; then
-        return 0
+    # #583: an explicit --trusted-proxies on this run overrides an
+    # already-persisted value in place; otherwise fall back to the
+    # existing migrate-legacy-key-if-absent behavior.
+    if [[ "$TRUSTED_PROXIES_FROM_CLI" == "true" ]]; then
+        log "Setting MAGPIE_TRUSTED_PROXIES=${TRUSTED_PROXIES} in ${env_file} (--trusted-proxies)"
+        upsert_env_key "$env_file" "MAGPIE_TRUSTED_PROXIES" "$TRUSTED_PROXIES"
+    elif ! grep -q '^MAGPIE_TRUSTED_PROXIES=' "$env_file" 2>/dev/null; then
+        log "Persisting MAGPIE_TRUSTED_PROXIES=${TRUSTED_PROXIES} to ${env_file} (migrated from legacy TRUSTED_PROXIES key)"
+        upsert_env_key "$env_file" "MAGPIE_TRUSTED_PROXIES" "$TRUSTED_PROXIES"
     fi
 
-    log "Patching Docker Compose for IP binding: ${BIND_IP}..."
-
-    local compose_file="${INSTALL_DIR}/docker-compose.yml"
-
-    # Replace port bindings to include IP prefix
-    # Original: - "${MAGPIE_HTTP_PORT:-8080}:80"
-    # New:      - "${BIND_IP}:${MAGPIE_HTTP_PORT:-8080}:80"
-    sed -i 's|- "\${MAGPIE_HTTP_PORT:-[0-9]*}:80"|- "${BIND_IP}:${MAGPIE_HTTP_PORT:-8080}:80"|g' "$compose_file"
-    sed -i 's|- "\${MAGPIE_HTTPS_PORT:-[0-9]*}:443"|- "${BIND_IP}:${MAGPIE_HTTPS_PORT:-8443}:443"|g' "$compose_file"
-
-    # Verify the changes were applied
-    if ! grep -q '${BIND_IP}:${MAGPIE_HTTP_PORT' "$compose_file"; then
-        die "Failed to patch docker-compose.yml for bind IP"
+    # Drop the stale legacy unprefixed TRUSTED_PROXIES= key now that its
+    # value is guaranteed to be carried forward in MAGPIE_TRUSTED_PROXIES
+    # (either already present above, or just written by the block above)
+    # -- it's never read by docker-compose, so leaving it in place is
+    # harmless but confusing clutter for an operator hand-inspecting .env.
+    # Gated on MAGPIE_TRUSTED_PROXIES actually being present so the value
+    # is never dropped without first being carried forward. Anchored on the
+    # key at line start (^TRUSTED_PROXIES=, which does not match
+    # ^MAGPIE_TRUSTED_PROXIES=) so this never touches an unrelated line
+    # that merely contains the substring.
+    if grep -q '^MAGPIE_TRUSTED_PROXIES=' "$env_file" 2>/dev/null \
+        && grep -q '^TRUSTED_PROXIES=' "$env_file" 2>/dev/null; then
+        log "Removing stale legacy TRUSTED_PROXIES key from ${env_file} (superseded by MAGPIE_TRUSTED_PROXIES)"
+        sed -i '/^TRUSTED_PROXIES=/d' "$env_file"
     fi
-
-    log "Docker Compose patched for IP binding"
 }
 
 pull_or_build_image() {
+    local env_file="${INSTALL_DIR}/etc/.env"
+
     if [[ "$FROM_SOURCE" == "true" ]]; then
         log "Building magpie Docker image from source (this may take a few minutes)..."
-        cd "${INSTALL_DIR}/repo"
-        if ! docker build --pull -t magpie:latest .; then
+        if ! docker build --pull -f "${INSTALL_DIR}/repo/Dockerfile.bundled" -t magpie:local "${INSTALL_DIR}/repo"; then
             die "Failed to build magpie image"
         fi
+        upsert_env_key "$env_file" "MAGPIE_IMAGE" "magpie:local"
         log "Image built successfully"
     else
-        local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}"
+        local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}-bundled"
         log "Pulling magpie image from container registry..."
         log "  Image: ${image_tag}"
         if ! docker pull "$image_tag"; then
             die "Failed to pull magpie image from ${image_tag}\nThe image tag is derived from the version in the cloned repo's pyproject.toml (${MAGPIE_VERSION}). If you used --release, confirm a release was published for that version."
         fi
-        # Tag as magpie:latest for compose compatibility
-        docker tag "$image_tag" magpie:latest
+        upsert_env_key "$env_file" "MAGPIE_IMAGE" "$image_tag"
         log "Image pulled successfully"
     fi
-}
-
-patch_compose_for_local_image() {
-    # Replace 'build: .' with 'image: magpie:latest' so we use our pre-built/pulled image
-    log "Configuring Docker Compose to use local image..."
-
-    sed -i 's|build: \.|image: magpie:latest|g' "${INSTALL_DIR}/docker-compose.yml"
 }
 
 # =============================================================================
@@ -1515,8 +1236,7 @@ patch_compose_for_local_image() {
 
 pull_images() {
     log "Pulling Docker images..."
-    cd "$INSTALL_DIR"
-    docker compose --env-file "${INSTALL_DIR}/etc/.env" pull
+    docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" pull
 }
 
 start_services() {
@@ -1552,8 +1272,6 @@ wait_for_healthy() {
 run_init() {
     log "Initializing database..."
 
-    cd "$INSTALL_DIR"
-
     # Retry logic for container exec (container may need time to start)
     local max_retries=5
     local retry_delay=5
@@ -1571,7 +1289,7 @@ run_init() {
         # printing to this interactive install session, not the automatic
         # first-boot init that runs as the container's PID 1 (which is the
         # actual leak vector #387 addresses; see docs/installation.md).
-        if output=$(docker compose --env-file "${INSTALL_DIR}/etc/.env" exec -T -e MAGPIE_ADMIN_TOKEN_SINK=stdout magpie magpie-ctl init 2>&1); then
+        if output=$(docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" exec -T -e MAGPIE_ADMIN_TOKEN_SINK=stdout magpie magpie-ctl init 2>&1); then
             init_success=true
             break
         fi
@@ -1617,14 +1335,14 @@ run_init() {
         echo ""
     else
         # No token in this exec's output -- almost always because the
-        # container's own first-boot init (entrypoint.sh, running before
-        # this script's health check returns) already generated and
-        # delivered it via MAGPIE_ADMIN_TOKEN_SINK (default: file, at
-        # ${DATA_DIR}/admin-token) before this exec ever ran.
+        # container's own first-boot init (wrapper.sh's root prelude,
+        # running before this script's health check returns) already
+        # generated and delivered it via MAGPIE_ADMIN_TOKEN_SINK (default:
+        # file, at ${DATA_DIR}/admin-token) before this exec ever ran.
         log "Database already initialized; admin token was delivered on first boot."
         log "Default sink is 'file': sudo cat ${DATA_DIR}/admin-token"
         log "To mint an additional admin-scope token instead:"
-        log "  docker compose --env-file ${INSTALL_DIR}/etc/.env exec magpie magpie-ctl token create --name ops-admin --scope admin"
+        log "  docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env exec magpie magpie-ctl token create --name ops-admin --scope admin"
     fi
 }
 
@@ -1641,32 +1359,33 @@ cmd_install() {
     validate_config
     check_existing_installation
 
+    # Carry forward MAGPIE_ALLOWED_CIDRS from an existing install's .env
+    # when reinstalling with --force, purely so the trusted-proxies gate
+    # below can still see it -- generate_env_file() always writes a fresh
+    # .env from scratch below and does not otherwise consult the old one.
+    if [[ -f "${INSTALL_DIR}/etc/.env" ]]; then
+        local -A existing_env_vars=()
+        read_env_file "${INSTALL_DIR}/etc/.env" existing_env_vars
+        ALLOWED_CIDRS="$(trim_whitespace "${existing_env_vars[MAGPIE_ALLOWED_CIDRS]:-}")"
+    fi
+    warn_or_gate_trusted_proxies_for_cidr_allow "install"
+
     # Create directory structure
     log "Creating directory structure..."
     mkdir -p "${INSTALL_DIR}/etc"
     mkdir -p "${DATA_DIR}/artifacts"
 
-    # Clone repo first (needed for Caddyfile.prod and Dockerfile)
+    # Clone repo first (needed for Dockerfile.bundled on --from-source)
     clone_repo
     detect_version
 
     # Generate configuration files
     generate_env_file
-    generate_caddyfile  # Uses Caddyfile.prod from cloned repo
     generate_systemd_service
     generate_gc_units
 
-    # Pull or build image and configure compose
+    # Pull or build the bundled image; sets MAGPIE_IMAGE in .env
     pull_or_build_image
-    patch_compose_for_caddyfile
-    patch_compose_for_tls_certs
-    patch_compose_for_https_port
-    patch_compose_for_bind_ip
-    patch_compose_for_local_image
-
-    # Pull Caddy image
-    log "Pulling Caddy image..."
-    docker pull caddy:2-alpine
 
     # Start everything
     start_services
@@ -1678,14 +1397,8 @@ cmd_install() {
     echo ""
     echo "  Installation directory: ${INSTALL_DIR}"
     echo "  Data directory: ${DATA_DIR}"
-    echo "  TLS mode: ${TLS_MODE}"
-    if [[ "$TLS_MODE" == "off" ]]; then
-        echo "  Listening on: http://127.0.0.1:${HTTP_PORT}"
-        echo ""
-        echo "  Configure your reverse proxy to forward to this address."
-    else
-        echo "  Domain: ${DOMAIN}"
-    fi
+    echo "  Listening on: http://127.0.0.1:${HTTP_PORT} (plain HTTP -- magpie does not"
+    echo "  terminate TLS; place a reverse proxy in front of it for HTTPS)"
     echo ""
     echo "  Manage with:"
     echo "    systemctl status magpie"
@@ -1697,12 +1410,18 @@ cmd_install() {
 # Interactive prompt for the issue #579 gate below: lets the operator either
 # enter the upstream proxy's hop (sets TRUSTED_PROXIES and returns 0),
 # confirm magpie is directly exposed (leaves TRUSTED_PROXIES empty and
-# returns 0), or decline -- which aborts the update via die(). Deliberately
-# not built on confirm()/prompt_value(): those honor --yes/NONINTERACTIVE
-# defaults, which would let an unrelated --yes (e.g. for uninstall
-# confirmations) silently answer this security-relevant question. Only
-# called when NONINTERACTIVE is already known false.
+# returns 0), or decline. Deliberately not built on confirm()/prompt_value():
+# those honor --yes/NONINTERACTIVE defaults, which would let an unrelated
+# --yes (e.g. for uninstall confirmations) silently answer this
+# security-relevant question. Only called when NONINTERACTIVE is already
+# known false.
+#
+# mode="update": a decline aborts via die() -- there's a running deployment
+# to protect from an unattended lockout. mode="install": a decline only
+# warns and proceeds -- a fresh install has nothing running yet to lock
+# anyone out of, so there is no "not hard-fail" case to protect against.
 prompt_trusted_proxies_for_cidr_allow() {
+    local mode="$1"
     local response trimmed
     while true; do
         read -r -p "[magpie] Upstream proxy hop as seen by magpie's Caddy (e.g. 172.20.0.0/16), or leave blank if magpie is directly exposed: " response
@@ -1733,89 +1452,66 @@ prompt_trusted_proxies_for_cidr_allow() {
             return 0
             ;;
         *)
-            die "Update aborted -- MAGPIE_TRUSTED_PROXIES was not confirmed. Re-run '$SCRIPT_NAME update' and either enter the proxy hop or confirm direct exposure."
+            if [[ "$mode" == "update" ]]; then
+                die "Update aborted -- MAGPIE_TRUSTED_PROXIES was not confirmed. Re-run '$SCRIPT_NAME update' and either enter the proxy hop or confirm direct exposure."
+            fi
+            log_warn "Proceeding with empty MAGPIE_TRUSTED_PROXIES -- not confirmed as direct exposure. If magpie ends up behind a reverse proxy, set MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env before relying on MAGPIE_ALLOWED_CIDRS."
+            return 0
             ;;
     esac
 }
 
-# Tiered response for cmd_update when MAGPIE_ALLOWED_CIDRS is a real range
-# and MAGPIE_TRUSTED_PROXIES resolves empty, keyed on TLS_MODE as the "am I
-# fronted?" signal (tls-mode off => almost certainly behind an external
-# terminator; auto/manual => magpie is the edge, so empty is likely
-# correct). See issue #579's scope-expansion comment for the full rationale.
+# Fires when MAGPIE_ALLOWED_CIDRS is a real range and MAGPIE_TRUSTED_PROXIES
+# resolves empty and was never deliberately configured. As of the bundled
+# single-container image (v0.2.0, see issue #309's 2026-07-18 decision),
+# magpie always serves plain HTTP and is always expected to sit behind an
+# external TLS-terminating reverse proxy -- there is no longer a "Caddy
+# faces the internet directly" mode to treat as lower-risk, so this gate now
+# applies unconditionally rather than being tiered on the (removed)
+# --tls-mode. See issue #579's original scope-expansion comment for that
+# history.
 #
-# tls-mode off (HIGH-RISK): if MAGPIE_TRUSTED_PROXIES has never been
-# configured for this install (TRUSTED_PROXIES_KEY_PRESENT is false --
-# load_existing_config() only sets it true for the new prefixed key with a
-# real value or a truly zero-length "" (the exact deliberate-empty marker
-# this script's own writeback produces -- a whitespace-only prefixed value
-# is neither, so it's treated as anomalous/unconfigured, not trusted), or
-# a legacy unprefixed key with a real non-empty (after trimming) value,
-# which is already migrated forward with a warning above. A present-but-
-# EMPTY-or-whitespace-only legacy key deliberately leaves it false:
-# pre-#575 Caddy trusted the hardcoded private_ranges regardless of that
-# key, so an empty legacy value was dead config, not a real "trust
-# nothing" choice, and this gate must still fire for it) and the operator
-# didn't pass --trusted-proxies or --accept-empty-trusted-proxies this
-# run, GATE: prompt interactively, or
-# hard-fail via die() when NONINTERACTIVE. Fires once -- cmd_update's
-# existing MAGPIE_TRUSTED_PROXIES writeback (below, near the legacy-key
-# cleanup) persists whatever TRUSTED_PROXIES resolves to once the gate is
-# satisfied, including an explicit empty value, so TRUSTED_PROXIES_KEY_PRESENT
-# is true on every subsequent run.
+# If MAGPIE_TRUSTED_PROXIES has never been configured for this install
+# (TRUSTED_PROXIES_KEY_PRESENT is false -- load_existing_config() only sets
+# it true for the new prefixed key with a real value or a truly zero-length
+# "" (the exact deliberate-empty marker this script's own writeback
+# produces), or a legacy unprefixed key with a real non-empty value, which
+# is already migrated forward with a warning above) and the operator didn't
+# pass --trusted-proxies or --accept-empty-trusted-proxies this run:
 #
-# tls-mode auto/manual (LOWER-RISK): advisory only, never blocks.
+#   mode="update": GATE -- prompt interactively, or hard-fail via die() when
+#     NONINTERACTIVE (unattended-lockout protection for a running
+#     deployment).
+#   mode="install": prompt interactively, or WARN (never die) when
+#     NONINTERACTIVE -- a fresh install has no running service to lock
+#     anyone out of.
 #
-# Whitespace-only input from ANY source (a --trusted-proxies " " CLI flag,
-# a whitespace-only MAGPIE_TRUSTED_PROXIES in .env, or a whitespace-only
-# answer at the interactive prompt) normalizes to empty at this function's
-# canonical normalization point (or, for the interactive prompt, at its
-# own point of assignment) -- so it is indistinguishable from "never
-# configured" and correctly reaches the GATE above for a tls-mode off
-# install with a real MAGPIE_ALLOWED_CIDRS, exactly as it should: a
-# fronted deployment can't have silently trusted a value that's actually
-# blank.
+# Fires once per install -- cmd_update's .env surgery persists whatever
+# TRUSTED_PROXIES resolves to once the gate is satisfied, including an
+# explicit empty value, so TRUSTED_PROXIES_KEY_PRESENT is true on every
+# subsequent run.
 warn_or_gate_trusted_proxies_for_cidr_allow() {
-    # Canonical normalization point: by the time this function runs, both
-    # non-interactive sources of TRUSTED_PROXIES -- the --trusted-proxies
-    # CLI flag (parse_args, before cmd_update starts) and .env
-    # (load_existing_config(), just called by cmd_update) -- have already
+    local mode="$1"  # "install" or "update"
+
+    # Canonical normalization point: by the time this function runs, every
+    # source of TRUSTED_PROXIES -- the --trusted-proxies CLI flag
+    # (parse_args, before this runs), .env (load_existing_config(), for
+    # update), and gather_config()'s prompt (for install) -- has already
     # resolved into the global TRUSTED_PROXIES, and ALLOWED_CIDRS only ever
-    # comes from .env. Re-trimming (idempotent; load_existing_config()
-    # already trims its own .env reads) here, once, in the globals
-    # themselves, guarantees every check below AND every consumer later in
-    # cmd_update (validate_network_config, the MAGPIE_TRUSTED_PROXIES
-    # writeback, generate_caddyfile) sees a canonical, whitespace-safe
-    # value regardless of which source produced it -- no per-call-site
-    # trimming needed anywhere else. The third source, the interactive
-    # prompt below, runs strictly after this point and already trims its
-    # own input before assigning TRUSTED_PROXIES, so its result is
-    # inherently already canonical too.
+    # comes from .env. Re-trimming (idempotent) here, once, guarantees every
+    # check below and every consumer later (validate_network_config, the
+    # MAGPIE_TRUSTED_PROXIES writeback) sees a canonical, whitespace-safe
+    # value regardless of which source produced it.
     TRUSTED_PROXIES="$(trim_whitespace "$TRUSTED_PROXIES")"
     ALLOWED_CIDRS="$(trim_whitespace "$ALLOWED_CIDRS")"
 
-    # 255.255.255.255/32 is the Caddyfile's own placeholder default for an
-    # unset MAGPIE_ALLOWED_CIDRS (see Caddyfile.prod's `client_ip
-    # {$MAGPIE_ALLOWED_CIDRS:255.255.255.255/32}`) -- never a real client, so
-    # treat it the same as empty.
+    # 255.255.255.255/32 is the bundled Caddyfile's own placeholder default
+    # for an unset MAGPIE_ALLOWED_CIDRS -- never a real client, so treat it
+    # the same as empty.
     local off_sentinel="255.255.255.255/32"
 
     [[ -z "$ALLOWED_CIDRS" || "$ALLOWED_CIDRS" == "$off_sentinel" ]] && return 0
     [[ -n "$TRUSTED_PROXIES" ]] && return 0
-
-    if [[ "$TLS_MODE" != "off" ]]; then
-        # Same "key present = deliberate choice" signal the gate below
-        # uses -- once an explicit empty MAGPIE_TRUSTED_PROXIES= is
-        # persisted (e.g. by a prior --tls-mode off run, or hand-edited),
-        # don't nag a settled install on every subsequent update.
-        if [[ "$TRUSTED_PROXIES_KEY_PRESENT" != "true" ]]; then
-            log_warn "MAGPIE_ALLOWED_CIDRS is set but MAGPIE_TRUSTED_PROXIES is empty."
-            log_warn "As of v0.1.6 the built-in Caddy trusts no proxy by default. If magpie is behind a reverse proxy, CIDR-based anonymous reads will NO LONGER match real clients (they will 401) until you set MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to your proxy's hop as seen by magpie's Caddy -- commonly magpie's docker bridge subnet, e.g. 172.20.0.0/16 (or the gateway /32) -- and re-run '$SCRIPT_NAME update'. If magpie is directly exposed (no proxy), no action is needed."
-        fi
-        return 0
-    fi
-
-    # tls-mode off from here on -- the high-risk gate.
     if [[ "$TRUSTED_PROXIES_KEY_PRESENT" == "true" ]]; then
         # Already a deliberate, persisted choice (even if empty) -- silent.
         return 0
@@ -1825,20 +1521,26 @@ warn_or_gate_trusted_proxies_for_cidr_allow() {
         return 0
     fi
 
-    local detected="tls-mode is 'off' and MAGPIE_ALLOWED_CIDRS=${ALLOWED_CIDRS} is set for anonymous CIDR-based reads, but MAGPIE_TRUSTED_PROXIES has never been configured for this install. As of v0.1.6 Caddy trusts no proxy by default, so if magpie sits behind a reverse proxy, the real client IP is lost and every anonymous CIDR read will 401 after this update."
-    local fix="Fix: set MAGPIE_TRUSTED_PROXIES to the upstream reverse proxy's hop as seen by magpie's Caddy -- commonly the docker bridge subnet, e.g. 172.20.0.0/16 (or the gateway /32) -- via --trusted-proxies <value> or by editing ${INSTALL_DIR}/etc/.env, then re-run '$SCRIPT_NAME update'."
+    local detected="MAGPIE_ALLOWED_CIDRS=${ALLOWED_CIDRS} is set for anonymous CIDR-based reads, but MAGPIE_TRUSTED_PROXIES has never been configured for this install. The bundled image serves plain HTTP and expects an external reverse proxy in front of it -- if the real client IP isn't forwarded correctly, every anonymous CIDR read will 401."
+    local fix="Fix: set MAGPIE_TRUSTED_PROXIES to the upstream reverse proxy's hop as seen by magpie's Caddy -- commonly the docker bridge subnet, e.g. 172.20.0.0/16 (or the gateway /32) -- via --trusted-proxies <value> or by editing ${INSTALL_DIR}/etc/.env."
     local bypass="Bypass: if magpie is directly exposed (no reverse proxy), pass --accept-empty-trusted-proxies to proceed with an empty MAGPIE_TRUSTED_PROXIES."
 
     if [[ "$NONINTERACTIVE" == "true" ]]; then
-        log_error "$detected"
-        log_error "$fix"
-        die "$bypass"
+        if [[ "$mode" == "update" ]]; then
+            log_error "$detected"
+            log_error "$fix"
+            die "$bypass"
+        fi
+        log_warn "$detected"
+        log_warn "$fix"
+        log_warn "$bypass"
+        return 0
     fi
 
     log_warn "$detected"
     log_warn "$fix"
     log_warn "$bypass"
-    prompt_trusted_proxies_for_cidr_allow
+    prompt_trusted_proxies_for_cidr_allow "$mode"
 }
 
 cmd_update() {
@@ -1847,12 +1549,12 @@ cmd_update() {
     INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 
     # Unlike DATA_DIR, INSTALL_DIR is not persisted to .env -- it comes
-    # straight from --install-dir on this invocation (or the default). It's
-    # later interpolated into `sed 's|...|${INSTALL_DIR}/...|g'` in
-    # patch_compose_for_caddyfile()/patch_compose_for_tls_certs(), so an
-    # unvalidated value containing '|' or other sed metacharacters could
-    # corrupt or hijack docker-compose.yml. cmd_install validates this via
-    # validate_config(); cmd_update needs its own check. See issue #448.
+    # straight from --install-dir on this invocation (or the default), and
+    # is interpolated into every `-f ${INSTALL_DIR}/docker-compose.yml` /
+    # `sed` call below, so an unvalidated value containing '|' or other
+    # metacharacters could corrupt or hijack the on-disk files.
+    # cmd_install validates this via validate_config(); cmd_update needs
+    # its own check. See issue #448.
     local errors=()
     if [[ ! "$INSTALL_DIR" =~ ^/ ]]; then
         errors+=("Install directory must be an absolute path: $INSTALL_DIR")
@@ -1870,14 +1572,40 @@ cmd_update() {
     verify_installation
     load_existing_config
 
-    # Resolved here (rather than only in the Caddyfile-regeneration block
-    # below) so the issue #579 tls-mode check below sees the real value for
-    # pre-#345 .env files that predate the TLS_MODE key. Idempotent -- the
-    # Caddyfile block re-applies the same default further down.
-    TLS_MODE="${TLS_MODE:-$DEFAULT_TLS_MODE}"
-    warn_or_gate_trusted_proxies_for_cidr_allow
+    # Tier-2 TLS deprecation gate: a persisted TLS_MODE of auto|manual means
+    # this install used to terminate TLS itself (the pre-0.2.0 two-container
+    # topology). The bundled image never does -- refuse to swap the running
+    # deployment out from under an operator who hasn't acknowledged that
+    # their TLS termination is going away. 'off' or absent means the
+    # install was already HTTP-only; nothing changes, so no gate.
+    if [[ "$PERSISTED_TLS_MODE" == "auto" || "$PERSISTED_TLS_MODE" == "manual" ]] \
+        && [[ "$ACCEPT_BUILTIN_TLS_REMOVED" != "true" ]]; then
+        log_error "This install's persisted TLS_MODE is '${PERSISTED_TLS_MODE}' -- it was terminating TLS itself."
+        log_error "As of v0.2.0, magpie runs as a single bundled container that serves plain HTTP only (see issue #309's 2026-07-18 decision); it no longer terminates TLS."
+        log_error "After this update, magpie will serve plain HTTP on MAGPIE_HTTP_PORT with no TLS. Place a reverse proxy in front of it for HTTPS before proceeding."
+        die "Once your reverse proxy is in place, re-run with --accept-builtin-tls-removed to acknowledge and continue."
+    fi
 
-    cd "$INSTALL_DIR"
+    warn_or_gate_trusted_proxies_for_cidr_allow "update"
+
+    local env_file="${INSTALL_DIR}/etc/.env"
+
+    # Re-validate TRUSTED_PROXIES/BIND_IP loaded from .env before they're
+    # written back below -- guards against a hand-edited or stale .env
+    # value that would no longer pass validation.
+    local errors=()
+    validate_network_config
+    if [[ ${#errors[@]} -gt 0 ]]; then
+        log_error "Existing configuration in .env failed validation:"
+        for err in "${errors[@]}"; do
+            echo "  - $err" >&2
+        done
+        die "Fix or remove the invalid value(s) in ${env_file}, or reinstall."
+    fi
+
+    # Runs before any git/docker work below -- fails fast on a config
+    # problem rather than after an expensive fetch/pull.
+    reconcile_env_file_for_update "$env_file"
 
     # Verify repo directory exists
     if [[ ! -d "${INSTALL_DIR}/repo" ]]; then
@@ -1915,108 +1643,34 @@ cmd_update() {
         log_warn "No git tag v${MAGPIE_VERSION} found for detected version; continuing on branch ${GITHUB_BRANCH}"
     fi
 
-    # Update compose files from repo
-    log "Updating docker-compose files..."
+    # Update the canonical compose file from the repo. This is the only
+    # file swapped wholesale on update -- docker-compose.override.yml is
+    # never copied (dev-only), and .env was already reconciled above (not
+    # regenerated -- only `install` calls generate_env_file()).
+    log "Updating docker-compose.yml..."
     cp "${INSTALL_DIR}/repo/docker-compose.yml" "${INSTALL_DIR}/"
-    cp "${INSTALL_DIR}/repo/docker-compose.prod.yml" "${INSTALL_DIR}/" 2>/dev/null || true
-
-    # Update Caddyfile from repo
-    log "Updating Caddyfile using Caddyfile.prod and existing configuration..."
-    if [[ ! -f "${INSTALL_DIR}/repo/Caddyfile.prod" ]]; then
-        log_warn "Caddyfile.prod not found in repo, skipping Caddyfile update"
-    else
-        # TLS_MODE, DOMAIN, TRUSTED_PROXIES, BIND_IP, and ACME_SERVER were
-        # already loaded from .env by load_existing_config() above, using a
-        # parser that performs no shell expansion or execution of the
-        # file's contents -- no need to source the file again here.
-        # See issues #340, #344, and #448 for background.
-
-        # Apply defaults for vars that may be missing from old .env files (migration from pre-#345 installs)
-        TLS_MODE="${TLS_MODE:-$DEFAULT_TLS_MODE}"
-        TRUSTED_PROXIES="${TRUSTED_PROXIES:-$DEFAULT_TRUSTED_PROXIES}"
-
-        # Re-validate the values loaded from .env before they're used to
-        # regenerate the Caddyfile -- guards against a hand-edited or
-        # pre-#448 .env file containing a value that would no longer pass
-        # validation. Does not call the full validate_config(), since
-        # TLS_CERT/TLS_KEY (manual-mode certificate paths) are per-install
-        # CLI args, not persisted to .env, and would spuriously fail here.
-        local errors=()
-        validate_network_config
-        if [[ ${#errors[@]} -gt 0 ]]; then
-            log_error "Existing configuration in .env failed validation; refusing to regenerate Caddyfile:"
-            for err in "${errors[@]}"; do
-                echo "  - $err" >&2
-            done
-            die "Fix or remove the invalid value(s) in ${INSTALL_DIR}/etc/.env, or reinstall."
-        fi
-
-        # `update` never regenerates .env (only `install` calls
-        # generate_env_file()), so a pre-#575 install's .env may still only
-        # have the legacy unprefixed TRUSTED_PROXIES key that
-        # load_existing_config() just migrated into this script's
-        # TRUSTED_PROXIES variable above. That in-memory value alone is not
-        # enough: docker-compose reads .env directly (not through this
-        # script) and substitutes MAGPIE_TRUSTED_PROXIES specifically into
-        # the caddy container's environment. Write the canonical key back
-        # to .env now so the regenerated Caddyfile and the running
-        # container agree. See issue #575.
-        if ! grep -q '^MAGPIE_TRUSTED_PROXIES=' "${INSTALL_DIR}/etc/.env" 2>/dev/null; then
-            log "Persisting MAGPIE_TRUSTED_PROXIES=${TRUSTED_PROXIES} to ${INSTALL_DIR}/etc/.env (migrated from legacy TRUSTED_PROXIES key)"
-            printf 'MAGPIE_TRUSTED_PROXIES=%s\n' "$TRUSTED_PROXIES" >> "${INSTALL_DIR}/etc/.env"
-        fi
-
-        # Drop the stale legacy unprefixed TRUSTED_PROXIES= key now that its
-        # value is guaranteed to be carried forward in MAGPIE_TRUSTED_PROXIES
-        # (either already present above, or just written by the block above)
-        # -- it's never read by docker-compose, so leaving it in place is
-        # harmless but confusing clutter for an operator hand-inspecting
-        # .env. Gated on MAGPIE_TRUSTED_PROXIES actually being present so the
-        # value is never dropped without first being carried forward.
-        # Anchored on the key at line start (^TRUSTED_PROXIES=, which does
-        # not match ^MAGPIE_TRUSTED_PROXIES=) so this never touches an
-        # unrelated line that merely contains the substring.
-        if grep -q '^MAGPIE_TRUSTED_PROXIES=' "${INSTALL_DIR}/etc/.env" 2>/dev/null \
-            && grep -q '^TRUSTED_PROXIES=' "${INSTALL_DIR}/etc/.env" 2>/dev/null; then
-            log "Removing stale legacy TRUSTED_PROXIES key from ${INSTALL_DIR}/etc/.env (superseded by MAGPIE_TRUSTED_PROXIES)"
-            sed -i '/^TRUSTED_PROXIES=/d' "${INSTALL_DIR}/etc/.env"
-        fi
-
-        # Regenerate the Caddyfile using the configured (or defaulted) TLS settings
-        if declare -F generate_caddyfile >/dev/null 2>&1; then
-            generate_caddyfile
-        else
-            log_warn "generate_caddyfile() not found; falling back to direct Caddyfile copy"
-            cp "${INSTALL_DIR}/repo/Caddyfile.prod" "${INSTALL_DIR}/etc/Caddyfile"
-        fi
-    fi
-
-    # Re-patch compose files for deployment
-    patch_compose_for_caddyfile
-    patch_compose_for_tls_certs
-    patch_compose_for_https_port
-    patch_compose_for_bind_ip
-    patch_compose_for_local_image
 
     if [[ "$FROM_SOURCE" == "true" ]]; then
         log "Rebuilding magpie image from source..."
-        if ! docker build --pull -t magpie:latest "${INSTALL_DIR}/repo"; then
+        if ! docker build --pull -f "${INSTALL_DIR}/repo/Dockerfile.bundled" -t magpie:local "${INSTALL_DIR}/repo"; then
             die "Failed to rebuild magpie image"
         fi
+        upsert_env_key "$env_file" "MAGPIE_IMAGE" "magpie:local"
     else
-        local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}"
+        local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}-bundled"
         log "Pulling magpie image from container registry..."
         log "  Image: ${image_tag}"
         if ! docker pull "$image_tag"; then
             die "Failed to pull magpie image from ${image_tag}"
         fi
-        docker tag "$image_tag" magpie:latest
+        # MAGPIE_IMAGE always reflects the version just resolved above.
+        upsert_env_key "$env_file" "MAGPIE_IMAGE" "$image_tag"
     fi
 
-    log "Pulling external images..."
-    # Only pull caddy - magpie image is already handled above
-    docker compose --env-file "${INSTALL_DIR}/etc/.env" pull caddy
-
+    # --remove-orphans (baked into ExecStop, see generate_systemd_service())
+    # drops a v0.1.x install's leftover 'caddy' sidecar container when the
+    # restart below stops the old stack and starts the single-service one.
+    # /data is a bind mount, untouched by the container swap.
     log "Restarting services..."
     systemctl restart magpie.service
 
@@ -2025,8 +1679,8 @@ cmd_update() {
     log "Update complete!"
     echo ""
     echo "  Updated to version: ${MAGPIE_VERSION}"
-    echo "  Note: docker-compose.yml and Caddyfile have been regenerated from the repository."
-    echo "  Any local customizations to these files have been overwritten; review and reapply as needed."
+    echo "  Note: docker-compose.yml and .env have been updated from the repository."
+    echo "  Any local customizations to docker-compose.yml have been overwritten; review and reapply as needed."
     echo ""
 }
 
@@ -2074,9 +1728,11 @@ cmd_uninstall() {
     systemctl disable magpie.service 2>/dev/null || true
     systemctl disable magpie-gc.timer 2>/dev/null || true
 
-    cd "$INSTALL_DIR"
+    # Absolute -f (not `cd "$INSTALL_DIR"` + a relative compose lookup) so
+    # this doesn't depend on INSTALL_DIR still being a valid working
+    # directory -- it's about to be rm -rf'd below. See issue #161.
     log "Removing containers and volumes..."
-    docker compose --env-file "${INSTALL_DIR}/etc/.env" down --volumes 2>/dev/null || true
+    docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" down --volumes 2>/dev/null || true
 
     log "Removing systemd units..."
     rm -f /etc/systemd/system/magpie.service
@@ -2117,8 +1773,10 @@ cmd_status() {
     echo ""
 
     echo "--- Container Status ---"
-    cd "$INSTALL_DIR"
-    docker compose --env-file "${INSTALL_DIR}/etc/.env" ps 2>/dev/null || echo "  No containers"
+    # Absolute -f, not `cd "$INSTALL_DIR"`: a partially-removed or
+    # inaccessible INSTALL_DIR would otherwise fail the cd itself before
+    # reaching the "No containers" fallback below. See issue #161.
+    docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps 2>/dev/null || echo "  No containers"
     echo ""
 
     echo "--- Health Check ---"
@@ -2138,16 +1796,15 @@ cmd_logs() {
     INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
     verify_installation
 
-    cd "$INSTALL_DIR"
-
     # Validate --lines before it reaches docker compose. See issue #448.
     if ! [[ "$LINES" =~ ^[0-9]+$ ]]; then
         die "Invalid --lines value: $LINES (must be a non-negative integer)"
     fi
 
     # Build the docker-compose argument list as a quoted array rather than
-    # interpolating into an unquoted command line. See issue #448.
-    local compose_args=(--env-file "${INSTALL_DIR}/etc/.env" logs)
+    # interpolating into an unquoted command line. See issue #448. Absolute
+    # -f rather than `cd "$INSTALL_DIR"` first -- see issue #161.
+    local compose_args=(-f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" logs)
     [[ "$FOLLOW" == "true" ]] && compose_args+=(-f)
     compose_args+=(--tail="$LINES")
     compose_args+=("$@")
@@ -2190,26 +1847,17 @@ Install options (only used with 'install' command):
                           supported due to systemd hardening (ProtectHome=true).
                           Note: Symlinks to /home paths will also fail with GC service.
                           Recommended: /srv/magpie/data or /opt/magpie/data
-  --tls-mode MODE         TLS mode: off, auto, manual (default: $DEFAULT_TLS_MODE)
-  --domain DOMAIN         Domain name (required for auto/manual TLS)
-  --tls-cert PATH         TLS certificate path (required for manual TLS)
-  --tls-key PATH          TLS key path (required for manual TLS)
   --http-port PORT        HTTP port (default: $DEFAULT_HTTP_PORT)
-  --https-port PORT       HTTPS port (default: $DEFAULT_HTTPS_PORT)
-  --bind-ip IP            Bind to specific IP address (default: all interfaces)
-                          Example: --bind-ip 10.3.3.107
-  --acme-server URL       Custom ACME server URL (only with --tls-mode auto)
-                          Example: --acme-server https://ca.example.com/acme/acme/directory
-                          Default: Let's Encrypt
+  --bind-ip IP            Bind the published port to a specific host IP
+                          (default: all interfaces). Example: --bind-ip 10.3.3.107
   --trusted-proxies CIDR  Space-separated IPs/CIDRs whose X-Forwarded-For
-                          header Caddy trusts (default: none -- the real
-                          connecting peer's IP is used). Only set this to
-                          the exact upstream hop(s) when Caddy sits behind
-                          another reverse proxy (e.g. --tls-mode off);
-                          never a broad range. See issue #575. Also
-                          accepted by 'update' to satisfy the issue #579
-                          gate below on a fronted install that has never
-                          configured MAGPIE_TRUSTED_PROXIES.
+                          header the bundled Caddy trusts (default: none --
+                          the real connecting peer's IP is used). Only set
+                          this to the exact upstream hop(s) if something
+                          sits in front of magpie; never a broad range. See
+                          issue #575. Also accepted by 'update' to satisfy
+                          the issue #579 gate below, or to change an
+                          already-persisted value in place (issue #583).
   --noninteractive        Skip interactive prompts (use defaults for all config)
   --force                 Overwrite existing installation
   --from-source           Build image from source instead of pulling from ghcr.io
@@ -2218,21 +1866,29 @@ Update options:
   --from-source                    Rebuild image from source instead of
                                     pulling from ghcr.io
   --trusted-proxies CIDR           See Install options above -- also
-                                    applies to 'update'.
+                                    applies to 'update', where it overrides
+                                    an already-persisted value in place.
   --accept-empty-trusted-proxies   Acknowledge that an empty
                                     MAGPIE_TRUSTED_PROXIES is intentional
                                     (magpie is directly exposed, no reverse
-                                    proxy). Only meaningful when this
-                                    install's configured TLS mode
-                                    (persisted in INSTALL_DIR/etc/.env) is
-                                    'off' and 'update' finds a real
-                                    MAGPIE_ALLOWED_CIDRS with no
-                                    MAGPIE_TRUSTED_PROXIES ever configured
-                                    for this install -- without it (or
-                                    --trusted-proxies), that combination
-                                    prompts interactively or, with
-                                    --noninteractive, hard-fails the
+                                    proxy). Only meaningful when 'update'
+                                    finds a real MAGPIE_ALLOWED_CIDRS with
+                                    no MAGPIE_TRUSTED_PROXIES ever
+                                    configured for this install -- without
+                                    it (or --trusted-proxies), that
+                                    combination prompts interactively or,
+                                    with --noninteractive, hard-fails the
                                     update. See issue #579.
+  --accept-builtin-tls-removed     Acknowledge that this install's
+                                    persisted TLS_MODE (auto or manual --
+                                    it was terminating TLS itself in the
+                                    pre-v0.2.0 two-container topology) no
+                                    longer applies: the bundled image is
+                                    always HTTP-only. Without it, 'update'
+                                    refuses to proceed on such an install.
+                                    Not needed for a persisted TLS_MODE of
+                                    'off' (already HTTP-only) or an install
+                                    that predates TLS_MODE entirely.
 
 Uninstall options:
   --yes, -y               Skip confirmation prompts (auto-confirm uninstall)
@@ -2244,18 +1900,25 @@ Logs options:
   -f, --follow            Follow log output
   -n, --lines N           Number of lines to show (default: 100)
 
+Deprecated options (removed in v0.2.0's bundled image, kept as accepted
+no-ops through v0.2.x for compatibility with existing scripts/playbooks --
+will be REJECTED starting in v0.3.0):
+  --tls-mode, --domain, --tls-cert, --tls-key, --https-port, --acme-server
+                          The bundled image serves plain HTTP only and
+                          never terminates TLS -- front it with your own
+                          reverse proxy for HTTPS. Passing any of these
+                          prints a deprecation warning and is otherwise
+                          ignored.
+
 Examples:
   # Interactive installation
   sudo $SCRIPT_NAME install
 
-  # Non-interactive installation (HTTP-only, behind proxy)
-  sudo $SCRIPT_NAME install --tls-mode off --noninteractive
+  # Non-interactive installation
+  sudo $SCRIPT_NAME install --noninteractive
 
-  # Installation with custom data directory
-  sudo $SCRIPT_NAME install --data-dir /srv/magpie/data
-
-  # Installation with Let's Encrypt
-  sudo $SCRIPT_NAME install --tls-mode auto --domain magpie.example.com
+  # Installation with custom data directory and a trusted upstream proxy
+  sudo $SCRIPT_NAME install --data-dir /srv/magpie/data --trusted-proxies 172.20.0.0/16
 
   # Install a specific tagged release instead of the default branch
   sudo $SCRIPT_NAME install --release v0.1.3
@@ -2296,32 +1959,58 @@ parse_args() {
                 DATA_DIR="$2"
                 shift 2
                 ;;
+            # Tier 1 deprecation (v0.2.0, see docs/installation.md
+            # "Deprecated in v0.2.0"): the bundled image has no in-container
+            # TLS or Caddyfile to configure, so these six flags no longer
+            # set anything -- they're still PARSED (consume their value and
+            # `shift 2`) purely so an existing script/playbook that still
+            # passes one doesn't hit "Unknown option" and abort. Removed
+            # entirely in v0.3.0.
             --tls-mode)
-                TLS_MODE="$2"
+                case "$2" in
+                    off)
+                        log_warn "--tls-mode is deprecated and ignored; the bundled image is HTTP-only. 'off' was already the effective behavior. Remove it; front magpie with your own TLS proxy. This flag will be removed in v0.3.0."
+                        ;;
+                    auto|manual)
+                        log_warn "--tls-mode auto|manual is deprecated and IGNORED; the bundled image does not terminate TLS. Put an external reverse proxy in front of magpie for HTTPS. This flag will be removed in v0.3.0."
+                        ;;
+                    *)
+                        log_warn "--tls-mode is deprecated and ignored (no in-container TLS). This flag will be removed in v0.3.0."
+                        ;;
+                esac
                 shift 2
                 ;;
             --domain)
-                DOMAIN="$2"
+                log_warn "--domain is deprecated and ignored (no in-container TLS). This flag will be removed in v0.3.0."
                 shift 2
                 ;;
             --tls-cert)
-                TLS_CERT="$2"
+                log_warn "--tls-cert is deprecated and ignored (no in-container TLS). This flag will be removed in v0.3.0."
                 shift 2
                 ;;
             --tls-key)
-                TLS_KEY="$2"
+                log_warn "--tls-key is deprecated and ignored (no in-container TLS). This flag will be removed in v0.3.0."
+                shift 2
+                ;;
+            --https-port)
+                log_warn "--https-port is deprecated and ignored (no in-container TLS). This flag will be removed in v0.3.0."
+                shift 2
+                ;;
+            --acme-server)
+                log_warn "--acme-server is deprecated and ignored (no in-container TLS). This flag will be removed in v0.3.0."
                 shift 2
                 ;;
             --http-port)
                 HTTP_PORT="$2"
                 shift 2
                 ;;
-            --https-port)
-                HTTPS_PORT="$2"
-                shift 2
-                ;;
             --trusted-proxies)
                 TRUSTED_PROXIES="$2"
+                # Marks this as a deliberate override for cmd_update's #583
+                # fix: an explicit --trusted-proxies must update an
+                # already-persisted MAGPIE_TRUSTED_PROXIES in place, not
+                # just fill in an absent key.
+                TRUSTED_PROXIES_FROM_CLI="true"
                 shift 2
                 ;;
             # --accept-<specific-thing> is this installer's convention for
@@ -2336,12 +2025,12 @@ parse_args() {
                 ACCEPT_EMPTY_TRUSTED_PROXIES="true"
                 shift
                 ;;
+            --accept-builtin-tls-removed)
+                ACCEPT_BUILTIN_TLS_REMOVED="true"
+                shift
+                ;;
             --bind-ip)
                 BIND_IP="$2"
-                shift 2
-                ;;
-            --acme-server)
-                ACME_SERVER="$2"
                 shift 2
                 ;;
             --noninteractive)
