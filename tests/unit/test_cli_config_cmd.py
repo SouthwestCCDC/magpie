@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,126 @@ class TestConfigShow:
 
         assert result.exit_code == 0
         assert "No configuration file found" in result.output
+
+    def test_show_prints_effective_configuration_header(
+        self, runner: CliRunner, config_path: Path
+    ) -> None:
+        """Test that --show introduces the resolved settings with a header."""
+        result = runner.invoke(cli, ["config", "--show"])
+
+        assert result.exit_code == 0
+        assert "Effective configuration:" in result.output
+
+
+class TestConfigShowSourceAttribution:
+    """Tests for source attribution in 'magpie config --show'."""
+
+    def test_default_source_when_nothing_configured(
+        self, runner: CliRunner, config_path: Path
+    ) -> None:
+        """Test that unset values are attributed to 'default'."""
+        result = runner.invoke(cli, ["config", "--show"])
+
+        assert result.exit_code == 0
+        assert "server" in result.output
+        assert "(default)" in result.output
+        assert "timeout = 600" in result.output
+
+    def test_file_source_when_only_config_file_set(
+        self, runner: CliRunner, config_path: Path
+    ) -> None:
+        """Test that config-file values are attributed to 'file: <path>'."""
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text('[client]\nserver = "https://example.com"\ntoken = "mgp_abc123"\n')
+
+        result = runner.invoke(cli, ["config", "--show"])
+
+        assert result.exit_code == 0
+        assert f"(file: {config_path})" in result.output
+
+    def test_env_source_overrides_file(self, runner: CliRunner, config_path: Path) -> None:
+        """Test that MAGPIE_SERVER/MAGPIE_TOKEN env vars are attributed to 'env' and
+        take precedence over the config file's values in both value and source.
+        """
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            '[client]\nserver = "https://file.example.com"\ntoken = "mgp_filetoken"\n'
+        )
+
+        result = runner.invoke(
+            cli,
+            ["config", "--show"],
+            env={"MAGPIE_SERVER": "https://env.example.com", "MAGPIE_TOKEN": "mgp_envtoken1234"},
+        )
+
+        assert result.exit_code == 0
+        assert "https://env.example.com" in result.output
+        assert "https://file.example.com" not in result.output
+        assert "(env: MAGPIE_SERVER)" in result.output
+        assert "(env: MAGPIE_TOKEN)" in result.output
+        # The env-sourced token should still be masked.
+        assert "mgp_envtoken1234" not in result.output
+
+    def test_cli_source_overrides_env_and_file(self, runner: CliRunner, config_path: Path) -> None:
+        """Test that a top-level --server flag is attributed to 'cli' and wins over
+        both the env var and the config file.
+        """
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text('[client]\nserver = "https://file.example.com"\n')
+
+        result = runner.invoke(
+            cli,
+            ["--server", "https://cli.example.com", "config", "--show"],
+            env={"MAGPIE_SERVER": "https://env.example.com"},
+        )
+
+        assert result.exit_code == 0
+        assert "https://cli.example.com" in result.output
+        assert "(cli: --server)" in result.output
+
+    def test_timeout_env_source(self, runner: CliRunner, config_path: Path) -> None:
+        """Test that MAGPIE_TIMEOUT is attributed to 'env', including duration strings."""
+        result = runner.invoke(cli, ["config", "--show"], env={"MAGPIE_TIMEOUT": "5m"})
+
+        assert result.exit_code == 0
+        assert "timeout = 300" in result.output
+        assert "(env: MAGPIE_TIMEOUT)" in result.output
+
+    def test_timeout_cli_source(self, runner: CliRunner, config_path: Path) -> None:
+        """Test that a top-level --timeout flag is attributed to 'cli'."""
+        result = runner.invoke(cli, ["--timeout", "45", "config", "--show"])
+
+        assert result.exit_code == 0
+        assert "timeout = 45" in result.output
+        assert "(cli: --timeout)" in result.output
+
+    def test_json_output_includes_source_and_masks_token(
+        self, runner: CliRunner, config_path: Path
+    ) -> None:
+        """Test that --format json exposes value/source/origin per field, with the
+        token masked just like human output.
+        """
+        result = runner.invoke(
+            cli,
+            ["--format", "json", "config", "--show"],
+            env={"MAGPIE_TOKEN": "mgp_supersecret1234"},
+        )
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        data = payload["data"]
+
+        assert data["server"]["source"] == "default"
+        assert data["server"]["value"] is None
+
+        assert data["token"]["source"] == "env"
+        assert data["token"]["origin"] == "MAGPIE_TOKEN"
+        assert data["token"]["value"] != "mgp_supersecret1234"
+        assert "mgp_supersecret1234" not in result.output
+        assert data["token"]["value"].endswith("1234")
+
+        assert data["timeout"]["source"] == "default"
+        assert data["timeout"]["value"] == 600.0
 
 
 class TestConfigSet:
