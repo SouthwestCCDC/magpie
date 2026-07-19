@@ -149,7 +149,14 @@ fi
 if ! mkdir -p /var/lib/caddy/data /var/lib/caddy/config; then
 	fail_before_caddy "failed to create /var/lib/caddy/{data,config}"
 fi
-if ! chown -R "$CADDY_UID:$CADDY_GID" /var/lib/caddy; then
+# -P (never traverse symlinks during the recursion) is GNU chown's
+# default, so this is already safe against a prior boot's Caddy (uid
+# CADDY_UID, i.e. not fully trusted) planting a symlink under
+# /var/lib/caddy to trick a subsequent restart's root-run chown into
+# reaching outside this subtree -- verified against this image's actual
+# coreutils. Passed explicitly so that safety property doesn't silently
+# depend on an implicit default.
+if ! chown -RP "$CADDY_UID:$CADDY_GID" /var/lib/caddy; then
 	fail_before_caddy "failed to chown /var/lib/caddy to $CADDY_UID:$CADDY_GID"
 fi
 export XDG_DATA_HOME=/var/lib/caddy/data
