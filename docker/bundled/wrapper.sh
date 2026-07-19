@@ -269,6 +269,19 @@ magpie_resolve_storage_paths
 # racing for /data). No gosu here: this whole process is already running
 # as the target uid.
 #
+# The lock file itself is opened for the `200>"$DB_LOCK_FILE"`
+# redirection below inside the backgrounded subshell, not here -- if
+# that open fails (e.g. LOCK_DIR isn't writable by this uid), bash still
+# forks the subshell and $! is still valid (redirections are set up in
+# the child, after fork), but the failure surfaces only as bash's own
+# raw redirection error text, not one of this script's own `log`
+# messages. Preflight it explicitly instead, for a diagnostic
+# consistent with every other failure path here.
+if ! : >>"$DB_LOCK_FILE" 2>/dev/null; then
+	log "error: cannot open $DB_LOCK_FILE for writing (uid $(id -u) may lack permission on $LOCK_DIR)"
+	exit 1
+fi
+
 # Backgrounded (not run as a plain synchronous foreground command),
 # specifically so that a signal arriving while blocked on `flock -x -w
 # 30` is handled promptly: per bash's documented signal semantics, a
