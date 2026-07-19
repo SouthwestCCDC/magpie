@@ -41,8 +41,18 @@ Before deploying to production:
 ```bash
 export MAGPIE_DATA_DIR=/path/to/persistent/storage
 export MAGPIE_ADMIN_TOKEN_SINK=file   # or exec / discard / stdout
+export MAGPIE_IMAGE=ghcr.io/southwestccdc/magpie:X.Y.Z-bundled   # see note below
 docker compose -f docker-compose.yml up -d
 ```
+
+`MAGPIE_IMAGE` must be set explicitly to a published `<version>-bundled`
+tag -- without it, `docker-compose.yml` falls back to
+`ghcr.io/southwestccdc/magpie:latest`, a different, currently-incompatible
+image (built from the plain `Dockerfile`, container port 8000, not this
+compose file's 8080). Prefer
+[`scripts/magpie-deploy.sh`](../scripts/magpie-deploy.sh) for a normal
+install -- it resolves and pins the correct tag automatically; see
+[installation.md](installation.md#production-deployment).
 
 `-f docker-compose.yml` pins the canonical operator file explicitly -- a
 bare `docker compose up` from a repo checkout auto-merges

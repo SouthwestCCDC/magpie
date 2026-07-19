@@ -1168,6 +1168,20 @@ strip_env_key() {
     fi
 }
 
+# True if KEY= is present in the .env file with a real (non-empty,
+# non-whitespace-only) value -- unlike a bare `grep -q "^KEY="`, this does
+# NOT match a present-but-empty key (e.g. "KEY=" or "KEY=   ", a common
+# placeholder/leftover-from-editing style). Used where "already configured"
+# must mean "would actually satisfy a fail-closed requirement", not merely
+# "the line exists" -- see reconcile_env_file_for_update()'s
+# MAGPIE_ADMIN_TOKEN_SINK check.
+env_key_has_value() {
+    local env_file="$1"
+    local key="$2"
+
+    grep -qE "^${key}=[[:space:]]*[^[:space:]]" "$env_file" 2>/dev/null
+}
+
 # cmd_update's .env surgery: `update` never regenerates .env wholesale
 # (only `install` calls generate_env_file()) -- this edits the operator's
 # persisted file in place. Reads the globals TRUSTED_PROXIES, BIND_IP, and
@@ -1189,13 +1203,18 @@ reconcile_env_file_for_update() {
     strip_env_key "$env_file" "TLS_KEY"
 
     # Add the fail-closed admin-token-sink keys if this .env predates them
-    # (issue #387/#595) -- never clobber an operator's existing exec/discard
-    # choice; only add what's missing.
-    if ! grep -q '^MAGPIE_ADMIN_TOKEN_SINK=' "$env_file" 2>/dev/null; then
+    # (issue #387/#595) or has them present but EMPTY (e.g. a placeholder
+    # "MAGPIE_ADMIN_TOKEN_SINK=" left over from hand-editing) -- an empty
+    # value is exactly as fail-closed as an absent one (MagpieSettings'
+    # env_ignore_empty treats it the same as unset), so a bare presence
+    # check here would silently leave the boot-loop this logic exists to
+    # prevent. Never clobber an operator's existing real exec/discard
+    # choice; only add/fix what's actually missing.
+    if ! env_key_has_value "$env_file" "MAGPIE_ADMIN_TOKEN_SINK"; then
         log "Adding MAGPIE_ADMIN_TOKEN_SINK=${DEFAULT_ADMIN_TOKEN_SINK} to ${env_file} (required by the canonical compose file; not previously set)"
         upsert_env_key "$env_file" "MAGPIE_ADMIN_TOKEN_SINK" "$DEFAULT_ADMIN_TOKEN_SINK"
     fi
-    if ! grep -q '^MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH=' "$env_file" 2>/dev/null; then
+    if ! env_key_has_value "$env_file" "MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH"; then
         upsert_env_key "$env_file" "MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH" "$DEFAULT_ADMIN_TOKEN_SINK_FILE_PATH"
     fi
 
@@ -1642,10 +1661,6 @@ cmd_update() {
         die "Fix or remove the invalid value(s) in ${env_file}, or reinstall."
     fi
 
-    # Runs before any git/docker work below -- fails fast on a config
-    # problem rather than after an expensive fetch/pull.
-    reconcile_env_file_for_update "$env_file"
-
     # Verify repo directory exists
     if [[ ! -d "${INSTALL_DIR}/repo" ]]; then
         die "Repository directory not found at ${INSTALL_DIR}/repo\nThe installation may be corrupted. Try reinstalling with 'install --force'."
@@ -1684,10 +1699,24 @@ cmd_update() {
 
     # Update the canonical compose file from the repo. This is the only
     # file swapped wholesale on update -- docker-compose.override.yml is
-    # never copied (dev-only), and .env was already reconciled above (not
-    # regenerated -- only `install` calls generate_env_file()).
+    # never copied (dev-only). .env is edited in place, not regenerated
+    # (only `install` calls generate_env_file()).
     log "Updating docker-compose.yml..."
     cp "${INSTALL_DIR}/repo/docker-compose.yml" "${INSTALL_DIR}/"
+
+    # .env surgery runs here -- after the repo checkout/version-tag work
+    # above has already succeeded and docker-compose.yml has already been
+    # swapped to the canonical file, not before it. Reconciling .env any
+    # earlier (e.g. right after the gates, before confirming the repo
+    # checkout even exists) would leave a partially-migrated .env (dead
+    # keys stripped, new keys added) paired with the STILL-OLD
+    # docker-compose.yml if the update aborted immediately afterward (repo
+    # dir missing, fetch failure, etc.) -- a state a later unrelated
+    # restart could pick up inconsistently. Only the image pull/build below
+    # remains outside this atomicity window, which is inherent to any
+    # multi-step deploy (the running container is untouched until the
+    # final `systemctl restart`, regardless).
+    reconcile_env_file_for_update "$env_file"
 
     if [[ "$FROM_SOURCE" == "true" ]]; then
         log "Rebuilding magpie image from source..."
@@ -1718,8 +1747,11 @@ cmd_update() {
     log "Update complete!"
     echo ""
     echo "  Updated to version: ${MAGPIE_VERSION}"
-    echo "  Note: docker-compose.yml and .env have been updated from the repository."
-    echo "  Any local customizations to docker-compose.yml have been overwritten; review and reapply as needed."
+    echo "  Note: docker-compose.yml was replaced with the repository's copy (any local"
+    echo "  customizations to it have been overwritten; review and reapply as needed)."
+    echo "  .env was reconciled in place, not overwritten -- your existing settings are"
+    echo "  preserved; only dead pre-0.2.0 keys were removed and required new keys added"
+    echo "  (each logged above)."
     echo ""
 }
 

@@ -10,8 +10,13 @@ Get Magpie running in 5 minutes using the installer script.
 git clone https://github.com/SouthwestCCDC/magpie
 cd magpie
 sudo ./scripts/magpie-deploy.sh install --noninteractive
-# Copy the admin token from install output. If lost, reset with:
-# docker exec -it magpie-magpie-1 magpie-ctl init --reset-admin-token
+# Copy the admin token from install output. With the default
+# MAGPIE_ADMIN_TOKEN_SINK=file, if it wasn't shown (or you lost it), read
+# it instead:
+# sudo cat /opt/magpie/data/admin-token
+# To reset it: docker exec -it magpie-magpie-1 magpie-ctl init --reset-admin-token
+# (the new token is delivered through the same configured sink, i.e. also
+# written to that file, not printed to the terminal)
 ```
 
 Magpie serves plain HTTP only -- it does not terminate TLS itself. For a

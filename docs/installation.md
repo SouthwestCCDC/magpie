@@ -15,8 +15,20 @@ Server runs at `http://localhost:8080` (change via `MAGPIE_HTTP_PORT`).
 ```bash
 export MAGPIE_DATA_DIR=/srv/magpie/data
 export MAGPIE_ADMIN_TOKEN_SINK=file   # required -- see Admin Token Delivery below
+export MAGPIE_IMAGE=ghcr.io/southwestccdc/magpie:X.Y.Z-bundled   # see note below
 docker compose -f docker-compose.yml up -d
 ```
+
+`MAGPIE_IMAGE` must be set explicitly to a published `<version>-bundled`
+tag (check [the release list](https://github.com/SouthwestCCDC/magpie/releases)
+for the latest) -- without it, `docker-compose.yml` falls back to
+`ghcr.io/southwestccdc/magpie:latest`, which currently still points at a
+different, incompatible image (built from the plain `Dockerfile`, serving
+on container port 8000, not this compose file's 8080). This manual path
+is for advanced/non-systemd deployments only; **use
+[`scripts/magpie-deploy.sh`](../scripts/magpie-deploy.sh)** (see the
+[Quick Start Guide](quickstart.md)) for a normal bare-metal/VM install --
+it resolves and pins the correct `-bundled` tag automatically.
 
 `-f docker-compose.yml` pins the canonical operator file explicitly -- a
 bare `docker compose up` from a repo checkout auto-merges

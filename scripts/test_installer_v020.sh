@@ -196,6 +196,28 @@ EOF
         fail "reconcile_env_file_for_update clobbered an operator's existing MAGPIE_ADMIN_TOKEN_SINK=discard: $(grep MAGPIE_ADMIN_TOKEN_SINK "$env_file2")"
     fi
     log "  ✓ an already-configured MAGPIE_ADMIN_TOKEN_SINK is never clobbered"
+
+    # A PRESENT-BUT-EMPTY MAGPIE_ADMIN_TOKEN_SINK (e.g. a hand-edited
+    # placeholder) is exactly as fail-closed as an absent one -- must be
+    # treated as missing and fixed, not left alone by a bare presence
+    # check. Same for a whitespace-only value.
+    local env_file3="${TEST_DIR}/reconcile3.env"
+    cat > "$env_file3" << 'EOF'
+MAGPIE_DATA_DIR=/opt/magpie/data
+MAGPIE_ADMIN_TOKEN_SINK=
+MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH=
+EOF
+    (
+        TRUSTED_PROXIES="" BIND_IP="" TRUSTED_PROXIES_FROM_CLI="false" \
+        reconcile_env_file_for_update "$env_file3"
+    ) >/dev/null 2>&1
+    if ! grep -q '^MAGPIE_ADMIN_TOKEN_SINK=file$' "$env_file3"; then
+        fail "reconcile_env_file_for_update left a present-but-empty MAGPIE_ADMIN_TOKEN_SINK unfixed -- boot-loop guard gap: $(grep MAGPIE_ADMIN_TOKEN_SINK= "$env_file3")"
+    fi
+    if ! grep -q '^MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH=/data/admin-token$' "$env_file3"; then
+        fail "reconcile_env_file_for_update left a present-but-whitespace-only MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH unfixed: $(grep MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH "$env_file3")"
+    fi
+    log "  ✓ a present-but-empty/whitespace-only MAGPIE_ADMIN_TOKEN_SINK(+_FILE_PATH) is treated as missing and fixed"
 }
 
 # Test 4: BIND_IP migration -- a legacy unprefixed BIND_IP key is migrated
@@ -559,6 +581,28 @@ EOF
         fail "upsert_env_key touched an unrelated key that merely shares a prefix"
     fi
     log "  ✓ upsert_env_key is anchored -- does not touch a key that shares a name prefix"
+
+    # env_key_has_value(): true only for a present key with a real
+    # (non-empty, non-whitespace-only) value -- false for absent, present-
+    # but-empty, and present-but-whitespace-only.
+    local env_file3="${TEST_DIR}/has_value.env"
+    # printf, not a quoted heredoc, so the trailing spaces on the
+    # whitespace-only line are preserved literally (a heredoc line ending
+    # in bare trailing whitespace is easy to lose/miss on re-edit).
+    printf 'MAGPIE_REAL=file\nMAGPIE_EMPTY=\nMAGPIE_WHITESPACE=   \n' > "$env_file3"
+    if ! env_key_has_value "$env_file3" "MAGPIE_REAL"; then
+        fail "env_key_has_value said a key with a real value has none"
+    fi
+    if env_key_has_value "$env_file3" "MAGPIE_EMPTY"; then
+        fail "env_key_has_value treated a present-but-empty key as having a value"
+    fi
+    if env_key_has_value "$env_file3" "MAGPIE_WHITESPACE"; then
+        fail "env_key_has_value treated a present-but-whitespace-only key as having a value"
+    fi
+    if env_key_has_value "$env_file3" "MAGPIE_ABSENT"; then
+        fail "env_key_has_value treated an absent key as having a value"
+    fi
+    log "  ✓ env_key_has_value distinguishes a real value from absent/empty/whitespace-only"
 }
 
 # Run all tests
