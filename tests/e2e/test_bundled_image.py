@@ -163,6 +163,24 @@ class TestBundledImageShutdownClassification:
         before it ever starts uvicorn -- uvicorn cannot answer /health
         while the host holds this lock, so wrapper.sh's startup gate is
         guaranteed to still be open when `docker stop` is issued below.
+
+        That guarantee only covers the DB-init phase, though -- it does
+        nothing to slow down wrapper.sh's earlier PID-1 root prelude (id/
+        stat/mkdir/chown x2/exec gosu+tini in wrapper.sh, none of which
+        touch the lock file), which runs first and has its own separate
+        SIGTERM trap ("termination requested during startup, exiting
+        cleanly", not the "graceful shutdown complete (during startup)"
+        this test asserts on). `docker run -d` returns once the container
+        is merely created/started, not once wrapper.sh reaches any
+        particular line, so without waiting for evidence the root prelude
+        has actually finished, `docker stop` below races it -- normally
+        losing that race by a wide margin, but wide enough to flake in CI
+        when a `docker stop` lands during the root prelude instead of the
+        (also exit-0, but differently-logged) DB-init window this test
+        means to exercise. `_wait_for_log` below closes that race: it
+        blocks until wrapper.sh's last root-prelude log line appears, so
+        `docker stop` is guaranteed to land after the exec into
+        gosu+tini, in the flock-held window.
         """
         # Unique suffix: hard-coded names could collide if tests ever run in
         # parallel (pytest-xdist, or multiple CI jobs sharing a Docker
@@ -183,6 +201,17 @@ class TestBundledImageShutdownClassification:
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX)
                 _run_container(bundled_image, data_dir, name)
+                # Wait for wrapper.sh's root prelude to finish (its last
+                # log line, immediately before it execs into gosu+tini)
+                # before stopping: this is what makes the race above
+                # deterministic. Once this line has been logged, the
+                # container is provably past the un-covered PID-1 window
+                # and about to (or already does) exec into the child that
+                # will immediately block on the host-held flock, so
+                # `docker stop` below is guaranteed to land in the
+                # DB-init window this test is meant to exercise, not the
+                # root prelude's own (differently-logged) shutdown path.
+                _wait_for_log(name, "root setup complete, dropping to", timeout=10)
                 subprocess.run(["docker", "stop", name], check=True, capture_output=True)
                 assert _exit_code(name) == 0, (
                     "docker stop during startup should exit 0 (graceful), "

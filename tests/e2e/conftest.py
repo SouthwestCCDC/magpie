@@ -229,6 +229,14 @@ def authenticated_client(
         yield client
 
 
+# Upstream-gateway status codes worth retrying: Caddy returns one of these
+# when magpie:8000 briefly refuses/drops a connection (e.g. a moment of host
+# resource contention from other e2e tests' own docker churn), not when
+# magpie itself rejects the request -- a real 4xx (bad request, auth
+# failure) must still fail immediately, not get masked by a retry.
+_TRANSIENT_UPSTREAM_STATUS_CODES = (502, 503, 504)
+
+
 def create_token_via_api(
     client: httpx.Client,
     admin_token: str,
@@ -245,14 +253,43 @@ def create_token_via_api(
 
     Returns:
         The created token string.
+
+    This is normally the very first real request several session-scoped
+    fixtures (read_token, write_token) make against the stack, often
+    minutes into a long e2e run -- well past docker_services' own startup
+    health-gate. A single transient Caddy 502/503/504 or dropped connection
+    here (observed in CI, correlated with other e2e tests' own docker
+    build/run churn on the same daemon) would otherwise permanently poison
+    the cached session fixture and cascade into every test that depends on
+    it. Retries a bounded few times, with a short backoff, on exactly those
+    transient failure modes -- a genuine 4xx from magpie itself still fails
+    on the first attempt via raise_for_status() below, un-retried.
     """
-    response = client.post(
-        "/api/v1/tokens",
-        json={"name": name, "scope": scope},
-        headers={"Authorization": f"Bearer {admin_token}"},
-    )
-    response.raise_for_status()
-    return response.json()["token"]
+    max_attempts = 3
+    retry_delay_seconds = 1.0
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = client.post(
+                "/api/v1/tokens",
+                json={"name": name, "scope": scope},
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+        except (httpx.ConnectError, httpx.TimeoutException):
+            if attempt == max_attempts:
+                raise
+            time.sleep(retry_delay_seconds)
+            continue
+
+        if response.status_code in _TRANSIENT_UPSTREAM_STATUS_CODES and attempt < max_attempts:
+            time.sleep(retry_delay_seconds)
+            continue
+
+        response.raise_for_status()
+        return response.json()["token"]
+
+    # Unreachable: the loop above always either returns or raises on its
+    # final iteration.
+    raise AssertionError("unreachable")
 
 
 @pytest.fixture(scope="session")
