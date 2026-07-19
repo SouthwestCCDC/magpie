@@ -49,16 +49,27 @@ def _own_uid_gid_args() -> list[str]:
     Explicit (not relying on wrapper.sh's own auto-detection from /data's
     ownership) so tests asserting "runs as non-root" are deterministic
     regardless of what uid happens to own the test's tempdir in a given
-    environment (e.g. pytest running as literal root would otherwise make
-    RUN_UID legitimately resolve to 0, a false test failure, not an image
-    bug). Uses the *current* process's own uid/gid rather than a
+    environment. Uses the *current* process's own uid/gid rather than a
     hardcoded constant like 1000: a hardcoded value only coincidentally
     matches the invoking user on some hosts, and on any host where it
     doesn't, the container chowns everything under the tempdir to that
     mismatched uid, orphaning it from pytest's own cleanup (a real CI
     failure this caused once already).
+
+    Falls back to a fixed non-root uid/gid if pytest itself is running as
+    root: passing MAGPIE_UID=0 through would make wrapper.sh legitimately
+    keep RUN_UID=0 and stay root (its documented, correct fallback for
+    that configuration) -- defeating the entire point of the tests that
+    use this helper, which assert the image does NOT run as root. Safe
+    to do without reintroducing the tempdir-cleanup issue above: root can
+    always remove/chown files regardless of who owns them, so whatever
+    uid the container chowns things to, pytest's own cleanup (also
+    running as root in this branch) can still remove it.
     """
-    return ["-e", f"MAGPIE_UID={os.getuid()}", "-e", f"MAGPIE_GID={os.getgid()}"]
+    uid, gid = os.getuid(), os.getgid()
+    if uid == 0:
+        uid, gid = 1000, 1000
+    return ["-e", f"MAGPIE_UID={uid}", "-e", f"MAGPIE_GID={gid}"]
 
 
 def _run_container(
