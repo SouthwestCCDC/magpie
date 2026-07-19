@@ -17,10 +17,26 @@
 
 set -euo pipefail
 
+# Force the published port rather than trusting docker-compose.yml's own
+# default: the health check and every docker-compose invocation below
+# assume port 8080 (see health_url below). If MAGPIE_HTTP_PORT happens to
+# be set to something else in the ambient shell environment, Compose would
+# publish a different host port and this script would probe the wrong one.
+export MAGPIE_HTTP_PORT=8080
+
 # Cleanup function to ensure containers are removed on exit
 cleanup() {
     echo "Cleaning up..."
-    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down -v
+    # `|| echo ... >&2` (not a bare command) matters here specifically
+    # because this runs as an EXIT trap: bash sets the script's *actual*
+    # final exit status to the trap's own last command's exit status,
+    # silently overriding whatever `exit $TEST_EXIT_CODE` below already
+    # set -- a failing teardown here would otherwise mask a real test
+    # failure as success (or a real success as failure), whichever
+    # $TEST_EXIT_CODE was. Verified directly: an EXIT trap ending in a
+    # failing command changes `exit 0`'s observed outer exit code to 1.
+    docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml down -v \
+        || echo "WARNING: cleanup (docker compose down -v) failed; you may need to run it manually" >&2
 }
 trap cleanup EXIT
 
@@ -35,7 +51,7 @@ else
 fi
 
 echo "Starting CIDR test environment..."
-docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml up -d --build
 
 # Wait for services to be healthy with retry loop
 echo "Waiting for services to be healthy..."
@@ -65,7 +81,7 @@ done
 if [ $attempt -gt $max_attempts ]; then
     echo ""
     echo "ERROR: Services failed to become healthy after $max_attempts attempts. Check logs:"
-    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml logs
+    docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml logs
     exit 1
 fi
 
@@ -73,21 +89,38 @@ fi
 echo "Initializing magpie and getting admin token..."
 # Capture output and return code separately to avoid mixing stdout/stderr
 # MAGPIE_ADMIN_TOKEN_SINK=stdout is overridden for just this exec so the
-# token can be scraped below, regardless of docker-compose.yml's own
-# (file-sink) default -- this is the script reading its own token, not a
+# token can be scraped below, regardless of docker-compose.override.yml's
+# own (file-sink) default -- docker-compose.yml itself is fail-closed and
+# has no default -- this is the script reading its own token, not a
 # production delivery path.
-INIT_OUTPUT=$(docker compose exec -T -e MAGPIE_ADMIN_TOKEN_SINK=stdout magpie magpie-ctl init --reset-admin-token 2>&1)
-INIT_EXIT_CODE=$?
+# `|| INIT_EXIT_CODE=$?` (not a bare trailing `$?` on the next line) is
+# required under `set -e`: a failing command inside `$(...)` propagates its
+# exit status to the assignment itself, which -e treats as a failing
+# command and aborts the script immediately -- the INIT_EXIT_CODE=$? below
+# would never run, silently turning the "if [ $INIT_EXIT_CODE -ne 0 ]"
+# handling that follows into dead code. `||` catches the failure inline
+# and keeps the script running so that handling actually executes.
+INIT_EXIT_CODE=0
+INIT_OUTPUT=$(docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml \
+  exec -T -e MAGPIE_ADMIN_TOKEN_SINK=stdout magpie magpie-ctl init --reset-admin-token 2>&1) || INIT_EXIT_CODE=$?
 
 if [ $INIT_EXIT_CODE -ne 0 ]; then
     echo "ERROR: magpie-ctl init failed with exit code $INIT_EXIT_CODE"
     echo "Output: $INIT_OUTPUT"
-    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml logs magpie
+    docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml logs magpie
     exit 1
 fi
 
 # Extract token from stdout only after confirming success
-ADMIN_TOKEN=$(echo "$INIT_OUTPUT" | grep "^mgp_" | head -1)
+# `|| true` (not a bare pipeline) is required under `pipefail`: if grep
+# finds no match it exits 1, and even though `head -1` after it exits 0,
+# pipefail makes the *pipeline's* overall exit status 1 (the last command
+# that itself failed, not simply the last command) -- which under `set -e`
+# aborts the script at this assignment, before the "if [ -z "$ADMIN_TOKEN"
+# ]" check below ever runs. `|| true` lets a legitimate no-match reach
+# that check instead of aborting. Verified directly: without it, a
+# no-match here aborts before the following echo/if ever execute.
+ADMIN_TOKEN=$(echo "$INIT_OUTPUT" | grep "^mgp_" | head -1 || true)
 
 if [ -z "$ADMIN_TOKEN" ]; then
     echo "ERROR: Failed to extract admin token from output"
@@ -106,7 +139,7 @@ echo "=========================================="
 
 # Temporarily disable errexit to allow tests to fail without stopping the script
 set +e
-docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml \
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml \
   exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner-inside \
   pytest tests/e2e/test_cidr_allowlist.py -k "not OutsideIP" "${PYTEST_ARGS[@]}"
 
@@ -124,7 +157,7 @@ echo "=========================================="
 
 # Temporarily disable errexit to allow tests to fail without stopping the script
 set +e
-docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml \
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml \
   exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner-outside \
   pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied \
   tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListForgedForwardedFor \

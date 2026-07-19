@@ -90,8 +90,28 @@ def docker_services(
     # The temp directory will contain both artifacts/ subdirectory and magpie.db file
     env["MAGPIE_DATA_DIR"] = str(temp_data_dir)
     env["MAGPIE_ENABLE_TEST_ENDPOINTS"] = "true"  # Enable memory tracking endpoints for E2E tests
+    # Force the published port rather than trusting docker-compose.yml's own
+    # default: base_url below is hardcoded to port 8080, so if
+    # MAGPIE_HTTP_PORT happens to be set to something else in the ambient
+    # shell environment (e.g. a developer's own .env or exported var),
+    # Compose would publish a different host port and every request in this
+    # module would silently hit the wrong (or no) service.
+    env["MAGPIE_HTTP_PORT"] = "8080"
 
-    compose_cmd = ["docker", "compose", "-f", str(PROJECT_ROOT / "docker-compose.yml")]
+    # docker-compose.override.yml is needed explicitly here (not just for
+    # its dev conveniences) -- passing any -f at all disables Compose's
+    # automatic merge of the override file, and the canonical
+    # docker-compose.yml has no `build:` (image: only) and no
+    # MAGPIE_ADMIN_TOKEN_SINK default (fail-closed by design); the
+    # override file supplies both.
+    compose_cmd = [
+        "docker",
+        "compose",
+        "-f",
+        str(PROJECT_ROOT / "docker-compose.yml"),
+        "-f",
+        str(PROJECT_ROOT / "docker-compose.override.yml"),
+    ]
 
     try:
         # Build services
@@ -157,14 +177,17 @@ def admin_token(docker_services: dict[str, str]) -> str:
 
     Overrides MAGPIE_ADMIN_TOKEN_SINK=stdout for just this `docker compose
     exec` invocation so the token is scraped from stdout below, regardless of
-    docker-compose.yml's own (file-sink) default -- this is the harness
-    reading the token for its own use, not a production delivery path.
+    docker-compose.override.yml's own (file-sink) default -- docker-compose.yml
+    itself is fail-closed and has no default -- this is the harness reading
+    the token for its own use, not a production delivery path.
     """
     compose_cmd = [
         "docker",
         "compose",
         "-f",
         str(PROJECT_ROOT / "docker-compose.yml"),
+        "-f",
+        str(PROJECT_ROOT / "docker-compose.override.yml"),
     ]
     env = os.environ.copy()
     env["COMPOSE_PROJECT_NAME"] = docker_services["project_name"]
@@ -387,7 +410,9 @@ def cidr_base_url() -> str:
     """Get base URL for CIDR tests (internal Docker network URL).
 
     When running inside test-runner container, this returns the internal
-    Caddy URL (http://caddy) which makes requests appear from Docker network IP.
+    magpie service URL (http://magpie:8080 -- the bundled Caddy's port,
+    see docker-compose.yml) which makes requests appear from Docker
+    network IP.
 
     Raises:
         pytest.skip: If CIDR testing is not enabled.
@@ -396,7 +421,7 @@ def cidr_base_url() -> str:
         pytest.skip("CIDR tests require running inside test-runner container")
 
     # Use internal Docker service name when running in test-runner container
-    return os.environ.get("MAGPIE_CIDR_TEST_BASE_URL", "http://caddy")
+    return os.environ.get("MAGPIE_CIDR_TEST_BASE_URL", "http://magpie:8080")
 
 
 @pytest.fixture(scope="session")
@@ -413,9 +438,12 @@ def cidr_admin_token(cidr_base_url: str) -> str:
     Raises:
         pytest.fail: If MAGPIE_CIDR_ADMIN_TOKEN is not set.
     """
-    # Wait for service to be healthy via Caddy (which is accessible from both networks)
-    # Note: We check via cidr_base_url (caddy) instead of http://magpie:8000 because
-    # the test-runner-outside container cannot reach magpie directly (different network)
+    # Wait for service to be healthy via the bundled Caddy (cidr_base_url,
+    # accessible from both networks -- see docker-compose.cidr-test.yml).
+    # There is no separate backend port to fall back to: uvicorn only
+    # listens on 127.0.0.1:8000 inside the container (see docker/bundled/
+    # Caddyfile), so cidr_base_url is the only reachable endpoint from
+    # either test-runner network.
     if not _wait_for_health(cidr_base_url, timeout=30, interval=1.0):
         pytest.fail(f"Magpie service did not become healthy at {cidr_base_url}")
 

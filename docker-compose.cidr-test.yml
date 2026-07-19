@@ -5,12 +5,20 @@
 # 1. allowed-net (172.18.0.0/24) - IPs INSIDE the CIDR allow-list
 # 2. external-net (192.168.100.0/24) - IPs OUTSIDE the CIDR allow-list
 #
-# Usage:
-#   docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml up --build
+# Usage (also needs docker-compose.override.yml for a build-from-source
+# image and a non-fail-closed MAGPIE_ADMIN_TOKEN_SINK default -- see
+# scripts/run-cidr-tests.sh, which wires all three files together):
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml \
+#     -f docker-compose.cidr-test.yml up --build
 #
 # Two test-runner containers verify:
 # - test-runner-inside: IPs in 172.18.0.0/24 can read without auth (200)
 # - test-runner-outside: IPs in 192.168.100.0/24 cannot read without auth (401)
+#
+# There is only one `magpie` service to target (Caddy is bundled inside
+# it, not a separate container -- see docker-compose.yml) -- it joins
+# BOTH networks, and the two test-runners are what's actually on
+# opposite sides of the CIDR boundary.
 
 networks:
   allowed-net:
@@ -25,8 +33,9 @@ networks:
         - subnet: 192.168.100.0/24
 
 services:
-  # Override caddy to enable CIDR allow-list for allowed-net only
-  caddy:
+  # Bundled Caddy needs to be reachable from both networks; the CIDR
+  # allow-list itself is what's actually under test.
+  magpie:
     networks:
       - allowed-net
       - external-net
@@ -34,11 +43,6 @@ services:
       # Only allow IPs from allowed-net subnet (172.18.0.0/24)
       # external-net IPs (192.168.100.x) should be denied
       - MAGPIE_ALLOWED_CIDRS=172.18.0.0/24
-
-  # Override magpie to only connect to allowed-net (backend network)
-  magpie:
-    networks:
-      - allowed-net
 
   # Test runner for positive CIDR cases (inside allowed CIDR)
   # This container has an IP in 172.18.0.x (within 172.18.0.0/24), which IS in the allow-list
@@ -52,10 +56,11 @@ services:
       - ./pyproject.toml:/app/pyproject.toml:ro
       - ./test-results:/app/test-results
     environment:
-      - MAGPIE_CIDR_TEST_BASE_URL=http://caddy
+      # Bundled Caddy listens on :8080 (non-privileged, non-root -- #589),
+      # not :80.
+      - MAGPIE_CIDR_TEST_BASE_URL=http://magpie:8080
       - MAGPIE_CIDR_TEST_ENABLED=true
     depends_on:
-      - caddy
       - magpie
     networks:
       - allowed-net
@@ -73,11 +78,11 @@ services:
       - ./pyproject.toml:/app/pyproject.toml:ro
       - ./test-results:/app/test-results
     environment:
-      - MAGPIE_CIDR_TEST_BASE_URL=http://caddy
+      - MAGPIE_CIDR_TEST_BASE_URL=http://magpie:8080
       - MAGPIE_CIDR_TEST_ENABLED=true
       - MAGPIE_CIDR_OUTSIDE_TEST=true
     depends_on:
-      - caddy
+      - magpie
     networks:
       - external-net
     command: ["sleep", "infinity"]

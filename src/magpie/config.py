@@ -23,6 +23,18 @@ class MagpieSettings(BaseSettings):
         env_prefix="MAGPIE_",
         env_file=".env",
         env_file_encoding="utf-8",
+        # Docker Compose's `${VAR:-}` (no default after the `-`) and bare
+        # `${VAR}` (no default at all) both resolve an unset shell var to a
+        # present-but-blank env entry, not an absent one -- every optional
+        # MAGPIE_* var passed through docker-compose.yml this way
+        # (MAGPIE_MAX_UPLOAD_SIZE via `:-`, MAGPIE_ADMIN_TOKEN_SINK via the
+        # bare form, etc.) hits this. Without env_ignore_empty, a
+        # blank string fails Literal/int field validation outright instead
+        # of falling through to the field's own default -- for
+        # admin_token_sink specifically, that also means bypassing
+        # deliver_admin_token's own clean "no sink configured" error in
+        # favor of a raw pydantic traceback.
+        env_ignore_empty=True,
     )
 
     storage_path: Path = Path("/data/artifacts")
