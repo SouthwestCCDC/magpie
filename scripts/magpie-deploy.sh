@@ -534,6 +534,36 @@ check_existing_installation() {
     fi
 }
 
+# Validates INSTALL_DIR (absolute path, safe charset -- see
+# validate_path_value()) and dies with a clear message if it fails.
+# INSTALL_DIR is not persisted to .env -- it comes straight from
+# --install-dir on this invocation (or the default) -- and is
+# interpolated into every `-f ${INSTALL_DIR}/docker-compose.yml` call and
+# into die()/log_error() messages (e.g. verify_installation()'s "not
+# installed at $INSTALL_DIR" below), so an unvalidated value could corrupt
+# an on-disk path or, since log_error() renders a literal `\n` in a
+# message as a real line break, inject fabricated extra lines into this
+# script's own error output. cmd_install validates INSTALL_DIR via
+# validate_config() before this would ever run; every other command that
+# accepts --install-dir (update/status/logs/uninstall) calls this first,
+# before INSTALL_DIR reaches verify_installation() or any die() call. See
+# issues #448 and #161.
+validate_install_dir_or_die() {
+    local errors=()
+    if [[ ! "$INSTALL_DIR" =~ ^/ ]]; then
+        errors+=("Install directory must be an absolute path: $INSTALL_DIR")
+    else
+        validate_path_value "$INSTALL_DIR" "Install directory"
+    fi
+    if [[ ${#errors[@]} -gt 0 ]]; then
+        log_error "Invalid --install-dir:"
+        for err in "${errors[@]}"; do
+            echo "  - $err" >&2
+        done
+        die "Fix the --install-dir value and try again."
+    fi
+}
+
 verify_installation() {
     if [[ ! -d "$INSTALL_DIR" ]]; then
         die "Magpie is not installed at $INSTALL_DIR\nRun '$SCRIPT_NAME install' first."
@@ -1613,28 +1643,7 @@ cmd_update() {
     log "Updating magpie..."
 
     INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
-
-    # Unlike DATA_DIR, INSTALL_DIR is not persisted to .env -- it comes
-    # straight from --install-dir on this invocation (or the default), and
-    # is interpolated into every `-f ${INSTALL_DIR}/docker-compose.yml` /
-    # `sed` call below, so an unvalidated value containing '|' or other
-    # metacharacters could corrupt or hijack the on-disk files.
-    # cmd_install validates this via validate_config(); cmd_update needs
-    # its own check. See issue #448.
-    local errors=()
-    if [[ ! "$INSTALL_DIR" =~ ^/ ]]; then
-        errors+=("Install directory must be an absolute path: $INSTALL_DIR")
-    else
-        validate_path_value "$INSTALL_DIR" "Install directory"
-    fi
-    if [[ ${#errors[@]} -gt 0 ]]; then
-        log_error "Invalid --install-dir:"
-        for err in "${errors[@]}"; do
-            echo "  - $err" >&2
-        done
-        die "Fix the --install-dir value and try again."
-    fi
-
+    validate_install_dir_or_die
     verify_installation
     load_existing_config
 
@@ -1767,6 +1776,7 @@ cmd_uninstall() {
     log "Uninstalling magpie..."
 
     INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+    validate_install_dir_or_die
     verify_installation
     load_existing_config
 
@@ -1841,6 +1851,7 @@ cmd_uninstall() {
 
 cmd_status() {
     INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+    validate_install_dir_or_die
     verify_installation
     load_existing_config
 
@@ -1873,6 +1884,7 @@ cmd_status() {
 
 cmd_logs() {
     INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+    validate_install_dir_or_die
     verify_installation
 
     # Validate --lines before it reaches docker compose. See issue #448.

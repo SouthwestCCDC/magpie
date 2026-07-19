@@ -641,6 +641,48 @@ test_log_error_only_interprets_literal_backslash_n() {
     log "  ✓ \\e/\\a in interpolated content stay inert literal text (no escape decoding)"
 }
 
+# Test 10 (Copilot follow-up on the log_error() fix, PR #597): the
+# substitution log_error() uses to render a literal \n as a real line
+# break operates on the WHOLE message, including interpolated content --
+# so an unvalidated --install-dir containing a literal \n could still
+# inject a fabricated extra output line (log injection, not the
+# ANSI-escape-injection Test 9 covers) into cmd_status/cmd_logs/
+# cmd_uninstall's error output, since none of them validated INSTALL_DIR's
+# charset before it could reach verify_installation()'s die() calls (only
+# cmd_update did). validate_install_dir_or_die() -- extracted from
+# cmd_update()'s existing check, now shared by cmd_update/cmd_status/
+# cmd_logs/cmd_uninstall -- closes this: INSTALL_DIR's charset (no
+# backslash, no metacharacters) is validated before any of these commands
+# ever calls verify_installation() or die() with it interpolated.
+test_hostile_install_dir_rejected_before_reaching_die() {
+    log "Test 10: a hostile --install-dir (embedded backslash-n) is rejected before it can reach die()/log_error() in status/logs/uninstall"
+
+    local hostile='/opt/magpie\nFAKE INJECTED LINE'
+    local cmd out
+    for cmd in cmd_status cmd_logs cmd_uninstall; do
+        if out=$(
+            (
+                INSTALL_DIR="$hostile" NONINTERACTIVE="true" YES="true" "$cmd"
+            ) 2>&1
+        ); then
+            fail "$cmd accepted a hostile --install-dir containing a literal backslash-n"
+        fi
+        if ! echo "$out" | grep -qE "Invalid --install-dir|invalid characters"; then
+            fail "$cmd did not report an install-dir validation failure for the hostile value: $out"
+        fi
+        # The hostile value's raw backslash-n legitimately appears verbatim
+        # in this validation error's own text (it echoes the rejected
+        # value) -- the injection question is whether it survived as a
+        # literal two-char sequence (safe) or got rendered as a real line
+        # break (log injection). Check for the exact substring spanning
+        # both halves on one line, not just the second half's presence.
+        if ! echo "$out" | grep -qF 'magpie\nFAKE INJECTED LINE'; then
+            fail "$cmd's error output rendered the hostile value's embedded backslash-n as a real line break (log injection): $out"
+        fi
+        log "  ✓ $cmd rejects the hostile --install-dir before any die()/log_error() call could see it"
+    done
+}
+
 # Run all tests
 log "Running tests for the v0.2.0 installer rewrite (PR-3)"
 log ""
@@ -655,6 +697,7 @@ test_tier2_gate_blocks_and_bypasses
 test_579_gate_install_warns_update_dies
 test_upsert_and_strip_env_key_primitives
 test_log_error_only_interprets_literal_backslash_n
+test_hostile_install_dir_rejected_before_reaching_die
 
 log ""
 log "All tests passed!"
