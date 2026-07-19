@@ -683,6 +683,48 @@ test_hostile_install_dir_rejected_before_reaching_die() {
     done
 }
 
+# Test 11 (Copilot finding on PR #597): generate_systemd_service()/
+# generate_gc_units() are also called by cmd_install, but `update` has no
+# other path that touches /etc/systemd/system/magpie*.{service,timer} --
+# without an explicit call, `update` restarts the service via whatever
+# unit definition is ALREADY on disk from the last install. For a real
+# v0.1.x-topology install, that predates this PR entirely (no
+# -f docker-compose.yml pinning, no --remove-orphans on ExecStop), so the
+# 2->1 topology-swap cleanup this PR documents (dropping the old caddy
+# sidecar via --remove-orphans) would silently never run on an actual
+# upgrade -- only on a from-scratch reinstall. A live/root+systemd
+# integration test is out of scope for this test file (see
+# scripts/magpie-deploy.sh's live-verification notes in the PR
+# description instead); this is a static regression guard against the
+# call being silently removed, which is what actually caused the gap.
+test_cmd_update_regenerates_systemd_units() {
+    log "Test 11: cmd_update() regenerates the systemd units (and daemon-reloads) before restarting"
+
+    local update_body
+    update_body=$(awk '/^cmd_update\(\)/,/^}/' "$DEPLOY_SCRIPT")
+
+    if ! echo "$update_body" | grep -q '^\s*generate_systemd_service$'; then
+        fail "cmd_update() no longer calls generate_systemd_service() -- an upgraded install's on-disk unit would keep using stale ExecStart/ExecStop (no -f docker-compose.yml pinning, no --remove-orphans)"
+    fi
+    if ! echo "$update_body" | grep -q '^\s*generate_gc_units$'; then
+        fail "cmd_update() no longer calls generate_gc_units()"
+    fi
+    if ! echo "$update_body" | grep -q '^\s*systemctl daemon-reload$'; then
+        fail "cmd_update() regenerates the unit files but never runs 'systemctl daemon-reload' -- systemd would keep using its cached (stale) unit definition"
+    fi
+    log "  ✓ cmd_update() regenerates both unit files and reloads systemd before restarting"
+
+    # Ordering: must happen before the restart, not after (a restart against
+    # a not-yet-reloaded stale unit defeats the point).
+    local regen_line restart_line
+    regen_line=$(echo "$update_body" | grep -n '^\s*generate_systemd_service$' | head -1 | cut -d: -f1)
+    restart_line=$(echo "$update_body" | grep -n 'systemctl restart magpie.service' | head -1 | cut -d: -f1)
+    if [[ -z "$regen_line" || -z "$restart_line" || "$regen_line" -ge "$restart_line" ]]; then
+        fail "cmd_update() does not regenerate the systemd units before the restart (regen at line $regen_line, restart at line $restart_line, relative to cmd_update's own body)"
+    fi
+    log "  ✓ unit regeneration happens before the restart, not after"
+}
+
 # Run all tests
 log "Running tests for the v0.2.0 installer rewrite (PR-3)"
 log ""
@@ -698,6 +740,7 @@ test_579_gate_install_warns_update_dies
 test_upsert_and_strip_env_key_primitives
 test_log_error_only_interprets_literal_backslash_n
 test_hostile_install_dir_rejected_before_reaching_die
+test_cmd_update_regenerates_systemd_units
 
 log ""
 log "All tests passed!"

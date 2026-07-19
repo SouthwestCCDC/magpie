@@ -14,7 +14,7 @@ sudo ./scripts/magpie-deploy.sh install --noninteractive
 # MAGPIE_ADMIN_TOKEN_SINK=file, if it wasn't shown (or you lost it), read
 # it instead:
 # sudo cat /opt/magpie/data/admin-token
-# To reset it: docker exec -it magpie-magpie-1 magpie-ctl init --reset-admin-token
+# To reset it: cd /opt/magpie && docker compose exec magpie magpie-ctl init --reset-admin-token
 # (the new token is delivered through the same configured sink, i.e. also
 # written to that file, not printed to the terminal)
 ```

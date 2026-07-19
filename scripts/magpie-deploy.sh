@@ -1752,10 +1752,26 @@ cmd_update() {
         upsert_env_key "$env_file" "MAGPIE_IMAGE" "$image_tag"
     fi
 
-    # --remove-orphans (baked into ExecStop, see generate_systemd_service())
-    # drops a v0.1.x install's leftover 'caddy' sidecar container when the
-    # restart below stops the old stack and starts the single-service one.
-    # /data is a bind mount, untouched by the container swap.
+    # generate_systemd_service()/generate_gc_units() are also called by
+    # cmd_install, but `update` never re-derives the unit files any other
+    # way -- they're regenerated here too so an install whose on-disk
+    # units still predate this PR (no -f docker-compose.yml pinning, no
+    # --remove-orphans on ExecStop) actually picks up both on this update,
+    # not just on a from-scratch reinstall. Without this, `systemctl
+    # restart` below would still exec the OLD unit definition and
+    # --remove-orphans's v0.1.x-sidecar cleanup (see the comment below)
+    # would silently not happen on a real upgrade. Idempotent -- writing
+    # the same content again on an install whose units already match is a
+    # no-op in effect.
+    generate_systemd_service
+    generate_gc_units
+    systemctl daemon-reload
+
+    # --remove-orphans (baked into ExecStop by generate_systemd_service()
+    # just above) drops a v0.1.x install's leftover 'caddy' sidecar
+    # container when the restart below stops the old stack and starts the
+    # single-service one. /data is a bind mount, untouched by the
+    # container swap.
     log "Restarting services..."
     systemctl restart magpie.service
 
