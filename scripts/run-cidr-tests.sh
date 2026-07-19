@@ -27,7 +27,16 @@ export MAGPIE_HTTP_PORT=8080
 # Cleanup function to ensure containers are removed on exit
 cleanup() {
     echo "Cleaning up..."
-    docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml down -v
+    # `|| echo ... >&2` (not a bare command) matters here specifically
+    # because this runs as an EXIT trap: bash sets the script's *actual*
+    # final exit status to the trap's own last command's exit status,
+    # silently overriding whatever `exit $TEST_EXIT_CODE` below already
+    # set -- a failing teardown here would otherwise mask a real test
+    # failure as success (or a real success as failure), whichever
+    # $TEST_EXIT_CODE was. Verified directly: an EXIT trap ending in a
+    # failing command changes `exit 0`'s observed outer exit code to 1.
+    docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml down -v \
+        || echo "WARNING: cleanup (docker compose down -v) failed; you may need to run it manually" >&2
 }
 trap cleanup EXIT
 
@@ -103,7 +112,15 @@ if [ $INIT_EXIT_CODE -ne 0 ]; then
 fi
 
 # Extract token from stdout only after confirming success
-ADMIN_TOKEN=$(echo "$INIT_OUTPUT" | grep "^mgp_" | head -1)
+# `|| true` (not a bare pipeline) is required under `pipefail`: if grep
+# finds no match it exits 1, and even though `head -1` after it exits 0,
+# pipefail makes the *pipeline's* overall exit status 1 (the last command
+# that itself failed, not simply the last command) -- which under `set -e`
+# aborts the script at this assignment, before the "if [ -z "$ADMIN_TOKEN"
+# ]" check below ever runs. `|| true` lets a legitimate no-match reach
+# that check instead of aborting. Verified directly: without it, a
+# no-match here aborts before the following echo/if ever execute.
+ADMIN_TOKEN=$(echo "$INIT_OUTPUT" | grep "^mgp_" | head -1 || true)
 
 if [ -z "$ADMIN_TOKEN" ]; then
     echo "ERROR: Failed to extract admin token from output"
