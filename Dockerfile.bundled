@@ -3,18 +3,24 @@
 # Magpie bundled single-container image (#309 Phase 1, issue #586).
 #
 # Bundles Caddy (internal auth gate / static server, see
-# docker/bundled/Caddyfile) and uvicorn into a single image. tini is PID 1;
-# it execs docker/bundled/wrapper.sh, which runs a brief root prelude (the
-# on-disk ownership fixups only root can do), then drops itself to the
-# non-root runtime uid and, from there, starts both processes in order
-# (uvicorn first, then Caddy once uvicorn answers /health), fails the whole
-# container fast if either process exits on its own, and drains both
-# cleanly on SIGTERM/`docker stop`. In the normal case (the resolved
-# runtime uid is non-root), no process other than tini itself runs as
-# root in steady state (issue #591); if that uid resolves to 0 (e.g. a
-# fresh, still-root-owned volume with no MAGPIE_UID set), wrapper.sh's
-# documented fallback is to keep running everything as root instead,
-# same as entrypoint.sh's own "no privilege drop needed" case.
+# docker/bundled/Caddyfile) and uvicorn into a single image. wrapper.sh
+# itself is PID 1 (ENTRYPOINT): it runs a brief root prelude (the on-disk
+# ownership fixups only root can do), then inserts tini -- dropped to the
+# non-root runtime uid via gosu in the same exec -- so tini itself ends
+# up PID 1, non-root, rather than tini running as root in front of a
+# dropped child (issue #591: that cross-uid relationship was the last
+# thing requiring CAP_KILL, since root-tini forwarding a signal to its
+# non-root child is a different-uid kill()). tini then forks wrapper.sh
+# again as its child, same uid throughout, which starts both processes
+# in order (uvicorn first, then Caddy once uvicorn answers /health),
+# fails the whole container fast if either process exits on its own, and
+# drains both cleanly on SIGTERM/`docker stop`. In the normal case (the
+# resolved runtime uid is non-root), NO process in this container runs
+# as root in steady state, tini included; if that uid resolves to 0
+# (e.g. a fresh, still-root-owned volume with no MAGPIE_UID set),
+# wrapper.sh's documented fallback is to keep tini and everything else
+# running as root instead, same as entrypoint.sh's own "no privilege
+# drop needed" case.
 #
 # Externally the container exposes one plain-HTTP port (8080, non-
 # privileged so Caddy can run non-root -- see issue #589); TLS
@@ -141,4 +147,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=5s --start-period=95s --retries=3 \
     CMD ["/usr/local/bin/healthcheck.sh"]
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/wrapper.sh"]
+ENTRYPOINT ["/wrapper.sh"]

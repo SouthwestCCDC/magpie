@@ -6,9 +6,10 @@ arrives before or after uvicorn's startup-ordering gate completes, while a
 process actually crashing (SIGKILL) must still fail the container (exit 1).
 
 Also covers #589 (Caddy binds :8080, non-root) and #591 (the whole
-supervisor -- wrapper.sh itself, not just uvicorn/caddy -- runs non-root
-in steady state via a root prelude that re-execs itself dropped; only
-tini, PID 1, stays root).
+process tree -- tini itself, not just wrapper.sh/uvicorn/caddy -- runs
+non-root in steady state; wrapper.sh's brief root prelude execs tini
+dropped via gosu, so tini never runs root in front of a non-root child,
+and CAP_KILL is no longer needed for tini's own signal forwarding).
 """
 
 from __future__ import annotations
@@ -329,15 +330,19 @@ def _docker_top_user(name: str, *comm_candidates: str) -> str | None:
 @pytest.mark.slow
 class TestBundledImageNonRootCaddy:
     """Regression coverage for #589 (Caddy binds :8080, non-root) and #591
-    (the whole supervisor -- wrapper.sh itself, not just its children --
-    runs non-root in steady state, via a brief root prelude that re-execs
-    itself dropped).
+    (the whole process tree -- tini itself, not just wrapper.sh and its
+    children -- runs non-root in steady state). wrapper.sh (PID 1, the
+    ENTRYPOINT) runs a brief root prelude, then execs tini dropped to the
+    non-root runtime uid via gosu in that same exec, so tini itself ends
+    up non-root rather than root in front of a non-root child; tini then
+    forks wrapper.sh again, same uid, which runs the actual supervisor
+    loop.
     """
 
     def test_supervisor_and_children_run_as_non_root(self, bundled_image: str) -> None:
-        """wrapper.sh, uvicorn, and caddy must all be owned by the same
-        non-root uid (not root), and Caddy must be reachable on :8080.
-        Only tini (PID 1) may still be root.
+        """tini, wrapper.sh, uvicorn, and caddy must all be owned by the
+        same non-root uid (not root), and Caddy must be reachable on
+        :8080. No process runs as root in this configuration.
         """
         name = f"magpie-bundled-e2e-nonroot-{uuid.uuid4().hex[:8]}"
         with tempfile.TemporaryDirectory(prefix="magpie_bundled_nonroot_") as tmp:
@@ -360,10 +365,8 @@ class TestBundledImageNonRootCaddy:
                 assert uvicorn_user is not None, "could not find uvicorn in `docker top` output"
                 assert caddy_user is not None, "could not find caddy in `docker top` output"
 
-                assert tini_user in ("root", "0"), (
-                    f"tini (PID 1) is expected to stay root for zombie reaping, got {tini_user!r}"
-                )
                 for proc_name, user in (
+                    ("tini", tini_user),
                     ("wrapper.sh", wrapper_user),
                     ("uvicorn", uvicorn_user),
                     ("caddy", caddy_user),
@@ -371,9 +374,10 @@ class TestBundledImageNonRootCaddy:
                     assert user not in ("root", "0"), (
                         f"{proc_name} must not run as root in steady state, got user={user!r}"
                     )
-                assert wrapper_user == uvicorn_user == caddy_user, (
-                    "the supervisor and both children must all run as the same uid "
-                    f"(so caddy can read what uvicorn writes under /data), got "
+                assert tini_user == wrapper_user == uvicorn_user == caddy_user, (
+                    "tini, the supervisor, and both children must all run as the same uid "
+                    f"(so caddy can read what uvicorn writes under /data, and tini's own "
+                    f"signal forwarding needs no CAP_KILL), got tini={tini_user!r} "
                     f"wrapper.sh={wrapper_user!r} uvicorn={uvicorn_user!r} caddy={caddy_user!r}"
                 )
 
@@ -391,28 +395,25 @@ class TestBundledImageNonRootCaddy:
         """The container must start healthy and serve real traffic in
         steady state (an already-provisioned /data, matching a real
         deployment's second and subsequent boots) with every Linux
-        capability dropped except SETUID/SETGID/CHOWN/KILL -- notably
-        WITHOUT CAP_NET_BIND_SERVICE (Caddy binds :8080, not :80, #589),
+        capability dropped except SETUID/SETGID/CHOWN -- notably WITHOUT
+        CAP_NET_BIND_SERVICE (Caddy binds :8080, not :80, #589), KILL,
         DAC_OVERRIDE, and FOWNER.
 
-        KILL could NOT be dropped, unlike the original #591 hypothesis:
-        tini (PID 1) necessarily stays root (for zombie reaping), and it
-        forwards `docker stop`'s SIGTERM to its direct child -- which, by
-        the time signals matter, is wrapper.sh already running as the
-        non-root uid. That specific hop (root tini -> non-root child) is a
-        different-uid kill(), which needs CAP_KILL regardless of every
-        *other* signal in this container now being same-uid (wrapper.sh's
-        own signaling of uvicorn/caddy, which needs no capability at all).
-        DAC_OVERRIDE and FOWNER are NOT needed for this steady-state case:
-        the root prelude only touches /var/lib/caddy (baked into the
-        image, root-owned) and dirs already owned by the target uid from
-        the first boot below, and root chowning something it already owns
-        needs neither. (DAC_OVERRIDE IS still needed on a genuinely fresh
-        boot against a bind mount not already owned by root or the target
-        uid -- root creating new files/dirs inside a directory it doesn't
-        own needs it. That's the first-boot step below, deliberately run
-        with full default capabilities, matching a real deployment's
-        first boot.)
+        KILL is not needed: tini itself runs as the non-root runtime uid
+        (wrapper.sh, PID 1 and root only briefly during its prelude,
+        execs tini dropped via gosu in the same exec, so tini never runs
+        root in front of a non-root child), so tini forwarding `docker
+        stop`'s SIGTERM to its forked child is always a same-uid kill().
+        DAC_OVERRIDE and FOWNER are NOT needed for this steady-state case
+        either: the root prelude only touches /var/lib/caddy (baked into
+        the image, root-owned) and dirs already owned by the target uid
+        from the first boot below, and root chowning something it
+        already owns needs neither. (DAC_OVERRIDE IS still needed on a
+        genuinely fresh boot against a bind mount not already owned by
+        root or the target uid -- root creating new files/dirs inside a
+        directory it doesn't own needs it. That's the first-boot step
+        below, deliberately run with full default capabilities, matching
+        a real deployment's first boot.)
         """
         name = f"magpie-bundled-e2e-capdrop-{uuid.uuid4().hex[:8]}"
         init_name = f"{name}-init"
@@ -463,8 +464,6 @@ class TestBundledImageNonRootCaddy:
                         "SETGID",
                         "--cap-add",
                         "CHOWN",
-                        "--cap-add",
-                        "KILL",
                     ],
                 )
                 _wait_for_log(name, "caddy started")

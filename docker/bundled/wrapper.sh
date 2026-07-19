@@ -1,22 +1,39 @@
 #!/bin/bash
 # Magpie bundled single-container image -- process supervisor.
 #
-# Runs under tini (PID 1, see Dockerfile.bundled). tini execs this script
-# directly; a brief ROOT PRELUDE (the on-disk ownership fixups only root
-# can do -- chown /data, chown /var/lib/caddy) runs first, and this same
-# script then re-execs itself dropped to the non-root runtime uid via
-# gosu. Everything from that point on -- DB init, uvicorn, caddy, and the
-# rest of this supervisor -- runs as that uid, not root (issue #591), in
-# the normal case where the resolved uid is non-root: no process in this
-# container runs as root in steady state except tini itself (PID 1, kept
-# root purely for zombie reaping, which needs no privilege). If the
-# resolved uid is 0 (e.g. a fresh, still-root-owned volume with no
-# MAGPIE_UID set -- entrypoint.sh's own documented "no privilege drop
-# needed" case), there is nothing to drop to and everything continues as
-# root instead; this is an explicit, intentional fallback, not the
-# steady-state default. uvicorn and caddy are launched directly (no
-# per-child gosu) since the whole supervisor is already at the target
-# uid by then.
+# THIS script is PID 1 (see Dockerfile.bundled's ENTRYPOINT) -- not tini.
+# On its first invocation ($$ == 1, "the raw entrypoint invocation, not
+# yet wrapped by tini"), it runs a brief ROOT PRELUDE if it's root (the
+# on-disk ownership fixups only root can do -- chown /data, chown
+# /var/lib/caddy), then execs tini as PID 1 in its place -- dropped to
+# the non-root runtime uid via gosu in that same exec, so tini itself
+# ends up running non-root, not root in front of a non-root child. tini
+# then forks a fresh, non-root invocation of this same script as ITS
+# child ($$ != 1 this time), which is what actually runs the DB init,
+# uvicorn, and Caddy supervisor loop below. This matters because tini
+# forwards `docker stop`'s SIGTERM to its child itself, via a real
+# kill(): if tini were root and its child non-root, that's a
+# different-uid signal needing CAP_KILL; same-uid (both non-root now)
+# needs none (issue #591). In the normal case (resolved uid is
+# non-root), NO process in this container runs as root in steady state,
+# tini included. uvicorn and caddy are launched directly by the
+# tini-forked invocation (no per-child gosu) since it's already at the
+# target uid.
+#
+# Three entry paths all converge on "tini ends up PID 1, at the correct
+# uid, having forked this script as its child":
+#   1. Normal: started as root (Docker default), a MAGPIE_UID resolves
+#      non-root -> root prelude runs, then `exec gosu $UID:$GID tini --
+#      "$0" "$@"`.
+#   2. RUN_UID=0 fallback: started as root, resolved uid is ALSO 0 (e.g.
+#      a fresh, still-root-owned volume with no MAGPIE_UID set --
+#      entrypoint.sh's own documented "no privilege drop needed" case)
+#      -> root prelude runs, then `exec tini -- "$0" "$@"` (no gosu:
+#      dropping root to root is a no-op, and root forwarding a signal to
+#      its own root child needs no capability either).
+#   3. Started non-root directly (`docker run --user <uid>`): no root
+#      prelude possible (nothing to chown with) -> straight to `exec
+#      tini -- "$0" "$@"` at the already-current uid.
 #
 # The root prelude intentionally duplicates a small amount of
 # entrypoint.sh's setup logic (uid resolution, /data ownership fixups)
@@ -25,7 +42,7 @@
 # that image must not change here (issue #591's PR description has the
 # full rationale).
 #
-# Once running (post-drop), starts uvicorn, waits for it to answer
+# Once running as tini's child, starts uvicorn, waits for it to answer
 # /health, then starts caddy. Both processes fail fast: either one
 # exiting on its own brings down the whole container with a non-zero
 # exit code, so an orchestrator restarts the full unit rather than
@@ -34,8 +51,8 @@
 #
 # A `docker stop`/SIGTERM is NOT a failure: it is forwarded to both
 # children so they drain in-flight requests, and the container exits 0 --
-# including a stop that arrives during the (very brief) root prelude
-# itself, before anything has started.
+# including a stop that arrives during the (very brief) PID-1 window
+# itself, before tini has even been inserted.
 set -u
 
 log() {
@@ -137,17 +154,37 @@ magpie_fixup_ownership() {
 	fi
 }
 
-if [ "$(id -u)" = "0" ]; then
+if [ "$$" = 1 ]; then
 	# ------------------------------------------------------------------
-	# Root prelude. A stop signal arriving during this window (no flock,
-	# no network I/O -- a handful of mkdir/stat/chown calls) is not a
-	# failure: nothing has started yet, so there's nothing to drain, and
-	# it's safe to just exit 0 immediately. Bash defers trap delivery
-	# until the current foreground command returns, which bounds this
-	# window to whichever single mkdir/chown/stat call happens to be in
-	# flight.
+	# I am the raw entrypoint invocation (Dockerfile.bundled's
+	# ENTRYPOINT execs this script directly) -- tini has not been
+	# inserted yet. A stop signal arriving during this window (no flock,
+	# no network I/O -- at most a handful of mkdir/stat/chown calls) is
+	# not a failure: nothing has started yet, so there's nothing to
+	# drain, and it's safe to just exit 0 immediately. Bash defers trap
+	# delivery until the current foreground command returns, which
+	# bounds this window to whichever single mkdir/chown/stat call
+	# happens to be in flight.
 	# ------------------------------------------------------------------
-	trap 'log "termination requested during root setup, exiting cleanly"; exit 0' TERM INT
+	trap 'log "termination requested during startup, exiting cleanly"; exit 0' TERM INT
+
+	if [ "$(id -u)" != "0" ]; then
+		# Started non-root directly (e.g. `docker run --user <uid>`):
+		# no root prelude is possible (nothing to chown with), so
+		# there's nothing to do here except insert tini at the
+		# already-current uid. tini forks (not execs) a fresh
+		# invocation of this same script as its child, which re-enters
+		# below with $$ != 1.
+		log "started non-root directly (uid $(id -u)) -- inserting tini, no root prelude possible"
+		# shellcheck disable=SC2093  # intentional: the log+exit below is
+		# an explicit failure path for when exec itself fails, not dead
+		# code left behind by mistake.
+		exec /usr/bin/tini -- "$0" "$@"
+		log "error: exec tini failed"
+		exit 1
+	fi
+
+	# --- Root prelude: the on-disk ownership fixups only root can do. ---
 
 	# Determine UID/GID to run as: MAGPIE_UID/MAGPIE_GID env vars if set,
 	# else detected from /data's existing ownership, else 1000:1000.
@@ -193,44 +230,49 @@ if [ "$(id -u)" = "0" ]; then
 	magpie_resolve_storage_paths
 	magpie_fixup_ownership
 
-	# RUN_UID=0 (e.g. auto-detected from a fresh, still-root-owned
-	# volume with no MAGPIE_UID/MAGPIE_GID set) means there's nothing to
-	# drop to -- entrypoint.sh supports this same configuration ("no
-	# privilege drop needed"). Falling through to `exec gosu 0:0 "$0"
-	# "$@"` below would be a no-op privilege change that re-enters this
-	# same `id -u = 0` branch again on the next line of execution,
-	# looping forever -- skip the re-exec entirely instead and just
-	# continue as root.
 	if [ "$RUN_UID" = "0" ]; then
-		log "RUN_UID is 0 -- continuing as root (no privilege drop configured)"
-	else
-		if ! command -v gosu >/dev/null 2>&1; then
-			log "error: gosu is required to drop privileges but was not found in PATH"
-			exit 1
-		fi
-		log "root setup complete, dropping to $RUN_UID:$RUN_GID"
-		# shellcheck disable=SC2093  # intentional: the log+exit below is
-		# an explicit failure path for when exec itself fails, not dead
-		# code left behind by mistake.
-		exec gosu "$RUN_UID:$RUN_GID" "$0" "$@"
-		# Only reached if exec itself failed (it replaces the process on
-		# success, so nothing after it runs then) -- e.g. gosu couldn't
-		# perform the setuid/setgid syscalls. Without this, falling
-		# through would run the entire rest of this script -- the
-		# post-drop supervisor body -- as root, silently defeating the
-		# whole point of the drop.
-		log "error: exec gosu failed to drop privileges to $RUN_UID:$RUN_GID"
+		# RUN_UID=0 (e.g. auto-detected from a fresh, still-root-owned
+		# volume with no MAGPIE_UID/MAGPIE_GID set) means there's
+		# nothing to drop to -- entrypoint.sh supports this same
+		# configuration ("no privilege drop needed"). Still insert tini
+		# as PID 1 (root here, which is fine: root forwarding a signal
+		# to its own root child needs no capability either).
+		log "RUN_UID is 0 -- inserting tini, continuing as root (no privilege drop configured)"
+		# shellcheck disable=SC2093
+		exec /usr/bin/tini -- "$0" "$@"
+		log "error: exec tini failed"
 		exit 1
 	fi
+
+	if ! command -v gosu >/dev/null 2>&1; then
+		log "error: gosu is required to drop privileges but was not found in PATH"
+		exit 1
+	fi
+	log "root setup complete, dropping to $RUN_UID:$RUN_GID and inserting tini"
+	# shellcheck disable=SC2093  # intentional: the log+exit below is an
+	# explicit failure path for when exec itself fails, not dead code
+	# left behind by mistake.
+	exec gosu "$RUN_UID:$RUN_GID" /usr/bin/tini -- "$0" "$@"
+	# Only reached if exec itself failed (it replaces the process on
+	# success, so nothing after it runs then) -- e.g. gosu couldn't
+	# perform the setuid/setgid syscalls, or tini's own exec failed
+	# after gosu already dropped. Without this, falling through would
+	# run the entire rest of this script -- the post-tini supervisor
+	# body -- as root and without tini as PID 1, silently defeating the
+	# whole point of the drop.
+	log "error: exec gosu+tini failed to drop privileges to $RUN_UID:$RUN_GID"
+	exit 1
 fi
 
 # ---------------------------------------------------------------------------
-# Everything below runs as the non-root runtime uid -- via the exec above,
-# or because the container was started non-root directly (e.g. `docker
-# run --user`). uvicorn and caddy are launched directly, not through a
-# per-child gosu: no capability related to privilege dropping (SETUID,
-# SETGID) or to signaling a different-uid process (KILL) is needed past
-# this point.
+# Everything below runs as tini's forked child ($$ != 1 -- tini forks a
+# fresh copy of this script rather than exec'ing into it, so this is a
+# genuinely new process, always at whatever uid tini itself ended up at
+# above), not the raw PID-1 entrypoint invocation. uvicorn and caddy are
+# launched directly, not through a per-child gosu: no capability related
+# to privilege dropping (SETUID, SETGID) is needed past this point, and
+# neither is CAP_KILL -- tini forwarding a signal to THIS process is
+# always same-uid now, whatever that uid is.
 # ---------------------------------------------------------------------------
 
 DB_INIT_PID=""
