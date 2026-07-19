@@ -33,17 +33,43 @@ def _load_compose(path: Path) -> dict:
 
 
 def _env_dict(service: dict) -> dict[str, str]:
-    """Parse a service's `environment: [KEY=value, ...]` list into a dict.
+    """Parse a service's `environment:` block into a dict.
+
+    Compose accepts two equivalent YAML shapes for `environment:` -- the
+    list form (`[KEY=value, ...]`, what docker-compose.yml actually uses)
+    and the mapping form (`{KEY: value, ...}`). Handling only the list form
+    would silently drop every value (iterating a mapping yields its keys)
+    if a file ever switched shapes, blinding every assertion below that
+    reads this dict without raising an error.
 
     Raw ${VAR:-default}/${VAR:?msg} substitution syntax is preserved
     as-is (not interpolated) -- these assertions check the *shape* of the
     directive (has a default vs. requires a value), not a resolved value.
     """
-    env = {}
-    for entry in service.get("environment", []):
-        key, _, value = entry.partition("=")
-        env[key] = value
+    raw = service.get("environment", [])
+    env: dict[str, str] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            env[key] = "" if value is None else str(value)
+    else:
+        for entry in raw:
+            key, _, value = entry.partition("=")
+            env[key] = value
     return env
+
+
+def test_env_dict_handles_both_list_and_mapping_forms():
+    """Prove `_env_dict()` -- what every fail-closed/hardening assertion
+    below relies on -- handles both YAML shapes Compose accepts for
+    `environment:`, so a compose file switching shapes wouldn't silently
+    blind this whole drift guard (a `:-` default missed rather than
+    caught).
+    """
+    list_form = {"environment": ["FOO=${FOO:-bar}", "BAZ=qux"]}
+    mapping_form = {"environment": {"FOO": "${FOO:-bar}", "BAZ": "qux"}}
+    expected = {"FOO": "${FOO:-bar}", "BAZ": "qux"}
+    assert _env_dict(list_form) == expected
+    assert _env_dict(mapping_form) == expected
 
 
 def test_operator_compose_has_single_magpie_service():

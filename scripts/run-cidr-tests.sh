@@ -17,6 +17,13 @@
 
 set -euo pipefail
 
+# Force the published port rather than trusting docker-compose.yml's own
+# default: the health check and every docker-compose invocation below
+# assume port 8080 (see health_url below). If MAGPIE_HTTP_PORT happens to
+# be set to something else in the ambient shell environment, Compose would
+# publish a different host port and this script would probe the wrong one.
+export MAGPIE_HTTP_PORT=8080
+
 # Cleanup function to ensure containers are removed on exit
 cleanup() {
     echo "Cleaning up..."
@@ -77,9 +84,16 @@ echo "Initializing magpie and getting admin token..."
 # own (file-sink) default -- docker-compose.yml itself is fail-closed and
 # has no default -- this is the script reading its own token, not a
 # production delivery path.
+# `|| INIT_EXIT_CODE=$?` (not a bare trailing `$?` on the next line) is
+# required under `set -e`: a failing command inside `$(...)` propagates its
+# exit status to the assignment itself, which -e treats as a failing
+# command and aborts the script immediately -- the INIT_EXIT_CODE=$? below
+# would never run, silently turning the "if [ $INIT_EXIT_CODE -ne 0 ]"
+# handling that follows into dead code. `||` catches the failure inline
+# and keeps the script running so that handling actually executes.
+INIT_EXIT_CODE=0
 INIT_OUTPUT=$(docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml \
-  exec -T -e MAGPIE_ADMIN_TOKEN_SINK=stdout magpie magpie-ctl init --reset-admin-token 2>&1)
-INIT_EXIT_CODE=$?
+  exec -T -e MAGPIE_ADMIN_TOKEN_SINK=stdout magpie magpie-ctl init --reset-admin-token 2>&1) || INIT_EXIT_CODE=$?
 
 if [ $INIT_EXIT_CODE -ne 0 ]; then
     echo "ERROR: magpie-ctl init failed with exit code $INIT_EXIT_CODE"

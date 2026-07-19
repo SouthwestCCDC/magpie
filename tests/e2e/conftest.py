@@ -90,6 +90,13 @@ def docker_services(
     # The temp directory will contain both artifacts/ subdirectory and magpie.db file
     env["MAGPIE_DATA_DIR"] = str(temp_data_dir)
     env["MAGPIE_ENABLE_TEST_ENDPOINTS"] = "true"  # Enable memory tracking endpoints for E2E tests
+    # Force the published port rather than trusting docker-compose.yml's own
+    # default: base_url below is hardcoded to port 8080, so if
+    # MAGPIE_HTTP_PORT happens to be set to something else in the ambient
+    # shell environment (e.g. a developer's own .env or exported var),
+    # Compose would publish a different host port and every request in this
+    # module would silently hit the wrong (or no) service.
+    env["MAGPIE_HTTP_PORT"] = "8080"
 
     # docker-compose.override.yml is needed explicitly here (not just for
     # its dev conveniences) -- passing any -f at all disables Compose's
