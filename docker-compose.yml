@@ -26,7 +26,9 @@
 # - MAGPIE_DATA_DIR: host path for the data directory (default: ./data)
 # - MAGPIE_IMAGE: image ref to run (default: ghcr.io/southwestccdc/magpie:latest)
 # - MAGPIE_HTTP_PORT: host port published for the container's :8080 (default: 8080)
-# - MAGPIE_ADMIN_TOKEN_SINK: REQUIRED, no default (fail-closed) -- see docs/installation.md
+# - MAGPIE_ADMIN_TOKEN_SINK: REQUIRED, no default (fail-closed) -- see the
+#   `environment:` block below for the sink options and why there's no
+#   Compose-level default
 
 services:
   magpie:
@@ -43,7 +45,9 @@ services:
       # traces that could leak sensitive info.
       - MAGPIE_DEBUG=false
       # Admin bootstrap token delivery -- REQUIRED, no default (fail-closed
-      # by design; see docs/installation.md "Admin Token Delivery"). One of:
+      # by design; see the "Deliberately NOT ${MAGPIE_ADMIN_TOKEN_SINK:?err}"
+      # note below for why there's no Compose-level default or guard). One
+      # of:
       #   file    - write a 0600 file at MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH
       #   exec    - pipe the token via stdin to MAGPIE_ADMIN_TOKEN_SINK_EXEC_COMMAND
       #             (e.g. a `vault kv put ...` invocation)
