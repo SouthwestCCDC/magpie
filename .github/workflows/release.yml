@@ -46,6 +46,16 @@ jobs:
           echo "Version validated: $TAG_VERSION"
 
   build-and-push:
+    # Publishes the two-container image (./Dockerfile, FastAPI service
+    # only, paired with a separate Caddy container -- see
+    # docker-compose.prod.yml) as the primary `magpie` image. This stays
+    # the installer-compatible image (scripts/magpie-deploy.sh's default
+    # `FROM_SOURCE=false` path pulls this tag and expects a bare FastAPI
+    # backend on :8000, not the bundled image's Caddy front door) until a
+    # later PR flips the primary tag over to the bundled image and
+    # retires this build -- see build-and-push-bundled below for that
+    # image, published only under a transitional `-bundled` tag in the
+    # meantime.
     name: Build and push container
     runs-on: ubuntu-latest
     needs: validate
@@ -94,10 +104,69 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  build-and-push-bundled:
+    # Publishes the bundled single-container image (Dockerfile.bundled,
+    # Caddy + uvicorn under one supervisor -- see #586/#589/#591) under a
+    # transitional `<version>-bundled` tag only -- never the primary
+    # `<version>`/`latest`/major/minor tags, and never `latest-bundled`.
+    # It's not yet the installer-compatible topology (see the comment on
+    # build-and-push above), so it must not collide with the primary tag
+    # until a later PR migrates the installer/compose topology and flips
+    # the primary tag over.
+    name: Build and push bundled container
+    runs-on: ubuntu-latest
+    needs: validate
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Transitional alias -- exact version only, RC and final both
+            # get `<version>-bundled`, no `latest-bundled`. Built from the
+            # already-validated version output (not a `type=semver`
+            # pattern suffix): metadata-action ignores `pattern` for
+            # prerelease refs and always emits the bare raw tag instead,
+            # so a `{{version}}-bundled` pattern silently loses the
+            # `-bundled` suffix on RCs. This form is correct for both RC
+            # and final.
+            type=raw,value=${{ needs.validate.outputs.version }}-bundled
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.bundled
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [validate, build-and-push]
+    needs: [validate, build-and-push, build-and-push-bundled]
     permissions:
       contents: write
     steps:
