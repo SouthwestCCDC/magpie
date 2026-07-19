@@ -125,12 +125,20 @@ log() {
     echo "[magpie] $*"
 }
 
-# `echo -e` (not plain `echo`) so a `\n` embedded in a die()/log_error()
-# message renders as an actual line break instead of a literal backslash-n
-# -- several call sites below build multi-line messages this way. See
-# issue #161.
+# Replaces only a literal `\n` (backslash-n) with a real line break -- a
+# few call sites below build multi-line die()/log_error() messages this
+# way. See issue #161. Deliberately NOT `echo -e`/`printf '%b'`: both
+# interpret the FULL escape-sequence set (\t, \a, \e, octal, etc.) in the
+# entire message, including any interpolated, potentially operator- or
+# attacker-influenced content (e.g. a hostile --install-dir value, or
+# output captured from a subprocess) -- \e in particular enables ANSI
+# terminal-escape injection. Bash's own `${var//pattern/replacement}`
+# performs a literal string substitution, not escape interpretation, so
+# this can never decode anything other than the exact two-byte sequence
+# this script's own hardcoded message literals use.
 log_error() {
-    echo -e "[magpie] ERROR: $*" >&2
+    local msg="$*"
+    printf '[magpie] ERROR: %s\n' "${msg//\\n/$'\n'}" >&2
 }
 
 log_warn() {

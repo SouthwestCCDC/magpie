@@ -605,6 +605,42 @@ EOF
     log "  ✓ env_key_has_value distinguishes a real value from absent/empty/whitespace-only"
 }
 
+# Test 9 (Copilot finding on PR #597): log_error() must render a literal
+# `\n` in the SCRIPT'S OWN hardcoded die()/log_error() message text as a
+# real line break (several call sites rely on this for multi-line
+# messages), but must NOT interpret any OTHER escape sequence -- including
+# in interpolated content the script didn't write itself (an operator CLI
+# value, or output captured from a subprocess). `echo -e`/`printf '%b'`
+# interpret the full escape set (\t, \a, \e, octal, ...) across the WHOLE
+# message; \e in particular enables ANSI terminal-escape injection into
+# this script's own error output.
+test_log_error_only_interprets_literal_backslash_n() {
+    log "Test 9: log_error() renders \\n but does not interpret other escapes from interpolated content"
+
+    local out
+    out=$(log_error "line one\nline two" 2>&1)
+    if [[ "$out" != $'[magpie] ERROR: line one\nline two' ]]; then
+        fail "log_error did not render a literal \\n as a real line break: $(printf '%q' "$out")"
+    fi
+    log "  ✓ a literal \\n in the message renders as a real line break"
+
+    # \e (ESC, 0x1B) is the terminal-escape-injection payload; \a (BEL) is
+    # a milder but still-unwanted example. Neither must be decoded.
+    local hostile
+    hostile=$(printf 'path\\e[31mFAKE\\e[0m\\abell')
+    out=$(log_error "Invalid: $hostile" 2>&1)
+    if [[ "$out" == *$'\x1b'* ]]; then
+        fail "log_error decoded \\e into a real ESC byte from interpolated content -- ANSI injection: $(printf '%q' "$out")"
+    fi
+    if [[ "$out" == *$'\a'* ]]; then
+        fail "log_error decoded \\a into a real BEL byte from interpolated content: $(printf '%q' "$out")"
+    fi
+    if [[ "$out" != *'\e[31mFAKE\e[0m\abell'* ]]; then
+        fail "log_error did not preserve the hostile value's escape sequences as inert literal text: $(printf '%q' "$out")"
+    fi
+    log "  ✓ \\e/\\a in interpolated content stay inert literal text (no escape decoding)"
+}
+
 # Run all tests
 log "Running tests for the v0.2.0 installer rewrite (PR-3)"
 log ""
@@ -618,6 +654,7 @@ test_cli_override_survives_load_existing_config
 test_tier2_gate_blocks_and_bypasses
 test_579_gate_install_warns_update_dies
 test_upsert_and_strip_env_key_primitives
+test_log_error_only_interprets_literal_backslash_n
 
 log ""
 log "All tests passed!"
