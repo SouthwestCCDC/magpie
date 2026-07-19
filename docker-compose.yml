@@ -35,8 +35,16 @@
 services:
   magpie:
     image: ${MAGPIE_IMAGE:-ghcr.io/southwestccdc/magpie:latest}
+    # Long-form (not the short "host_ip:host_port:container_port" string)
+    # so an IPv6 MAGPIE_BIND_IP works: the short form's colon-delimited
+    # string is ambiguous for an unbracketed IPv6 literal (it has colons of
+    # its own), and interpolating one in unbracketed here would silently
+    # produce something Compose can't parse as host:port:port. The
+    # structured host_ip field has no such ambiguity.
     ports:
-      - "${MAGPIE_BIND_IP:-0.0.0.0}:${MAGPIE_HTTP_PORT:-8080}:8080"
+      - target: 8080
+        published: "${MAGPIE_HTTP_PORT:-8080}"
+        host_ip: "${MAGPIE_BIND_IP:-0.0.0.0}"
     volumes:
       - ${MAGPIE_DATA_DIR:-./data}:/data
     environment:

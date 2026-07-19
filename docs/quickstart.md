@@ -17,7 +17,10 @@ sudo ./scripts/magpie-deploy.sh install --noninteractive
 Magpie serves plain HTTP only -- it does not terminate TLS itself. For a
 public deployment, put a reverse proxy (nginx, Caddy, a cloud load
 balancer, etc.) in front of it and forward to `http://127.0.0.1:8080`
-(or whatever port `MAGPIE_HTTP_PORT`/`--http-port` was set to).
+(or whatever port `MAGPIE_HTTP_PORT`/`--http-port` was set to). If
+`MAGPIE_BIND_IP`/`--bind-ip` was set to bind a specific host address
+instead of the default (all interfaces), forward to that address instead
+-- 127.0.0.1 won't be listening.
 
 See [Installation Guide](installation.md) for advanced configuration.
 

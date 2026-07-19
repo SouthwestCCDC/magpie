@@ -54,8 +54,8 @@ deployment. See [.env.example](../.env.example) for the full list of
 Choose one:
 
 - **`file`** -- writes a root-only (0600) file at
-  `MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH` (default: a sibling of
-  `MAGPIE_DATABASE_PATH`, typically `/data/admin-token`):
+  `MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH` (default: `/data/admin-token`, set by
+  `docker-compose.yml`):
   ```bash
   export MAGPIE_ADMIN_TOKEN_SINK=file
   docker compose -f docker-compose.yml up -d
