@@ -79,11 +79,30 @@ def _cleanup(name: str) -> None:
 
 
 def _wait_for_log(name: str, substring: str, timeout: int = 30) -> None:
-    """Poll `docker logs` until `substring` appears, or fail after `timeout`s."""
+    """Poll `docker logs` until `substring` appears, or fail after `timeout`s.
+
+    Fails fast (rather than spinning for the full timeout) if the container
+    exits before the substring shows up, surfacing its exit code and logs
+    so the failure is actionable.
+    """
     for _ in range(timeout):
-        result = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
-        if substring in result.stdout + result.stderr:
+        result = subprocess.run(
+            ["docker", "logs", name], check=True, capture_output=True, text=True
+        )
+        log_text = result.stdout + result.stderr
+        if substring in log_text:
             return
+        running = subprocess.run(
+            ["docker", "inspect", name, "--format", "{{.State.Running}}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if running == "false":
+            pytest.fail(
+                f"{name} exited (code={_exit_code(name)}) before '{substring}' appeared "
+                f"in its logs:\n{log_text}"
+            )
         time.sleep(1)
     pytest.fail(f"'{substring}' did not appear in {name}'s logs within {timeout}s")
 
@@ -355,6 +374,7 @@ class TestBundledImageNonRootCaddy:
                 for _ in range(30):
                     health = subprocess.run(
                         ["docker", "inspect", name, "--format", "{{.State.Health.Status}}"],
+                        check=True,
                         capture_output=True,
                         text=True,
                     ).stdout.strip()
