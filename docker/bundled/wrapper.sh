@@ -117,29 +117,41 @@ log "uvicorn ready after ${attempts} attempts (${SECONDS}s elapsed)"
 # under /data. entrypoint.sh writes this file before it execs uvicorn,
 # and uvicorn is already answering /health above, so it is guaranteed to
 # exist here.
-if [ ! -f /run/magpie-user ]; then
-	log "error: /run/magpie-user not found (entrypoint.sh should have written it before uvicorn became ready)"
+# Bails out before Caddy ever starts: drains uvicorn (already up at this
+# point) and exits 1, same fail-fast contract as the rest of this script.
+# wrapper.sh runs under `set -u`, not `set -e`, so none of the setup below
+# would stop the script on its own -- each step must check its own result.
+fail_before_caddy() {
+	log "error: $1"
 	kill -TERM "$UVICORN_PID" 2>/dev/null
 	wait "$UVICORN_PID" 2>/dev/null
 	exit 1
+}
+
+if [ ! -f /run/magpie-user ]; then
+	fail_before_caddy "/run/magpie-user not found (entrypoint.sh should have written it before uvicorn became ready)"
 fi
 CADDY_USER_CONTENT=$(cat /run/magpie-user)
 CADDY_UID=${CADDY_USER_CONTENT%%:*}
 CADDY_GID=${CADDY_USER_CONTENT##*:}
 if ! [[ "$CADDY_UID" =~ ^[0-9]+$ ]] || ! [[ "$CADDY_GID" =~ ^[0-9]+$ ]]; then
-	log "error: invalid uid:gid in /run/magpie-user: '$CADDY_USER_CONTENT'"
-	kill -TERM "$UVICORN_PID" 2>/dev/null
-	wait "$UVICORN_PID" 2>/dev/null
-	exit 1
+	fail_before_caddy "invalid uid:gid in /run/magpie-user: '$CADDY_USER_CONTENT'"
 fi
 
 # Caddy writes an autosave config (and its own data dir) on every config
 # load even with `admin off`. Give it a home outside the /data artifact
 # volume, owned by the same uid:gid it's about to run as -- chowned here
 # rather than at build time because CADDY_UID/GID are only known at
-# runtime.
-mkdir -p /var/lib/caddy/data /var/lib/caddy/config
-chown -R "$CADDY_UID:$CADDY_GID" /var/lib/caddy
+# runtime. A silent failure here would let Caddy start anyway and only
+# fail later trying to write its autosave file (worse under reduced
+# capabilities, where the chown itself is more likely to fail) -- check
+# both explicitly instead.
+if ! mkdir -p /var/lib/caddy/data /var/lib/caddy/config; then
+	fail_before_caddy "failed to create /var/lib/caddy/{data,config}"
+fi
+if ! chown -R "$CADDY_UID:$CADDY_GID" /var/lib/caddy; then
+	fail_before_caddy "failed to chown /var/lib/caddy to $CADDY_UID:$CADDY_GID"
+fi
 export XDG_DATA_HOME=/var/lib/caddy/data
 export XDG_CONFIG_HOME=/var/lib/caddy/config
 

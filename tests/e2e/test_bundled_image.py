@@ -223,6 +223,25 @@ class TestBundledImageShutdownClassification:
                 _cleanup(name)
 
 
+def _published_port(name: str, container_port: str = "8080/tcp") -> str:
+    """Return the host port Docker published for `container_port`.
+
+    Uses `docker inspect` (a single scalar field) rather than `docker port`
+    (whose output can span multiple lines -- e.g. separate IPv4/IPv6
+    bindings -- making naive text parsing flaky on IPv6-enabled hosts).
+    """
+    fmt = '{{(index (index .NetworkSettings.Ports "%s") 0).HostPort}}' % container_port
+    result = subprocess.run(
+        ["docker", "inspect", name, "--format", fmt],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    port = result.stdout.strip()
+    assert port, f"{name} did not publish {container_port}"
+    return port
+
+
 def _docker_top_user(name: str, comm: str) -> str | None:
     """Return the USER field docker top reports for a process matching `comm` exactly."""
     result = subprocess.run(
@@ -271,16 +290,13 @@ class TestBundledImageNonRootCaddy:
                     f"uvicorn={uvicorn_user!r}"
                 )
 
-                # Port mapping proves Caddy is actually listening on :8080
-                # inside the container (host port 0 -> Docker picks a free
-                # ephemeral port).
-                port_result = subprocess.run(
-                    ["docker", "port", name, "8080/tcp"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                assert port_result.stdout.strip(), "container did not publish 8080/tcp"
+                # A real request through the published port proves Caddy is
+                # actually listening and routing on :8080 -- merely
+                # checking that Docker published the port would only prove
+                # the mapping exists, not that anything is answering on it.
+                port = _published_port(name)
+                health = httpx.get(f"http://127.0.0.1:{port}/health")
+                assert health.status_code == 200
             finally:
                 _cleanup(name)
 
@@ -348,16 +364,7 @@ class TestBundledImageNonRootCaddy:
                 else:
                     pytest.fail(f"container never became healthy under cap-drop ALL: {health}")
 
-                port = (
-                    subprocess.run(
-                        ["docker", "port", name, "8080/tcp"],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                    )
-                    .stdout.strip()
-                    .split(":")[-1]
-                )
+                port = _published_port(name)
                 base_url = f"http://127.0.0.1:{port}"
 
                 unauth = httpx.get(f"{base_url}/api/v1/artifacts")
