@@ -1,44 +1,382 @@
 #!/bin/bash
 # Magpie bundled single-container image -- process supervisor.
 #
-# Runs under tini (PID 1, see Dockerfile.bundled). Starts uvicorn, waits for
-# it to answer /health, then starts caddy. Both processes fail fast: either
-# one exiting on its own brings down the whole container with a non-zero
-# exit code, so an orchestrator restarts the full unit rather than leaving
-# it in a half-healthy state (auth gate up with no backend, or vice versa).
+# THIS script is PID 1 (see Dockerfile.bundled's ENTRYPOINT) -- not tini.
+# On its first invocation ($$ == 1, "the raw entrypoint invocation, not
+# yet wrapped by tini"), it runs a brief ROOT PRELUDE if it's root (the
+# on-disk ownership fixups only root can do -- chown /data, chown
+# /var/lib/caddy), then execs tini as PID 1 in its place -- dropped to
+# the non-root runtime uid via gosu in that same exec, so tini itself
+# ends up running non-root, not root in front of a non-root child. tini
+# then forks a fresh, non-root invocation of this same script as ITS
+# child ($$ != 1 this time), which is what actually runs the DB init,
+# uvicorn, and Caddy supervisor loop below. This matters because tini
+# forwards `docker stop`'s SIGTERM to its child itself, via a real
+# kill(): if tini were root and its child non-root, that's a
+# different-uid signal needing CAP_KILL; same-uid (both non-root now)
+# needs none (issue #591). In the normal case (resolved uid is
+# non-root), NO process in this container runs as root in steady state,
+# tini included. uvicorn and caddy are launched directly by the
+# tini-forked invocation (no per-child gosu) since it's already at the
+# target uid.
 #
-# A `docker stop`/SIGTERM is NOT a failure: it is forwarded to both children
-# so they drain in-flight requests, and the container exits 0.
+# Three entry paths all converge on "tini ends up PID 1, at the correct
+# uid, having forked this script as its child":
+#   1. Normal: started as root (Docker default), a MAGPIE_UID resolves
+#      non-root -> root prelude runs, then `exec gosu $UID:$GID tini --
+#      "$0" "$@"`.
+#   2. RUN_UID=0 fallback: started as root, resolved uid is ALSO 0 (e.g.
+#      a fresh, still-root-owned volume with no MAGPIE_UID set --
+#      entrypoint.sh's own documented "no privilege drop needed" case)
+#      -> root prelude runs, then `exec tini -- "$0" "$@"` (no gosu:
+#      dropping root to root is a no-op, and root forwarding a signal to
+#      its own root child needs no capability either).
+#   3. Started non-root directly (`docker run --user <uid>`): no root
+#      prelude possible (nothing to chown with) -> straight to `exec
+#      tini -- "$0" "$@"` at the already-current uid.
+#
+# The root prelude intentionally duplicates a small amount of
+# entrypoint.sh's setup logic (uid resolution, /data ownership fixups)
+# rather than calling entrypoint.sh: entrypoint.sh is also the ENTRYPOINT
+# for the separate two-container `magpie` image, and its contract for
+# that image must not change here (issue #591's PR description has the
+# full rationale).
+#
+# Once running as tini's child, starts uvicorn, waits for it to answer
+# /health, then starts caddy. Both processes fail fast: either one
+# exiting on its own brings down the whole container with a non-zero
+# exit code, so an orchestrator restarts the full unit rather than
+# leaving it in a half-healthy state (auth gate up with no backend, or
+# vice versa).
+#
+# A `docker stop`/SIGTERM is NOT a failure: it is forwarded to both
+# children so they drain in-flight requests, and the container exits 0 --
+# including a stop that arrives during the (very brief) PID-1 window
+# itself, before tini has even been inserted.
 set -u
-
-UVICORN_PID=""
-CADDY_PID=""
-SHUTTING_DOWN=0
 
 log() {
 	echo "[wrapper] $*" >&2
 }
 
+# Resolves STORAGE_DIR, LOCK_DIR, DB_LOCK_FILE, and DB_PATH from the
+# MAGPIE_STORAGE_PATH / MAGPIE_DATABASE_PATH env vars -- the same
+# resolution entrypoint.sh uses for the two-container image. Creates
+# STORAGE_DIR and DB_DIR if they don't exist yet (this part doesn't
+# require root: creating a directory only needs write access to its
+# parent, and after the root prelude's chown, the post-drop uid has
+# that). Sets STORAGE_DIR_CREATED=1 iff this call created STORAGE_DIR,
+# for magpie_fixup_ownership below to decide whether to chown it.
+# Idempotent and safe to call from both the root prelude (to learn what
+# needs chowning) and the post-drop phase (to re-resolve the same paths,
+# which is a no-op if the root prelude already ran).
+STORAGE_DIR_CREATED=0
+magpie_resolve_storage_paths() {
+	STORAGE_DIR="${MAGPIE_STORAGE_PATH:-/data/artifacts}"
+	if [ ! -d "$STORAGE_DIR" ]; then
+		if ! mkdir -p "$STORAGE_DIR"; then
+			log "error: failed to create storage directory $STORAGE_DIR (uid $(id -u)) -- if running as root, this needs CAP_DAC_OVERRIDE to create a new directory inside a parent it doesn't own (e.g. an unprovisioned bind mount); if running non-root directly, the parent directory's mode/ownership must already allow this uid to create files in it"
+			exit 1
+		fi
+		STORAGE_DIR_CREATED=1
+	fi
+
+	if [ -n "${MAGPIE_STORAGE_PATH:-}" ] && [ -d "$MAGPIE_STORAGE_PATH" ]; then
+		LOCK_DIR="$MAGPIE_STORAGE_PATH"
+	elif [ -d /data/artifacts ]; then
+		LOCK_DIR=/data/artifacts
+	elif [ -d /data ]; then
+		LOCK_DIR=/data
+	else
+		log "error: no valid storage directory found for lock file (tried MAGPIE_STORAGE_PATH, /data/artifacts, /data)"
+		exit 1
+	fi
+	DB_LOCK_FILE="${LOCK_DIR}/.magpie-init.lock"
+
+	DB_PATH="${MAGPIE_DATABASE_PATH:-/data/magpie.db}"
+	case "$DB_PATH" in
+		/*) ;;
+		*)
+			log "error: MAGPIE_DATABASE_PATH must be an absolute path (got: $DB_PATH)"
+			exit 1
+			;;
+	esac
+	export MAGPIE_DATABASE_PATH="$DB_PATH"
+
+	DB_DIR="$(dirname "$DB_PATH")"
+	if [ ! -d "$DB_DIR" ]; then
+		if ! mkdir -p "$DB_DIR"; then
+			log "error: failed to create database directory $DB_DIR (uid $(id -u)) -- if running as root, this needs CAP_DAC_OVERRIDE to create a new directory inside a parent it doesn't own (e.g. an unprovisioned bind mount); if running non-root directly, the parent directory's mode/ownership must already allow this uid to create files in it"
+			exit 1
+		fi
+	fi
+}
+
+# Root-only: chowns whatever magpie_resolve_storage_paths determined
+# needs it, plus /var/lib/caddy (#589's Caddy home, baked into the image
+# root-owned). STORAGE_DIR is chowned only if this boot just created it
+# (a pre-existing bind mount's ownership is left alone, matching
+# entrypoint.sh); DB_DIR is chowned whenever its current ownership
+# doesn't already match RUN_UID:RUN_GID, regardless of whether it was
+# just created (also matching entrypoint.sh).
+magpie_fixup_ownership() {
+	if [ "$STORAGE_DIR_CREATED" -eq 1 ]; then
+		if ! chown "$RUN_UID:$RUN_GID" "$STORAGE_DIR"; then
+			log "error: failed to chown storage directory $STORAGE_DIR to $RUN_UID:$RUN_GID (the container may lack permission to change ownership on this mount, e.g. some bind mounts or non-root filesystems)"
+			exit 1
+		fi
+	fi
+
+	if [ "$RUN_UID" != "0" ]; then
+		DB_DIR_UID=$(stat -c %u "$DB_DIR" 2>/dev/null || echo "")
+		DB_DIR_GID=$(stat -c %g "$DB_DIR" 2>/dev/null || echo "")
+		if [ "$DB_DIR_UID" != "$RUN_UID" ] || [ "$DB_DIR_GID" != "$RUN_GID" ]; then
+			if ! chown "$RUN_UID:$RUN_GID" "$DB_DIR"; then
+				log "error: failed to chown database directory $DB_DIR to $RUN_UID:$RUN_GID (the container may lack permission to change ownership on this mount, e.g. some bind mounts or non-root filesystems)"
+				exit 1
+			fi
+		fi
+	fi
+
+	# Caddy writes an autosave config (and its own data dir) on every
+	# config load even with `admin off` (#589). -P (never traverse
+	# symlinks during the recursion) is GNU chown's default; passed
+	# explicitly so that safety property doesn't silently depend on an
+	# implicit default (see #590's discussion for why this matters and
+	# why it's already safe).
+	if ! mkdir -p /var/lib/caddy/data /var/lib/caddy/config; then
+		log "error: failed to create /var/lib/caddy/{data,config}"
+		exit 1
+	fi
+	if ! chown -RP "$RUN_UID:$RUN_GID" /var/lib/caddy; then
+		log "error: failed to chown /var/lib/caddy to $RUN_UID:$RUN_GID"
+		exit 1
+	fi
+}
+
+if [ "$$" = 1 ]; then
+	# ------------------------------------------------------------------
+	# I am the raw entrypoint invocation (Dockerfile.bundled's
+	# ENTRYPOINT execs this script directly) -- tini has not been
+	# inserted yet. A stop signal arriving during this window (no flock,
+	# no network I/O -- at most a handful of mkdir/stat/chown calls) is
+	# not a failure: nothing has started yet, so there's nothing to
+	# drain, and it's safe to just exit 0 immediately. Bash defers trap
+	# delivery until the current foreground command returns, which
+	# bounds this window to whichever single mkdir/chown/stat call
+	# happens to be in flight.
+	# ------------------------------------------------------------------
+	trap 'log "termination requested during startup, exiting cleanly"; exit 0' TERM INT
+
+	if [ "$(id -u)" != "0" ]; then
+		# Started non-root directly (e.g. `docker run --user <uid>`):
+		# no root prelude is possible (nothing to chown with), so
+		# there's nothing to do here except insert tini at the
+		# already-current uid. tini forks (not execs) a fresh
+		# invocation of this same script as its child, which re-enters
+		# below with $$ != 1.
+		log "started non-root directly (uid $(id -u)) -- inserting tini, no root prelude possible"
+		# shellcheck disable=SC2093  # intentional: the log+exit below is
+		# an explicit failure path for when exec itself fails, not dead
+		# code left behind by mistake.
+		exec /usr/bin/tini -- "$0" "$@"
+		log "error: exec tini failed"
+		exit 1
+	fi
+
+	# --- Root prelude: the on-disk ownership fixups only root can do. ---
+
+	# Determine UID/GID to run as: MAGPIE_UID/MAGPIE_GID env vars if set,
+	# else detected from /data's existing ownership, else 1000:1000.
+	# Mirrors entrypoint.sh's resolution (used by the two-container
+	# image) -- duplicated, not shared, so that image's contract can't
+	# be affected by this refactor.
+	if [ -n "${MAGPIE_UID:-}" ]; then
+		RUN_UID="$MAGPIE_UID"
+	else
+		RUN_UID=$(stat -c %u /data 2>/dev/null || echo 1000)
+	fi
+	if [ -n "${MAGPIE_GID:-}" ]; then
+		RUN_GID="$MAGPIE_GID"
+	else
+		RUN_GID=$(stat -c %g /data 2>/dev/null || echo 1000)
+	fi
+	if ! [[ "$RUN_UID" =~ ^[0-9]+$ ]] || ! [[ "$RUN_GID" =~ ^[0-9]+$ ]]; then
+		log "error: invalid RUN_UID=$RUN_UID or RUN_GID=$RUN_GID"
+		exit 1
+	fi
+
+	# Publish for magpie-ctl-wrapper.sh (docker exec ... magpie-ctl ...):
+	# nothing else in this script needs it post-drop anymore, since
+	# uvicorn and caddy are both launched directly as this same uid
+	# rather than individually gosu'd. Checked explicitly (not just
+	# best-effort) because a silent failure here would leave
+	# magpie-ctl-wrapper.sh unable to find the runtime uid later --
+	# falling back to running docker-exec'd magpie-ctl invocations as
+	# raw root instead of erroring clearly.
+	if ! mkdir -p /run; then
+		log "error: failed to create /run"
+		exit 1
+	fi
+	if ! echo "$RUN_UID:$RUN_GID" >/run/magpie-user; then
+		log "error: failed to write /run/magpie-user"
+		exit 1
+	fi
+	if ! chmod 644 /run/magpie-user; then
+		log "error: failed to chmod /run/magpie-user"
+		exit 1
+	fi
+
+	magpie_resolve_storage_paths
+	magpie_fixup_ownership
+
+	if [ "$RUN_UID" = "0" ]; then
+		# RUN_UID=0 (e.g. auto-detected from a fresh, still-root-owned
+		# volume with no MAGPIE_UID/MAGPIE_GID set) means there's
+		# nothing to drop to -- entrypoint.sh supports this same
+		# configuration ("no privilege drop needed"). Still insert tini
+		# as PID 1 (root here, which is fine: root forwarding a signal
+		# to its own root child needs no capability either).
+		log "RUN_UID is 0 -- inserting tini, continuing as root (no privilege drop configured)"
+		# shellcheck disable=SC2093
+		exec /usr/bin/tini -- "$0" "$@"
+		log "error: exec tini failed"
+		exit 1
+	fi
+
+	if ! command -v gosu >/dev/null 2>&1; then
+		log "error: gosu is required to drop privileges but was not found in PATH"
+		exit 1
+	fi
+	log "root setup complete, dropping to $RUN_UID:$RUN_GID and inserting tini"
+	# shellcheck disable=SC2093  # intentional: the log+exit below is an
+	# explicit failure path for when exec itself fails, not dead code
+	# left behind by mistake.
+	exec gosu "$RUN_UID:$RUN_GID" /usr/bin/tini -- "$0" "$@"
+	# Only reached if exec itself failed (it replaces the process on
+	# success, so nothing after it runs then) -- e.g. gosu couldn't
+	# perform the setuid/setgid syscalls, or tini's own exec failed
+	# after gosu already dropped. Without this, falling through would
+	# run the entire rest of this script -- the post-tini supervisor
+	# body -- as root and without tini as PID 1, silently defeating the
+	# whole point of the drop.
+	log "error: exec gosu+tini failed to drop privileges to $RUN_UID:$RUN_GID"
+	exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Everything below runs as tini's forked child ($$ != 1 -- tini forks a
+# fresh copy of this script rather than exec'ing into it, so this is a
+# genuinely new process, always at whatever uid tini itself ended up at
+# above), not the raw PID-1 entrypoint invocation. uvicorn and caddy are
+# launched directly, not through a per-child gosu: no capability related
+# to privilege dropping (SETUID, SETGID) is needed past this point, and
+# neither is CAP_KILL -- tini forwarding a signal to THIS process is
+# always same-uid now, whatever that uid is.
+# ---------------------------------------------------------------------------
+
+DB_INIT_PID=""
+UVICORN_PID=""
+CADDY_PID=""
+SHUTTING_DOWN=0
+
 # On SIGTERM/SIGINT (docker stop, or tini forwarding a signal sent to the
-# container), forward SIGTERM to both children so they drain in-flight
-# requests, and mark this as a requested shutdown so the final exit code is
-# 0 rather than the fail-fast non-zero code.
+# container), forward SIGTERM to whichever of these is currently running
+# so it drains (uvicorn, caddy) or just stops waiting (the DB-init flock,
+# which has nothing to gracefully drain), and mark this as a requested
+# shutdown so the final exit code is 0 rather than the fail-fast non-zero
+# code.
 # shellcheck disable=SC2317  # only reachable via the trap below
 term_handler() {
 	if [ "$SHUTTING_DOWN" -eq 0 ]; then
 		SHUTTING_DOWN=1
-		log "received termination signal, draining both processes"
+		log "received termination signal, draining"
+		[ -n "$DB_INIT_PID" ] && kill -TERM "$DB_INIT_PID" 2>/dev/null
 		[ -n "$UVICORN_PID" ] && kill -TERM "$UVICORN_PID" 2>/dev/null
 		[ -n "$CADDY_PID" ] && kill -TERM "$CADDY_PID" 2>/dev/null
 	fi
 }
 trap term_handler TERM INT
 
-# Start uvicorn via the existing entrypoint (DB init lock + privilege drop
-# via gosu); entrypoint.sh's final step is `exec`, so $UVICORN_PID ends up
-# being uvicorn itself, not a wrapper shell -- SIGTERM sent to it reaches
-# uvicorn directly.
-/entrypoint.sh /app/.venv/bin/uvicorn magpie.server.app:app \
+# Re-resolve the same paths (cheap, no side effects if the root prelude
+# already ran: STORAGE_DIR/DB_DIR already exist, so the mkdir branches
+# are no-ops). If the root prelude was skipped entirely -- the container
+# was started non-root directly -- this is the first and only
+# resolution, and it's this uid's own responsibility to already own
+# whatever it points at (nothing here can chown).
+magpie_resolve_storage_paths
+
+# Auto-initialize the database if it doesn't exist yet, guarded by the
+# same flock entrypoint.sh used to use (concurrent container starts
+# racing for /data). No gosu here: this whole process is already running
+# as the target uid.
+#
+# The lock file itself is opened for the `200>"$DB_LOCK_FILE"`
+# redirection below inside the backgrounded subshell, not here -- if
+# that open fails (e.g. LOCK_DIR isn't writable by this uid), bash still
+# forks the subshell and $! is still valid (redirections are set up in
+# the child, after fork), but the failure surfaces only as bash's own
+# raw redirection error text, not one of this script's own `log`
+# messages. Preflight it explicitly instead, for a diagnostic
+# consistent with every other failure path here.
+if ! : >>"$DB_LOCK_FILE" 2>/dev/null; then
+	log "error: cannot open $DB_LOCK_FILE for writing (uid $(id -u) may lack permission on $LOCK_DIR)"
+	exit 1
+fi
+
+# Backgrounded (not run as a plain synchronous foreground command),
+# specifically so that a signal arriving while blocked on `flock -x -w
+# 30` is handled promptly: per bash's documented signal semantics, a
+# trap does NOT fire until a synchronous foreground command completes,
+# but explicitly `wait`ing on an already-backgrounded job IS
+# signal-interruptible (the same property `wait -n` below relies on).
+# Without this, a `docker stop` arriving during a lock contended by
+# another container could block for up to the full 30s timeout before
+# term_handler even runs.
+(
+	flock_status=0
+	flock -x -w 30 200 || flock_status=$?
+	if [ "$flock_status" -ne 0 ]; then
+		if [ "$flock_status" -eq 1 ]; then
+			log "error: failed to acquire database init lock on $DB_LOCK_FILE within 30 seconds (another process may be initializing the database)"
+		else
+			log "error: flock failed with exit code $flock_status while trying to lock $DB_LOCK_FILE (is flock available and working?)"
+		fi
+		exit 1
+	fi
+
+	if [ ! -f "$DB_PATH" ]; then
+		log "database not found at $DB_PATH, running magpie-ctl init..."
+		init_status=0
+		/app/.venv/bin/python -m magpie.ctl init || init_status=$?
+		if [ "$init_status" -ne 0 ]; then
+			log "error: magpie-ctl init failed with exit code $init_status"
+			if [ -f "$DB_PATH" ]; then
+				log "removing incomplete database file at $DB_PATH"
+				rm -f "$DB_PATH"
+			fi
+			exit 1
+		fi
+	fi
+) 200>"$DB_LOCK_FILE" &
+DB_INIT_PID=$!
+# Same race as uvicorn's/caddy's below: catch up on a signal that arrived
+# before DB_INIT_PID was captured.
+if [ "$SHUTTING_DOWN" -eq 1 ]; then
+	kill -TERM "$DB_INIT_PID" 2>/dev/null
+fi
+wait "$DB_INIT_PID"
+DB_INIT_EXIT=$?
+if [ "$SHUTTING_DOWN" -eq 1 ]; then
+	log "graceful shutdown complete (during startup)"
+	exit 0
+fi
+if [ "$DB_INIT_EXIT" -ne 0 ]; then
+	log "database init failed (exit=$DB_INIT_EXIT), failing container"
+	exit 1
+fi
+
+/app/.venv/bin/uvicorn magpie.server.app:app \
 	--host 127.0.0.1 --port 8000 &
 UVICORN_PID=$!
 # Close the narrow race where term_handler ran between the `&` above and
@@ -63,6 +401,13 @@ log "uvicorn started, pid=$UVICORN_PID"
 # fail-fast exit 1 -- otherwise a legitimate stop during startup gets
 # misreported as a crash.
 #
+# Liveness is checked via /proc/$PID's existence rather than `kill -0`:
+# equivalent as a liveness check (both see a zombie as "still there" until
+# reaped), but doesn't depend on signal-permission semantics -- `kill -0`
+# against a different-uid process needs CAP_KILL, which was a source of
+# false-crash reports before the whole supervisor ran as one uid (#591);
+# /proc's existence needs no capability at all, regardless of uid.
+#
 # --timeout bounds each individual wget connection attempt (DNS/connect/
 # read combined): without it, a stalled connection (TCP connects but the
 # response never arrives) could block wget indefinitely. --tries=1 is
@@ -85,7 +430,7 @@ until wget -q -O /dev/null --timeout=3 --tries=1 http://127.0.0.1:8000/health 2>
 		log "graceful shutdown complete (during startup)"
 		exit 0
 	fi
-	if ! kill -0 "$UVICORN_PID" 2>/dev/null; then
+	if [ ! -d "/proc/$UVICORN_PID" ]; then
 		log "uvicorn exited before becoming ready"
 		wait "$UVICORN_PID"
 		exit 1
@@ -107,62 +452,24 @@ until wget -q -O /dev/null --timeout=3 --tries=1 http://127.0.0.1:8000/health 2>
 done
 log "uvicorn ready after ${attempts} attempts (${SECONDS}s elapsed)"
 
-# Run Caddy as the same non-root user entrypoint.sh dropped uvicorn's
-# privileges to (issue #589) -- not a fixed 1000:1000: entrypoint.sh
-# derives RUN_UID/RUN_GID from MAGPIE_UID/MAGPIE_GID or from /data's
-# ownership, and publishes the result to /run/magpie-user for exactly
-# this purpose (see magpie-ctl-wrapper.sh, which reads the same file for
-# `docker exec` invocations). Using the same uid as uvicorn also
-# satisfies #589's requirement that Caddy can read what uvicorn writes
-# under /data. entrypoint.sh writes this file before it execs uvicorn,
-# and uvicorn is already answering /health above, so it is guaranteed to
-# exist here.
-# Bails out before Caddy ever starts: drains uvicorn (already up at this
-# point) and exits 1, same fail-fast contract as the rest of this script.
-# wrapper.sh runs under `set -u`, not `set -e`, so none of the setup below
-# would stop the script on its own -- each step must check its own result.
-fail_before_caddy() {
-	log "error: $1"
+# /var/lib/caddy is baked into the image root-owned; the root prelude
+# above is what normally chowns it to this uid. If that prelude was
+# skipped (container started non-root directly, e.g. `docker run --user
+# <uid>`), this directory is still root-owned and Caddy can't write its
+# autosave config into it -- checked explicitly here, with an actionable
+# message, rather than letting Caddy itself fail deep inside its own
+# startup with a less clear error.
+if ! mkdir -p /var/lib/caddy/data /var/lib/caddy/config 2>/dev/null ||
+	! [ -w /var/lib/caddy/data ] || ! [ -w /var/lib/caddy/config ]; then
+	log "error: /var/lib/caddy is not writable by uid $(id -u) -- if this container was started non-root directly (skipping the root prelude), either start it as root once so the prelude can provision /var/lib/caddy, or pre-create and chown /var/lib/caddy to this uid before starting"
 	kill -TERM "$UVICORN_PID" 2>/dev/null
 	wait "$UVICORN_PID" 2>/dev/null
 	exit 1
-}
-
-if [ ! -f /run/magpie-user ]; then
-	fail_before_caddy "/run/magpie-user not found (entrypoint.sh should have written it before uvicorn became ready)"
-fi
-CADDY_USER_CONTENT=$(cat /run/magpie-user)
-CADDY_UID=${CADDY_USER_CONTENT%%:*}
-CADDY_GID=${CADDY_USER_CONTENT##*:}
-if ! [[ "$CADDY_UID" =~ ^[0-9]+$ ]] || ! [[ "$CADDY_GID" =~ ^[0-9]+$ ]]; then
-	fail_before_caddy "invalid uid:gid in /run/magpie-user: '$CADDY_USER_CONTENT'"
 fi
 
-# Caddy writes an autosave config (and its own data dir) on every config
-# load even with `admin off`. Give it a home outside the /data artifact
-# volume, owned by the same uid:gid it's about to run as -- chowned here
-# rather than at build time because CADDY_UID/GID are only known at
-# runtime. A silent failure here would let Caddy start anyway and only
-# fail later trying to write its autosave file (worse under reduced
-# capabilities, where the chown itself is more likely to fail) -- check
-# both explicitly instead.
-if ! mkdir -p /var/lib/caddy/data /var/lib/caddy/config; then
-	fail_before_caddy "failed to create /var/lib/caddy/{data,config}"
-fi
-# -P (never traverse symlinks during the recursion) is GNU chown's
-# default, so this is already safe against a prior boot's Caddy (uid
-# CADDY_UID, i.e. not fully trusted) planting a symlink under
-# /var/lib/caddy to trick a subsequent restart's root-run chown into
-# reaching outside this subtree -- verified against this image's actual
-# coreutils. Passed explicitly so that safety property doesn't silently
-# depend on an implicit default.
-if ! chown -RP "$CADDY_UID:$CADDY_GID" /var/lib/caddy; then
-	fail_before_caddy "failed to chown /var/lib/caddy to $CADDY_UID:$CADDY_GID"
-fi
 export XDG_DATA_HOME=/var/lib/caddy/data
 export XDG_CONFIG_HOME=/var/lib/caddy/config
-
-gosu "$CADDY_UID:$CADDY_GID" caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
+caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 CADDY_PID=$!
 # Same race as uvicorn's above: catch up on a signal that arrived before
 # CADDY_PID was captured, so a later `wait "$CADDY_PID"` can't hang on an
@@ -190,11 +497,11 @@ fi
 # One process exited on its own -- crash, or something killed it directly
 # (e.g. `docker exec ... kill <pid>`). Fail fast: bring the other one down
 # too and exit non-zero so an orchestrator restarts the whole container.
-if kill -0 "$UVICORN_PID" 2>/dev/null; then
+if [ -d "/proc/$UVICORN_PID" ]; then
 	log "caddy exited (code=$FIRST_EXIT) - killing uvicorn, failing container"
 	kill -TERM "$UVICORN_PID" 2>/dev/null
 	wait "$UVICORN_PID" 2>/dev/null
-elif kill -0 "$CADDY_PID" 2>/dev/null; then
+elif [ -d "/proc/$CADDY_PID" ]; then
 	log "uvicorn exited (code=$FIRST_EXIT) - killing caddy, failing container"
 	kill -TERM "$CADDY_PID" 2>/dev/null
 	wait "$CADDY_PID" 2>/dev/null

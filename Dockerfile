@@ -49,6 +49,19 @@ COPY pyproject.toml uv.lock README.md ./
 # Install the project itself
 RUN uv sync --frozen --no-dev
 
+# `uv sync` installs magpie-ctl's own console-script entry point at
+# /app/.venv/bin/magpie-ctl (from pyproject.toml's [project.scripts]).
+# Removed: PATH puts /app/.venv/bin ahead of /usr/local/bin (see ENV PATH
+# above), so a bare `magpie-ctl` on PATH would resolve to this raw binary
+# INSTEAD OF /usr/local/bin/magpie-ctl (the privilege-dropping wrapper
+# below) -- silently bypassing it for any `docker exec <container>
+# magpie-ctl ...` invocation (root, no gosu drop) while still appearing
+# to work, since unrestricted root's implicit DAC_OVERRIDE masks the
+# wrong uid. Every documented `docker exec ... magpie-ctl` usage (see
+# docs/, deployment/README.md, scripts/magpie-deploy.sh) depends on the
+# wrapper actually being what bare `magpie-ctl` resolves to.
+RUN rm /app/.venv/bin/magpie-ctl
+
 # Entrypoint handles dropping privileges to the correct user
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
