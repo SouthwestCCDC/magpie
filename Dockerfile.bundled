@@ -9,7 +9,8 @@
 # container fast if either process exits on its own, and drains both
 # cleanly on SIGTERM/`docker stop`.
 #
-# Externally the container exposes one plain-HTTP port (80); TLS
+# Externally the container exposes one plain-HTTP port (8080, non-
+# privileged so Caddy can run non-root -- see issue #589); TLS
 # termination is left to whatever reverse proxy fronts it.
 #
 # This does not replace the two-container docker-compose.prod.yml topology
@@ -66,6 +67,22 @@ RUN set -eux; \
 # Caddy binary, copied from the official Caddy alpine image
 COPY --from=caddy-src /usr/bin/caddy /usr/bin/caddy
 
+# Strip the cap_net_bind_service file capability the upstream Caddy image
+# sets on the binary (so Caddy can bind :80 without running as root).
+# Unneeded here since Caddy binds :8080, non-root, instead (#589) -- and
+# leaving it in place is actively harmful, not just unused: execve()
+# refuses to run a binary whose file capabilities exceed the calling
+# process's capability bounding set (EPERM), so under a container with
+# CAP_NET_BIND_SERVICE dropped, Caddy would fail to start at all rather
+# than simply not using the capability.
+# hadolint ignore=DL3008
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libcap2-bin && \
+    setcap -r /usr/bin/caddy && \
+    apt-get purge -y libcap2-bin && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY src/ ./src/
 COPY pyproject.toml uv.lock README.md ./
 
@@ -85,7 +102,12 @@ COPY docker/bundled/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY docker/bundled/wrapper.sh /wrapper.sh
 RUN chmod +x /usr/local/bin/healthcheck.sh /wrapper.sh
 
-EXPOSE 80
+# Caddy's writable home (autosave config + data dir, see wrapper.sh);
+# created here, chowned at container start once wrapper.sh knows the
+# runtime uid:gid.
+RUN mkdir -p /var/lib/caddy/data /var/lib/caddy/config
+
+EXPOSE 8080
 
 # start-period covers the worst-case cold start: wrapper.sh's startup gate
 # waits up to 60s for uvicorn to answer /health, and entrypoint.sh's

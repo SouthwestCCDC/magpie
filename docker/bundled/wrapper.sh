@@ -107,7 +107,43 @@ until wget -q -O /dev/null --timeout=3 --tries=1 http://127.0.0.1:8000/health 2>
 done
 log "uvicorn ready after ${attempts} attempts (${SECONDS}s elapsed)"
 
-caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
+# Run Caddy as the same non-root user entrypoint.sh dropped uvicorn's
+# privileges to (issue #589) -- not a fixed 1000:1000: entrypoint.sh
+# derives RUN_UID/RUN_GID from MAGPIE_UID/MAGPIE_GID or from /data's
+# ownership, and publishes the result to /run/magpie-user for exactly
+# this purpose (see magpie-ctl-wrapper.sh, which reads the same file for
+# `docker exec` invocations). Using the same uid as uvicorn also
+# satisfies #589's requirement that Caddy can read what uvicorn writes
+# under /data. entrypoint.sh writes this file before it execs uvicorn,
+# and uvicorn is already answering /health above, so it is guaranteed to
+# exist here.
+if [ ! -f /run/magpie-user ]; then
+	log "error: /run/magpie-user not found (entrypoint.sh should have written it before uvicorn became ready)"
+	kill -TERM "$UVICORN_PID" 2>/dev/null
+	wait "$UVICORN_PID" 2>/dev/null
+	exit 1
+fi
+CADDY_USER_CONTENT=$(cat /run/magpie-user)
+CADDY_UID=${CADDY_USER_CONTENT%%:*}
+CADDY_GID=${CADDY_USER_CONTENT##*:}
+if ! [[ "$CADDY_UID" =~ ^[0-9]+$ ]] || ! [[ "$CADDY_GID" =~ ^[0-9]+$ ]]; then
+	log "error: invalid uid:gid in /run/magpie-user: '$CADDY_USER_CONTENT'"
+	kill -TERM "$UVICORN_PID" 2>/dev/null
+	wait "$UVICORN_PID" 2>/dev/null
+	exit 1
+fi
+
+# Caddy writes an autosave config (and its own data dir) on every config
+# load even with `admin off`. Give it a home outside the /data artifact
+# volume, owned by the same uid:gid it's about to run as -- chowned here
+# rather than at build time because CADDY_UID/GID are only known at
+# runtime.
+mkdir -p /var/lib/caddy/data /var/lib/caddy/config
+chown -R "$CADDY_UID:$CADDY_GID" /var/lib/caddy
+export XDG_DATA_HOME=/var/lib/caddy/data
+export XDG_CONFIG_HOME=/var/lib/caddy/config
+
+gosu "$CADDY_UID:$CADDY_GID" caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 CADDY_PID=$!
 # Same race as uvicorn's above: catch up on a signal that arrived before
 # CADDY_PID was captured, so a later `wait "$CADDY_PID"` can't hang on an
