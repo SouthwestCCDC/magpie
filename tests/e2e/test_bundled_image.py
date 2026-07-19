@@ -390,15 +390,22 @@ class TestBundledImageNonRootCaddy:
             _cleanup(name)
             _cleanup(init_name)
             try:
+                # Deliberately no MAGPIE_UID/MAGPIE_GID here: leaving them
+                # unset lets the container auto-detect the runtime uid
+                # from data_dir's own ownership (i.e. whoever is running
+                # this test), so the containers chown everything under
+                # data_dir back to that same uid -- required for
+                # TemporaryDirectory's own cleanup to have permission to
+                # remove it afterwards. A hardcoded uid here (e.g. 1000)
+                # would only coincidentally match the invoking user on
+                # some hosts and silently break teardown (PermissionError
+                # during rmtree) on any host where it doesn't -- this bit
+                # a CI run where the runner's uid isn't 1000.
+                #
                 # First boot: full default capabilities, provisioning the
                 # bind-mounted /data (see docstring -- this step needs
                 # DAC_OVERRIDE, which the restart below deliberately omits).
-                _run_container(
-                    bundled_image,
-                    data_dir,
-                    init_name,
-                    extra_args=["-e", "MAGPIE_UID=1000", "-e", "MAGPIE_GID=1000"],
-                )
+                _run_container(bundled_image, data_dir, init_name)
                 _wait_for_log(init_name, "caddy started")
                 subprocess.run(["docker", "stop", init_name], check=True, capture_output=True)
                 _cleanup(init_name)
@@ -410,10 +417,6 @@ class TestBundledImageNonRootCaddy:
                     extra_args=[
                         "-p",
                         "0:8080",
-                        "-e",
-                        "MAGPIE_UID=1000",
-                        "-e",
-                        "MAGPIE_GID=1000",
                         "--cap-drop",
                         "ALL",
                         "--cap-add",
