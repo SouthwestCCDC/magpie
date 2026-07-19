@@ -132,6 +132,29 @@ class TestConfigShowSourceAttribution:
         # The env-sourced token should still be masked.
         assert "mgp_envtoken1234" not in result.output
 
+    def test_empty_env_var_falls_through_to_file(
+        self, runner: CliRunner, config_path: Path
+    ) -> None:
+        """Test that an empty MAGPIE_SERVER is treated as unset, not as 'env'.
+
+        get_server() uses a truthy check (`if cli_override:`), so `MAGPIE_SERVER=`
+        is ignored and the config file value is what's actually used. Attribution
+        must agree: reporting 'env' here would misrepresent the effective source.
+        """
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text('[client]\nserver = "https://file.example.com"\n')
+
+        result = runner.invoke(
+            cli,
+            ["config", "--show"],
+            env={"MAGPIE_SERVER": ""},
+        )
+
+        assert result.exit_code == 0
+        assert "https://file.example.com" in result.output
+        assert f"(file: {config_path})" in result.output
+        assert "(env: MAGPIE_SERVER)" not in result.output
+
     def test_cli_source_overrides_env_and_file(self, runner: CliRunner, config_path: Path) -> None:
         """Test that a top-level --server flag is attributed to 'cli' and wins over
         both the env var and the config file.

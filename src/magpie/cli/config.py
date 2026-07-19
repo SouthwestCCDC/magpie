@@ -273,14 +273,23 @@ def _group_option_source(
 
     Returns None (source unresolved at this level) if the option was left at
     its Click default, so the caller can fall through to config-file /
-    built-in-default resolution.
+    built-in-default resolution. An empty string is treated the same as "not
+    provided": get_server()/get_token()/get_ca_cert() all use a truthy check
+    (`if cli_override:`), so e.g. `MAGPIE_SERVER=` is ignored by them and
+    falls through to the config file. Attribution must match that or it
+    would report "env" for a value that isn't actually the effective one.
+    This can't misfire on the float-typed `timeout` option (where 0 is a
+    legitimate, non-fallthrough value): a float never equals "".
     """
     root = ctx.find_root()
+    value = root.params.get(param_name)
+    if value == "":
+        return None
     source = root.get_parameter_source(param_name)
     if source is ParameterSource.COMMANDLINE:
-        return ResolvedValue(value=root.params.get(param_name), source="cli", origin=flag)
+        return ResolvedValue(value=value, source="cli", origin=flag)
     if source is ParameterSource.ENVIRONMENT:
-        return ResolvedValue(value=root.params.get(param_name), source="env", origin=envvar)
+        return ResolvedValue(value=value, source="env", origin=envvar)
     return None
 
 
