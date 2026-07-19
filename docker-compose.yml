@@ -26,6 +26,8 @@
 # - MAGPIE_DATA_DIR: host path for the data directory (default: ./data)
 # - MAGPIE_IMAGE: image ref to run (default: ghcr.io/southwestccdc/magpie:latest)
 # - MAGPIE_HTTP_PORT: host port published for the container's :8080 (default: 8080)
+# - MAGPIE_BIND_IP: host IP the published port binds to (default: 0.0.0.0,
+#   all interfaces)
 # - MAGPIE_ADMIN_TOKEN_SINK: REQUIRED, no default (fail-closed) -- see the
 #   `environment:` block below for the sink options and why there's no
 #   Compose-level default
@@ -34,7 +36,7 @@ services:
   magpie:
     image: ${MAGPIE_IMAGE:-ghcr.io/southwestccdc/magpie:latest}
     ports:
-      - "${MAGPIE_HTTP_PORT:-8080}:8080"
+      - "${MAGPIE_BIND_IP:-0.0.0.0}:${MAGPIE_HTTP_PORT:-8080}:8080"
     volumes:
       - ${MAGPIE_DATA_DIR:-./data}:/data
     environment:
