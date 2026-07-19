@@ -20,7 +20,7 @@ set -euo pipefail
 # Cleanup function to ensure containers are removed on exit
 cleanup() {
     echo "Cleaning up..."
-    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml down -v
+    docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml down -v
 }
 trap cleanup EXIT
 
@@ -35,7 +35,7 @@ else
 fi
 
 echo "Starting CIDR test environment..."
-docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml up -d --build
 
 # Wait for services to be healthy with retry loop
 echo "Waiting for services to be healthy..."
@@ -65,7 +65,7 @@ done
 if [ $attempt -gt $max_attempts ]; then
     echo ""
     echo "ERROR: Services failed to become healthy after $max_attempts attempts. Check logs:"
-    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml logs
+    docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml logs
     exit 1
 fi
 
@@ -82,7 +82,7 @@ INIT_EXIT_CODE=$?
 if [ $INIT_EXIT_CODE -ne 0 ]; then
     echo "ERROR: magpie-ctl init failed with exit code $INIT_EXIT_CODE"
     echo "Output: $INIT_OUTPUT"
-    docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml logs magpie
+    docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml logs magpie
     exit 1
 fi
 
@@ -106,7 +106,7 @@ echo "=========================================="
 
 # Temporarily disable errexit to allow tests to fail without stopping the script
 set +e
-docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml \
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml \
   exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner-inside \
   pytest tests/e2e/test_cidr_allowlist.py -k "not OutsideIP" "${PYTEST_ARGS[@]}"
 
@@ -124,7 +124,7 @@ echo "=========================================="
 
 # Temporarily disable errexit to allow tests to fail without stopping the script
 set +e
-docker compose -f docker-compose.yml -f docker-compose.cidr-test.yml \
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.cidr-test.yml \
   exec -e MAGPIE_CIDR_ADMIN_TOKEN="$ADMIN_TOKEN" test-runner-outside \
   pytest tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListOutsideIPDenied \
   tests/e2e/test_cidr_allowlist.py::TestCIDRAllowListForgedForwardedFor \
