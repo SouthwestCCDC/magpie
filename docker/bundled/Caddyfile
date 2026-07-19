@@ -9,7 +9,8 @@
 # (forward_auth, X-Magpie-* header strip #525, CIDR bypass, Content-
 # Disposition, security headers), with two differences from Caddyfile.prod:
 #   1. No site TLS block / MAGPIE_DOMAIN. This container terminates plain
-#      HTTP on :80; an external reverse proxy is expected to terminate TLS
+#      HTTP on :8080 (non-privileged, so Caddy can run non-root -- see
+#      issue #589); an external reverse proxy is expected to terminate TLS
 #      in front of it and add its own HSTS header (this Caddyfile does not
 #      send one, since it has no way to know whether the connection in
 #      front of it is actually HTTPS).
@@ -38,7 +39,7 @@
 	}
 }
 
-:80 {
+:8080 {
 	header {
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"

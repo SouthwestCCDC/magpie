@@ -8,4 +8,4 @@
 #   - Caddy must be listening and routing for curl to get any response.
 #   - uvicorn must be listening and returning 200 for the response to be
 #     200 (if uvicorn is down, Caddy's reverse_proxy answers 502, not 200).
-exec curl -fsS -o /dev/null http://127.0.0.1:80/health
+exec curl -fsS -o /dev/null http://127.0.0.1:8080/health
