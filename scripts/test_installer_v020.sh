@@ -681,6 +681,27 @@ test_hostile_install_dir_rejected_before_reaching_die() {
         fi
         log "  ✓ $cmd rejects the hostile --install-dir before any die()/log_error() call could see it"
     done
+
+    # Copilot follow-up: validate_install_dir_or_die() must validate the
+    # charset UNCONDITIONALLY, not only in the branch that runs when the
+    # value happens to already be absolute -- a non-absolute hostile value
+    # must be rejected on charset grounds too (even though, today, it also
+    # separately fails the absolute-path check; that overlap shouldn't be
+    # the only thing keeping this safe).
+    local hostile_relative='foo\nFAKE INJECTED LINE'
+    local out
+    out=$(
+        (
+            INSTALL_DIR="$hostile_relative" NONINTERACTIVE="true" YES="true" cmd_status
+        ) 2>&1
+    )
+    if ! echo "$out" | grep -q "invalid characters"; then
+        fail "a non-absolute hostile --install-dir was not rejected on charset grounds (only on the absolute-path check, if at all): $out"
+    fi
+    if ! echo "$out" | grep -qF 'foo\nFAKE INJECTED LINE'; then
+        fail "cmd_status's error output rendered the non-absolute hostile value's embedded backslash-n as a real line break: $out"
+    fi
+    log "  ✓ a non-absolute hostile --install-dir is also rejected on charset grounds (not only via the absolute-path check)"
 }
 
 # Test 11 (Copilot finding on PR #597): generate_systemd_service()/

@@ -550,10 +550,16 @@ check_existing_installation() {
 # issues #448 and #161.
 validate_install_dir_or_die() {
     local errors=()
+    # Charset validated unconditionally, not only in an `else` branch after
+    # the absolute-path check -- both checks must independently hold
+    # regardless of the other's outcome. The two currently happen to
+    # overlap in effect (a non-absolute value is always an error either
+    # way, via the check below), but a defense-in-depth allowlist
+    # shouldn't rely on that coincidence to stay safe if this function or
+    # its caller changes later.
+    validate_path_value "$INSTALL_DIR" "Install directory"
     if [[ ! "$INSTALL_DIR" =~ ^/ ]]; then
         errors+=("Install directory must be an absolute path: $INSTALL_DIR")
-    else
-        validate_path_value "$INSTALL_DIR" "Install directory"
     fi
     if [[ ${#errors[@]} -gt 0 ]]; then
         log_error "Invalid --install-dir:"
