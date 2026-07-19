@@ -286,6 +286,122 @@ EOF
     log "  ✓ an already-present value is left alone when --trusted-proxies was not passed this run"
 }
 
+# Test 5b (A1 review finding on PR #597): a CLI override must survive the
+# REAL cmd_update() call order -- parse_args (sets the value + its
+# *_FROM_CLI marker) THEN load_existing_config() THEN
+# reconcile_env_file_for_update(). Every other test above calls
+# reconcile_env_file_for_update() directly with a hand-set
+# TRUSTED_PROXIES/BIND_IP, which bypasses load_existing_config() entirely
+# -- exactly why the actual bug (load_existing_config() unconditionally
+# overwriting both from .env, clobbering a CLI override that runs before
+# it in real usage) slipped past the tests that motivated the #583 fix in
+# the first place. This test exercises both functions together, for both
+# variables, in both the absent-key and already-present-key (including
+# empty) cases.
+test_cli_override_survives_load_existing_config() {
+    log "Test 5b: a CLI --trusted-proxies/--bind-ip override survives load_existing_config() before reconcile_env_file_for_update() runs"
+
+    run_update_env_surgery() {
+        local env_file="$1" trusted_proxies="$2" trusted_proxies_from_cli="$3" bind_ip="$4" bind_ip_from_cli="$5"
+        local install_dir
+        install_dir="$(dirname "$(dirname "$env_file")")"
+        (
+            # shellcheck disable=SC2034  # consumed by load_existing_config(), sourced from magpie-deploy.sh
+            INSTALL_DIR="$install_dir"
+            # shellcheck disable=SC2034
+            DATA_DIR=""
+            # shellcheck disable=SC2034
+            HTTP_PORT=""
+            # shellcheck disable=SC2034  # all four read by load_existing_config()/reconcile_env_file_for_update() below
+            TRUSTED_PROXIES="$trusted_proxies"
+            # shellcheck disable=SC2034
+            TRUSTED_PROXIES_FROM_CLI="$trusted_proxies_from_cli"
+            # shellcheck disable=SC2034
+            BIND_IP="$bind_ip"
+            # shellcheck disable=SC2034
+            BIND_IP_FROM_CLI="$bind_ip_from_cli"
+            load_existing_config
+            reconcile_env_file_for_update "$env_file"
+        ) >/dev/null 2>&1
+    }
+
+    # Case A: --trusted-proxies/--bind-ip against a .env with NO key present
+    # at all (a pre-v0.2.0 install, or one that never touched these).
+    local install_a="${TEST_DIR}/cli_override_a"
+    mkdir -p "${install_a}/etc"
+    local env_a="${install_a}/etc/.env"
+    echo "MAGPIE_DATA_DIR=/opt/magpie/data" > "$env_a"
+    run_update_env_surgery "$env_a" "172.20.0.0/16" "true" "10.3.3.107" "true"
+    if ! grep -q '^MAGPIE_TRUSTED_PROXIES=172.20.0.0/16$' "$env_a"; then
+        fail "case A: --trusted-proxies did not survive load_existing_config()+reconcile against a .env with no prior key: $(grep MAGPIE_TRUSTED_PROXIES "$env_a")"
+    fi
+    if ! grep -q '^MAGPIE_BIND_IP=10.3.3.107$' "$env_a"; then
+        fail "case A: --bind-ip did not survive load_existing_config()+reconcile against a .env with no prior key: $(grep MAGPIE_BIND_IP "$env_a")"
+    fi
+    log "  ✓ case A (no prior key): both CLI overrides survived"
+
+    # Case B: the actual regression -- a .env that ALREADY has both keys,
+    # empty (exactly what generate_env_file() writes on every fresh
+    # install). This is the case that was silently broken: FROM_CLI=true
+    # but load_existing_config() would previously overwrite the CLI value
+    # right back to the empty persisted one before reconcile ever saw it.
+    local install_b="${TEST_DIR}/cli_override_b"
+    mkdir -p "${install_b}/etc"
+    local env_b="${install_b}/etc/.env"
+    cat > "$env_b" << 'EOF'
+MAGPIE_DATA_DIR=/opt/magpie/data
+MAGPIE_TRUSTED_PROXIES=
+MAGPIE_BIND_IP=
+EOF
+    run_update_env_surgery "$env_b" "172.20.0.0/16" "true" "10.3.3.107" "true"
+    if ! grep -q '^MAGPIE_TRUSTED_PROXIES=172.20.0.0/16$' "$env_b"; then
+        fail "case B (A1 regression): --trusted-proxies was clobbered back to the persisted empty value: $(grep MAGPIE_TRUSTED_PROXIES "$env_b")"
+    fi
+    if ! grep -q '^MAGPIE_BIND_IP=10.3.3.107$' "$env_b"; then
+        fail "case B (A1 regression): --bind-ip was clobbered back to the persisted empty value: $(grep MAGPIE_BIND_IP "$env_b")"
+    fi
+    log "  ✓ case B (already-present, empty key -- the A1/#583 regression case): both CLI overrides survived"
+
+    # Case C: a .env with a real (non-empty) prior value for both keys --
+    # the CLI override must still win.
+    local install_c="${TEST_DIR}/cli_override_c"
+    mkdir -p "${install_c}/etc"
+    local env_c="${install_c}/etc/.env"
+    cat > "$env_c" << 'EOF'
+MAGPIE_DATA_DIR=/opt/magpie/data
+MAGPIE_TRUSTED_PROXIES=10.0.0.0/8
+MAGPIE_BIND_IP=192.0.2.1
+EOF
+    run_update_env_surgery "$env_c" "172.20.0.0/16" "true" "10.3.3.107" "true"
+    if ! grep -q '^MAGPIE_TRUSTED_PROXIES=172.20.0.0/16$' "$env_c"; then
+        fail "case C: --trusted-proxies did not override a real prior value: $(grep MAGPIE_TRUSTED_PROXIES "$env_c")"
+    fi
+    if ! grep -q '^MAGPIE_BIND_IP=10.3.3.107$' "$env_c"; then
+        fail "case C: --bind-ip did not override a real prior value: $(grep MAGPIE_BIND_IP "$env_c")"
+    fi
+    log "  ✓ case C (already-present, non-empty key): both CLI overrides won"
+
+    # Case D: regression guard -- WITHOUT a CLI override this run
+    # (*_FROM_CLI=false), the persisted values must still load and survive
+    # untouched (the normal update-with-no-flags path).
+    local install_d="${TEST_DIR}/cli_override_d"
+    mkdir -p "${install_d}/etc"
+    local env_d="${install_d}/etc/.env"
+    cat > "$env_d" << 'EOF'
+MAGPIE_DATA_DIR=/opt/magpie/data
+MAGPIE_TRUSTED_PROXIES=10.0.0.0/8
+MAGPIE_BIND_IP=192.0.2.1
+EOF
+    run_update_env_surgery "$env_d" "" "false" "" "false"
+    if ! grep -q '^MAGPIE_TRUSTED_PROXIES=10.0.0.0/8$' "$env_d"; then
+        fail "case D: MAGPIE_TRUSTED_PROXIES changed even though no --trusted-proxies was passed: $(grep MAGPIE_TRUSTED_PROXIES "$env_d")"
+    fi
+    if ! grep -q '^MAGPIE_BIND_IP=192.0.2.1$' "$env_d"; then
+        fail "case D: MAGPIE_BIND_IP changed even though no --bind-ip was passed: $(grep MAGPIE_BIND_IP "$env_d")"
+    fi
+    log "  ✓ case D (no CLI override): persisted values load normally and are left untouched"
+}
+
 # Test 6: tier-2 gate -- cmd_update refuses an install with a persisted
 # TLS_MODE=auto|manual without --accept-builtin-tls-removed, and gets past
 # the gate (reaching the next real failure -- the missing repo dir, since
@@ -454,6 +570,7 @@ test_tier1_deprecated_flags_accepted_and_warn
 test_reconcile_env_file_strips_and_adds
 test_reconcile_env_file_migrates_legacy_bind_ip
 test_583_trusted_proxies_upsert_in_place
+test_cli_override_survives_load_existing_config
 test_tier2_gate_blocks_and_bypasses
 test_579_gate_install_warns_update_dies
 test_upsert_and_strip_env_key_primitives

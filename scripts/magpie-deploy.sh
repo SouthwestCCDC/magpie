@@ -87,6 +87,12 @@ ALLOWED_CIDRS=""
 # load_existing_config().
 TRUSTED_PROXIES_KEY_PRESENT="false"
 BIND_IP=""
+# Whether --bind-ip was passed explicitly on this run -- same purpose as
+# TRUSTED_PROXIES_FROM_CLI above: load_existing_config() must not let a
+# stale/absent .env value clobber a CLI override before
+# reconcile_env_file_for_update() ever sees it. See issue #583's precedent
+# and the A1 review finding on PR #597.
+BIND_IP_FROM_CLI="false"
 # Read-only detection of a persisted (pre-0.2.0) TLS_MODE from an existing
 # install's .env -- never used to drive any generated config, only to
 # decide whether cmd_update's tier-2 deprecation gate fires. See
@@ -583,10 +589,20 @@ load_existing_config() {
         # see issue #575's TRUSTED_PROXIES precedent below) so an existing
         # install's --bind-ip setting survives an update unchanged.
         # cmd_update migrates the legacy key forward in its .env surgery.
-        if [[ -n "${env_vars[MAGPIE_BIND_IP]+set}" ]]; then
-            BIND_IP="$(trim_whitespace "${env_vars[MAGPIE_BIND_IP]}")"
-        elif [[ -n "${env_vars[BIND_IP]+set}" ]]; then
-            BIND_IP="$(trim_whitespace "${env_vars[BIND_IP]}")"
+        #
+        # Skipped entirely when BIND_IP_FROM_CLI is true: an explicit
+        # --bind-ip on THIS run must win over whatever is in .env. Without
+        # this guard, a CLI override would be silently clobbered right back
+        # to the persisted (or absent/empty) value below, before
+        # reconcile_env_file_for_update() ever saw the operator's actual
+        # choice -- `update --bind-ip <X>` would be a no-op. See the A1
+        # review finding on PR #597.
+        if [[ "$BIND_IP_FROM_CLI" != "true" ]]; then
+            if [[ -n "${env_vars[MAGPIE_BIND_IP]+set}" ]]; then
+                BIND_IP="$(trim_whitespace "${env_vars[MAGPIE_BIND_IP]}")"
+            elif [[ -n "${env_vars[BIND_IP]+set}" ]]; then
+                BIND_IP="$(trim_whitespace "${env_vars[BIND_IP]}")"
+            fi
         fi
 
         # MAGPIE_TRUSTED_PROXIES (issue #575) replaces the pre-#575
@@ -598,46 +614,59 @@ load_existing_config() {
         # default this issue fixes, warn loudly rather than fix it
         # automatically: only the operator knows the actual upstream hop(s)
         # to scope it to.
-        local legacy_broad_default="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+        #
+        # Skipped when TRUSTED_PROXIES_FROM_CLI is true -- same reasoning as
+        # BIND_IP_FROM_CLI above: this is the exact bug issue #583 was
+        # supposed to fix (an explicit --trusted-proxies silently clobbered
+        # by .env before reconcile_env_file_for_update() ever saw it,
+        # because this function ran in between and didn't know about the
+        # CLI override). An explicit CLI value, even a deliberately empty
+        # one, IS the deliberate choice -- mark TRUSTED_PROXIES_KEY_PRESENT
+        # accordingly so the #579 gate doesn't second-guess it.
+        if [[ "$TRUSTED_PROXIES_FROM_CLI" == "true" ]]; then
+            TRUSTED_PROXIES_KEY_PRESENT="true"
+        else
+            local legacy_broad_default="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 
-        if [[ -n "${env_vars[MAGPIE_TRUSTED_PROXIES]+set}" ]]; then
-            local raw_trusted_proxies="${env_vars[MAGPIE_TRUSTED_PROXIES]}"
-            TRUSTED_PROXIES="$(trim_whitespace "$raw_trusted_proxies")"
-            # This script's own writeback (below) only ever persists
-            # either a real, already-trimmed value or a truly
-            # zero-length "" (the deliberate-empty marker for a
-            # confirmed direct-exposure choice) -- never whitespace
-            # padding. So a RAW value that is whitespace-only (nonzero
-            # length, but trims to empty) is not something this script
-            # would have written itself; treat it as anomalous /
-            # unconfigured rather than trusting it as deliberate, so the
-            # gate still fires instead of silently trusting garbage.
-            if [[ -z "$raw_trusted_proxies" || -n "$TRUSTED_PROXIES" ]]; then
-                TRUSTED_PROXIES_KEY_PRESENT="true"
-            fi
-        elif [[ -n "${env_vars[TRUSTED_PROXIES]+set}" ]]; then
-            TRUSTED_PROXIES="$(trim_whitespace "${env_vars[TRUSTED_PROXIES]}")"
-            if [[ "$TRUSTED_PROXIES" == "$legacy_broad_default" ]]; then
-                log_warn "Migrating pre-#575 TRUSTED_PROXIES from ${INSTALL_DIR}/etc/.env: it is set to the old overly-broad default ($legacy_broad_default), which lets any client on those ranges spoof X-Forwarded-For and bypass MAGPIE_ALLOWED_CIDRS."
-                log_warn "Edit MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to the exact upstream reverse proxy address(es) in front of this install (or leave it empty to trust none), then run '$SCRIPT_NAME update'."
-            fi
-            # Unlike the prefixed key above, a present legacy key only
-            # counts as "already configured" when it carries a real,
-            # non-empty value -- pre-#575, Caddy trusted the hardcoded
-            # private_ranges regardless of this key, so an empty legacy
-            # TRUSTED_PROXIES was dead config, not a deliberate "trust
-            # nothing" choice. Leaving TRUSTED_PROXIES_KEY_PRESENT false
-            # here lets the issue #579 gate fire for exactly the
-            # deployments that were silently relying on private_ranges and
-            # would otherwise break unnoticed on upgrade. A non-empty
-            # legacy value is already handled above (migrated forward,
-            # warned if it's the broad default) and must not also trip
-            # the gate.
-            # Already trimmed above, so a whitespace-only legacy value
-            # (dead config, same as truly empty) doesn't fool this into
-            # "true".
-            if [[ -n "$TRUSTED_PROXIES" ]]; then
-                TRUSTED_PROXIES_KEY_PRESENT="true"
+            if [[ -n "${env_vars[MAGPIE_TRUSTED_PROXIES]+set}" ]]; then
+                local raw_trusted_proxies="${env_vars[MAGPIE_TRUSTED_PROXIES]}"
+                TRUSTED_PROXIES="$(trim_whitespace "$raw_trusted_proxies")"
+                # This script's own writeback (below) only ever persists
+                # either a real, already-trimmed value or a truly
+                # zero-length "" (the deliberate-empty marker for a
+                # confirmed direct-exposure choice) -- never whitespace
+                # padding. So a RAW value that is whitespace-only (nonzero
+                # length, but trims to empty) is not something this script
+                # would have written itself; treat it as anomalous /
+                # unconfigured rather than trusting it as deliberate, so the
+                # gate still fires instead of silently trusting garbage.
+                if [[ -z "$raw_trusted_proxies" || -n "$TRUSTED_PROXIES" ]]; then
+                    TRUSTED_PROXIES_KEY_PRESENT="true"
+                fi
+            elif [[ -n "${env_vars[TRUSTED_PROXIES]+set}" ]]; then
+                TRUSTED_PROXIES="$(trim_whitespace "${env_vars[TRUSTED_PROXIES]}")"
+                if [[ "$TRUSTED_PROXIES" == "$legacy_broad_default" ]]; then
+                    log_warn "Migrating pre-#575 TRUSTED_PROXIES from ${INSTALL_DIR}/etc/.env: it is set to the old overly-broad default ($legacy_broad_default), which lets any client on those ranges spoof X-Forwarded-For and bypass MAGPIE_ALLOWED_CIDRS."
+                    log_warn "Edit MAGPIE_TRUSTED_PROXIES in ${INSTALL_DIR}/etc/.env to the exact upstream reverse proxy address(es) in front of this install (or leave it empty to trust none), then run '$SCRIPT_NAME update'."
+                fi
+                # Unlike the prefixed key above, a present legacy key only
+                # counts as "already configured" when it carries a real,
+                # non-empty value -- pre-#575, Caddy trusted the hardcoded
+                # private_ranges regardless of this key, so an empty legacy
+                # TRUSTED_PROXIES was dead config, not a deliberate "trust
+                # nothing" choice. Leaving TRUSTED_PROXIES_KEY_PRESENT false
+                # here lets the issue #579 gate fire for exactly the
+                # deployments that were silently relying on private_ranges and
+                # would otherwise break unnoticed on upgrade. A non-empty
+                # legacy value is already handled above (migrated forward,
+                # warned if it's the broad default) and must not also trip
+                # the gate.
+                # Already trimmed above, so a whitespace-only legacy value
+                # (dead config, same as truly empty) doesn't fool this into
+                # "true".
+                if [[ -n "$TRUSTED_PROXIES" ]]; then
+                    TRUSTED_PROXIES_KEY_PRESENT="true"
+                fi
             fi
         fi
 
@@ -1397,8 +1426,18 @@ cmd_install() {
     echo ""
     echo "  Installation directory: ${INSTALL_DIR}"
     echo "  Data directory: ${DATA_DIR}"
-    echo "  Listening on: http://127.0.0.1:${HTTP_PORT} (plain HTTP -- magpie does not"
-    echo "  terminate TLS; place a reverse proxy in front of it for HTTPS)"
+    # BIND_IP may bind the published port to a specific interface instead
+    # of all of them (the default, 0.0.0.0) -- reflect the actual
+    # configured bind rather than hardcoding the loopback address, which is
+    # misleading (or simply wrong) once --bind-ip is anything else. See the
+    # Copilot #1 finding on PR #597.
+    if [[ -n "$BIND_IP" ]]; then
+        echo "  Listening on: http://${BIND_IP}:${HTTP_PORT}"
+    else
+        echo "  Listening on: http://0.0.0.0:${HTTP_PORT} (all interfaces)"
+    fi
+    echo "  Plain HTTP only -- magpie does not terminate TLS; place a reverse"
+    echo "  proxy in front of it for HTTPS."
     echo ""
     echo "  Manage with:"
     echo "    systemctl status magpie"
@@ -2031,6 +2070,10 @@ parse_args() {
                 ;;
             --bind-ip)
                 BIND_IP="$2"
+                # See BIND_IP_FROM_CLI's declaration -- mirrors
+                # TRUSTED_PROXIES_FROM_CLI so load_existing_config() knows
+                # not to clobber this with a stale .env value on update.
+                BIND_IP_FROM_CLI="true"
                 shift 2
                 ;;
             --noninteractive)
