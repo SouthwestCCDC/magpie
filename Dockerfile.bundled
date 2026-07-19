@@ -9,8 +9,12 @@
 # non-root runtime uid and, from there, starts both processes in order
 # (uvicorn first, then Caddy once uvicorn answers /health), fails the whole
 # container fast if either process exits on its own, and drains both
-# cleanly on SIGTERM/`docker stop`. No process other than tini itself runs
-# as root in steady state (issue #591).
+# cleanly on SIGTERM/`docker stop`. In the normal case (the resolved
+# runtime uid is non-root), no process other than tini itself runs as
+# root in steady state (issue #591); if that uid resolves to 0 (e.g. a
+# fresh, still-root-owned volume with no MAGPIE_UID set), wrapper.sh's
+# documented fallback is to keep running everything as root instead,
+# same as entrypoint.sh's own "no privilege drop needed" case.
 #
 # Externally the container exposes one plain-HTTP port (8080, non-
 # privileged so Caddy can run non-root -- see issue #589); TLS
