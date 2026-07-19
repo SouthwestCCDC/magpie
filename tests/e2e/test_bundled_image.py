@@ -5,9 +5,10 @@ graceful-shutdown classification: a `docker stop` must exit 0 whether it
 arrives before or after uvicorn's startup-ordering gate completes, while a
 process actually crashing (SIGKILL) must still fail the container (exit 1).
 
-Also covers #589: Caddy runs non-root on :8080, and the container needs no
-Linux capability beyond gosu-based privilege dropping (not even
-CAP_NET_BIND_SERVICE).
+Also covers #589 (Caddy binds :8080, non-root) and #591 (the whole
+supervisor -- wrapper.sh itself, not just uvicorn/caddy -- runs non-root
+in steady state via a root prelude that re-execs itself dropped; only
+tini, PID 1, stays root).
 """
 
 from __future__ import annotations
@@ -123,14 +124,15 @@ class TestBundledImageShutdownClassification:
         as a crash.
 
         The startup window is forced open deterministically rather than
-        relied on via a sleep: entrypoint.sh serializes first-boot DB init
-        with `flock -x -w 30 200` on `{storage_dir}/.magpie-init.lock`. That
-        file lives under the bind-mounted /data volume, so a host-held
-        exclusive flock on the same path (same inode, shared through the
-        bind mount) blocks entrypoint.sh before it ever execs uvicorn --
-        uvicorn cannot answer /health while the host holds this lock, so
-        wrapper.sh's startup gate is guaranteed to still be open when
-        `docker stop` is issued below.
+        relied on via a sleep: wrapper.sh (post-drop) serializes first-boot
+        DB init with `flock -x -w 30 200` on `{storage_dir}/.magpie-init.lock`
+        (#591 -- previously this lived in entrypoint.sh, which the bundled
+        image no longer uses). That file lives under the bind-mounted
+        /data volume, so a host-held exclusive flock on the same path
+        (same inode, shared through the bind mount) blocks wrapper.sh
+        before it ever starts uvicorn -- uvicorn cannot answer /health
+        while the host holds this lock, so wrapper.sh's startup gate is
+        guaranteed to still be open when `docker stop` is issued below.
         """
         # Unique suffix: hard-coded names could collide if tests ever run in
         # parallel (pytest-xdist, or multiple CI jobs sharing a Docker
@@ -142,9 +144,10 @@ class TestBundledImageShutdownClassification:
             data_dir = Path(tmp)
             artifacts_dir = data_dir / "artifacts"
             artifacts_dir.mkdir(parents=True)
-            # Matches entrypoint.sh's LOCK_DIR resolution for the no-
-            # MAGPIE_STORAGE_PATH case: LOCK_DIR=/data/artifacts (already
-            # exists, since we just created it), DB_LOCK_FILE=LOCK_DIR/.magpie-init.lock.
+            # Matches wrapper.sh's magpie_resolve_storage_paths LOCK_DIR
+            # resolution for the no-MAGPIE_STORAGE_PATH case:
+            # LOCK_DIR=/data/artifacts (already exists, since we just
+            # created it), DB_LOCK_FILE=LOCK_DIR/.magpie-init.lock.
             lock_path = artifacts_dir / ".magpie-init.lock"
             lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
             try:
@@ -160,7 +163,7 @@ class TestBundledImageShutdownClassification:
                 assert "graceful shutdown complete (during startup)" in log_text, (
                     "expected wrapper.sh's during-startup shutdown log line -- "
                     "its absence means the host-held flock didn't actually "
-                    "block entrypoint.sh's DB init as intended, so this test "
+                    "block wrapper.sh's DB init as intended, so this test "
                     "didn't exercise the startup-window shutdown path it's "
                     f"meant to guard:\n{log_text}"
                 )
@@ -199,6 +202,15 @@ class TestBundledImageShutdownClassification:
                 # a substring search -- a substring search here would also
                 # match this very docker-exec command's own argv, since its
                 # shell script text contains the same path literally.
+                #
+                # `/proc/[0-9]*` glob-expands in lexicographic (string)
+                # order, not numeric order (e.g. "34" sorts before "7"), so
+                # whichever PID happens to sort last is essentially
+                # arbitrary and won't in general be uvicorn's -- trailing
+                # `; true` keeps the overall exit code 0 regardless of
+                # whether that last iteration's grep matched, since success
+                # here is "did stdout capture a PID", not "did the last loop
+                # iteration itself match".
                 uvicorn_pid = subprocess.run(
                     [
                         "docker",
@@ -209,7 +221,7 @@ class TestBundledImageShutdownClassification:
                         "for p in /proc/[0-9]*; do "
                         "tr '\\0' '\\n' < \"$p/cmdline\" 2>/dev/null "
                         "| grep -qx '/app/.venv/bin/uvicorn' "
-                        '&& basename "$p"; done',
+                        '&& basename "$p"; done; true',
                     ],
                     capture_output=True,
                     text=True,
@@ -279,15 +291,16 @@ def _docker_top_user(name: str, comm: str) -> str | None:
 @pytest.mark.e2e
 @pytest.mark.slow
 class TestBundledImageNonRootCaddy:
-    """Regression coverage for #589: Caddy must bind :8080 and run non-root,
-    and the container must not need any Linux capability beyond what
-    gosu-based privilege dropping already requires (in particular, not
-    CAP_NET_BIND_SERVICE).
+    """Regression coverage for #589 (Caddy binds :8080, non-root) and #591
+    (the whole supervisor -- wrapper.sh itself, not just its children --
+    runs non-root in steady state, via a brief root prelude that re-execs
+    itself dropped).
     """
 
-    def test_caddy_runs_as_non_root_on_8080(self, bundled_image: str) -> None:
-        """Caddy's process must be owned by the same non-root uid uvicorn
-        runs as (not root), and it must be reachable on :8080.
+    def test_supervisor_and_children_run_as_non_root(self, bundled_image: str) -> None:
+        """wrapper.sh, uvicorn, and caddy must all be owned by the same
+        non-root uid (not root), and Caddy must be reachable on :8080.
+        Only tini (PID 1) may still be root.
         """
         name = f"magpie-bundled-e2e-nonroot-{uuid.uuid4().hex[:8]}"
         with tempfile.TemporaryDirectory(prefix="magpie_bundled_nonroot_") as tmp:
@@ -296,17 +309,30 @@ class TestBundledImageNonRootCaddy:
                 _run_container(bundled_image, Path(tmp), name, extra_args=["-p", "0:8080"])
                 _wait_for_log(name, "caddy started")
 
-                caddy_user = _docker_top_user(name, "caddy")
+                tini_user = _docker_top_user(name, "tini")
+                wrapper_user = _docker_top_user(name, "wrapper.sh")
                 uvicorn_user = _docker_top_user(name, "uvicorn")
-                assert caddy_user is not None, "could not find caddy in `docker top` output"
+                caddy_user = _docker_top_user(name, "caddy")
+                assert tini_user is not None, "could not find tini in `docker top` output"
+                assert wrapper_user is not None, "could not find wrapper.sh in `docker top` output"
                 assert uvicorn_user is not None, "could not find uvicorn in `docker top` output"
-                assert caddy_user not in ("root", "0"), (
-                    f"caddy must not run as root, got user={caddy_user!r}"
+                assert caddy_user is not None, "could not find caddy in `docker top` output"
+
+                assert tini_user in ("root", "0"), (
+                    f"tini (PID 1) is expected to stay root for zombie reaping, got {tini_user!r}"
                 )
-                assert caddy_user == uvicorn_user, (
-                    "caddy and uvicorn must run as the same uid (so caddy can read "
-                    f"what uvicorn writes under /data), got caddy={caddy_user!r} "
-                    f"uvicorn={uvicorn_user!r}"
+                for proc_name, user in (
+                    ("wrapper.sh", wrapper_user),
+                    ("uvicorn", uvicorn_user),
+                    ("caddy", caddy_user),
+                ):
+                    assert user not in ("root", "0"), (
+                        f"{proc_name} must not run as root in steady state, got user={user!r}"
+                    )
+                assert wrapper_user == uvicorn_user == caddy_user, (
+                    "the supervisor and both children must all run as the same uid "
+                    f"(so caddy can read what uvicorn writes under /data), got "
+                    f"wrapper.sh={wrapper_user!r} uvicorn={uvicorn_user!r} caddy={caddy_user!r}"
                 )
 
                 # A real request through the published port proves Caddy is
@@ -319,29 +345,60 @@ class TestBundledImageNonRootCaddy:
             finally:
                 _cleanup(name)
 
-    def test_starts_and_serves_under_cap_drop_all(self, bundled_image: str) -> None:
-        """The container must start healthy and serve real traffic with
-        every Linux capability dropped except the small set gosu-based
-        privilege dropping and first-boot ownership fixups require
-        (SETUID/SETGID/CHOWN/DAC_OVERRIDE/FOWNER/KILL) -- notably, WITHOUT
-        CAP_NET_BIND_SERVICE, proving Caddy's move to :8080 makes that
-        capability unnecessary.
+    def test_starts_and_serves_under_minimal_capabilities(self, bundled_image: str) -> None:
+        """The container must start healthy and serve real traffic in
+        steady state (an already-provisioned /data, matching a real
+        deployment's second and subsequent boots) with every Linux
+        capability dropped except SETUID/SETGID/CHOWN/KILL -- notably
+        WITHOUT CAP_NET_BIND_SERVICE (Caddy binds :8080, not :80, #589),
+        DAC_OVERRIDE, and FOWNER.
+
+        KILL could NOT be dropped, unlike the original #591 hypothesis:
+        tini (PID 1) necessarily stays root (for zombie reaping), and it
+        forwards `docker stop`'s SIGTERM to its direct child -- which, by
+        the time signals matter, is wrapper.sh already running as the
+        non-root uid. That specific hop (root tini -> non-root child) is a
+        different-uid kill(), which needs CAP_KILL regardless of every
+        *other* signal in this container now being same-uid (wrapper.sh's
+        own signaling of uvicorn/caddy, which needs no capability at all).
+        DAC_OVERRIDE and FOWNER are NOT needed for this steady-state case:
+        the root prelude only touches /var/lib/caddy (baked into the
+        image, root-owned) and dirs already owned by the target uid from
+        the first boot below, and root chowning something it already owns
+        needs neither. (DAC_OVERRIDE IS still needed on a genuinely fresh
+        boot against a bind mount not already owned by root or the target
+        uid -- root creating new files/dirs inside a directory it doesn't
+        own needs it. That's the first-boot step below, deliberately run
+        with full default capabilities, matching a real deployment's
+        first boot.)
         """
         name = f"magpie-bundled-e2e-capdrop-{uuid.uuid4().hex[:8]}"
         init_name = f"{name}-init"
         with tempfile.TemporaryDirectory(prefix="magpie_bundled_capdrop_") as tmp:
             data_dir = Path(tmp)
+            # tempfile.TemporaryDirectory() creates its directory mode
+            # 0700 (owner-only, no group/other access at all) -- more
+            # restrictive than a realistic bind-mount host directory,
+            # which is normally at least 0755. At 0700, root can't even
+            # traverse into it without DAC_OVERRIDE, which would make
+            # every restart need DAC_OVERRIDE regardless of whether
+            # anything inside actually needs creating -- an artifact of
+            # this test's tempdir, not of steady-state operation on a
+            # normal host directory. Loosen it to model that realistic
+            # case.
+            data_dir.chmod(0o755)
             _cleanup(name)
             _cleanup(init_name)
             try:
-                # First boot needs full default capabilities: entrypoint.sh
-                # runs as root and chowns the fresh /data tree to the
-                # runtime uid, which requires CAP_CHOWN/DAC_OVERRIDE/FOWNER
-                # against a directory it doesn't yet own. This mirrors a
-                # real deployment's first boot -- the cap-drop claim is
-                # about steady-state operation, not bootstrapping an empty
-                # volume.
-                _run_container(bundled_image, data_dir, init_name)
+                # First boot: full default capabilities, provisioning the
+                # bind-mounted /data (see docstring -- this step needs
+                # DAC_OVERRIDE, which the restart below deliberately omits).
+                _run_container(
+                    bundled_image,
+                    data_dir,
+                    init_name,
+                    extra_args=["-e", "MAGPIE_UID=1000", "-e", "MAGPIE_GID=1000"],
+                )
                 _wait_for_log(init_name, "caddy started")
                 subprocess.run(["docker", "stop", init_name], check=True, capture_output=True)
                 _cleanup(init_name)
@@ -353,6 +410,10 @@ class TestBundledImageNonRootCaddy:
                     extra_args=[
                         "-p",
                         "0:8080",
+                        "-e",
+                        "MAGPIE_UID=1000",
+                        "-e",
+                        "MAGPIE_GID=1000",
                         "--cap-drop",
                         "ALL",
                         "--cap-add",
@@ -361,10 +422,6 @@ class TestBundledImageNonRootCaddy:
                         "SETGID",
                         "--cap-add",
                         "CHOWN",
-                        "--cap-add",
-                        "DAC_OVERRIDE",
-                        "--cap-add",
-                        "FOWNER",
                         "--cap-add",
                         "KILL",
                     ],
@@ -382,7 +439,9 @@ class TestBundledImageNonRootCaddy:
                         break
                     time.sleep(1)
                 else:
-                    pytest.fail(f"container never became healthy under cap-drop ALL: {health}")
+                    pytest.fail(
+                        f"container never became healthy under minimal capabilities: {health}"
+                    )
 
                 port = _published_port(name)
                 base_url = f"http://127.0.0.1:{port}"
@@ -412,7 +471,7 @@ class TestBundledImageNonRootCaddy:
                 )
                 headers = {"Authorization": f"Bearer {token}"}
 
-                content = b"issue #589 cap-drop round-trip test\n"
+                content = b"issue #591 minimal-capability round-trip test\n"
                 push = httpx.post(
                     f"{base_url}/api/v1/upload/e2e-capdrop-artifact",
                     headers=headers,
