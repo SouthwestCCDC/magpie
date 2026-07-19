@@ -39,6 +39,7 @@ dev = [
     "pytest>=9.0.3",
     "pytest-asyncio",
     "pytest-cov",
+    "pyyaml",
     "bandit[toml]",
     "pre-commit",
 ]
