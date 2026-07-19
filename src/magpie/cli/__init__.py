@@ -56,7 +56,6 @@ pass_context = click.make_pass_decorator(CLIContext)
 @click.option(
     "--timeout",
     type=float,
-    envvar="MAGPIE_TIMEOUT",
     help="HTTP request timeout in seconds (default: 600).",
 )
 @click.option(

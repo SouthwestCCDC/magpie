@@ -1,7 +1,7 @@
 """CLI configuration module for Magpie client.
 
 Handles loading configuration from ~/.magpie/config.toml with environment
-variable overrides. Precedence: env vars > config file > defaults.
+variable overrides. Precedence: CLI flag > env var > config file > defaults.
 """
 
 from __future__ import annotations
@@ -10,12 +10,17 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from click.core import ParameterSource
 
 try:
     import tomllib
 except ImportError:
     import tomli as tomllib  # type: ignore[import-not-found,no-redef]
+
+if TYPE_CHECKING:
+    import click
 
 
 DEFAULT_CONFIG_PATH = Path.home() / ".magpie" / "config.toml"
@@ -238,3 +243,129 @@ def get_ca_cert(cli_override: str | None = None) -> str | None:
         return env_ca_cert
 
     return None
+
+
+@dataclass(frozen=True)
+class ResolvedValue:
+    """An effective configuration value together with where it came from.
+
+    Attributes:
+        value: The effective value (None if unset).
+        source: One of "cli", "env", "file", or "default".
+        origin: Human-readable detail for the source: a flag name (e.g.
+            "--server"), an env var name (e.g. "MAGPIE_SERVER"), or a config
+            file path. Empty string for "default".
+    """
+
+    value: str | float | None
+    source: str
+    origin: str = ""
+
+
+def _group_option_source(
+    ctx: click.Context, param_name: str, envvar: str, flag: str
+) -> ResolvedValue | None:
+    """Report whether a top-level group option was set via CLI flag or envvar.
+
+    `server`, `token`, and `ca_cert` are declared with `envvar=` directly on
+    the Click options in the `cli` group, so Click's own parameter-source
+    tracking already distinguishes COMMANDLINE from ENVIRONMENT for them.
+
+    Returns None (source unresolved at this level) if the option was left at
+    its Click default, so the caller can fall through to config-file /
+    built-in-default resolution. An empty string is treated the same as "not
+    provided": get_server()/get_token()/get_ca_cert() all use a truthy check
+    (`if cli_override:`), so e.g. `MAGPIE_SERVER=` is ignored by them and
+    falls through to the config file. Attribution must match that or it
+    would report "env" for a value that isn't actually the effective one.
+    This can't misfire on the float-typed `timeout` option (where 0 is a
+    legitimate, non-fallthrough value): a float never equals "".
+    """
+    root = ctx.find_root()
+    value = root.params.get(param_name)
+    if value == "":
+        return None
+    source = root.get_parameter_source(param_name)
+    if source is ParameterSource.COMMANDLINE:
+        return ResolvedValue(value=value, source="cli", origin=flag)
+    if source is ParameterSource.ENVIRONMENT:
+        return ResolvedValue(value=value, source="env", origin=envvar)
+    return None
+
+
+def resolve_server(ctx: click.Context, config_path: Path | None = None) -> ResolvedValue:
+    """Resolve the effective server URL with source attribution.
+
+    Args:
+        ctx: Any Click context within the `cli` group's invocation (the
+            group-level options are read via `ctx.find_root()`).
+        config_path: Optional config file path for testing.
+    """
+    hit = _group_option_source(ctx, "server", "MAGPIE_SERVER", "--server")
+    if hit is not None:
+        return hit
+
+    config = load_config(config_path)
+    if config.client.server:
+        return ResolvedValue(
+            value=config.client.server,
+            source="file",
+            origin=str(config_path or DEFAULT_CONFIG_PATH),
+        )
+    return ResolvedValue(value=None, source="default")
+
+
+def resolve_token(ctx: click.Context, config_path: Path | None = None) -> ResolvedValue:
+    """Resolve the effective auth token with source attribution.
+
+    Args:
+        ctx: Any Click context within the `cli` group's invocation.
+        config_path: Optional config file path for testing.
+    """
+    hit = _group_option_source(ctx, "token", "MAGPIE_TOKEN", "--token")
+    if hit is not None:
+        return hit
+
+    config = load_config(config_path)
+    if config.client.token:
+        return ResolvedValue(
+            value=config.client.token, source="file", origin=str(config_path or DEFAULT_CONFIG_PATH)
+        )
+    return ResolvedValue(value=None, source="default")
+
+
+def resolve_timeout(ctx: click.Context) -> ResolvedValue:
+    """Resolve the effective HTTP timeout with source attribution.
+
+    Timeout is intentionally not read from the config file (see get_timeout);
+    it is either set via --timeout, MAGPIE_TIMEOUT, or the built-in default.
+    MAGPIE_TIMEOUT supports human-readable duration strings ("5m", "1h30m"),
+    which the --timeout Click option's own float-typed envvar can't parse --
+    Click only resolves COMMANDLINE for this option (see cli/__init__.py), so
+    the env var is checked here directly, matching get_timeout().
+    """
+    hit = _group_option_source(ctx, "timeout", "MAGPIE_TIMEOUT", "--timeout")
+    if hit is not None:
+        return hit
+
+    env_timeout = os.environ.get("MAGPIE_TIMEOUT")
+    if env_timeout:
+        try:
+            return ResolvedValue(
+                value=float(parse_duration(env_timeout)), source="env", origin="MAGPIE_TIMEOUT"
+            )
+        except DurationParseError:
+            pass  # Invalid env var value, fall back to default
+
+    return ResolvedValue(value=DEFAULT_TIMEOUT, source="default")
+
+
+def resolve_ca_cert(ctx: click.Context) -> ResolvedValue:
+    """Resolve the effective CA certificate path with source attribution.
+
+    Like timeout, the CA cert is not read from the config file.
+    """
+    hit = _group_option_source(ctx, "ca_cert", "MAGPIE_CA_CERT", "--ca-cert")
+    if hit is not None:
+        return hit
+    return ResolvedValue(value=None, source="default")

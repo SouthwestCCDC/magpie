@@ -17,6 +17,9 @@ from magpie.cli.formatting import (
     output_result,
 )
 
+# Fields shown by 'magpie config --show', in display order.
+_EFFECTIVE_FIELDS = ("server", "token", "timeout", "ca_cert")
+
 
 def _write_config(config_path: Path, server: str | None, token: str | None) -> None:
     """Write configuration to TOML file.
@@ -63,14 +66,16 @@ def _write_config(config_path: Path, server: str | None, token: str | None) -> N
 @click.option(
     "--show",
     is_flag=True,
-    help="Show current configuration.",
+    help="Show effective configuration, with the source of each value.",
 )
 @click.option(
     "--clear",
     is_flag=True,
     help="Clear all configuration.",
 )
+@click.pass_context
 def config_cmd(
+    ctx: click.Context,
     server: str | None,
     token: str | None,
     show: bool,
@@ -107,16 +112,16 @@ def config_cmd(
         raise click.ClickException(msg)
 
     if show:
-        _show_config(config_path)
+        _show_config(ctx, config_path)
         return
 
     if clear:
         _clear_config(config_path)
         return
 
-    # If no options provided, show current config
+    # If no options provided, show current (effective) config
     if server is None and token is None:
-        _show_config(config_path)
+        _show_config(ctx, config_path)
         return
 
     # Set values
@@ -145,40 +150,67 @@ def config_cmd(
     click.echo(f"Configuration saved to {config_path}")
 
 
-def _show_config(config_path: Path) -> None:
-    """Display current configuration."""
-    if not config_path.exists():
-        # JSON output for missing config
-        if is_json_output():
-            output_result(
-                CommandResult(
-                    data={
-                        "server": None,
-                        "token": None,
-                        "timeout": None,
-                        "path": str(config_path),
-                        "exists": False,
-                    },
-                    human_output="",
-                )
-            )
-            return
-        click.echo(f"No configuration file found at {config_path}")
-        click.echo("Run 'magpie config --server URL --token TOKEN' to create one.")
-        return
+def _resolve_effective_config(
+    ctx: click.Context, config_path: Path
+) -> dict[str, cli_config.ResolvedValue]:
+    """Resolve every effective config field, each with its source attribution."""
+    return {
+        "server": cli_config.resolve_server(ctx, config_path),
+        "token": cli_config.resolve_token(ctx, config_path),
+        "timeout": cli_config.resolve_timeout(ctx),
+        "ca_cert": cli_config.resolve_ca_cert(ctx),
+    }
 
-    config = cli_config.load_config(config_path)
+
+def _source_label(resolved: cli_config.ResolvedValue) -> str:
+    """Format a source annotation, e.g. '(env: MAGPIE_SERVER)' or '(default)'."""
+    if resolved.source == "default":
+        return "(default)"
+    return f"({resolved.source}: {resolved.origin})"
+
+
+def _display_value(field: str, resolved: cli_config.ResolvedValue) -> str:
+    """Format a resolved value for human-readable display, masking the token."""
+    if resolved.value is None:
+        return "(not set)"
+    if field == "token":
+        return mask_token(str(resolved.value))
+    if field == "timeout":
+        # Timeout is stored as a float; show it as a plain integer when whole.
+        timeout = float(resolved.value)
+        return str(int(timeout)) if timeout == int(timeout) else str(timeout)
+    return str(resolved.value)
+
+
+def _json_value(field: str, resolved: cli_config.ResolvedValue) -> str | float | None:
+    """Value for JSON output: masked for token, raw type preserved otherwise."""
+    if resolved.value is None:
+        return None
+    if field == "token":
+        return mask_token(str(resolved.value))
+    return resolved.value
+
+
+def _show_config(ctx: click.Context, config_path: Path) -> None:
+    """Display the effective configuration, with the source of each value."""
+    resolved = _resolve_effective_config(ctx, config_path)
+    exists = config_path.exists()
 
     # JSON output
     if is_json_output():
         output_result(
             CommandResult(
                 data={
-                    "server": config.client.server,
-                    "token": mask_token(config.client.token) if config.client.token else None,
-                    "timeout": config.client.timeout,
                     "path": str(config_path),
-                    "exists": True,
+                    "exists": exists,
+                    **{
+                        field: {
+                            "value": _json_value(field, resolved[field]),
+                            "source": resolved[field].source,
+                            "origin": resolved[field].origin,
+                        }
+                        for field in _EFFECTIVE_FIELDS
+                    },
                 },
                 human_output="",
             )
@@ -186,18 +218,21 @@ def _show_config(config_path: Path) -> None:
         return
 
     # Human output
-    click.echo(f"Configuration file: {config_path}")
+    if exists:
+        click.echo(f"Configuration file: {config_path}")
+    else:
+        click.echo(f"No configuration file found at {config_path}")
+        click.echo("Run 'magpie config --server URL --token TOKEN' to create one.")
     click.echo()
 
-    if config.client.server:
-        click.echo(f"  server = {config.client.server}")
-    else:
-        click.echo("  server = (not set)")
-
-    if config.client.token:
-        click.echo(f"  token  = {mask_token(config.client.token)}")
-    else:
-        click.echo("  token  = (not set)")
+    click.echo("Effective configuration:")
+    click.echo()
+    name_width = max(len(field) for field in _EFFECTIVE_FIELDS)
+    value_width = max(len(_display_value(field, resolved[field])) for field in _EFFECTIVE_FIELDS)
+    for field in _EFFECTIVE_FIELDS:
+        value = _display_value(field, resolved[field])
+        source = _source_label(resolved[field])
+        click.echo(f"  {field:<{name_width}} = {value:<{value_width}}  {source}")
 
 
 def _clear_config(config_path: Path) -> None:
