@@ -75,7 +75,7 @@ magpie_resolve_storage_paths() {
 	STORAGE_DIR="${MAGPIE_STORAGE_PATH:-/data/artifacts}"
 	if [ ! -d "$STORAGE_DIR" ]; then
 		if ! mkdir -p "$STORAGE_DIR"; then
-			log "error: failed to create storage directory $STORAGE_DIR"
+			log "error: failed to create storage directory $STORAGE_DIR (uid $(id -u)) -- if running as root, this needs CAP_DAC_OVERRIDE to create a new directory inside a parent it doesn't own (e.g. an unprovisioned bind mount); if running non-root directly, the parent directory's mode/ownership must already allow this uid to create files in it"
 			exit 1
 		fi
 		STORAGE_DIR_CREATED=1
@@ -106,7 +106,7 @@ magpie_resolve_storage_paths() {
 	DB_DIR="$(dirname "$DB_PATH")"
 	if [ ! -d "$DB_DIR" ]; then
 		if ! mkdir -p "$DB_DIR"; then
-			log "error: failed to create database directory $DB_DIR"
+			log "error: failed to create database directory $DB_DIR (uid $(id -u)) -- if running as root, this needs CAP_DAC_OVERRIDE to create a new directory inside a parent it doesn't own (e.g. an unprovisioned bind mount); if running non-root directly, the parent directory's mode/ownership must already allow this uid to create files in it"
 			exit 1
 		fi
 	fi
