@@ -197,7 +197,7 @@ class TestConfigShowSourceAttribution:
         result = runner.invoke(
             cli,
             ["--format", "json", "config", "--show"],
-            env={"MAGPIE_TOKEN": "mgp_supersecret1234"},
+            env={"MAGPIE_TOKEN": "mgp_supersecret1234", "MAGPIE_CA_CERT": "/etc/ssl/custom-ca.pem"},
         )
 
         assert result.exit_code == 0
@@ -215,6 +215,10 @@ class TestConfigShowSourceAttribution:
 
         assert data["timeout"]["source"] == "default"
         assert data["timeout"]["value"] == 600.0
+
+        assert data["ca_cert"]["source"] == "env"
+        assert data["ca_cert"]["origin"] == "MAGPIE_CA_CERT"
+        assert data["ca_cert"]["value"] == "/etc/ssl/custom-ca.pem"
 
 
 class TestConfigSet:
