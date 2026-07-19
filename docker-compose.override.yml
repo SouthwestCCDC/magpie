@@ -23,6 +23,6 @@ services:
       # bind-mounted /data directory, readable on the host at
       # ${MAGPIE_DATA_DIR:-./data}/admin-token.
       - MAGPIE_ADMIN_TOKEN_SINK=${MAGPIE_ADMIN_TOKEN_SINK:-file}
-      # Enables the /api/v1/test/* memory-tracking endpoints used by the
+      # Enables the /api/v1/_test/* memory-tracking endpoints used by the
       # e2e suite. NEVER set true in a real deployment.
       - MAGPIE_ENABLE_TEST_ENDPOINTS=${MAGPIE_ENABLE_TEST_ENDPOINTS:-false}

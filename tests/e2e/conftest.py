@@ -170,8 +170,9 @@ def admin_token(docker_services: dict[str, str]) -> str:
 
     Overrides MAGPIE_ADMIN_TOKEN_SINK=stdout for just this `docker compose
     exec` invocation so the token is scraped from stdout below, regardless of
-    docker-compose.yml's own (file-sink) default -- this is the harness
-    reading the token for its own use, not a production delivery path.
+    docker-compose.override.yml's own (file-sink) default -- docker-compose.yml
+    itself is fail-closed and has no default -- this is the harness reading
+    the token for its own use, not a production delivery path.
     """
     compose_cmd = [
         "docker",
