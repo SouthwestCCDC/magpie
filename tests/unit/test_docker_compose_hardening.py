@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
 COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
 OVERRIDE_FILE = PROJECT_ROOT / "docker-compose.override.yml"
 
