@@ -16,6 +16,7 @@ from magpie.ctl.commands.migrate import (
     _MIGRATIONS,
     CURRENT_DATA_FORMAT_VERSION,
     MigrationStep,
+    _check_current_version_matches_migrations,
     get_data_format_version,
     run_migrations,
 )
@@ -139,6 +140,40 @@ class TestRunMigrations:
         assert version_after == 6
         assert applied == ["v6: new step"]
         assert calls == [1]
+
+
+class TestCurrentVersionMatchesMigrations:
+    """Tests for the CURRENT_DATA_FORMAT_VERSION/_MIGRATIONS drift guard.
+
+    The real module-level call at import time already proves the two are
+    in sync today (otherwise nothing in this file would have imported
+    successfully) -- these exercise the guard function directly against
+    synthetic inputs, including the mismatch case the real call can never
+    demonstrate against itself.
+    """
+
+    def test_matching_version_is_a_no_op(self) -> None:
+        """A last step whose version equals current_version raises nothing."""
+        steps = (MigrationStep(1, "a", lambda c: None), MigrationStep(3, "b", lambda c: None))
+        _check_current_version_matches_migrations(3, steps)  # must not raise
+
+    def test_current_version_ahead_of_migrations_raises(self) -> None:
+        """A bumped CURRENT_DATA_FORMAT_VERSION with no matching new step is caught."""
+        steps = (MigrationStep(1, "a", lambda c: None),)
+        with pytest.raises(AssertionError, match="does not match"):
+            _check_current_version_matches_migrations(2, steps)
+
+    def test_migrations_ahead_of_current_version_raises(self) -> None:
+        """A new step registered without bumping CURRENT_DATA_FORMAT_VERSION is caught."""
+        steps = (MigrationStep(1, "a", lambda c: None), MigrationStep(2, "b", lambda c: None))
+        with pytest.raises(AssertionError, match="does not match"):
+            _check_current_version_matches_migrations(1, steps)
+
+    def test_empty_migrations_treated_as_version_zero(self) -> None:
+        """An empty registry is only valid alongside CURRENT_DATA_FORMAT_VERSION == 0."""
+        _check_current_version_matches_migrations(0, ())  # must not raise
+        with pytest.raises(AssertionError, match="does not match"):
+            _check_current_version_matches_migrations(1, ())
 
 
 class TestMigrateCommand:

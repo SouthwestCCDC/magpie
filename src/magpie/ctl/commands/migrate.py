@@ -63,6 +63,33 @@ _MIGRATIONS: tuple[MigrationStep, ...] = (
 )
 
 
+def _check_current_version_matches_migrations(
+    current_version: int, migrations: tuple[MigrationStep, ...]
+) -> None:
+    """Raise if CURRENT_DATA_FORMAT_VERSION and _MIGRATIONS have drifted apart.
+
+    They both encode "the current data format" but nothing else ties them
+    together -- a future change that bumps one without the other would let
+    `migrate` silently stop stamping the version assert_post_update() (via
+    --check) expects, turning into a confusing A5 failure downstream
+    instead of a clear error right here. A standalone function (rather than
+    inline module-level code) so it's independently testable with
+    synthetic inputs, not just the real (currently-in-sync) module state.
+    """
+    last_step_version = migrations[-1].version if migrations else 0
+    if last_step_version != current_version:
+        raise AssertionError(
+            f"CURRENT_DATA_FORMAT_VERSION ({current_version}) does not match "
+            f"the last registered migration step's version ({last_step_version}) -- "
+            "update one to match the other."
+        )
+
+
+# Checked at import time so a future drift is caught as soon as this
+# module is loaded, not just when a migration happens to run.
+_check_current_version_matches_migrations(CURRENT_DATA_FORMAT_VERSION, _MIGRATIONS)
+
+
 def get_data_format_version(conn: sqlite3.Connection) -> int:
     """Read the data-format version stamped on this database.
 
