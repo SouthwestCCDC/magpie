@@ -322,7 +322,7 @@ test_backup_data_snapshots_db_env_and_writes_manifest() {
     read -r install_dir data_dir < <(setup_fake_install "backup_basic" "MY_DB_BYTES")
     local backup_dir="${install_dir}/backups/test"
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
         NO_BACKUP="false" BACKUP_ARTIFACTS="skip" \
         PRIOR_MAGPIE_IMAGE="ghcr.io/southwestccdc/magpie:0.1.6-bundled" \
@@ -354,7 +354,7 @@ test_backup_data_refuses_symlinked_admin_token() {
     local out
     out=$(
         (
-            systemctl() { return 0; }
+            systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
             INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
             NO_BACKUP="false" BACKUP_ARTIFACTS="skip" MAGPIE_VERSION="0.2.0" \
             backup_data
@@ -412,7 +412,7 @@ test_backup_data_artifacts_modes() {
     echo "artifact-bytes" > "${data_dir}/artifacts/blob1"
     backup_dir="${install_dir}/backups/link"
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
         NO_BACKUP="false" BACKUP_ARTIFACTS="link" MAGPIE_VERSION="0.2.0" \
         backup_data
@@ -428,7 +428,7 @@ test_backup_data_artifacts_modes() {
     echo "artifact-bytes" > "${data_dir}/artifacts/blob1"
     backup_dir="${install_dir}/backups/copy"
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
         NO_BACKUP="false" BACKUP_ARTIFACTS="copy" MAGPIE_VERSION="0.2.0" \
         backup_data
@@ -445,7 +445,7 @@ test_backup_data_artifacts_modes() {
     echo "artifact-bytes" > "${data_dir}/artifacts/blob1"
     backup_dir="${install_dir}/backups/skip"
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
         NO_BACKUP="false" BACKUP_ARTIFACTS="skip" MAGPIE_VERSION="0.2.0" \
         backup_data
@@ -461,7 +461,7 @@ test_backup_data_no_backup_skips_everything() {
     read -r install_dir data_dir < <(setup_fake_install "backup_noop")
     local backup_dir="${install_dir}/backups/noop"
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
         NO_BACKUP="true" MAGPIE_VERSION="0.2.0" \
         backup_data
@@ -807,7 +807,7 @@ test_rollback_fires_and_restores_prior_state() {
     # capture_prior_state() + backup_data(): snapshot the "prior" (good)
     # state before any mutation, exactly as cmd_update() does.
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
         HTTP_PORT=1 BIND_IP="" PRIOR_GIT_REF="" MAGPIE_VERSION="0.2.0" \
         NO_BACKUP="false" BACKUP_ARTIFACTS="skip"
@@ -832,7 +832,7 @@ test_rollback_fires_and_restores_prior_state() {
     local out
     out=$(
         (
-            systemctl() { return 0; }
+            systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
             wait_for_healthy() { return 0; }  # simulate the restored topology coming up healthy
             docker() { return 1; }  # no prior image to inspect/pull in this fixture (PRIOR_MAGPIE_IMAGE is empty)
             INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
@@ -848,6 +848,45 @@ test_rollback_fires_and_restores_prior_state() {
     log "  ✓ FAULT INJECTED (corrupted .env/docker-compose.yml/magpie.db) -> rollback_to_prior() restored all three to their exact prior bytes"
 }
 
+test_rollback_no_backup_message_is_explicit_that_data_was_not_restored() {
+    log "Test 14b: rollback_to_prior()'s success message is explicit that --no-backup means data was NOT restored (config/units/image only)"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "rollback_no_backup_msg" "OLD_DB_CONTENT")
+    local backup_dir="${install_dir}/backups/nobackupmsg"
+
+    # capture_prior_state() only -- NO_BACKUP="true" means backup_data()
+    # is never even called here (matches cmd_update(): backup_data()
+    # itself no-ops under --no-backup), so no data/ snapshot exists under
+    # $backup_dir at all, exactly the state rollback_to_prior() sees on a
+    # real --no-backup update.
+    (
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
+        INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+        HTTP_PORT=1 BIND_IP="" PRIOR_GIT_REF="" MAGPIE_VERSION="0.2.0" \
+        NO_BACKUP="true"
+        capture_prior_state
+    ) >/dev/null 2>&1
+    [[ ! -f "${backup_dir}/data/magpie.db" ]] || fail "setup problem: a data/ snapshot exists despite NO_BACKUP=true -- not exercising the --no-backup scenario this test is about"
+
+    local out
+    out=$(
+        (
+            systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
+            wait_for_healthy() { return 0; }
+            docker() { return 1; }
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+            NO_BACKUP="true" PRIOR_MAGPIE_IMAGE="" PRIOR_GIT_REF="" \
+            rollback_to_prior
+        ) 2>&1
+    )
+
+    echo "$out" | grep -qi "ROLLED BACK to the prior version" || fail "rollback_to_prior() did not report a clean rollback: $out"
+    echo "$out" | grep -qi "no-backup" || fail "the --no-backup rollback message did not call out that this was a --no-backup update: $out"
+    echo "$out" | grep -qi "were NOT restored" || fail "the --no-backup rollback message was not explicit that data was NOT restored -- 'ROLLED BACK' alone reads as a full restore, which is misleading here: $out"
+    log "  ✓ the --no-backup rollback message explicitly says data was NOT restored, not just config/units/image"
+}
+
 test_rollback_reports_loudly_when_restore_itself_unhealthy() {
     log "Test 15: rollback_to_prior() reports a LOUD failure (not a silent one) if the restored topology doesn't come up healthy"
 
@@ -855,7 +894,7 @@ test_rollback_reports_loudly_when_restore_itself_unhealthy() {
     read -r install_dir data_dir < <(setup_fake_install "rollback_double_fail" "OLD_DB_CONTENT")
     local backup_dir="${install_dir}/backups/doublefail"
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         # Standalone assignments (not command-prefix form) -- all consumed
         # by capture_prior_state()/backup_data() below, sourced from
         # magpie-deploy.sh.
@@ -883,7 +922,7 @@ test_rollback_reports_loudly_when_restore_itself_unhealthy() {
     local out
     out=$(
         (
-            systemctl() { return 0; }
+            systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
             wait_for_healthy() { return 1; }  # even the restored topology fails to come up
             docker() { return 1; }
             INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
@@ -912,7 +951,7 @@ test_rollback_revokes_probe_token_after_healthy_restore() {
     read -r install_dir data_dir < <(setup_fake_install "rollback_probe_revoke" "OLD_DB_CONTENT")
     local backup_dir="${install_dir}/backups/proberevoke"
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
         HTTP_PORT=1 BIND_IP="" PRIOR_GIT_REF="" MAGPIE_VERSION="0.2.0" \
         NO_BACKUP="false" BACKUP_ARTIFACTS="skip"
@@ -923,7 +962,7 @@ test_rollback_revokes_probe_token_after_healthy_restore() {
     local calls_log="${TEST_DIR}/probe_revoke_calls.log"
     rm -f "$calls_log"
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         wait_for_healthy() { return 0; }  # restored topology comes up healthy
         docker() { return 1; }
         compose_exec() { echo "$*" >> "$calls_log"; return 0; }
@@ -1060,7 +1099,7 @@ test_backup_data_stops_gc_timer() {
     rm -f "$calls_log"
 
     (
-        systemctl() { echo "$*" >> "$calls_log"; return 0; }
+        systemctl() { echo "$*" >> "$calls_log"; [[ "$1" == "is-active" ]] && return 1; return 0; }
         INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="${install_dir}/backups/x" \
         NO_BACKUP="false" BACKUP_ARTIFACTS="skip" MAGPIE_VERSION="0.2.0" \
         backup_data
@@ -1084,7 +1123,7 @@ test_rollback_and_cmd_update_restart_gc_timer() {
     read -r install_dir data_dir < <(setup_fake_install "gc_timer_restart" "OLD_DB_CONTENT")
     local backup_dir="${install_dir}/backups/gctimer"
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
         HTTP_PORT=1 BIND_IP="" PRIOR_GIT_REF="" MAGPIE_VERSION="0.2.0" \
         NO_BACKUP="false" BACKUP_ARTIFACTS="skip"
@@ -1095,7 +1134,7 @@ test_rollback_and_cmd_update_restart_gc_timer() {
     local calls_log="${TEST_DIR}/gc_timer_restart_calls.log"
     rm -f "$calls_log"
     (
-        systemctl() { echo "$*" >> "$calls_log"; return 0; }
+        systemctl() { echo "$*" >> "$calls_log"; [[ "$1" == "is-active" ]] && return 1; return 0; }
         wait_for_healthy() { return 0; }
         docker() { return 1; }
         INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
@@ -1123,7 +1162,7 @@ test_rollback_reasserts_using_legacy_bind_ip_key() {
     read -r install_dir data_dir < <(setup_fake_install "legacy_bind_ip" "OLD_DB_CONTENT" "BIND_IP=10.9.9.9")
     local backup_dir="${install_dir}/backups/legacybindip"
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
         HTTP_PORT=1 BIND_IP="" PRIOR_GIT_REF="" MAGPIE_VERSION="0.2.0" \
         NO_BACKUP="false" BACKUP_ARTIFACTS="skip"
@@ -1134,7 +1173,7 @@ test_rollback_reasserts_using_legacy_bind_ip_key() {
     local probed_url_file="${TEST_DIR}/legacy_bind_ip_probed_url"
     rm -f "$probed_url_file"
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         wait_for_healthy() { health_check_url > "$probed_url_file"; return 0; }
         docker() { return 1; }
         INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
@@ -1357,7 +1396,7 @@ test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit() {
         (
             set -euo pipefail  # magpie-deploy.sh's own real semantics
             update_repo_to_latest() { :; }  # needs a real remote; out of scope for this test (see #582)
-            systemctl() { return 0; }
+            systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
             wait_for_healthy() { return 1; }  # fail fast rather than really retrying/probing
             docker() { return 1; }
             compose_exec() { return 1; }
@@ -1403,7 +1442,7 @@ test_gc_timer_never_started_before_rollback_stops_it_again() {
     (
         set -euo pipefail
         update_repo_to_latest() { :; }
-        systemctl() { echo "$*" >> "$calls_log"; return 0; }
+        systemctl() { echo "$*" >> "$calls_log"; [[ "$1" == "is-active" ]] && return 1; return 0; }
         wait_for_healthy() { return 1; }
         docker() { return 1; }
         compose_exec() { return 1; }
@@ -1463,7 +1502,7 @@ test_no_rollback_restarts_gc_timer_before_dying() {
     (
         set -euo pipefail
         update_repo_to_latest() { :; }
-        systemctl() { echo "$*" >> "$calls_log"; return 0; }
+        systemctl() { echo "$*" >> "$calls_log"; [[ "$1" == "is-active" ]] && return 1; return 0; }
         wait_for_healthy() { return 1; }  # forces the post-update assert gate to fail
         docker() { return 0; }  # swap's docker pull/build succeeds
         compose_exec() { return 1; }
@@ -1503,7 +1542,7 @@ test_backup_data_cp_failure_triggers_rollback_under_real_errexit() {
     out=$(
         (
             set -euo pipefail  # magpie-deploy.sh's own real semantics
-            systemctl() { return 0; }
+            systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
             wait_for_healthy() { return 0; }
             docker() { return 1; }
             INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="${install_dir}/backups/x" \
@@ -1523,6 +1562,106 @@ test_backup_data_cp_failure_triggers_rollback_under_real_errexit() {
     log "  ✓ a real backup_data() cp failure, with errexit preserved, reaches rollback_to_prior() -- not a bare abort leaving the site down"
 }
 
+# ---------------------------------------------------------------------------
+# backup_data()/rollback_to_prior() must fail closed if magpie.service is
+# still ACTIVE after the stop attempt -- copying/restoring magpie.db while
+# the service is still live would produce an inconsistent backup/restore
+# and defeat the whole "this checkpoints the WAL" guarantee. The raw
+# `systemctl stop` return code is not the real signal (an already-inactive
+# unit's stop succeeds trivially either way); `systemctl is-active` after
+# the attempt is. Both tests below shadow `is-active` to report ACTIVE
+# (simulating a stop that silently failed to take effect) with errexit
+# PRESERVED, since this is exactly the kind of guarded `if` this session's
+# set+e test harness could otherwise mask a regression in without
+# actually exercising the real control flow.
+# ---------------------------------------------------------------------------
+test_backup_data_refuses_to_copy_db_while_service_still_active_under_real_errexit() {
+    log "Test 17h: backup_data() fails closed (never copies magpie.db) if magpie.service is still ACTIVE after the stop attempt"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "backup_stuck_active" "OLD_DB_CONTENT")
+
+    local out
+    out=$(
+        (
+            set -euo pipefail  # magpie-deploy.sh's own real semantics
+            # `stop` itself "succeeds" (rc 0) -- but the service is still
+            # reported ACTIVE afterward, exactly the case a raw return-code
+            # check would miss.
+            systemctl() { [[ "$1" == "is-active" ]] && return 0; return 0; }
+            wait_for_healthy() { return 0; }
+            docker() { return 1; }
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="${install_dir}/backups/x" \
+            HTTP_PORT=1 BIND_IP="" PRIOR_GIT_REF="" MAGPIE_VERSION="0.2.0" \
+            NO_BACKUP="false" BACKUP_ARTIFACTS="skip"
+            capture_prior_state
+            preflight_backup_space
+            backup_data
+        ) 2>&1
+    )
+    local rc=$?
+
+    [[ $rc -ne 0 ]] || fail "backup_data() reported success despite magpie.service staying ACTIVE after the stop attempt"
+    [[ ! -f "${install_dir}/backups/x/data/magpie.db" ]] || fail "backup_data() copied magpie.db even though magpie.service was still ACTIVE -- this is exactly the inconsistent-backup risk the fail-closed check exists to prevent"
+    echo "$out" | grep -qi "still active" || fail "backup_data() did not report WHY it refused (expected an 'is still active' message): $out"
+    echo "$out" | grep -qi "Rolling back to the prior install" || fail "a stuck-active magpie.service did not route to rollback_to_prior(): $out"
+    log "  ✓ backup_data() fails closed and never copies magpie.db when magpie.service is still active"
+}
+
+test_rollback_fails_closed_when_service_still_active_under_real_errexit() {
+    log "Test 22b: rollback_to_prior() fails closed (never restores magpie.db) if magpie.service is still ACTIVE after its own stop attempt"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "rollback_stuck_active" "OLD_DB_CONTENT")
+    local backup_dir="${install_dir}/backups/stuckactive"
+
+    (
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
+        # shellcheck disable=SC2034
+        INSTALL_DIR="$install_dir"
+        # shellcheck disable=SC2034
+        DATA_DIR="$data_dir"
+        BACKUP_DIR="$backup_dir"
+        # shellcheck disable=SC2034
+        HTTP_PORT=1
+        # shellcheck disable=SC2034
+        BIND_IP=""
+        # shellcheck disable=SC2034
+        PRIOR_GIT_REF=""
+        # shellcheck disable=SC2034
+        MAGPIE_VERSION="0.2.0"
+        # shellcheck disable=SC2034
+        NO_BACKUP="false"
+        # shellcheck disable=SC2034
+        BACKUP_ARTIFACTS="skip"
+        capture_prior_state
+        backup_data
+    ) >/dev/null 2>&1
+    [[ -f "${backup_dir}/data/magpie.db" ]] || fail "setup problem: backup_data() did not produce a DB backup to roll back from"
+
+    local out
+    out=$(
+        (
+            set -euo pipefail  # magpie-deploy.sh's own real semantics
+            # `stop` "succeeds" -- but the service is still reported
+            # ACTIVE afterward.
+            systemctl() { [[ "$1" == "is-active" ]] && return 0; return 0; }
+            wait_for_healthy() { return 0; }
+            docker() { return 1; }
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+            NO_BACKUP="false" PRIOR_MAGPIE_IMAGE="" PRIOR_GIT_REF="" \
+            rollback_to_prior
+        ) 2>&1
+    )
+    local rc=$?
+
+    [[ $rc -ne 0 ]] || fail "rollback_to_prior() reported success despite magpie.service staying ACTIVE after its own stop attempt"
+    echo "$out" | grep -qi "Rollback restore itself FAILED" || fail "a stuck-active magpie.service did not reach rollback_to_prior()'s own loud die() with the backup path: $out"
+    echo "$out" | grep -qi "still active" || fail "rollback_to_prior() did not report WHY it refused (expected an 'is still active' message): $out"
+    echo "$out" | grep -qF "$backup_dir" || fail "the loud fail-closed die() did not include the backup path for manual recovery: $out"
+    log "  ✓ rollback_to_prior() fails closed and never restores magpie.db when magpie.service is still active"
+}
+
 test_rollback_cp_failure_dies_loudly_under_real_errexit() {
     log "Test 22: a real cp failure during rollback's own restore, with errexit PRESERVED, dies loudly with the backup path rather than aborting bare"
 
@@ -1536,7 +1675,7 @@ test_rollback_cp_failure_dies_loudly_under_real_errexit() {
     local backup_dir="${install_dir}/backups/cpfail"
 
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         # Standalone assignments (not command-prefix form) -- all consumed
         # by capture_prior_state()/backup_data() below, sourced from
         # magpie-deploy.sh.
@@ -1569,7 +1708,7 @@ test_rollback_cp_failure_dies_loudly_under_real_errexit() {
     out=$(
         (
             set -euo pipefail  # magpie-deploy.sh's own real semantics
-            systemctl() { return 0; }
+            systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
             wait_for_healthy() { return 0; }
             docker() { return 1; }
             INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
@@ -1612,7 +1751,7 @@ test_rollback_unit_restore_short_circuits_on_first_failure() {
     local calls_log="${TEST_DIR}/unit_short_circuit_cp_calls"
     rm -f "$calls_log"
     (
-        systemctl() { return 0; }
+        systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
         wait_for_healthy() { return 1; }
         docker() { return 1; }
         # Shadows the real `cp` (an external command, so a same-shell
@@ -1703,6 +1842,7 @@ test_assert_post_update_a5_survives_total_compose_exec_failure
 test_assert_post_update_a6_survives_total_compose_exec_failure
 test_assert_post_update_a2_survives_total_compose_exec_failure
 test_rollback_fires_and_restores_prior_state
+test_rollback_no_backup_message_is_explicit_that_data_was_not_restored
 test_rollback_reports_loudly_when_restore_itself_unhealthy
 test_rollback_revokes_probe_token_after_healthy_restore
 test_prune_old_backups_keeps_newest_n
@@ -1711,6 +1851,7 @@ test_prune_old_backups_sorts_by_mtime_not_name
 test_prune_old_backups_is_best_effort_under_real_errexit
 test_backup_data_stops_gc_timer
 test_backup_data_cp_failure_triggers_rollback_under_real_errexit
+test_backup_data_refuses_to_copy_db_while_service_still_active_under_real_errexit
 test_rollback_and_cmd_update_restart_gc_timer
 test_rollback_reasserts_using_legacy_bind_ip_key
 test_run_data_migration_failure_propagates
@@ -1721,6 +1862,7 @@ test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit
 test_gc_timer_never_started_before_rollback_stops_it_again
 test_no_rollback_restarts_gc_timer_before_dying
 test_rollback_cp_failure_dies_loudly_under_real_errexit
+test_rollback_fails_closed_when_service_still_active_under_real_errexit
 test_rollback_unit_restore_short_circuits_on_first_failure
 test_cmd_update_validates_envelope_flags
 

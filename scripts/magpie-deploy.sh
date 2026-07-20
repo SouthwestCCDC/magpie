@@ -1893,6 +1893,23 @@ backup_data() {
 
     log "Stopping the running stack to back up data safely (this checkpoints the WAL)..."
     systemctl stop magpie.service 2>/dev/null || true
+    # A failed stop above is only safe to ignore if the service simply
+    # wasn't running (its `stop` then succeeds trivially, or the unit
+    # doesn't exist yet) -- copying magpie.db while an ACTIVE
+    # magpie.service is still writing to it (its own live WAL) would
+    # produce an inconsistent backup and defeat this stop's whole purpose
+    # ("this checkpoints the WAL", above). `systemctl is-active` after
+    # the attempt is the real signal, not the raw `stop` return code.
+    # Routes to rollback_to_prior() like every other fallible step below
+    # (safe: nothing has been swapped yet -- see the comment on that
+    # pattern just below) -- and rollback_to_prior() has this exact same
+    # fail-closed check on ITS OWN stop attempt, so a genuinely-stuck
+    # magpie.service surfaces as a loud die() with the backup path
+    # rather than proceeding to copy a live, actively-written database.
+    if systemctl is-active --quiet magpie.service; then
+        log_error "Failed to stop magpie.service before backing up data -- it is still active. Copying magpie.db from a live, actively-written database would produce an inconsistent backup."
+        rollback_to_prior
+    fi
     # magpie-gc.timer/-.service are SEPARATE units from magpie.service,
     # untouched by the stop above -- if the timer fires during the
     # stop-copy-swap window, its own `docker compose run --rm magpie-ctl
@@ -2193,6 +2210,22 @@ rollback_to_prior() {
     local restore_failure=""
 
     systemctl stop magpie.service 2>/dev/null || true
+    # A failed stop above is only safe to ignore if the service simply
+    # wasn't running -- restoring .env/docker-compose.yml/magpie.db below
+    # while an ACTIVE magpie.service is still running (and potentially
+    # still writing to the OLD magpie.db) would race this restore's own
+    # file copies, producing a corrupted or inconsistent restored state.
+    # `systemctl is-active` after the attempt is the real signal, not the
+    # raw `stop` return code (which succeeds trivially for an
+    # already-inactive unit). Setting restore_failure here (rather than a
+    # separate die()) reuses every subsequent step's existing
+    # `[[ -z "$restore_failure" ]]` guard to skip straight to this
+    # function's own loud die() with the backup path, below -- the same
+    # fail-closed contract as every other restore failure in this
+    # function.
+    if systemctl is-active --quiet magpie.service; then
+        restore_failure="stopping magpie.service before restoring (it is still active)"
+    fi
     # Defensive: magpie-gc.timer/-.service should already be stopped
     # (backup_data() stops both for the whole update window, and
     # cmd_update()'s success path only restarts the timer after the
@@ -2398,7 +2431,17 @@ rollback_to_prior() {
         # e.g. the prior install was unreachable when captured) is not
         # itself a rollback failure.
         compose_exec magpie magpie-ctl token revoke "$PROBE_TOKEN_NAME" >/dev/null 2>&1 || true
-        die "Update failed and was ROLLED BACK to the prior version. See the failure reason(s) above. Backup and rollback state: ${BACKUP_DIR}"
+        # Under --no-backup, no data snapshot exists (backup_data()
+        # returned early) -- only .env/docker-compose.yml/units/image
+        # were captured and restored above, magpie.db/artifacts were NOT
+        # touched by this rollback at all. Said explicitly rather than
+        # letting "ROLLED BACK" read as a full restore -- matters if the
+        # failed update had run a data migration that mutated /data
+        # in-place before failing (a future release's migrate step might;
+        # v0.2.0's own baseline step does not).
+        local data_note=""
+        [[ "$NO_BACKUP" == "true" ]] && data_note=" NOTE: this was a --no-backup update -- config/units/image were reverted, but magpie.db/artifacts were NOT restored (no data snapshot exists) and reflect whatever state the failed update left them in."
+        die "Update failed and was ROLLED BACK to the prior version. See the failure reason(s) above. Backup and rollback state: ${BACKUP_DIR}${data_note}"
     else
         die "Update failed AND the rollback restore did not come up healthy. Manual recovery needed -- do not retry 'update' until you've investigated. Check '$SCRIPT_NAME logs' and the MANIFEST at ${BACKUP_DIR}/MANIFEST. Backup and rollback state: ${BACKUP_DIR}"
     fi
