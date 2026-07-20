@@ -110,6 +110,25 @@ test_health_check_url_bind_ip_aware() {
     url=$(BIND_IP="::1" HTTP_PORT=8080 health_check_url)
     [[ "$url" == "http://[::1]:8080/health" ]] || fail "an IPv6 BIND_IP: expected bracketed host, got: $url"
     log "  ✓ an IPv6 BIND_IP is bracketed in the URL"
+
+    # The IPv6 unspecified address ("::", and any equivalent
+    # all-zero/all-compressed form) means "listen on every interface" --
+    # same as 0.0.0.0 for IPv4 -- and is not itself connectable. Probing
+    # it directly would time out and falsely trigger a rollback on an
+    # install that's actually fine.
+    url=$(BIND_IP="::" HTTP_PORT=8080 health_check_url)
+    [[ "$url" == "http://127.0.0.1:8080/health" ]] || fail "BIND_IP='::' (IPv6 all-interfaces): expected loopback fallback, got: $url"
+    log "  ✓ BIND_IP='::' (IPv6 all interfaces) -> loopback fallback"
+
+    url=$(BIND_IP="0:0:0:0:0:0:0:0" HTTP_PORT=8080 health_check_url)
+    [[ "$url" == "http://127.0.0.1:8080/health" ]] || fail "BIND_IP='0:0:0:0:0:0:0:0' (fully-expanded IPv6 all-interfaces): expected loopback fallback, got: $url"
+    log "  ✓ a fully-expanded all-zero IPv6 address also falls back to loopback"
+
+    # ::1 (loopback, contains a '1') must NOT be caught by the same
+    # all-zero fallback -- a real, connectable address.
+    url=$(BIND_IP="::1" HTTP_PORT=8080 health_check_url)
+    [[ "$url" == "http://[::1]:8080/health" ]] || fail "BIND_IP='::1' must still be probed directly (not treated as all-interfaces), got: $url"
+    log "  ✓ ::1 (a real address, not all-zero) is still probed directly"
 }
 
 # ---------------------------------------------------------------------------

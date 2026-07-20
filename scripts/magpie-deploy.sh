@@ -1382,7 +1382,17 @@ start_services() {
 # sentinel (0.0.0.0) -- both cases still accept loopback connections.
 health_check_url() {
     local host="127.0.0.1"
-    if [[ -n "$BIND_IP" && "$BIND_IP" != "0.0.0.0" ]]; then
+    # "0.0.0.0" (IPv4) and the IPv6 unspecified address ("::", and any
+    # equivalent all-zero/all-compressed form such as
+    # "0:0:0:0:0:0:0:0" or "0000:...:0000") both mean "listen on every
+    # interface", which is not itself a connectable address -- probing it
+    # directly (e.g. http://[::]:PORT/health) would time out and falsely
+    # trigger a rollback on an install that's actually fine. A real IPv6
+    # address always has at least one non-zero hex digit, so "contains a
+    # colon and only ':'/'0' characters" is a safe, format-agnostic test
+    # (it can't misfire on "::1"/loopback, which has a '1').
+    if [[ -n "$BIND_IP" && "$BIND_IP" != "0.0.0.0" ]] \
+        && ! [[ "$BIND_IP" == *:* && "$BIND_IP" =~ ^[0:]+$ ]]; then
         host="$BIND_IP"
     fi
     # An IPv6 literal needs brackets in a URL (it has colons of its own,

@@ -16,7 +16,13 @@ from typing import TYPE_CHECKING, NamedTuple
 import click
 
 from magpie.auth.database import get_connection, init_database
-from magpie.cli.formatting import CommandResult, is_json_output, output_result
+from magpie.cli.formatting import (
+    CommandResult,
+    ErrorCode,
+    is_json_output,
+    output_error,
+    output_result,
+)
 from magpie.ctl import CTLContext
 
 if TYPE_CHECKING:
@@ -125,8 +131,27 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
     Returns:
         Tuple of (version_before, version_after, list of applied step
         descriptions, oldest first).
+
+    Raises:
+        ValueError: The database is already stamped with a data-format
+            version newer than this build supports. For a forward-only
+            marker, this is not "nothing to do" -- no step in _MIGRATIONS
+            exceeds it, so the loop below would silently no-op and report
+            success. That's the wrong failure mode: a newer-than-supported
+            stamp almost always means a downgrade (an older magpie build
+            running against data a newer build already migrated), which
+            should fail closed rather than proceed against data this
+            build doesn't actually understand.
     """
     version_before = get_data_format_version(conn)
+    if version_before > CURRENT_DATA_FORMAT_VERSION:
+        raise ValueError(
+            f"Database data-format version ({version_before}) is newer than this "
+            f"build of magpie supports (current: {CURRENT_DATA_FORMAT_VERSION}). This "
+            "usually means a downgrade -- an older magpie build running against data "
+            "a newer build already migrated. Refusing to proceed: install a magpie "
+            f"build that supports data-format version {version_before} or newer."
+        )
     version = version_before
     applied: list[str] = []
 
@@ -212,7 +237,14 @@ def migrate(ctx: CTLContext, check: bool) -> None:
 
     conn = get_connection(settings.database_path)
     try:
-        version_before, version_after, applied = run_migrations(conn)
+        try:
+            version_before, version_after, applied = run_migrations(conn)
+        except ValueError as e:
+            # A clean, structured error (both output formats) rather than
+            # a raw traceback -- run_migrations() only raises ValueError
+            # for the newer-than-supported-stamp (likely downgrade) case;
+            # see its docstring.
+            output_error(ErrorCode.CONFLICT, str(e))
     finally:
         conn.close()
 
@@ -234,4 +266,4 @@ def migrate(ctx: CTLContext, check: bool) -> None:
         for step in applied:
             click.echo(f"  - {step}")
     else:
-        click.echo(f"Data format already current (v{version_after}); nothing to do.")
+        click.echo(f"Data-format already current (v{version_after}); nothing to do.")

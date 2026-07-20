@@ -131,7 +131,16 @@ class TestRunMigrations:
                 MigrationStep(5, "already applied", sentinel),
                 MigrationStep(6, "new step", sentinel),
             )
-            with patch("magpie.ctl.commands.migrate._MIGRATIONS", fake_steps):
+            # CURRENT_DATA_FORMAT_VERSION is also patched to match the
+            # synthetic steps' own top version (6) -- the real constant is
+            # 1, and the stamped version 5 above is deliberately higher
+            # than that to exercise "already applied", which would
+            # otherwise now trip the newer-than-supported fail-closed
+            # guard this test isn't about.
+            with (
+                patch("magpie.ctl.commands.migrate._MIGRATIONS", fake_steps),
+                patch("magpie.ctl.commands.migrate.CURRENT_DATA_FORMAT_VERSION", 6),
+            ):
                 version_before, version_after, applied = run_migrations(conn)
         finally:
             conn.close()
@@ -140,6 +149,36 @@ class TestRunMigrations:
         assert version_after == 6
         assert applied == ["v6: new step"]
         assert calls == [1]
+
+    def test_fails_closed_on_newer_than_supported_stamp(self, tmp_path: Path) -> None:
+        """A database stamped newer than CURRENT_DATA_FORMAT_VERSION is refused, not treated as current.
+
+        The likely real-world cause: an older magpie build (this one)
+        running against data a newer build already migrated -- e.g. a
+        downgrade, or `magpie-deploy.sh update --no-rollback` followed by
+        a manual revert. Silently no-op'ing here (nothing in _MIGRATIONS
+        exceeds the stamped version, so the loop would apply nothing and
+        report success) would let this build run against data it doesn't
+        actually understand.
+        """
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+        conn = get_connection(db_path)
+        try:
+            conn.execute(f"PRAGMA user_version = {CURRENT_DATA_FORMAT_VERSION + 1}")
+            conn.commit()
+
+            with pytest.raises(ValueError, match="newer than this"):
+                run_migrations(conn)
+        finally:
+            conn.close()
+
+        # Refusing to migrate must not itself mutate the stamp.
+        conn2 = get_connection(db_path)
+        try:
+            assert get_data_format_version(conn2) == CURRENT_DATA_FORMAT_VERSION + 1
+        finally:
+            conn2.close()
 
 
 class TestCurrentVersionMatchesMigrations:
@@ -247,3 +286,23 @@ class TestMigrateCommand:
         assert result.exit_code == 0, f"Output: {result.output}"
         assert '"data_format_version": 0' in result.output
         assert f'"current_data_format_version": {CURRENT_DATA_FORMAT_VERSION}' in result.output
+
+    def test_migrate_fails_closed_on_newer_than_supported_stamp(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """`magpie-ctl migrate` reports a clean error (not a traceback) for a downgrade scenario."""
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            cli_runner.invoke(cli, ["migrate"])
+            conn = get_connection(test_settings.database_path)
+            try:
+                conn.execute(f"PRAGMA user_version = {CURRENT_DATA_FORMAT_VERSION + 1}")
+                conn.commit()
+            finally:
+                conn.close()
+
+            result = cli_runner.invoke(cli, ["migrate"])
+
+        assert result.exit_code != 0, f"Output: {result.output}"
+        assert "newer than this" in result.output
+        # A clean, structured error -- not an unhandled-exception traceback.
+        assert "Traceback" not in result.output
