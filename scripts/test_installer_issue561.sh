@@ -206,6 +206,27 @@ test_compute_backup_dir_format() {
     log "  ✓ backup dir format: $dir"
 }
 
+# Regression test for a Copilot finding: detect_version() only requires
+# pyproject.toml's `version = "..."` line to parse at all -- the quoted
+# content itself (from a corrupted or malicious --from-source checkout)
+# isn't otherwise validated before compute_backup_dir() embeds it in a
+# filesystem path this script (running as root) creates and writes into.
+test_compute_backup_dir_rejects_unsafe_version() {
+    log "Test 4b: compute_backup_dir() rejects a MAGPIE_VERSION containing unsafe characters"
+
+    local out
+    if out=$(
+        (
+            INSTALL_DIR="/opt/magpie" MAGPIE_VERSION="../../etc"
+            compute_backup_dir
+        ) 2>&1
+    ); then
+        fail "compute_backup_dir() did not reject a MAGPIE_VERSION containing '/' and '..': $out"
+    fi
+    echo "$out" | grep -qi "contains characters outside" || fail "compute_backup_dir() rejected the unsafe version but without a clear message: $out"
+    log "  ✓ a MAGPIE_VERSION containing path-traversal characters is rejected before use in a filesystem path"
+}
+
 # ---------------------------------------------------------------------------
 # preflight_backup_space()
 # ---------------------------------------------------------------------------
@@ -267,6 +288,33 @@ test_backup_data_snapshots_db_env_and_writes_manifest() {
     grep -q "^source_image=ghcr.io/southwestccdc/magpie:0.1.6-bundled$" "${backup_dir}/MANIFEST" || fail "MANIFEST missing source_image"
     grep -q "^backup_artifacts_mode=skip$" "${backup_dir}/MANIFEST" || fail "MANIFEST did not record backup_artifacts_mode=skip"
     log "  ✓ magpie.db + .env snapshotted; MANIFEST written with expected fields"
+}
+
+# Regression test for a Copilot finding: backup_data()/rollback_to_prior()
+# derive a host path from the operator-controlled
+# MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH via `${DATA_DIR}${token_file#/data}` --
+# an unvalidated value like "/data/../../etc/shadow" would resolve OUTSIDE
+# DATA_DIR on the host, and this script runs as root.
+test_resolve_admin_token_host_path_rejects_traversal() {
+    log "Test 6b: resolve_admin_token_host_path() rejects a path outside /data or containing '..'"
+
+    local out
+    out=$(DATA_DIR="/opt/magpie/data" resolve_admin_token_host_path "/data/../../etc/shadow" 2>&1)
+    local rc=$?
+    [[ $rc -ne 0 ]] || fail "resolve_admin_token_host_path() accepted a '..'-containing path: $out"
+    [[ -z "$out" || "$out" != /* ]] || fail "resolve_admin_token_host_path() printed a resolved path despite rejecting the input: $out"
+    log "  ✓ a '..'-containing sink path is rejected, not resolved"
+
+    out=$(DATA_DIR="/opt/magpie/data" resolve_admin_token_host_path "/etc/shadow" 2>&1)
+    rc=$?
+    [[ $rc -ne 0 ]] || fail "resolve_admin_token_host_path() accepted a path outside /data: $out"
+    log "  ✓ a path not under /data is rejected"
+
+    out=$(DATA_DIR="/opt/magpie/data" resolve_admin_token_host_path "/data/subdir/admin-token" 2>/dev/null)
+    rc=$?
+    [[ $rc -eq 0 ]] || fail "resolve_admin_token_host_path() rejected a legitimate /data/... path"
+    [[ "$out" == "/opt/magpie/data/subdir/admin-token" ]] || fail "resolve_admin_token_host_path() resolved a legitimate path incorrectly: $out"
+    log "  ✓ a legitimate /data/... path resolves correctly under DATA_DIR"
 }
 
 test_backup_data_artifacts_modes() {
@@ -405,6 +453,42 @@ test_assert_post_update_skips_a2_a3_a4_when_nothing_captured() {
     local rc=$?
     [[ $rc -eq 0 ]] || fail "assert_post_update() failed even though A1/A5/A6 all pass and A2/A3/A4 have nothing to check"
     log "  ✓ passes cleanly when A2/A3/A4 are vacuously satisfied"
+}
+
+# Regression test (A4 half of the explicit-ref fix, see the
+# capture_probe_state() version above): assert_post_update()'s A4 check
+# must query 'info path:ref' by the EXPLICIT captured tag, not the bare
+# path (which resolves via magpie's implicit ":latest" default) -- it has
+# to verify the actual tag PROBE_ARTIFACT_REF names, not whatever "latest"
+# happens to be post-update.
+test_assert_post_update_a4_queries_info_by_explicit_ref() {
+    log "Test 11b: assert_post_update()'s A4 check queries 'info path:tag' explicitly, not the bare path"
+
+    local calls_log="${TEST_DIR}/a4_explicit_ref_calls.log"
+    rm -f "$calls_log"
+    (
+        wait_for_healthy() { return 0; }
+        compose_exec() {
+            echo "$*" >> "$calls_log"
+            case "$*" in
+                *"migrate --check"*) echo "Data-format version: 1 (current: 1)" ;;
+                *"token list"*) echo "Total: 2 token(s)" ;;
+                *"info myproj/myart:v1"*)
+                    printf 'Hash:        deadbeef123\n'
+                    ;;
+                *"get "*) echo "Downloaded: /tmp/x" ;;
+                *) return 1 ;;
+            esac
+        }
+        PRIOR_DATA_FORMAT_VERSION="1" PRIOR_TOKEN_ROW_COUNT="2" \
+        PROBE_TOKEN="mgp_probe" PROBE_ARTIFACT_PATH="myproj/myart" PROBE_ARTIFACT_REF="v1" \
+        PROBE_ARTIFACT_SHA256="deadbeef123" \
+        assert_post_update
+    ) >/dev/null 2>&1
+
+    grep -qF "info myproj/myart:v1" "$calls_log" \
+        || fail "assert_post_update()'s A4 check did not query 'info path:tag' explicitly: $(cat "$calls_log")"
+    log "  ✓ A4 queries the explicit ref, not the bare (implicit-:latest) path"
 }
 
 test_assert_post_update_a5_fails_on_version_regression() {
@@ -893,6 +977,52 @@ EOF
     log "  ✓ a hyphen-containing token is captured in full, not truncated"
 }
 
+# Regression test for a Copilot finding: capture_probe_state() used to
+# capture PROBE_ARTIFACT_SHA256 from the SAME untagged `magpie info $path`
+# query used to discover the tag list -- that query resolves via magpie's
+# implicit ":latest" default, so the captured hash was really "whatever
+# latest is," not explicitly the chosen PROBE_ARTIFACT_REF's hash (even
+# though the two happen to coincide today, per the untagged query's own
+# tags-are-for-the-resolved-hash semantics -- being explicit removes any
+# reliance on that holding forever, and closes the gap where a FUTURE tag
+# regression isolated to the non-latest tag wouldn't be caught). Confirms
+# the fix: a SECOND, explicitly ref-qualified `info path:tag` call is made
+# to get the hash, not just the bare untagged query.
+test_capture_probe_state_queries_info_by_explicit_ref() {
+    log "Test 20b: capture_probe_state() queries 'info path:tag' explicitly for the hash, not just the implicit-:latest untagged query"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "probe_explicit_ref")
+    local calls_log="${TEST_DIR}/probe_explicit_ref_calls.log"
+    rm -f "$calls_log"
+
+    (
+        curl() { return 0; }
+        compose_exec() {
+            echo "$*" >> "$calls_log"
+            case "$*" in
+                *"token create"*) echo "mgp_ADMIN_faketoken123" ;;
+                *"token list"*) echo "Total: 1 token(s)" ;;
+                *"migrate --check"*) echo "Data-format version: 0 (current: 1)" ;;
+                *"ls -r"*) echo "myproj/myart" ;;
+                *"info myproj/myart:v1"*)
+                    printf 'Hash:        deadbeef123\nTags:        v1, latest\n'
+                    ;;
+                *"info myproj/myart"*)
+                    printf 'Hash:        deadbeef123\nTags:        v1, latest\n'
+                    ;;
+                *) return 1 ;;
+            esac
+        }
+        INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" HTTP_PORT=1 BIND_IP="" \
+        capture_probe_state >/dev/null 2>&1
+    )
+
+    grep -qF "info myproj/myart:v1" "$calls_log" \
+        || fail "capture_probe_state() never made an explicitly ref-qualified 'info path:tag' call -- it's still relying on the implicit :latest untagged query for the hash: $(cat "$calls_log")"
+    log "  ✓ capture_probe_state() explicitly re-queries by tag for the hash"
+}
+
 # ---------------------------------------------------------------------------
 # Errexit-PRESERVED regression tests (adversarial review findings A1/A3).
 #
@@ -1216,13 +1346,16 @@ test_health_check_url_bind_ip_aware
 test_wait_for_healthy_hard_fails_on_timeout
 test_detect_upgrade_shape_signals
 test_compute_backup_dir_format
+test_compute_backup_dir_rejects_unsafe_version
 test_preflight_backup_space
 test_backup_data_snapshots_db_env_and_writes_manifest
+test_resolve_admin_token_host_path_rejects_traversal
 test_backup_data_artifacts_modes
 test_backup_data_no_backup_skips_everything
 test_capture_prior_state_snapshots_config_and_skips_unreachable_probes
 test_assert_post_update_a1_short_circuits_on_unhealthy
 test_assert_post_update_skips_a2_a3_a4_when_nothing_captured
+test_assert_post_update_a4_queries_info_by_explicit_ref
 test_assert_post_update_a5_fails_on_version_regression
 test_assert_post_update_a6_fails_on_row_count_change
 test_assert_post_update_a5_survives_total_compose_exec_failure
@@ -1239,6 +1372,7 @@ test_backup_data_cp_failure_triggers_rollback_under_real_errexit
 test_rollback_and_cmd_update_restart_gc_timer
 test_run_data_migration_failure_propagates
 test_capture_probe_state_token_regex_handles_hyphens
+test_capture_probe_state_queries_info_by_explicit_ref
 test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit
 test_gc_timer_never_started_before_rollback_stops_it_again
 test_no_rollback_restarts_gc_timer_before_dying

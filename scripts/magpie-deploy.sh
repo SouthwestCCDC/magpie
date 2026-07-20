@@ -1535,6 +1535,30 @@ compose_exec() {
     docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" exec -T "$@"
 }
 
+# Resolves MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH (an in-container path, always
+# under /data/... by convention -- see docker-compose.yml) to its host
+# path under DATA_DIR (the bind mount's host-side counterpart), used by
+# backup_data()/rollback_to_prior() to reach the admin-token file
+# directly. Validates the value first: it must actually start with
+# "/data/" and contain no ".." segments, or the naive
+# `${DATA_DIR}${token_file#/data}` substitution could resolve OUTSIDE
+# DATA_DIR on the host (e.g. a crafted ".env" value of
+# "/data/../../etc/shadow") -- this script runs as root, so an
+# unvalidated value here could read or write arbitrary host files. Prints
+# the resolved host path on stdout and returns 0 on success; on a value
+# that fails validation, logs a warning and returns 1 -- callers treat
+# that as "no host path available" and skip the admin-token copy step,
+# rather than failing the whole backup/rollback over an operator's
+# malformed sink-path setting.
+resolve_admin_token_host_path() {
+    local token_file="$1"
+    if [[ "$token_file" != /data/* ]] || [[ "$token_file" == *..* ]]; then
+        log_warn "MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH ('${token_file}') is not a safe /data/... path (must start with /data/ and contain no '..' segments) -- skipping the admin-token backup/restore step."
+        return 1
+    fi
+    echo "${DATA_DIR}${token_file#/data}"
+}
+
 # Sets IS_CROSS_020: whether this update is crossing the pre-0.2.0
 # two-container -> bundled single-container boundary, detected from the
 # CURRENT (not-yet-touched) install state, before any part of the swap
@@ -1575,8 +1599,18 @@ detect_upgrade_shape() {
 
 # Computes BACKUP_DIR for this update run. Called after detect_version()
 # (needs MAGPIE_VERSION, the version being updated TO) and before any
-# capture/backup step.
+# capture/backup step. MAGPIE_VERSION is validated here (not just trusted)
+# before being embedded in a filesystem path this script (running as
+# root) later creates and writes into: detect_version() only requires the
+# pyproject.toml `version = "..."` line to parse at all, so the quoted
+# content itself -- e.g. from a malicious or corrupted --from-source
+# checkout -- could otherwise contain '/' or '..' and escape
+# ${INSTALL_DIR}/backups/. Same conservative-allowlist approach as
+# is_valid_git_ref()/validate_path_value() elsewhere in this script.
 compute_backup_dir() {
+    if ! [[ "$MAGPIE_VERSION" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        die "Detected version '${MAGPIE_VERSION}' contains characters outside [A-Za-z0-9._-] -- refusing to use it in a backup path. This usually means a corrupted or malicious pyproject.toml in the repo checkout."
+    fi
     local ts
     ts="$(date -u +%Y%m%dT%H%M%SZ)"
     BACKUP_DIR="${INSTALL_DIR}/backups/${MAGPIE_VERSION}-${ts}"
@@ -1668,6 +1702,15 @@ capture_probe_state() {
         [[ -z "$tags" || "$tags" == "(none)" ]] && continue
         first_tag="${tags%%,*}"
         first_tag="$(trim_whitespace "$first_tag")"
+
+        # Re-queried explicitly BY TAG here, rather than reusing the
+        # Hash: line from the untagged query above (which resolved via
+        # magpie's implicit ":latest" default) -- makes the captured hash
+        # unambiguously the one PROBE_ARTIFACT_REF itself points to, not
+        # whatever "latest" happens to currently be, so assert_post_update()'s
+        # later A2/A4 checks (which also query by this explicit ref) are
+        # verifying the actual tag being probed, not latest-by-coincidence.
+        info_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie info "${path}:${first_tag}" 2>&1) || continue
         hash=$(echo "$info_out" | sed -nE 's/^Hash:[[:space:]]*//p')
         [[ -z "$hash" ]] && continue
 
@@ -1847,8 +1890,9 @@ backup_data() {
     local -A env_for_token=()
     read_env_file "${INSTALL_DIR}/etc/.env" env_for_token
     local token_file="${env_for_token[MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH]:-/data/admin-token}"
-    local host_token_file="${DATA_DIR}${token_file#/data}"
-    if [[ -f "$host_token_file" ]] && ! cp "$host_token_file" "${BACKUP_DIR}/data/admin-token"; then
+    local host_token_file
+    if host_token_file=$(resolve_admin_token_host_path "$token_file") \
+        && [[ -f "$host_token_file" ]] && ! cp "$host_token_file" "${BACKUP_DIR}/data/admin-token"; then
         log_error "Failed to back up admin-token"
         rollback_to_prior
     fi
@@ -1987,7 +2031,12 @@ assert_post_update() {
     # satisfied) if capture_probe_state() found no tagged artifact.
     if [[ -n "$PROBE_ARTIFACT_PATH" && -n "$PROBE_TOKEN" ]]; then
         local info_out post_hash=""
-        if info_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie info "$PROBE_ARTIFACT_PATH" 2>&1); then
+        # Queried by the EXPLICIT captured ref (not the bare path, which
+        # would resolve via magpie's implicit ":latest" default) -- this
+        # must check the actual tag PROBE_ARTIFACT_REF names, the same one
+        # capture_probe_state() captured the hash for, not whatever
+        # "latest" happens to be now.
+        if info_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie info "${PROBE_ARTIFACT_PATH}:${PROBE_ARTIFACT_REF}" 2>&1); then
             post_hash=$(echo "$info_out" | sed -nE 's/^Hash:[[:space:]]*//p')
         fi
         if [[ -z "$post_hash" ]]; then
@@ -2109,18 +2158,24 @@ rollback_to_prior() {
             local -A restored_env=()
             read_env_file "${INSTALL_DIR}/etc/.env" restored_env
             local token_file="${restored_env[MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH]:-/data/admin-token}"
-            local host_token_file="${DATA_DIR}${token_file#/data}"
-            # The sink path can be under a subdirectory of /data that
-            # doesn't otherwise get created until the container's own
-            # first-boot init runs -- mkdir -p its parent before the
-            # restore cp, or a subdir sink path fails this restore step
-            # for a reason that has nothing to do with genuine disk
-            # trouble.
-            if ! mkdir -p "$(dirname "$host_token_file")"; then
-                restore_failure="creating the admin-token directory (${host_token_file})"
-            elif ! cp "${BACKUP_DIR}/data/admin-token" "$host_token_file"; then
-                restore_failure="restoring admin-token"
+            local host_token_file
+            if host_token_file=$(resolve_admin_token_host_path "$token_file"); then
+                # The sink path can be under a subdirectory of /data that
+                # doesn't otherwise get created until the container's own
+                # first-boot init runs -- mkdir -p its parent before the
+                # restore cp, or a subdir sink path fails this restore step
+                # for a reason that has nothing to do with genuine disk
+                # trouble.
+                if ! mkdir -p "$(dirname "$host_token_file")"; then
+                    restore_failure="creating the admin-token directory (${host_token_file})"
+                elif ! cp "${BACKUP_DIR}/data/admin-token" "$host_token_file"; then
+                    restore_failure="restoring admin-token"
+                fi
             fi
+            # An invalid token_file is already logged by
+            # resolve_admin_token_host_path() -- not itself a
+            # restore_failure, since the rest of the (already-verified-
+            # complete) config/data restore should still proceed.
         fi
         # Artifacts are deliberately NOT restored here: for v0.2.0 no
         # migration touches /data/artifacts at all (see this section's
