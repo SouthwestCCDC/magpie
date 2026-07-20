@@ -219,13 +219,30 @@ them, and front magpie with your own reverse proxy for TLS instead (see
 v0.2.0 replaces the two-container topology (a `caddy` sidecar in front of
 the `magpie` FastAPI service) with a single bundled container (Caddy +
 uvicorn supervised together, see `Dockerfile.bundled`). `magpie-deploy.sh
-update` performs this swap automatically. The data directory
-(`MAGPIE_DATA_DIR`) is a bind mount and is not touched by the container
-swap itself -- but **back it up before updating** as a precaution;
-schema/layout migration testing across this topology change is tracked
-separately ([issue #561](https://github.com/SouthwestCCDC/magpie/issues/561))
-and this update does not yet assert byte-for-byte continuity beyond the
-topology swap.
+update` performs this swap automatically, wrapped in an automatic
+backup/assert/rollback safety envelope ([issue
+#561](https://github.com/SouthwestCCDC/magpie/issues/561)):
+
+1. **Backs up** the data directory (`magpie.db`, `.env`, `admin-token`,
+   and the artifacts tree) to `<install>/backups/<version>-<UTC
+   timestamp>/` before touching anything -- automatic, no manual backup
+   step needed. See [Backup & Restore](backup-restore.md#automatic-pre-update-backups)
+   for the layout and the flags that control it.
+2. **Swaps** the topology (repo checkout, `docker-compose.yml`, `.env`
+   reconcile, image pull, systemd units) as before.
+3. **Asserts** the new container is actually healthy and correctly
+   serving: health check, an existing tagged artifact still downloads
+   byte-identical (SHA-256 verified), an existing token still
+   authenticates, tags still resolve, and the token count is unchanged.
+4. **Rolls back automatically** on any assertion failure -- restores the
+   prior `.env`/`docker-compose.yml`/systemd units/image/data and
+   restarts, so a bad update never leaves the install silently broken or
+   boot-looping. Disable with `--no-rollback` if you'd rather investigate
+   the failed new stack in place.
+
+The data directory (`MAGPIE_DATA_DIR`) is a bind mount and is not touched
+by the container swap itself; the backup/assert/rollback envelope above
+is what makes the swap safe to run unattended.
 
 If this install was using built-in TLS termination (`--tls-mode
 auto`/`manual`, persisted as `TLS_MODE=auto`/`manual` in

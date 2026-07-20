@@ -14,7 +14,49 @@
     └── .tmp/               # Temporary uploads (exclude from backup)
 ```
 
+## Automatic Pre-Update Backups
+
+`magpie-deploy.sh update` (the [installer](../scripts/magpie-deploy.sh))
+backs up the data directory automatically before every update -- no
+manual backup step is required for a routine `update`. See [Upgrading to
+v0.2.0](installation.md#upgrading-to-v020) for the full backup -> swap ->
+assert -> rollback flow ([issue
+#561](https://github.com/SouthwestCCDC/magpie/issues/561)).
+
+**Layout:** `<install-dir>/backups/<version>-<UTC-timestamp>/`, e.g.
+`/opt/magpie/backups/0.2.0-20260720T073811Z/`:
+
+```
+<install-dir>/backups/<version>-<timestamp>/
+├── MANIFEST     # source/target version, image, git ref, DB sha256, backup mode
+├── rollback/    # config snapshot: .env, docker-compose.yml, systemd units,
+│                #   prior image tag, prior git ref
+└── data/        # data snapshot: magpie.db(+wal/shm), .env, admin-token,
+                 #   and (per --backup-artifacts) the artifacts tree
+```
+
+`<install-dir>/backups/` is under `INSTALL_DIR`, deliberately **not**
+under `MAGPIE_DATA_DIR` -- so a data-dir wipe can't take the backup with
+it.
+
+**Flags** (all optional; see `magpie-deploy.sh update --help`):
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--no-backup` | off | Skip the data backup entirely. NOT recommended -- if the update then fails its post-update checks, rollback can only restore config/units/image, not data. |
+| `--keep-backups N` | `3` | How many past backups to retain. Pruned only after a *successful* update; every backup from a failed update is kept for forensics/manual recovery. |
+| `--backup-artifacts MODE` | `link` | How to back up the artifacts tree: `link` (hardlink snapshot, near-free, same filesystem only), `copy` (full independent copy), or `skip`. The bind-mounted artifacts themselves are untouched by an update regardless -- this only affects the backup's own defense-in-depth copy. |
+| `--no-rollback` | off | Don't automatically roll back on a failed post-update assertion -- leaves the failed new stack running so you can investigate in place. |
+
+On a failed update, the installer prints the backup path and (for a
+failed rollback restore itself) the `MANIFEST` location -- start there
+for manual recovery.
+
 ## Backup Procedures
+
+Manual backup, independent of `magpie-deploy.sh update`'s automatic
+pre-update backup above -- for a standalone backup schedule, or a
+non-installer (`docker compose`-direct) deployment.
 
 **Full backup (rsync):**
 ```bash
@@ -80,4 +122,4 @@ find "$MAGPIE_DATA_DIR/artifacts" -type l ! -exec test -e {} \; -print
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; automatic pre-update backup section added for issue #561 via Claude Code w/ Opus 4.8)*
