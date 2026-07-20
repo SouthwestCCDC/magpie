@@ -1896,15 +1896,13 @@ assert_post_update() {
 
     # A3: token auth -- skipped (vacuously satisfied) if capture_probe_state()
     # didn't mint a probe token (S5: prior install unreachable, or minting
-    # failed).
+    # failed). The token is NOT revoked here -- A2/A4 below still needs it
+    # to authenticate; it's revoked once, after every check that uses it
+    # has run (see the end of this function).
     if [[ -n "$PROBE_TOKEN" ]]; then
         if ! compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie ls >/dev/null 2>&1; then
             ASSERT_FAILURES+=("A3 token auth: the pre-update probe token no longer authenticates")
         fi
-        # Revoke now that it's served its purpose. Best-effort: a failure
-        # here (e.g. the container is about to be rolled back anyway) is
-        # not itself an assertion failure.
-        compose_exec magpie magpie-ctl token revoke "$PROBE_TOKEN_NAME" >/dev/null 2>&1 || true
     else
         log "A3 token auth: skipped (no probe token was captured before the update)"
     fi
@@ -1934,6 +1932,14 @@ assert_post_update() {
         fi
     else
         log "A2/A4 artifact/tag continuity: skipped (no tagged artifact was captured before the update)"
+    fi
+
+    # Revoke the probe token now that every check above has had its chance
+    # to use it (A3, and A2/A4's `magpie info`/`magpie get`). Best-effort:
+    # a failure here (e.g. the container is about to be rolled back anyway)
+    # is not itself an assertion failure.
+    if [[ -n "$PROBE_TOKEN" ]]; then
+        compose_exec magpie magpie-ctl token revoke "$PROBE_TOKEN_NAME" >/dev/null 2>&1 || true
     fi
 
     if [[ ${#ASSERT_FAILURES[@]} -gt 0 ]]; then
