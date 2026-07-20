@@ -408,6 +408,48 @@ test_capture_prior_state_snapshots_config_and_skips_unreachable_probes() {
     log "  ✓ .env/docker-compose.yml snapshotted; probes skipped cleanly (no container running) with PRIOR_DATA_FORMAT_VERSION defaulting to 0"
 }
 
+# Regression test for a Copilot finding: capture_prior_state() runs
+# BEFORE anything is mutated (the service is still running normally) and
+# BEFORE backup_data()'s swap-window subshell exists to catch anything --
+# its own mkdir/cp calls were unguarded under this script's
+# `set -euo pipefail`. A failure here (disk full is the plausible cause)
+# must die() directly and clearly, NOT call rollback_to_prior() (which
+# restores FROM these very files, so it can't recover their own creation
+# failure) and NOT abort raw via an unguarded `set -e` exit.
+test_capture_prior_state_cp_failure_dies_clearly_under_real_errexit() {
+    log "Test 9b: a real capture_prior_state() cp failure, with errexit PRESERVED, dies clearly rather than aborting bare or calling rollback_to_prior()"
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        log "  (skipped: running as root -- cannot simulate a permission-denied cp failure via chmod)"
+        return 0
+    fi
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "capture_cp_fail")
+    local backup_dir="${install_dir}/backups/capturefail"
+    # Force a REAL cp failure: the source .env is unreadable, so
+    # capture_prior_state()'s very first cp fails for real (permission
+    # denied).
+    chmod 000 "${install_dir}/etc/.env"
+
+    local out
+    out=$(
+        (
+            set -euo pipefail  # magpie-deploy.sh's own real semantics
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+            HTTP_PORT=1 BIND_IP="" PRIOR_GIT_REF="" \
+            capture_prior_state
+        ) 2>&1
+    )
+    local rc=$?
+    chmod 644 "${install_dir}/etc/.env" 2>/dev/null || true  # restore perms so TEST_DIR cleanup can remove it
+
+    [[ $rc -ne 0 ]] || fail "capture_prior_state() reported success despite a real cp failure snapshotting .env"
+    echo "$out" | grep -qi "Failed to snapshot .*\.env" || fail "the specific capture-step failure message was lost: $out"
+    echo "$out" | grep -qi "Rolling back to the prior install" && fail "capture_prior_state()'s own failure incorrectly called rollback_to_prior() -- it restores FROM the files that just failed to be created, which can't work: $out"
+    log "  ✓ a real capture_prior_state() cp failure, with errexit preserved, dies clearly -- not a bare abort, and not a broken call to rollback_to_prior()"
+}
+
 # ---------------------------------------------------------------------------
 # assert_post_update() -- A1/A5/A6 always run; A2/A3/A4 skip when nothing
 # was captured. compose_exec is shadowed to simulate the post-update
@@ -1353,6 +1395,7 @@ test_resolve_admin_token_host_path_rejects_traversal
 test_backup_data_artifacts_modes
 test_backup_data_no_backup_skips_everything
 test_capture_prior_state_snapshots_config_and_skips_unreachable_probes
+test_capture_prior_state_cp_failure_dies_clearly_under_real_errexit
 test_assert_post_update_a1_short_circuits_on_unhealthy
 test_assert_post_update_skips_a2_a3_a4_when_nothing_captured
 test_assert_post_update_a4_queries_info_by_explicit_ref

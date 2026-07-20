@@ -1738,23 +1738,41 @@ capture_probe_state() {
 # docker-compose.yml, or the systemd unit files.
 capture_prior_state() {
     log "Capturing prior state for rollback (${BACKUP_DIR})..."
-    mkdir -p "${BACKUP_DIR}/rollback"
 
-    cp "${INSTALL_DIR}/etc/.env" "${BACKUP_DIR}/rollback/.env"
-    cp "${INSTALL_DIR}/docker-compose.yml" "${BACKUP_DIR}/rollback/docker-compose.yml"
+    # Every step below is guarded and dies directly on failure (NOT via
+    # rollback_to_prior() -- that function restores FROM the very files
+    # this one is creating, so it can't recover a failure here; and
+    # nothing has been mutated yet at this point -- the service is still
+    # running normally -- so a plain, clear die() is both correct and
+    # sufficient, matching the same disk-full/permissions concern
+    # preflight_backup_space() and the later swap-window guards address).
+    if ! mkdir -p "${BACKUP_DIR}/rollback"; then
+        die "Failed to create ${BACKUP_DIR}/rollback -- cannot safely proceed with 'update' without a rollback snapshot location. Check disk space/permissions under ${INSTALL_DIR}."
+    fi
+
+    if ! cp "${INSTALL_DIR}/etc/.env" "${BACKUP_DIR}/rollback/.env"; then
+        die "Failed to snapshot ${INSTALL_DIR}/etc/.env for rollback -- refusing to proceed with 'update' without it."
+    fi
+    if ! cp "${INSTALL_DIR}/docker-compose.yml" "${BACKUP_DIR}/rollback/docker-compose.yml"; then
+        die "Failed to snapshot ${INSTALL_DIR}/docker-compose.yml for rollback -- refusing to proceed with 'update' without it."
+    fi
 
     local unit
     for unit in magpie.service magpie-gc.service magpie-gc.timer; do
-        if [[ -f "/etc/systemd/system/${unit}" ]]; then
-            cp "/etc/systemd/system/${unit}" "${BACKUP_DIR}/rollback/${unit}"
+        if [[ -f "/etc/systemd/system/${unit}" ]] && ! cp "/etc/systemd/system/${unit}" "${BACKUP_DIR}/rollback/${unit}"; then
+            die "Failed to snapshot the ${unit} systemd unit for rollback -- refusing to proceed with 'update' without it."
         fi
     done
 
     local -A prior_env=()
     read_env_file "${INSTALL_DIR}/etc/.env" prior_env
     PRIOR_MAGPIE_IMAGE="${prior_env[MAGPIE_IMAGE]:-}"
-    printf '%s\n' "$PRIOR_MAGPIE_IMAGE" > "${BACKUP_DIR}/rollback/prior-image"
-    printf '%s\n' "$PRIOR_GIT_REF" > "${BACKUP_DIR}/rollback/prior-git-ref"
+    if ! printf '%s\n' "$PRIOR_MAGPIE_IMAGE" > "${BACKUP_DIR}/rollback/prior-image"; then
+        die "Failed to record the prior image reference for rollback -- refusing to proceed with 'update' without it."
+    fi
+    if ! printf '%s\n' "$PRIOR_GIT_REF" > "${BACKUP_DIR}/rollback/prior-git-ref"; then
+        die "Failed to record the prior git ref for rollback -- refusing to proceed with 'update' without it."
+    fi
 
     capture_probe_state
 }
