@@ -729,6 +729,65 @@ test_prune_old_backups_sorts_by_mtime_not_name() {
 }
 
 # ---------------------------------------------------------------------------
+# magpie-gc.timer stop/restart around the update window (Copilot finding):
+# magpie-gc.timer is a SEPARATE unit from magpie.service -- untouched by
+# backup_data()'s stop of the latter -- and its own `docker compose run
+# magpie-ctl gc` can race a backup/swap in progress if it fires during that
+# window. Must be stopped alongside magpie.service and restarted once the
+# service is running again, on both the success and rollback paths.
+# ---------------------------------------------------------------------------
+test_backup_data_stops_gc_timer() {
+    log "Test 17c: backup_data() stops magpie-gc.timer, not just magpie.service"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "gc_timer_stop")
+    local calls_log="${TEST_DIR}/gc_timer_stop_calls.log"
+    rm -f "$calls_log"
+
+    (
+        systemctl() { echo "$*" >> "$calls_log"; return 0; }
+        INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="${install_dir}/backups/x" \
+        NO_BACKUP="false" BACKUP_ARTIFACTS="skip" MAGPIE_VERSION="0.2.0" \
+        backup_data
+    ) >/dev/null 2>&1
+
+    grep -qx "stop magpie.service" "$calls_log" || fail "backup_data() did not stop magpie.service: $(cat "$calls_log")"
+    grep -qx "stop magpie-gc.timer" "$calls_log" || fail "backup_data() did not stop magpie-gc.timer -- it can fire mid-backup/swap and race the running copy: $(cat "$calls_log")"
+    log "  ✓ backup_data() stops both magpie.service and magpie-gc.timer"
+}
+
+test_rollback_and_cmd_update_restart_gc_timer() {
+    log "Test 17d: rollback_to_prior() restarts magpie-gc.timer alongside magpie.service"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "gc_timer_restart" "OLD_DB_CONTENT")
+    local backup_dir="${install_dir}/backups/gctimer"
+    (
+        systemctl() { return 0; }
+        INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+        HTTP_PORT=1 BIND_IP="" PRIOR_GIT_REF="" MAGPIE_VERSION="0.2.0" \
+        NO_BACKUP="false" BACKUP_ARTIFACTS="skip"
+        capture_prior_state
+        backup_data
+    ) >/dev/null 2>&1
+
+    local calls_log="${TEST_DIR}/gc_timer_restart_calls.log"
+    rm -f "$calls_log"
+    (
+        systemctl() { echo "$*" >> "$calls_log"; return 0; }
+        wait_for_healthy() { return 0; }
+        docker() { return 1; }
+        INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+        NO_BACKUP="false" PRIOR_MAGPIE_IMAGE="" PRIOR_GIT_REF="" \
+        rollback_to_prior
+    ) >/dev/null 2>&1
+
+    grep -qx "start magpie.service" "$calls_log" || fail "rollback_to_prior() did not restart magpie.service: $(cat "$calls_log")"
+    grep -qx "start magpie-gc.timer" "$calls_log" || fail "rollback_to_prior() did not restart magpie-gc.timer -- it would stay stopped after a rolled-back update: $(cat "$calls_log")"
+    log "  ✓ rollback_to_prior() restarts both magpie.service and magpie-gc.timer"
+}
+
+# ---------------------------------------------------------------------------
 # run_data_migration()
 # ---------------------------------------------------------------------------
 test_run_data_migration_failure_propagates() {
@@ -984,6 +1043,8 @@ test_rollback_reports_loudly_when_restore_itself_unhealthy
 test_prune_old_backups_keeps_newest_n
 test_prune_old_backups_noop_under_the_limit
 test_prune_old_backups_sorts_by_mtime_not_name
+test_backup_data_stops_gc_timer
+test_rollback_and_cmd_update_restart_gc_timer
 test_run_data_migration_failure_propagates
 test_capture_probe_state_token_regex_handles_hyphens
 test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit

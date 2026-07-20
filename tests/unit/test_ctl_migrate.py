@@ -13,6 +13,7 @@ from magpie.auth.database import get_connection, init_database
 from magpie.config import MagpieSettings
 from magpie.ctl import cli
 from magpie.ctl.commands.migrate import (
+    _MIGRATIONS,
     CURRENT_DATA_FORMAT_VERSION,
     MigrationStep,
     get_data_format_version,
@@ -64,7 +65,12 @@ class TestRunMigrations:
 
         assert version_before == 0
         assert version_after == CURRENT_DATA_FORMAT_VERSION
-        assert len(applied) == CURRENT_DATA_FORMAT_VERSION
+        # Against len(_MIGRATIONS) (the actual step count), not
+        # CURRENT_DATA_FORMAT_VERSION -- the two only coincide today
+        # because there's a single step at version 1. A registry with a
+        # gap (e.g. steps at versions 1 and 5, CURRENT=5) would have
+        # len(applied) == 2, not 5.
+        assert len(applied) == len(_MIGRATIONS)
 
     def test_idempotent_on_already_current_database(self, tmp_path: Path) -> None:
         """Running migrations twice applies nothing the second time."""

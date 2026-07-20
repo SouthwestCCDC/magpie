@@ -104,7 +104,15 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
     applied: list[str] = []
 
     for step in _MIGRATIONS:
-        if step.version <= version_before:
+        # Checked against `version` (the last-applied step so far this
+        # run), not the frozen `version_before` -- for a correctly
+        # ascending-ordered _MIGRATIONS tuple the two are equivalent, but
+        # checking the running value is the standard, defensive form: it
+        # can't be fooled by a future _MIGRATIONS entry added out of
+        # version order (a maintainer mistake this way just skips the
+        # misplaced step instead of silently re-deriving "already past
+        # it" from a stale baseline).
+        if step.version <= version:
             continue
         step.apply(conn)
         version = step.version

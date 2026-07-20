@@ -1390,7 +1390,12 @@ health_check_url() {
     if [[ "$host" == *:* ]]; then
         host="[$host]"
     fi
-    echo "http://${host}:${HTTP_PORT}/health"
+    # An install whose .env predates MAGPIE_HTTP_PORT (see issue #448)
+    # leaves the global $HTTP_PORT empty after load_existing_config() --
+    # without this fallback that produces "http://host:/health" (no port
+    # digits), which curl/wait_for_healthy() then fail against forever,
+    # falsely triggering a rollback on an install that's actually fine.
+    echo "http://${host}:${HTTP_PORT:-$DEFAULT_HTTP_PORT}/health"
 }
 
 # Polls health_check_url() and returns 0 once it responds, 1 if it never
@@ -1786,6 +1791,15 @@ backup_data() {
 
     log "Stopping the running stack to back up data safely (this checkpoints the WAL)..."
     systemctl stop magpie.service 2>/dev/null || true
+    # magpie-gc.timer is a SEPARATE unit from magpie.service, untouched by
+    # the stop above -- if it fires during the stop-copy-swap window (its
+    # own `docker compose run --rm magpie-ctl gc` spins up an independent
+    # one-off container against the SAME bind-mounted /data), it can race
+    # this backup's copy or a hardlink snapshot mid-flight. Stopped for the
+    # duration of the update window; restarted unconditionally (a no-op if
+    # already active) once magpie.service is running again -- see
+    # cmd_update()'s success path and rollback_to_prior().
+    systemctl stop magpie-gc.timer 2>/dev/null || true
 
     mkdir -p "${BACKUP_DIR}/data"
     local db_path="${DATA_DIR}/magpie.db"
@@ -2112,6 +2126,12 @@ rollback_to_prior() {
 
     systemctl daemon-reload
     systemctl start magpie.service
+    # Restarts magpie-gc.timer, stopped by backup_data() for the duration
+    # of the update window -- a no-op if it was never stopped. Skipped
+    # only on the restore_failure die() path above (the install needs
+    # manual investigation; GC firing against a possibly-inconsistent
+    # data dir in the meantime is not something to risk unattended).
+    systemctl start magpie-gc.timer 2>/dev/null || true
 
     # Re-assert against the RESTORED .env's bind IP/port, not this
     # process's current $BIND_IP/$HTTP_PORT globals -- if the update being
@@ -2584,6 +2604,13 @@ cmd_update() {
     # container swap.
     log "Restarting services..."
     systemctl restart magpie.service
+    # Restarts magpie-gc.timer, stopped by backup_data() for the duration
+    # of the update window (see its own comment) -- a no-op if it was
+    # never stopped (e.g. --no-backup). Always attempted here, even though
+    # the post-update gate below may still roll back: rollback_to_prior()
+    # also restarts it once the OLD service is back up, so either outcome
+    # leaves it running.
+    systemctl start magpie-gc.timer 2>/dev/null || true
 
     # The post-update gate (issue #561): a broken new container used to
     # `log_warn` and report success anyway (the toothless pre-#561
@@ -2733,13 +2760,9 @@ cmd_status() {
     echo ""
 
     echo "--- Health Check ---"
-    # HTTP_PORT is defaulted here (rather than relying on health_check_url()'s
-    # own bare $HTTP_PORT) since load_existing_config() only sets it from a
-    # present .env key -- an install predating MAGPIE_HTTP_PORT would
-    # otherwise probe "http://.../health" with an empty port. BIND_IP is
-    # always populated correctly by load_existing_config() by this point,
-    # so health_check_url() itself needs no similar guard for it.
-    HTTP_PORT="${HTTP_PORT:-8080}"
+    # health_check_url() itself falls back to DEFAULT_HTTP_PORT for an
+    # empty $HTTP_PORT (an install predating MAGPIE_HTTP_PORT) and to
+    # loopback for an empty $BIND_IP -- no additional guard needed here.
     local health_url
     health_url="$(health_check_url)"
     if curl -sf "$health_url" >/dev/null 2>&1; then
