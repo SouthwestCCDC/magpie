@@ -2184,6 +2184,13 @@ rollback_to_prior() {
 
     local unit
     for unit in magpie.service magpie-gc.service magpie-gc.timer; do
+        # Short-circuits on the first failed unit rather than pressing on
+        # to the rest of the loop -- once one unit file fails to restore,
+        # continuing to overwrite the OTHERS anyway would leave systemd in
+        # a partially-restored state (some units on the prior version,
+        # some still on the failed update's) instead of stopping with a
+        # clearly-scoped failure at the first problem.
+        [[ -n "$restore_failure" ]] && break
         if [[ -f "${BACKUP_DIR}/rollback/${unit}" ]]; then
             cp "${BACKUP_DIR}/rollback/${unit}" "/etc/systemd/system/${unit}" \
                 || restore_failure="restoring systemd unit ${unit}"

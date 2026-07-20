@@ -1475,6 +1475,61 @@ test_rollback_cp_failure_dies_loudly_under_real_errexit() {
 }
 
 # ---------------------------------------------------------------------------
+# rollback_to_prior()'s systemd-unit restore loop short-circuits on the
+# FIRST failed unit, rather than pressing on and leaving systemd in a
+# partially-restored state (some units on the prior version, some still
+# on the failed update's).
+# ---------------------------------------------------------------------------
+test_rollback_unit_restore_short_circuits_on_first_failure() {
+    log "Test 23: rollback_to_prior()'s systemd-unit restore loop stops at the first failed unit, not all three"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "unit_short_circuit")
+    local backup_dir="${install_dir}/backups/unitfail"
+    mkdir -p "${backup_dir}/rollback" "${backup_dir}/data"
+    # Fabricated directly (not via capture_prior_state(), which only
+    # snapshots a unit that already exists at the real
+    # /etc/systemd/system/${unit} -- not present in this sandbox) so all
+    # three units are present for rollback_to_prior() to attempt, in a
+    # known order.
+    for unit in magpie.service magpie-gc.service magpie-gc.timer; do
+        echo "fake ${unit} content" > "${backup_dir}/rollback/${unit}"
+    done
+    printf '%s\n' "OLD_DB_CONTENT" > "${backup_dir}/data/magpie.db"
+
+    local calls_log="${TEST_DIR}/unit_short_circuit_cp_calls"
+    rm -f "$calls_log"
+    (
+        systemctl() { return 0; }
+        wait_for_healthy() { return 1; }
+        docker() { return 1; }
+        # Shadows the real `cp` (an external command, so a same-shell
+        # function overrides it same as systemctl/docker above): logs
+        # every systemd-unit-destined call and fails the FIRST one
+        # (magpie.service) as if that single cp hit a real error --
+        # everything else passes through to the real cp unmodified.
+        cp() {
+            if [[ "$*" == *"/etc/systemd/system/"* ]]; then
+                echo "$*" >> "$calls_log"
+                [[ "$*" == *"/etc/systemd/system/magpie.service"* ]] && return 1
+            fi
+            command cp "$@"
+        }
+        INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+        NO_BACKUP="false" PRIOR_MAGPIE_IMAGE="" PRIOR_GIT_REF="" \
+        rollback_to_prior
+    ) >/dev/null 2>&1
+    local rc=$?
+
+    [[ $rc -ne 0 ]] || fail "rollback_to_prior() reported success despite a failed unit restore"
+    local unit_call_count
+    unit_call_count=$(wc -l < "$calls_log" 2>/dev/null || echo 0)
+    [[ "$unit_call_count" -eq 1 ]] || fail "rollback_to_prior() attempted ${unit_call_count} systemd-unit restores after the first one failed -- expected exactly 1 (magpie.service), not a continued attempt at magpie-gc.service/magpie-gc.timer. Calls: $(cat "$calls_log" 2>/dev/null)"
+    grep -q "magpie.service" "$calls_log" || fail "the one attempted unit restore wasn't magpie.service: $(cat "$calls_log" 2>/dev/null)"
+    log "  ✓ the loop stops after magpie.service fails -- magpie-gc.service/magpie-gc.timer are never attempted"
+}
+
+# ---------------------------------------------------------------------------
 # cmd_update() flag validation for the new envelope options
 # ---------------------------------------------------------------------------
 test_cmd_update_validates_envelope_flags() {
@@ -1551,6 +1606,7 @@ test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit
 test_gc_timer_never_started_before_rollback_stops_it_again
 test_no_rollback_restarts_gc_timer_before_dying
 test_rollback_cp_failure_dies_loudly_under_real_errexit
+test_rollback_unit_restore_short_circuits_on_first_failure
 test_cmd_update_validates_envelope_flags
 
 log ""
