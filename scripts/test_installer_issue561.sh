@@ -1008,6 +1008,41 @@ test_prune_old_backups_sorts_by_mtime_not_name() {
     log "  ✓ the chronologically newer backup (0.9.0) is kept even though it sorts first lexicographically"
 }
 
+test_prune_old_backups_is_best_effort_under_real_errexit() {
+    log "Test 17f: a real prune failure, with errexit PRESERVED, is a best-effort warning -- it must never fail an already-successful update"
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        log "  (skipped: running as root -- cannot simulate a permission-denied rm via chmod)"
+        return 0
+    fi
+
+    local install_dir="${TEST_DIR}/prune_best_effort"
+    mkdir -p "${install_dir}/backups/v1" "${install_dir}/backups/v2" "${install_dir}/backups/v3"
+    touch -d "2026-01-01T00:00:00" "${install_dir}/backups/v1"  # oldest -- the one prune_old_backups() will try to remove
+    touch -d "2026-01-02T00:00:00" "${install_dir}/backups/v2"
+    touch -d "2026-01-03T00:00:00" "${install_dir}/backups/v3"
+    # Read+execute only on the backups root -- rm -rf can still descend
+    # into and empty v1's contents, but unlinking the v1 directory entry
+    # itself (which needs write on ITS parent, backups/) fails with a
+    # real "Permission denied", exactly like a real disk-permissions/
+    # read-only-filesystem prune failure would.
+    chmod 555 "${install_dir}/backups"
+
+    local out
+    out=$(
+        (
+            set -euo pipefail  # magpie-deploy.sh's own real semantics
+            INSTALL_DIR="$install_dir" KEEP_BACKUPS="2" prune_old_backups
+        ) 2>&1
+    )
+    local rc=$?
+    chmod 755 "${install_dir}/backups" 2>/dev/null || true  # restore perms so TEST_DIR cleanup can remove it
+
+    [[ $rc -eq 0 ]] || fail "prune_old_backups() propagated a real rm failure as a hard error (rc=$rc) -- this would fail an update whose new version is already running and healthy, purely over stale-backup housekeeping. Output: $out"
+    echo "$out" | grep -qi "Failed to prune old backup" || fail "a real prune failure did not produce the expected best-effort warning: $out"
+    log "  ✓ a real prune failure, with errexit preserved, only warns -- it does not abort or fail the caller"
+}
+
 # ---------------------------------------------------------------------------
 # magpie-gc.timer stop/restart around the update window (Copilot finding):
 # magpie-gc.timer is a SEPARATE unit from magpie.service -- untouched by
@@ -1673,6 +1708,7 @@ test_rollback_revokes_probe_token_after_healthy_restore
 test_prune_old_backups_keeps_newest_n
 test_prune_old_backups_noop_under_the_limit
 test_prune_old_backups_sorts_by_mtime_not_name
+test_prune_old_backups_is_best_effort_under_real_errexit
 test_backup_data_stops_gc_timer
 test_backup_data_cp_failure_triggers_rollback_under_real_errexit
 test_rollback_and_cmd_update_restart_gc_timer

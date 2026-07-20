@@ -2436,7 +2436,17 @@ prune_old_backups() {
     local i
     for (( i = 0; i < to_remove; i++ )); do
         log "Pruning old backup: ${all_backups[$i]}"
-        rm -rf "${all_backups[$i]}"
+        # Best-effort: prune_old_backups() only runs after a CONFIRMED
+        # successful update (the new version is already running and
+        # healthy) -- a failed removal here (permissions, IO error, a
+        # read-only backups filesystem) is stale-disk-space housekeeping
+        # gone wrong, not a reason to fail the update itself. Under this
+        # script's own `set -euo pipefail`, an unguarded `rm -rf` failure
+        # would otherwise abort the whole script and report `update` as
+        # failed despite the actual update having already succeeded --
+        # confusing, and breaks any automation gating on this exit code.
+        rm -rf "${all_backups[$i]}" \
+            || log_warn "Failed to prune old backup ${all_backups[$i]} -- leaving it in place; the update itself already succeeded."
     done
 }
 
