@@ -283,6 +283,35 @@ test_preflight_backup_space() {
     log "  ✓ --no-backup skips the space check entirely (no-op, never dies)"
 }
 
+test_preflight_backup_space_dies_clearly_on_mkdir_failure() {
+    log "Test 5b: preflight_backup_space() dies with a clear message (not a raw shell error) if it can't create INSTALL_DIR/backups"
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        log "  (skipped: running as root -- cannot simulate a permission-denied mkdir via chmod)"
+        return 0
+    fi
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "space_mkdir_fail")
+    chmod 555 "$install_dir"  # read+execute only -- mkdir under it fails
+
+    local out
+    out=$(
+        (
+            set -euo pipefail  # magpie-deploy.sh's own real semantics
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" NO_BACKUP="false" \
+            BACKUP_ARTIFACTS="link" BACKUP_DIR="${install_dir}/backups/x" \
+            preflight_backup_space
+        ) 2>&1
+    )
+    local rc=$?
+    chmod 755 "$install_dir" 2>/dev/null || true  # restore perms so TEST_DIR cleanup can remove it
+
+    [[ $rc -ne 0 ]] || fail "preflight_backup_space() reported success despite a real mkdir failure"
+    echo "$out" | grep -qi "Failed to create" || fail "a real mkdir failure did not produce preflight_backup_space()'s own clear die() message -- reached a raw, unguarded shell abort instead: $out"
+    log "  ✓ a real mkdir failure under errexit dies with a clear, actionable message"
+}
+
 # ---------------------------------------------------------------------------
 # backup_data()
 # ---------------------------------------------------------------------------
@@ -611,6 +640,35 @@ test_assert_post_update_a5_fails_on_version_regression() {
     )
     echo "$out" | grep -q "^A5 data-format version:" || fail "A5 did not fail on a version regression (1 -> 0): $out"
     log "  ✓ A5 fails when the version goes backward"
+}
+
+test_assert_post_update_a5_fails_when_migrate_did_not_reach_current() {
+    log "Test 12b: assert_post_update() fails A5 if migrate ran but the post-update version is still behind this build's current version"
+
+    # post_version (2) is NOT behind PRIOR_DATA_FORMAT_VERSION (1) --
+    # would incorrectly pass the old (PRIOR-only) check -- but IS behind
+    # what this container's own 'migrate --check' reports as its current
+    # version (3), meaning `magpie-ctl migrate` ran but didn't actually
+    # finish advancing the stamp.
+    local out
+    out=$(
+        (
+            wait_for_healthy() { return 0; }
+            compose_exec() {
+                case "$*" in
+                    *"migrate --check"*) echo "Data-format version: 2 (current: 3)" ;;
+                    *"token list"*) echo "Total: 2 token(s)" ;;
+                    *) return 1 ;;
+                esac
+            }
+            PRIOR_DATA_FORMAT_VERSION="1" PRIOR_TOKEN_ROW_COUNT="2" \
+            PROBE_TOKEN="" PROBE_ARTIFACT_PATH="" \
+            assert_post_update
+            printf '%s\n' "${ASSERT_FAILURES[@]}"
+        ) 2>&1
+    )
+    echo "$out" | grep -q "^A5 data-format version:.*did not advance" || fail "A5 did not fail when the post-update version (2) was behind this build's current (3), despite not being a regression vs PRIOR (1): $out"
+    log "  ✓ A5 fails when migrate ran but didn't reach this build's current version"
 }
 
 test_assert_post_update_a6_fails_on_row_count_change() {
@@ -1592,6 +1650,7 @@ test_detect_upgrade_shape_signals
 test_compute_backup_dir_format
 test_compute_backup_dir_rejects_unsafe_version
 test_preflight_backup_space
+test_preflight_backup_space_dies_clearly_on_mkdir_failure
 test_backup_data_snapshots_db_env_and_writes_manifest
 test_backup_data_refuses_symlinked_admin_token
 test_resolve_admin_token_host_path_rejects_traversal
@@ -1603,6 +1662,7 @@ test_assert_post_update_a1_short_circuits_on_unhealthy
 test_assert_post_update_skips_a2_a3_a4_when_nothing_captured
 test_assert_post_update_a4_queries_info_by_explicit_ref
 test_assert_post_update_a5_fails_on_version_regression
+test_assert_post_update_a5_fails_when_migrate_did_not_reach_current
 test_assert_post_update_a6_fails_on_row_count_change
 test_assert_post_update_a5_survives_total_compose_exec_failure
 test_assert_post_update_a6_survives_total_compose_exec_failure

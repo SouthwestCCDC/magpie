@@ -1856,7 +1856,9 @@ preflight_backup_space() {
         needed_kb=$(( needed_kb + $(du_kb "${db_path}-shm") ))
     fi
 
-    mkdir -p "$(dirname "$BACKUP_DIR")"
+    if ! mkdir -p "$(dirname "$BACKUP_DIR")"; then
+        die "Failed to create ${INSTALL_DIR}/backups -- cannot back up data before updating. Fix the permissions/disk-space issue, or pass --no-backup to skip the backup (NOT recommended -- see 'update --help')."
+    fi
     local avail_kb
     avail_kb=$(df -Pk "$(dirname "$BACKUP_DIR")" | awk 'NR==2 {print $4}')
 
@@ -2063,18 +2065,28 @@ assert_post_update() {
         return 1
     fi
 
-    # A5: data-format version -- must never go backward. run_data_migration()
-    # (run just before this, by cmd_update()) always stamps this build's own
-    # CURRENT_DATA_FORMAT_VERSION, so equal-or-ahead is the only passing
-    # outcome; "behind" means the migrate step didn't actually take effect.
-    local ver_out post_version=""
+    # A5: data-format version -- must never go backward, AND must actually
+    # reach this build's current version. run_data_migration() (run just
+    # before this, by cmd_update()) always stamps the running build's own
+    # CURRENT_DATA_FORMAT_VERSION -- checking only "not behind PRIOR" would
+    # miss the case where `magpie-ctl migrate` ran but silently failed to
+    # advance all the way to current (e.g. CURRENT=2, prior=1, post=1):
+    # not a regression vs PRIOR, but still a migration that didn't
+    # actually finish. `migrate --check`'s own "(current: N)" suffix is
+    # the container's own view of its build's current version -- parsed
+    # from the SAME output as post_version so this can never disagree
+    # with what that specific container actually expects.
+    local ver_out post_version="" expected_current=""
     if ver_out=$(compose_exec magpie magpie-ctl migrate --check 2>&1); then
         post_version=$(echo "$ver_out" | sed -nE 's/^Data-format version: ([0-9]+).*/\1/p')
+        expected_current=$(echo "$ver_out" | sed -nE 's/^Data-format version: [0-9]+ \(current: ([0-9]+)\).*/\1/p')
     fi
     if [[ -z "$post_version" ]]; then
         ASSERT_FAILURES+=("A5 data-format version: could not read the post-update version (magpie-ctl migrate --check failed or produced unexpected output: ${ver_out:-no output})")
     elif (( post_version < PRIOR_DATA_FORMAT_VERSION )); then
         ASSERT_FAILURES+=("A5 data-format version: went backward (${PRIOR_DATA_FORMAT_VERSION} -> ${post_version})")
+    elif [[ -n "$expected_current" ]] && (( post_version < expected_current )); then
+        ASSERT_FAILURES+=("A5 data-format version: migrate ran but did not advance to this build's current version (post-update: ${post_version}, expected: ${expected_current})")
     fi
 
     # A6: token DB row count -- must be preserved exactly (includes the
