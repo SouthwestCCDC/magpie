@@ -2010,6 +2010,14 @@ rollback_to_prior() {
     local restore_failure=""
 
     systemctl stop magpie.service 2>/dev/null || true
+    # Defensive: magpie-gc.timer should already be stopped (backup_data()
+    # stops it for the whole update window, and cmd_update()'s success
+    # path only restarts it after the post-update gate passes) -- but
+    # stopping it again here, unconditionally, before the restore below
+    # touches any files, closes the gap if rollback_to_prior() is ever
+    # reached some other way with it still active. A GC run firing during
+    # THIS restore window would race the very file copies below.
+    systemctl stop magpie-gc.timer 2>/dev/null || true
 
     local unit
     for unit in magpie.service magpie-gc.service magpie-gc.timer; do
@@ -2124,8 +2132,16 @@ rollback_to_prior() {
         docker pull "$prior_image" || log_warn "Could not re-pull ${prior_image} -- the rollback restart below may fail."
     fi
 
-    systemctl daemon-reload
-    systemctl start magpie.service
+    # Guarded (not bare statements): a failure here must still reach this
+    # function's own loud die() with the backup path below, not a raw
+    # `set -e` abort that skips it -- the same contract every restore
+    # sub-step above is already held to.
+    if ! systemctl daemon-reload; then
+        die "Rollback restore succeeded, but 'systemctl daemon-reload' failed while bringing the prior service back up. Manual recovery needed. Backup and rollback state: ${BACKUP_DIR}"
+    fi
+    if ! systemctl start magpie.service; then
+        die "Rollback restore succeeded, but 'systemctl start magpie.service' failed. Manual recovery needed. Backup and rollback state: ${BACKUP_DIR}"
+    fi
     # Restarts magpie-gc.timer, stopped by backup_data() for the duration
     # of the update window -- a no-op if it was never stopped. Skipped
     # only on the restore_failure die() path above (the install needs
@@ -2602,15 +2618,30 @@ cmd_update() {
     # when the restart below stops the old stack and starts the
     # single-service one. /data is a bind mount, untouched by the
     # container swap.
+    #
+    # Explicitly guarded (not a bare statement): under this script's own
+    # `set -euo pipefail`, an unguarded restart failure (bad unit file, a
+    # transient systemd hiccup) would abort the whole script immediately
+    # here, skipping the post-update gate and rollback_to_prior() entirely
+    # -- exactly the class of bug issue #561's A1 finding was about,
+    # reachable at this specific line too.
     log "Restarting services..."
-    systemctl restart magpie.service
-    # Restarts magpie-gc.timer, stopped by backup_data() for the duration
-    # of the update window (see its own comment) -- a no-op if it was
-    # never stopped (e.g. --no-backup). Always attempted here, even though
-    # the post-update gate below may still roll back: rollback_to_prior()
-    # also restarts it once the OLD service is back up, so either outcome
-    # leaves it running.
-    systemctl start magpie-gc.timer 2>/dev/null || true
+    if ! systemctl restart magpie.service; then
+        log_error "systemctl restart magpie.service failed."
+        ASSERT_FAILURES=("swap: systemctl restart magpie.service failed -- see the error above")
+        rollback_to_prior
+    fi
+
+    # magpie-gc.timer, stopped by backup_data() for the duration of the
+    # update window (see its own comment), is deliberately NOT restarted
+    # here yet -- only once the update is CONFIRMED successful, below
+    # (after the post-update gate passes and prune_old_backups() runs).
+    # Restarting it immediately after this restart, before the gate even
+    # runs, would leave it active during rollback_to_prior()'s own
+    # restore window if the gate then fails -- exactly the race this stop
+    # exists to prevent, just moved one step later. rollback_to_prior()
+    # stops it again defensively at its own start and restarts it once
+    # ITS restore is done, so every path ends with it running again.
 
     # The post-update gate (issue #561): a broken new container used to
     # `log_warn` and report success anyway (the toothless pre-#561
@@ -2645,6 +2676,11 @@ cmd_update() {
         # Always exits via die() -- see rollback_to_prior()'s docstring.
         rollback_to_prior
     fi
+
+    # Update confirmed successful -- restart magpie-gc.timer (stopped by
+    # backup_data() for the update window; a no-op if it was never
+    # stopped, e.g. --no-backup) now that it's safe for it to fire again.
+    systemctl start magpie-gc.timer 2>/dev/null || true
 
     prune_old_backups
 

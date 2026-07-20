@@ -921,6 +921,63 @@ test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit() {
     log "  ✓ a real mid-swap cp failure, with errexit preserved, reaches rollback_to_prior() -- not a bare abort leaving the site down"
 }
 
+# Regression test for a Copilot finding on the FIRST gc.timer fix: the
+# original version restarted magpie-gc.timer immediately after
+# `systemctl restart magpie.service`, BEFORE the post-update gate ran --
+# so a subsequent assert failure routed to rollback_to_prior() with the
+# timer already active, able to fire during rollback's OWN restore
+# window. Reuses Test 21's real mid-swap-failure fixture, but logs every
+# systemctl call to prove the ORDER is safe: no "start magpie-gc.timer"
+# ever appears before rollback's own defensive "stop magpie-gc.timer".
+test_gc_timer_never_started_before_rollback_stops_it_again() {
+    log "Test 21b: magpie-gc.timer is never (re)started before rollback_to_prior() has a chance to stop it again"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "midswap_gctimer" "" "MAGPIE_HTTP_PORT=1")
+    mkdir -p "${install_dir}/repo"
+    (
+        cd "${install_dir}/repo"
+        git init -q
+        git config user.email test@example.com
+        git config user.name test
+        git config commit.gpgsign false
+        printf '[project]\nversion = "0.2.0"\n' > pyproject.toml
+        git add pyproject.toml
+        git commit -q -m init
+    )
+
+    local calls_log="${TEST_DIR}/gc_timer_order_calls.log"
+    rm -f "$calls_log"
+    (
+        set -euo pipefail
+        update_repo_to_latest() { :; }
+        systemctl() { echo "$*" >> "$calls_log"; return 0; }
+        wait_for_healthy() { return 1; }
+        docker() { return 1; }
+        compose_exec() { return 1; }
+        INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" NONINTERACTIVE="true" \
+        ACCEPT_EMPTY_TRUSTED_PROXIES="true" GITHUB_BRANCH="default" \
+        cmd_update
+    ) >/dev/null 2>&1
+
+    [[ -s "$calls_log" ]] || fail "setup problem: no systemctl calls were logged at all"
+
+    # The timer must never be started at any point before its SECOND stop
+    # (rollback_to_prior()'s own defensive stop, which runs before the
+    # restore). A "start magpie-gc.timer" appearing before that second
+    # stop would mean it was active during rollback's restore window.
+    local second_stop_line
+    second_stop_line=$(grep -n '^stop magpie-gc\.timer$' "$calls_log" | sed -n '2p' | cut -d: -f1)
+    [[ -n "$second_stop_line" ]] || fail "rollback_to_prior() never stopped magpie-gc.timer a second (defensive) time: $(cat "$calls_log")"
+
+    local premature_start_line
+    premature_start_line=$(grep -n '^start magpie-gc\.timer$' "$calls_log" | head -1 | cut -d: -f1)
+    if [[ -n "$premature_start_line" && "$premature_start_line" -lt "$second_stop_line" ]]; then
+        fail "magpie-gc.timer was started (line $premature_start_line) BEFORE rollback_to_prior()'s defensive stop (line $second_stop_line) -- it would have been active during the restore window: $(cat "$calls_log")"
+    fi
+    log "  ✓ magpie-gc.timer is never started before rollback_to_prior() has stopped it again"
+}
+
 test_rollback_cp_failure_dies_loudly_under_real_errexit() {
     log "Test 22: a real cp failure during rollback's own restore, with errexit PRESERVED, dies loudly with the backup path rather than aborting bare"
 
@@ -1048,6 +1105,7 @@ test_rollback_and_cmd_update_restart_gc_timer
 test_run_data_migration_failure_propagates
 test_capture_probe_state_token_regex_handles_hyphens
 test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit
+test_gc_timer_never_started_before_rollback_stops_it_again
 test_rollback_cp_failure_dies_loudly_under_real_errexit
 test_cmd_update_validates_envelope_flags
 
