@@ -1609,7 +1609,12 @@ capture_probe_state() {
     # token is readable on the host). See sharp edge S5.
     local token_out
     if token_out=$(compose_exec magpie magpie-ctl token create --name "$PROBE_TOKEN_NAME" --scope admin 2>&1); then
-        PROBE_TOKEN=$(echo "$token_out" | grep -Eo 'mgp_[A-Za-z0-9_]+' | head -1)
+        # Auto-generated tokens use secrets.token_urlsafe() (base64
+        # URL-safe alphabet: alnum plus '-' and '_') -- the character class
+        # here must include '-' or the match silently truncates at the
+        # first hyphen, producing a token-shaped-but-wrong (and always
+        # invalid) value. See TokenService.generate_plaintext_token().
+        PROBE_TOKEN=$(echo "$token_out" | grep -Eo 'mgp_[A-Za-z0-9_-]+' | head -1)
     fi
     if [[ -z "$PROBE_TOKEN" ]]; then
         log_warn "Could not mint a probe token against the prior install; A3 (token auth) will be skipped: ${token_out:-no output}"
@@ -1866,7 +1871,7 @@ assert_post_update() {
     # (run just before this, by cmd_update()) always stamps this build's own
     # CURRENT_DATA_FORMAT_VERSION, so equal-or-ahead is the only passing
     # outcome; "behind" means the migrate step didn't actually take effect.
-    local ver_out post_version
+    local ver_out post_version=""
     if ver_out=$(compose_exec magpie magpie-ctl migrate --check 2>&1); then
         post_version=$(echo "$ver_out" | sed -nE 's/^Data-format version: ([0-9]+).*/\1/p')
     fi
@@ -1879,7 +1884,7 @@ assert_post_update() {
     # A6: token DB row count -- must be preserved exactly (includes the
     # still-present probe token on both sides of the comparison; it's
     # revoked below, after this check).
-    local list_out post_row_count
+    local list_out post_row_count=""
     if list_out=$(compose_exec magpie magpie-ctl token list 2>&1); then
         post_row_count=$(echo "$list_out" | sed -nE 's/^Total: ([0-9]+) token\(s\)$/\1/p')
     fi
@@ -1907,7 +1912,7 @@ assert_post_update() {
     # A2/A4: artifact byte-identity + tag resolution -- skipped (vacuously
     # satisfied) if capture_probe_state() found no tagged artifact.
     if [[ -n "$PROBE_ARTIFACT_PATH" && -n "$PROBE_TOKEN" ]]; then
-        local info_out post_hash
+        local info_out post_hash=""
         if info_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie info "$PROBE_ARTIFACT_PATH" 2>&1); then
             post_hash=$(echo "$info_out" | sed -nE 's/^Hash:[[:space:]]*//p')
         fi

@@ -455,6 +455,102 @@ test_assert_post_update_a6_fails_on_row_count_change() {
     log "  ✓ A6 fails when the token row count changes"
 }
 
+# Regression tests for a bug a live-container run caught: A5/A6/A2 each
+# derive a "post_*" local (post_version/post_row_count/post_hash) INSIDE an
+# `if X=$(compose_exec ...); then post_*=...; fi` block -- if compose_exec
+# itself fails outright (not just returns unexpected content), the `then`
+# branch never runs and post_* is left truly unset. Under this script's own
+# `set -euo pipefail`, referencing an unset `local` (declared without an
+# initial value) throws "unbound variable" instead of behaving like an
+# empty string -- these tests simulate exactly that failure mode (as
+# opposed to Tests 12/13 above, which simulate compose_exec SUCCEEDING with
+# unexpected content) to prove assert_post_update() reports a clean
+# failure rather than crashing.
+test_assert_post_update_a5_survives_total_compose_exec_failure() {
+    log "Test 13b: assert_post_update() does not crash (unbound variable) when compose_exec fails outright for A5"
+
+    local out
+    out=$(
+        (
+            wait_for_healthy() { return 0; }
+            compose_exec() { return 1; }  # fails for every call, including A5's migrate --check
+            PRIOR_DATA_FORMAT_VERSION="1" PRIOR_TOKEN_ROW_COUNT="" \
+            PROBE_TOKEN="" PROBE_ARTIFACT_PATH="" \
+            assert_post_update
+            apu_rc=$?
+            printf '%s\n' "${ASSERT_FAILURES[@]}"
+            # Re-exits with assert_post_update()'s own code -- otherwise
+            # `$?` after the command substitution below would reflect the
+            # printf above (always 0), not the check actually under test.
+            exit "$apu_rc"
+        ) 2>&1
+    )
+    local rc=$?
+    [[ $rc -ne 0 ]] || fail "assert_post_update() returned success despite compose_exec failing outright"
+    echo "$out" | grep -q "unbound variable" && fail "assert_post_update() crashed with 'unbound variable' instead of reporting a clean A5 failure: $out"
+    echo "$out" | grep -q "^A5 data-format version: could not read" || fail "assert_post_update() did not report A5 as unreadable when compose_exec failed outright: $out"
+    log "  ✓ a total compose_exec failure for A5 is reported cleanly, not a crash"
+}
+
+test_assert_post_update_a6_survives_total_compose_exec_failure() {
+    log "Test 13c: assert_post_update() does not crash (unbound variable) when compose_exec fails outright for A6"
+
+    local out
+    out=$(
+        (
+            wait_for_healthy() { return 0; }
+            compose_exec() {
+                case "$*" in
+                    *"migrate --check"*) echo "Data-format version: 1 (current: 1)" ;;
+                    *) return 1 ;;  # fails A6's token list (and anything else)
+                esac
+            }
+            PRIOR_DATA_FORMAT_VERSION="1" PRIOR_TOKEN_ROW_COUNT="2" \
+            PROBE_TOKEN="" PROBE_ARTIFACT_PATH="" \
+            assert_post_update
+            apu_rc=$?
+            printf '%s\n' "${ASSERT_FAILURES[@]}"
+            exit "$apu_rc"
+        ) 2>&1
+    )
+    local rc=$?
+    [[ $rc -ne 0 ]] || fail "assert_post_update() returned success despite compose_exec failing outright for A6"
+    echo "$out" | grep -q "unbound variable" && fail "assert_post_update() crashed with 'unbound variable' instead of reporting a clean A6 failure: $out"
+    echo "$out" | grep -q "^A6 token row count: could not list tokens" || fail "assert_post_update() did not report A6 as unreadable when compose_exec failed outright: $out"
+    log "  ✓ a total compose_exec failure for A6 is reported cleanly, not a crash"
+}
+
+test_assert_post_update_a2_survives_total_compose_exec_failure() {
+    log "Test 13d: assert_post_update() does not crash (unbound variable) when compose_exec fails outright for A2/A4"
+
+    local out
+    out=$(
+        (
+            wait_for_healthy() { return 0; }
+            compose_exec() {
+                case "$*" in
+                    *"migrate --check"*) echo "Data-format version: 1 (current: 1)" ;;
+                    *"token list"*) echo "Total: 2 token(s)" ;;
+                    *"info"*) return 1 ;;  # fails A2/A4's magpie info call
+                    *) return 1 ;;
+                esac
+            }
+            PRIOR_DATA_FORMAT_VERSION="1" PRIOR_TOKEN_ROW_COUNT="2" \
+            PROBE_TOKEN="mgp_probe" PROBE_ARTIFACT_PATH="test/probe" PROBE_ARTIFACT_REF="latest" \
+            PROBE_ARTIFACT_SHA256="deadbeef" \
+            assert_post_update
+            apu_rc=$?
+            printf '%s\n' "${ASSERT_FAILURES[@]}"
+            exit "$apu_rc"
+        ) 2>&1
+    )
+    local rc=$?
+    [[ $rc -ne 0 ]] || fail "assert_post_update() returned success despite compose_exec failing outright for A2/A4"
+    echo "$out" | grep -q "unbound variable" && fail "assert_post_update() crashed with 'unbound variable' instead of reporting a clean A4 failure: $out"
+    echo "$out" | grep -q "^A4 tag resolution: could not read" || fail "assert_post_update() did not report A4 as unreadable when compose_exec failed outright: $out"
+    log "  ✓ a total compose_exec failure for A2/A4 is reported cleanly, not a crash"
+}
+
 # ---------------------------------------------------------------------------
 # rollback_to_prior() -- the fault-injection proof
 # ---------------------------------------------------------------------------
@@ -623,6 +719,53 @@ test_run_data_migration_failure_propagates() {
 }
 
 # ---------------------------------------------------------------------------
+# capture_probe_state()'s token-parsing regex -- regression test for a bug
+# a live-container run caught: auto-generated tokens use
+# secrets.token_urlsafe()'s alphabet (alnum plus '-' and '_'), and a
+# character class missing '-' silently truncates the parsed token at the
+# first hyphen, producing a token-shaped-but-wrong value that then fails
+# every A3 auth check. curl is shadowed to simulate a reachable prior
+# install (only far enough to reach the token-create/parse step).
+# ---------------------------------------------------------------------------
+test_capture_probe_state_token_regex_handles_hyphens() {
+    log "Test 20: capture_probe_state() does not truncate a probe token at a hyphen"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "token_regex")
+    local hyphenated_token="mgp_ADMIN_tgYzFL9o1RLghLo8TXt-6s3gNXZ0os-W-J6JOkKcn2U"
+
+    local captured
+    captured=$(
+        (
+            curl() { return 0; }  # "prior install is reachable"
+            compose_exec() {
+                case "$*" in
+                    *"token create"*)
+                        cat << EOF
+============================================================
+TOKEN CREATED: magpie-update-probe-1234 (scope: admin)
+Save this token - it will NOT be shown again!
+
+${hyphenated_token}
+============================================================
+EOF
+                        ;;
+                    *"token list"*) echo "Total: 1 token(s)" ;;
+                    *"migrate --check"*) echo "Data-format version: 0 (current: 1)" ;;
+                    *"ls -r"*) echo "No artifacts found." ;;
+                    *) return 1 ;;
+                esac
+            }
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" HTTP_PORT=1 BIND_IP="" \
+            capture_probe_state >/dev/null 2>&1
+            echo "$PROBE_TOKEN"
+        )
+    )
+    [[ "$captured" == "$hyphenated_token" ]] || fail "PROBE_TOKEN was truncated or wrong: expected '$hyphenated_token', got '$captured'"
+    log "  ✓ a hyphen-containing token is captured in full, not truncated"
+}
+
+# ---------------------------------------------------------------------------
 # cmd_update() flag validation for the new envelope options
 # ---------------------------------------------------------------------------
 test_cmd_update_validates_envelope_flags() {
@@ -673,11 +816,15 @@ test_assert_post_update_a1_short_circuits_on_unhealthy
 test_assert_post_update_skips_a2_a3_a4_when_nothing_captured
 test_assert_post_update_a5_fails_on_version_regression
 test_assert_post_update_a6_fails_on_row_count_change
+test_assert_post_update_a5_survives_total_compose_exec_failure
+test_assert_post_update_a6_survives_total_compose_exec_failure
+test_assert_post_update_a2_survives_total_compose_exec_failure
 test_rollback_fires_and_restores_prior_state
 test_rollback_reports_loudly_when_restore_itself_unhealthy
 test_prune_old_backups_keeps_newest_n
 test_prune_old_backups_noop_under_the_limit
 test_run_data_migration_failure_propagates
+test_capture_probe_state_token_regex_handles_hyphens
 test_cmd_update_validates_envelope_flags
 
 log ""
