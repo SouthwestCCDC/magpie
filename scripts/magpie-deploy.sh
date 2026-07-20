@@ -2732,7 +2732,12 @@ cmd_update() {
     # swap, .env reconcile, image pull/build, systemd regen. backup_data()
     # above already stopped the OLD service (to checkpoint the WAL) -- for
     # the ENTIRE duration of this window, the site is down and there is no
-    # running container to serve traffic. Every step here runs inside a
+    # running container to serve traffic. (Not true under --no-backup:
+    # backup_data() returns early without stopping anything, so the OLD
+    # container keeps serving traffic until the `systemctl restart` at
+    # the end of this window swaps it out -- the same pre-#561 behavior,
+    # just without a backup to roll back data from if it then fails.)
+    # Every step here runs inside a
     # subshell so ANY failure (an explicit die() -- which only exits the
     # subshell, not this script -- or a raw `set -e` abort from an
     # unguarded command) is caught uniformly by the single `if ! ( ... );`
