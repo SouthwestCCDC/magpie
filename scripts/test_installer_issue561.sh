@@ -978,6 +978,50 @@ test_gc_timer_never_started_before_rollback_stops_it_again() {
     log "  ✓ magpie-gc.timer is never started before rollback_to_prior() has stopped it again"
 }
 
+# Regression test for a Copilot finding: backup_data() runs BEFORE
+# cmd_update()'s swap-window subshell exists to catch anything, so its own
+# cp calls (copying magpie.db/.env/admin-token into the backup) were
+# unguarded under this script's `set -euo pipefail` -- a failure there
+# (disk full is the plausible cause) would abort the whole script raw,
+# leaving the just-stopped magpie.service down with no rollback engaged.
+test_backup_data_cp_failure_triggers_rollback_under_real_errexit() {
+    log "Test 17e: a real backup_data() cp failure, with errexit PRESERVED, reaches rollback_to_prior() rather than aborting bare"
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        log "  (skipped: running as root -- cannot simulate a permission-denied cp failure via chmod)"
+        return 0
+    fi
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "backup_cp_fail" "OLD_DB_CONTENT")
+    # Force a REAL cp failure: the source magpie.db is unreadable, so
+    # backup_data()'s very first cp fails for real (permission denied).
+    chmod 000 "${data_dir}/magpie.db"
+
+    local out
+    out=$(
+        (
+            set -euo pipefail  # magpie-deploy.sh's own real semantics
+            systemctl() { return 0; }
+            wait_for_healthy() { return 0; }
+            docker() { return 1; }
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="${install_dir}/backups/x" \
+            HTTP_PORT=1 BIND_IP="" PRIOR_GIT_REF="" MAGPIE_VERSION="0.2.0" \
+            NO_BACKUP="false" BACKUP_ARTIFACTS="skip"
+            capture_prior_state
+            preflight_backup_space
+            backup_data
+        ) 2>&1
+    )
+    local rc=$?
+    chmod 644 "${data_dir}/magpie.db" 2>/dev/null || true  # restore perms so TEST_DIR cleanup can remove it
+
+    [[ $rc -ne 0 ]] || fail "backup_data() reported success despite a real cp failure backing up magpie.db"
+    echo "$out" | grep -qi "Failed to back up magpie.db" || fail "the specific backup-step failure message was lost: $out"
+    echo "$out" | grep -qi "Rolling back to the prior install" || fail "a real (errexit-preserved) backup_data() cp failure did NOT reach rollback_to_prior() -- the just-stopped service would be left down with no rollback. Output: $out"
+    log "  ✓ a real backup_data() cp failure, with errexit preserved, reaches rollback_to_prior() -- not a bare abort leaving the site down"
+}
+
 test_rollback_cp_failure_dies_loudly_under_real_errexit() {
     log "Test 22: a real cp failure during rollback's own restore, with errexit PRESERVED, dies loudly with the backup path rather than aborting bare"
 
@@ -1101,6 +1145,7 @@ test_prune_old_backups_keeps_newest_n
 test_prune_old_backups_noop_under_the_limit
 test_prune_old_backups_sorts_by_mtime_not_name
 test_backup_data_stops_gc_timer
+test_backup_data_cp_failure_triggers_rollback_under_real_errexit
 test_rollback_and_cmd_update_restart_gc_timer
 test_run_data_migration_failure_propagates
 test_capture_probe_state_token_regex_handles_hyphens

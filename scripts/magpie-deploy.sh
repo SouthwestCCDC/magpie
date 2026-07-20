@@ -1801,14 +1801,44 @@ backup_data() {
     # cmd_update()'s success path and rollback_to_prior().
     systemctl stop magpie-gc.timer 2>/dev/null || true
 
-    mkdir -p "${BACKUP_DIR}/data"
+    # Every fallible step below (disk full is the plausible real-world
+    # cause -- the same condition preflight_backup_space() just checked
+    # for, but a check-then-act race or an unrelated IO/permissions
+    # problem can still hit this) is guarded and routes to
+    # rollback_to_prior() on failure. This is the SAME class of failure
+    # issue #561's A1 finding was about: the stack was JUST stopped above,
+    # so an unguarded failure here (under this script's own
+    # `set -euo pipefail`) would abort the whole script raw, leaving the
+    # site down with no rollback engaged -- before the swap-window
+    # subshell even exists to catch it. Reusing rollback_to_prior() here
+    # is safe even though nothing has actually been SWAPPED yet: .env/
+    # docker-compose.yml on disk are still identical to what
+    # capture_prior_state() just snapshotted, so "rolling back" at this
+    # point is just restoring them to themselves and restarting the
+    # still-current, untouched service.
+    if ! mkdir -p "${BACKUP_DIR}/data"; then
+        log_error "Failed to create ${BACKUP_DIR}/data"
+        rollback_to_prior
+    fi
     local db_path="${DATA_DIR}/magpie.db"
     if [[ -f "$db_path" ]]; then
-        cp "$db_path" "${BACKUP_DIR}/data/magpie.db"
-        [[ -f "${db_path}-wal" ]] && cp "${db_path}-wal" "${BACKUP_DIR}/data/magpie.db-wal"
-        [[ -f "${db_path}-shm" ]] && cp "${db_path}-shm" "${BACKUP_DIR}/data/magpie.db-shm"
+        if ! cp "$db_path" "${BACKUP_DIR}/data/magpie.db"; then
+            log_error "Failed to back up magpie.db"
+            rollback_to_prior
+        fi
+        if [[ -f "${db_path}-wal" ]] && ! cp "${db_path}-wal" "${BACKUP_DIR}/data/magpie.db-wal"; then
+            log_error "Failed to back up magpie.db-wal"
+            rollback_to_prior
+        fi
+        if [[ -f "${db_path}-shm" ]] && ! cp "${db_path}-shm" "${BACKUP_DIR}/data/magpie.db-shm"; then
+            log_error "Failed to back up magpie.db-shm"
+            rollback_to_prior
+        fi
     fi
-    cp "${INSTALL_DIR}/etc/.env" "${BACKUP_DIR}/data/.env"
+    if ! cp "${INSTALL_DIR}/etc/.env" "${BACKUP_DIR}/data/.env"; then
+        log_error "Failed to back up ${INSTALL_DIR}/etc/.env"
+        rollback_to_prior
+    fi
 
     # MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH is an in-container path (always
     # under /data by convention); the host path is DATA_DIR plus the same
@@ -1818,7 +1848,10 @@ backup_data() {
     read_env_file "${INSTALL_DIR}/etc/.env" env_for_token
     local token_file="${env_for_token[MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH]:-/data/admin-token}"
     local host_token_file="${DATA_DIR}${token_file#/data}"
-    [[ -f "$host_token_file" ]] && cp "$host_token_file" "${BACKUP_DIR}/data/admin-token"
+    if [[ -f "$host_token_file" ]] && ! cp "$host_token_file" "${BACKUP_DIR}/data/admin-token"; then
+        log_error "Failed to back up admin-token"
+        rollback_to_prior
+    fi
 
     local artifacts_mode="skip"
     case "$BACKUP_ARTIFACTS" in
@@ -1826,11 +1859,13 @@ backup_data() {
             if [[ -d "${DATA_DIR}/artifacts" ]]; then
                 # cp -al: hardlink snapshot, O(inodes) not O(bytes) -- only
                 # works on the same filesystem as DATA_DIR. Falls back to a
-                # warning (not a copy) on cross-filesystem or any other cp
-                # failure; the bind-mounted artifacts themselves are
-                # untouched by this update regardless, so this is defense
-                # against a FUTURE layout migration, not the primary safety
-                # net for this release.
+                # warning (not a hard failure) on cross-filesystem or any
+                # other cp failure; the bind-mounted artifacts themselves
+                # are untouched by this update regardless, so this is
+                # defense against a FUTURE layout migration, not the
+                # primary safety net for this release -- unlike the
+                # mandatory DB/.env/token copies above, losing this one
+                # doesn't mean data loss on a failed update.
                 if cp -al "${DATA_DIR}/artifacts" "${BACKUP_DIR}/data/artifacts" 2>/dev/null; then
                     artifacts_mode="link"
                 else
@@ -1840,7 +1875,10 @@ backup_data() {
             ;;
         copy)
             if [[ -d "${DATA_DIR}/artifacts" ]]; then
-                cp -a "${DATA_DIR}/artifacts" "${BACKUP_DIR}/data/artifacts"
+                if ! cp -a "${DATA_DIR}/artifacts" "${BACKUP_DIR}/data/artifacts"; then
+                    log_error "Failed to back up the artifacts tree (--backup-artifacts=copy)"
+                    rollback_to_prior
+                fi
                 artifacts_mode="copy"
             fi
             ;;
@@ -1850,7 +1888,7 @@ backup_data() {
     local db_sha256="none"
     [[ -f "${BACKUP_DIR}/data/magpie.db" ]] && db_sha256=$(sha256sum "${BACKUP_DIR}/data/magpie.db" | cut -d' ' -f1)
 
-    cat > "${BACKUP_DIR}/MANIFEST" << EOF
+    if ! cat > "${BACKUP_DIR}/MANIFEST" << EOF
 # Magpie update backup manifest
 # Generated by magpie-deploy.sh on $(date -Iseconds)
 source_image=${PRIOR_MAGPIE_IMAGE}
@@ -1862,6 +1900,10 @@ db_sha256=${db_sha256}
 probe_artifact=${PROBE_ARTIFACT_PATH:-none}:${PROBE_ARTIFACT_REF:-none}
 probe_artifact_hash=${PROBE_ARTIFACT_SHA256:-none}
 EOF
+    then
+        log_error "Failed to write ${BACKUP_DIR}/MANIFEST"
+        rollback_to_prior
+    fi
 
     log "Backup complete: ${BACKUP_DIR} (artifacts: ${artifacts_mode})"
 }
