@@ -1344,6 +1344,102 @@ test_capture_probe_state_token_parse_failure_survives_real_errexit() {
     log "  ✓ a token-parse failure (grep finds nothing) does not abort the script under real errexit"
 }
 
+# Regression test for a release-blocking bug a fresh adversarial audit
+# found: `((checked++))` as a bare statement in capture_probe_state()'s
+# artifact-scanning loop. Bash's `(( expr ))` returns the expr's TRUTH
+# value as its exit status -- 0 result means exit 1 -- and post-increment
+# evaluates to the PRE-increment value, so on the very first loop
+# iteration (checked: 0 -> 1) this returned exit 1. As a bare command
+# statement (not inside an if/while/&&/|| condition), that exit 1 would
+# abort the WHOLE update script under this file's own `set -euo
+# pipefail` -- silently, no die()/log_error -- the instant ANY tagged
+# artifact is found on the prior install. This hid from every prior test
+# because NEITHER existing capture_probe_state() test combines both
+# conditions needed to trigger it: Test 20b (queries by explicit ref) has
+# a real tagged artifact but runs under this FILE's own `set +e`
+# harness; Test 20c (token-parse survival) runs under real errexit but
+# its fixture reports "No artifacts found." -- the artifact-scanning
+# loop body (where `((checked++))` lives) never executes at all. This
+# test combines both: a REAL tagged artifact (exercising the loop body)
+# AND real errexit preserved (so a bare-statement abort would actually
+# be observed) -- exactly the combination that hid the bug.
+test_capture_probe_state_completes_with_tagged_artifact_under_real_errexit() {
+    log "Test 20d: capture_probe_state() runs to completion with a tagged artifact present, under real errexit (release-blocker regression)"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "probe_artifact_errexit")
+
+    local out
+    out=$(
+        (
+            set -euo pipefail  # magpie-deploy.sh's own real semantics
+            curl() { return 0; }
+            compose_exec() {
+                case "$*" in
+                    *"token create"*) echo "mgp_ADMIN_faketoken123" ;;
+                    *"token list"*) echo "Total: 1 token(s)" ;;
+                    *"migrate --check"*) echo "Data-format version: 0 (current: 1)" ;;
+                    *"ls -r"*) echo "myproj/myart" ;;  # a REAL tagged artifact -- exercises the loop body
+                    *"info myproj/myart:v1"*) printf 'Hash:        deadbeef123\nTags:        v1, latest\n' ;;
+                    *"info myproj/myart"*) printf 'Hash:        deadbeef123\nTags:        v1, latest\n' ;;
+                    *) return 1 ;;
+                esac
+            }
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" HTTP_PORT=1 BIND_IP="" \
+            capture_probe_state
+            echo "SURVIVED"
+        ) 2>&1
+    )
+    local rc=$?
+
+    [[ $rc -eq 0 ]] || fail "capture_probe_state() aborted (rc=$rc) with a tagged artifact present under real errexit -- this is the release-blocking bug (bare '((checked++))' exiting 1 on its first iteration and killing the whole update script silently): $out"
+    echo "$out" | grep -q "SURVIVED" || fail "capture_probe_state() did not run to completion with a tagged artifact present under real errexit: $out"
+    log "  ✓ capture_probe_state() runs to completion with a tagged artifact present under real errexit"
+}
+
+# Same bug, exercised through the actual entry point every real `update`
+# goes through: cmd_update() calls capture_prior_state(), which calls
+# capture_probe_state() unconditionally, before any of the backup/swap/
+# assert/rollback envelope this PR adds ever runs. Confirms the fix at
+# the level that matters operationally, not just at capture_probe_state()
+# in isolation.
+test_cmd_update_completes_past_capture_with_tagged_artifact_under_real_errexit() {
+    log "Test 20e: cmd_update() gets past capture_prior_state() with a tagged artifact present, under real errexit (release-blocker regression)"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "update_artifact_errexit")
+
+    local out
+    out=$(
+        (
+            set -euo pipefail  # magpie-deploy.sh's own real semantics
+            curl() { return 0; }
+            systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
+            compose_exec() {
+                case "$*" in
+                    *"token create"*) echo "mgp_ADMIN_faketoken123" ;;
+                    *"token list"*) echo "Total: 1 token(s)" ;;
+                    *"migrate --check"*) echo "Data-format version: 0 (current: 1)" ;;
+                    *"ls -r"*) echo "myproj/myart" ;;  # a REAL tagged artifact -- exercises the loop body
+                    *"info myproj/myart:v1"*) printf 'Hash:        deadbeef123\nTags:        v1, latest\n' ;;
+                    *"info myproj/myart"*) printf 'Hash:        deadbeef123\nTags:        v1, latest\n' ;;
+                    *) return 1 ;;
+                esac
+            }
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" HTTP_PORT=1 BIND_IP="" \
+            MAGPIE_VERSION="0.2.0" NO_BACKUP="false" BACKUP_ARTIFACTS="skip"
+            compute_backup_dir
+            capture_prior_state
+            echo "SURVIVED_CAPTURE"
+        ) 2>&1
+    )
+    local rc=$?
+
+    [[ $rc -eq 0 ]] || fail "capture_prior_state() (as called by cmd_update()) aborted (rc=$rc) with a tagged artifact present under real errexit -- every real 'update' against an install with >=1 tagged artifact would die silently before the backup/migrate/assert/rollback envelope ever runs: $out"
+    echo "$out" | grep -q "SURVIVED_CAPTURE" || fail "capture_prior_state() did not run to completion with a tagged artifact present under real errexit: $out"
+    log "  ✓ cmd_update()'s capture step completes with a tagged artifact present under real errexit"
+}
+
 # ---------------------------------------------------------------------------
 # Errexit-PRESERVED regression tests (adversarial review findings A1/A3).
 #
@@ -1858,6 +1954,8 @@ test_run_data_migration_failure_propagates
 test_capture_probe_state_token_regex_handles_hyphens
 test_capture_probe_state_queries_info_by_explicit_ref
 test_capture_probe_state_token_parse_failure_survives_real_errexit
+test_capture_probe_state_completes_with_tagged_artifact_under_real_errexit
+test_cmd_update_completes_past_capture_with_tagged_artifact_under_real_errexit
 test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit
 test_gc_timer_never_started_before_rollback_stops_it_again
 test_no_rollback_restarts_gc_timer_before_dying

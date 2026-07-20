@@ -238,7 +238,15 @@ prompt_choice() {
         local marker=""
         [[ "$opt" == "$default" ]] && marker=" (default)"
         echo "  $i) $opt$marker"
-        ((i++))
+        # Assignment form, not `((i++))` as a bare statement -- see the
+        # same fix on capture_probe_state()'s `checked` counter for why:
+        # a bare `(( expr ))` statement's exit status follows the
+        # expression's TRUTH value (0 result -> exit 1), which would
+        # abort the whole script under `set -euo pipefail` the moment `i`
+        # is ever 0 at this point. `i` starts at 1 here, so this
+        # particular loop never actually hits that today -- fixed anyway
+        # for consistency and to not leave a landmine for a future edit.
+        i=$(( i + 1 ))
     done
 
     while true; do
@@ -1430,7 +1438,13 @@ wait_for_healthy() {
         fi
         echo -n "."
         sleep 2
-        ((attempt++))
+        # Assignment form -- see capture_probe_state()'s `checked` counter
+        # for why a bare `((attempt++))` statement is dangerous under
+        # `set -euo pipefail` (aborts the whole script the moment
+        # `attempt` is 0 at this point). `attempt` starts at 1 here, so
+        # this particular loop never actually hits that today -- fixed
+        # anyway for consistency and to not leave a landmine.
+        attempt=$(( attempt + 1 ))
     done
 
     echo ""
@@ -1470,15 +1484,21 @@ run_init() {
             return 0
         fi
 
+        # Assignment form in both branches below -- see wait_for_healthy()'s
+        # `attempt` counter (and capture_probe_state()'s `checked`) for why
+        # a bare `((attempt++))` statement is dangerous under
+        # `set -euo pipefail`. `attempt` starts at 1 here, so this
+        # particular loop never actually hits that today -- fixed anyway
+        # for consistency and to not leave a landmine.
         if echo "$output" | grep -qiE "(no container|not running|is not running)"; then
             log_warn "Container not ready, waiting ${retry_delay}s before retry..."
             sleep "$retry_delay"
-            ((attempt++))
+            attempt=$(( attempt + 1 ))
         else
             # Some other error - might be transient, retry anyway
             log_warn "Init attempt failed: $output"
             sleep "$retry_delay"
-            ((attempt++))
+            attempt=$(( attempt + 1 ))
         fi
     done
 
@@ -1735,7 +1755,16 @@ capture_probe_state() {
     local path info_out tags first_tag hash checked=0
     while IFS= read -r path && (( checked < 5 )); do
         [[ -z "$path" ]] && continue
-        ((checked++))
+        # Assignment form, not `((checked++))` as a bare statement: bash's
+        # `(( expr ))` returns the expr's TRUTH value as its exit status
+        # (0 is "false" -> exit 1), and post-increment evaluates to the
+        # PRE-increment value -- so on the very first iteration
+        # (checked: 0 -> 1) this returns exit 1 for the checked==0 case.
+        # As a bare command statement (not inside an if/while/&&/||
+        # condition), that exit 1 would abort the WHOLE script under this
+        # file's own `set -euo pipefail` -- silently, no die()/log_error.
+        # `checked=$(( checked + 1 ))` is a plain assignment, always exit 0.
+        checked=$(( checked + 1 ))
         info_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie info "$path" 2>&1) || continue
         tags=$(echo "$info_out" | sed -nE 's/^Tags:[[:space:]]*//p')
         [[ -z "$tags" || "$tags" == "(none)" ]] && continue
