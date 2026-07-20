@@ -730,7 +730,17 @@ test_cmd_update_regenerates_systemd_units() {
     if ! echo "$update_body" | grep -q '^\s*generate_gc_units$'; then
         fail "cmd_update() no longer calls generate_gc_units()"
     fi
-    if ! echo "$update_body" | grep -q '^\s*systemctl daemon-reload$'; then
+    # Matches either a bare `systemctl daemon-reload` line or the issue
+    # #561 update-safety-envelope form, `if ! systemctl daemon-reload; then`
+    # (daemon-reload now runs inside cmd_update()'s swap-window subshell,
+    # guarded so a failure routes to rollback_to_prior() instead of a raw
+    # `set -e` abort -- see rollback_to_prior()). Anchored to match only
+    # an actual command line (optionally prefixed with `if !` and suffixed
+    # with `; then`), not merely the phrase appearing anywhere on a line --
+    # a bare substring grep would false-positive on a comment or an error
+    # message that happens to mention "systemctl daemon-reload" without
+    # the call itself being present.
+    if ! echo "$update_body" | grep -qE '^[[:space:]]*(if[[:space:]]+![[:space:]]+)?systemctl daemon-reload(;[[:space:]]*then)?[[:space:]]*$'; then
         fail "cmd_update() regenerates the unit files but never runs 'systemctl daemon-reload' -- systemd would keep using its cached (stale) unit definition"
     fi
     log "  ✓ cmd_update() regenerates both unit files and reloads systemd before restarting"
