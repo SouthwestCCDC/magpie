@@ -26,6 +26,8 @@
 # - MAGPIE_DATA_DIR: host path for the data directory (default: ./data)
 # - MAGPIE_IMAGE: image ref to run (default: ghcr.io/southwestccdc/magpie:latest)
 # - MAGPIE_HTTP_PORT: host port published for the container's :8080 (default: 8080)
+# - MAGPIE_BIND_IP: host IP the published port binds to (default: 0.0.0.0,
+#   all interfaces)
 # - MAGPIE_ADMIN_TOKEN_SINK: REQUIRED, no default (fail-closed) -- see the
 #   `environment:` block below for the sink options and why there's no
 #   Compose-level default
@@ -33,8 +35,16 @@
 services:
   magpie:
     image: ${MAGPIE_IMAGE:-ghcr.io/southwestccdc/magpie:latest}
+    # Long-form (not the short "host_ip:host_port:container_port" string)
+    # so an IPv6 MAGPIE_BIND_IP works: the short form's colon-delimited
+    # string is ambiguous for an unbracketed IPv6 literal (it has colons of
+    # its own), and interpolating one in unbracketed here would silently
+    # produce something Compose can't parse as host:port:port. The
+    # structured host_ip field has no such ambiguity.
     ports:
-      - "${MAGPIE_HTTP_PORT:-8080}:8080"
+      - target: 8080
+        published: "${MAGPIE_HTTP_PORT:-8080}"
+        host_ip: "${MAGPIE_BIND_IP:-0.0.0.0}"
     volumes:
       - ${MAGPIE_DATA_DIR:-./data}:/data
     environment:

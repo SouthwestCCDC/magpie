@@ -9,14 +9,25 @@ Get Magpie running in 5 minutes using the installer script.
 ```bash
 git clone https://github.com/SouthwestCCDC/magpie
 cd magpie
-sudo ./scripts/magpie-deploy.sh install --tls-mode off --noninteractive
-# Copy the admin token from install output. If lost, reset with:
-# docker exec -it magpie-magpie-1 magpie-ctl init --reset-admin-token
+sudo ./scripts/magpie-deploy.sh install --noninteractive
+# Copy the admin token from install output. With the default
+# MAGPIE_ADMIN_TOKEN_SINK=file, if it wasn't shown (or you lost it), read
+# it instead:
+# sudo cat /opt/magpie/data/admin-token
+# To reset it: cd /opt/magpie && docker compose exec magpie magpie-ctl init --reset-admin-token
+# (the new token is delivered through the same configured sink, i.e. also
+# written to that file, not printed to the terminal)
 ```
 
-Use `--tls-mode off` for local testing or behind a reverse proxy. For Let's Encrypt: `--tls-mode auto --domain magpie.example.com`.
+Magpie serves plain HTTP only -- it does not terminate TLS itself. For a
+public deployment, put a reverse proxy (nginx, Caddy, a cloud load
+balancer, etc.) in front of it and forward to `http://127.0.0.1:8080`
+(or whatever port `MAGPIE_HTTP_PORT`/`--http-port` was set to). If
+`MAGPIE_BIND_IP`/`--bind-ip` was set to bind a specific host address
+instead of the default (all interfaces), forward to that address instead
+-- 127.0.0.1 won't be listening.
 
-See [Installation Guide](installation.md) for TLS options and advanced configuration.
+See [Installation Guide](installation.md) for advanced configuration.
 
 ## 2. Install Client
 
@@ -62,7 +73,7 @@ magpie info builds/app:latest
 
 ## Next Steps
 
-- [Installation Guide](installation.md) - Advanced deployment options and TLS configuration
+- [Installation Guide](installation.md) - Advanced deployment options and reverse-proxy setup
 - [User Guide](user-guide.md) - Complete CLI reference
 - [Production Checklist](production-checklist.md) - Pre-deployment verification
 
