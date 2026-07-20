@@ -117,6 +117,38 @@ ACCEPT_EMPTY_TRUSTED_PROXIES="false"
 # tier-2 deprecation gate.
 ACCEPT_BUILTIN_TLS_REMOVED="false"
 
+# Update safety envelope (issue #561): backup -> swap -> assert -> rollback
+# around cmd_update()'s existing swap. See the "Update safety envelope"
+# section below for the functions these drive.
+NO_BACKUP="false"
+KEEP_BACKUPS="3"
+BACKUP_ARTIFACTS="link"  # link|copy|skip -- see backup_data()
+# Inverted flag name (--no-rollback sets this true) so the *default*
+# reads as the safe, hands-off choice: rollback on a failed update is ON
+# unless explicitly disabled.
+NO_ROLLBACK="false"
+# Populated by compute_backup_dir()/capture_prior_state()/backup_data() and
+# consumed by rollback_to_prior()/prune_old_backups(). Declared here (not
+# just implicitly created by first assignment) so every function that
+# reads them has a documented single source of truth.
+BACKUP_DIR=""
+IS_CROSS_020="false"
+PRIOR_MAGPIE_IMAGE=""
+PRIOR_GIT_REF=""
+PRIOR_DATA_FORMAT_VERSION="0"
+PRIOR_TOKEN_ROW_COUNT=""
+PROBE_TOKEN=""
+PROBE_TOKEN_NAME=""
+PROBE_ARTIFACT_PATH=""
+PROBE_ARTIFACT_REF=""
+PROBE_ARTIFACT_SHA256=""
+# Populated by assert_post_update() (and the migration-failure path in
+# cmd_update()): one human-readable reason per failed check, empty means
+# everything passed. Declared here since bash doesn't require a `local -a`
+# to opt into array semantics, and a stale value from the previous
+# invocation would otherwise leak through if a caller forgot to reset it.
+ASSERT_FAILURES=()
+
 # =============================================================================
 # Helper functions
 # =============================================================================
@@ -1340,12 +1372,41 @@ start_services() {
     systemctl start magpie-gc.timer
 }
 
+# Returns the URL wait_for_healthy() (and the update safety envelope's
+# probes) should hit. Probes the actual configured MAGPIE_BIND_IP rather
+# than hardcoding 127.0.0.1: a `--bind-ip` that excludes loopback (see
+# issue #561's sharp edge S6) would otherwise make every health/probe
+# check fail spuriously and, once assert_post_update() exists, trigger a
+# false rollback on an install that is actually fine. Falls back to
+# 127.0.0.1 when BIND_IP is empty or the explicit "all interfaces"
+# sentinel (0.0.0.0) -- both cases still accept loopback connections.
+health_check_url() {
+    local host="127.0.0.1"
+    if [[ -n "$BIND_IP" && "$BIND_IP" != "0.0.0.0" ]]; then
+        host="$BIND_IP"
+    fi
+    # An IPv6 literal needs brackets in a URL (it has colons of its own,
+    # which would otherwise be read as the URL's own port separator).
+    if [[ "$host" == *:* ]]; then
+        host="[$host]"
+    fi
+    echo "http://${host}:${HTTP_PORT}/health"
+}
+
+# Polls health_check_url() and returns 0 once it responds, 1 if it never
+# does within the timeout. Callers MUST check the return value -- unlike
+# the pre-#561 version of this function, a real failure here is no longer
+# swallowed into a warn-and-continue: `install` now dies on it (nothing
+# runs on a fresh install if the container never becomes healthy) and
+# `update`'s assert_post_update() treats it as its A1 check, triggering
+# rollback_to_prior(). See issue #561's "real gap PR-3 leaves open".
 wait_for_healthy() {
     log "Waiting for services to be healthy..."
 
     local max_attempts=30
     local attempt=1
-    local health_url="http://127.0.0.1:${HTTP_PORT}/health"
+    local health_url
+    health_url="$(health_check_url)"
 
     while (( attempt <= max_attempts )); do
         if curl -sf "$health_url" >/dev/null 2>&1; then
@@ -1358,7 +1419,8 @@ wait_for_healthy() {
     done
 
     echo ""
-    log_warn "Services may not be fully healthy. Check 'magpie logs' for details."
+    log_error "Services did not become healthy at ${health_url} within $(( max_attempts * 2 ))s. Check '$SCRIPT_NAME logs' for details."
+    return 1
 }
 
 run_init() {
@@ -1439,6 +1501,548 @@ run_init() {
 }
 
 # =============================================================================
+# Update safety envelope (issue #561)
+# =============================================================================
+#
+# Wraps cmd_update()'s existing swap (repo checkout, compose/env/systemd
+# regen, image pull, `systemctl restart`) in capture -> backup -> [swap] ->
+# migrate -> assert -> rollback, closing the gap left by the pre-#561
+# wait_for_healthy(): a broken update used to `log_warn` and report success
+# anyway, leaving a boot-looping container behind. See cmd_update() for how
+# these are wired together, and docs/installation.md's upgrade section for
+# the operator-facing summary.
+#
+# The /data layout (magpie.db, artifacts, admin-token) is byte-identical
+# across the pre-0.2.0 two-container topology and the bundled single-
+# container image (both are the same host bind mount at the same
+# in-container paths) -- the swap itself never touches /data. This
+# envelope's job is the safety discipline (backup/assert/rollback) and the
+# data-format version marker (magpie-ctl migrate) that makes a FUTURE
+# format change safe, not a data transform for THIS release.
+
+# Runs `docker compose exec -T` against the magpie service for the current
+# INSTALL_DIR/.env, used throughout this section to probe the running
+# container -- both the prior one (before the swap) and the new one
+# (after it) -- without depending on which admin-token-sink or network
+# config the operator chose. Extra arguments (e.g. `-e KEY=value`) are
+# inserted between `exec -T` and the service name.
+compose_exec() {
+    docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" exec -T "$@"
+}
+
+# Sets IS_CROSS_020: whether this update is crossing the pre-0.2.0
+# two-container -> bundled single-container boundary, detected from the
+# CURRENT (not-yet-touched) install state, before any part of the swap
+# below has run. Purely informational (logged, and recorded in the backup
+# MANIFEST) -- per issue #561's scope, both a cross-0.2.0 upgrade and a
+# same-topology 0.2.x -> 0.2.y update get the full backup+assert+rollback
+# envelope; this does not gate whether the envelope engages.
+detect_upgrade_shape() {
+    IS_CROSS_020="false"
+    local -a reasons=()
+
+    if [[ "$PERSISTED_TLS_MODE" == "auto" || "$PERSISTED_TLS_MODE" == "manual" || "$PERSISTED_TLS_MODE" == "off" ]]; then
+        reasons+=("persisted TLS_MODE=${PERSISTED_TLS_MODE}")
+    fi
+    if [[ -f "${INSTALL_DIR}/Caddyfile" ]]; then
+        reasons+=("Caddyfile present in ${INSTALL_DIR}")
+    fi
+    if [[ -f "${INSTALL_DIR}/docker-compose.prod.yml" ]]; then
+        reasons+=("docker-compose.prod.yml present in ${INSTALL_DIR}")
+    fi
+    if [[ -f "${INSTALL_DIR}/docker-compose.yml" ]] && grep -qE '^[[:space:]]*caddy:' "${INSTALL_DIR}/docker-compose.yml"; then
+        reasons+=("current docker-compose.yml has a caddy: service")
+    fi
+    if ! env_key_has_value "${INSTALL_DIR}/etc/.env" "MAGPIE_IMAGE" || ! grep -qE '^MAGPIE_IMAGE=.*-bundled$' "${INSTALL_DIR}/etc/.env" 2>/dev/null; then
+        reasons+=("MAGPIE_IMAGE is absent or not a -bundled tag")
+    fi
+    if docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps --services 2>/dev/null | grep -qx 'caddy'; then
+        reasons+=("a running caddy sidecar container was found")
+    fi
+
+    if [[ ${#reasons[@]} -gt 0 ]]; then
+        IS_CROSS_020="true"
+        log "Detected a pre-0.2.0 (two-container) install being upgraded: ${reasons[*]}"
+    else
+        log "Detected a same-topology (0.2.x) update"
+    fi
+}
+
+# Computes BACKUP_DIR for this update run. Called after detect_version()
+# (needs MAGPIE_VERSION, the version being updated TO) and before any
+# capture/backup step.
+compute_backup_dir() {
+    local ts
+    ts="$(date -u +%Y%m%dT%H%M%SZ)"
+    BACKUP_DIR="${INSTALL_DIR}/backups/${MAGPIE_VERSION}-${ts}"
+}
+
+# Captures a "before" snapshot used by assert_post_update() to prove data
+# continuity across the swap: an ephemeral admin-scope probe token (works
+# regardless of the configured MAGPIE_ADMIN_TOKEN_SINK -- see sharp edge S5
+# in issue #561's scope) and, if any tagged artifact already exists, its
+# path/tag/hash. Every piece here is best-effort: if the prior install
+# isn't reachable (a fresh/broken install, or this envelope running
+# against a two-container v0.1.x install whose old image predates
+# `magpie-ctl migrate`/token commands it expects), the corresponding piece
+# is skipped with a log message rather than aborting the update --
+# assert_post_update() treats a skipped probe as vacuously satisfied (the
+# A2/A3/A4 skip rule).
+capture_probe_state() {
+    PROBE_TOKEN=""
+    PROBE_TOKEN_NAME="magpie-update-probe-$$"
+    PROBE_ARTIFACT_PATH=""
+    PROBE_ARTIFACT_REF=""
+    PROBE_ARTIFACT_SHA256=""
+    PRIOR_TOKEN_ROW_COUNT=""
+    PRIOR_DATA_FORMAT_VERSION="0"
+
+    local health_url
+    health_url="$(health_check_url)"
+    if ! curl -sf "$health_url" >/dev/null 2>&1; then
+        log_warn "Prior install is not reachable at ${health_url}; skipping probe capture. A2/A3/A4 will be treated as vacuously satisfied by assert_post_update()."
+        return 0
+    fi
+
+    # A3 baseline: an ephemeral admin-scope token, independent of
+    # MAGPIE_ADMIN_TOKEN_SINK (works even with a discard/exec sink, where no
+    # token is readable on the host). See sharp edge S5.
+    local token_out
+    if token_out=$(compose_exec magpie magpie-ctl token create --name "$PROBE_TOKEN_NAME" --scope admin 2>&1); then
+        PROBE_TOKEN=$(echo "$token_out" | grep -Eo 'mgp_[A-Za-z0-9_]+' | head -1)
+    fi
+    if [[ -z "$PROBE_TOKEN" ]]; then
+        log_warn "Could not mint a probe token against the prior install; A3 (token auth) will be skipped: ${token_out:-no output}"
+    fi
+
+    # A6 baseline: total token row count, from magpie-ctl token list's own
+    # "Total: N token(s)" summary line. Includes the probe token just
+    # created above -- fine, since assert_post_update() compares this
+    # directly against the post-update count, and the probe token is
+    # present on both sides until it's revoked at the end of the assert.
+    local list_out
+    if list_out=$(compose_exec magpie magpie-ctl token list 2>&1); then
+        PRIOR_TOKEN_ROW_COUNT=$(echo "$list_out" | sed -nE 's/^Total: ([0-9]+) token\(s\)$/\1/p')
+    fi
+
+    # A5 baseline: current data-format version. Absent entirely on any
+    # install that predates `magpie-ctl migrate` (a v0.1.x image, or a
+    # 0.2.0 install from before this command existed) -- magpie-ctl itself
+    # won't be found on such an image, so this just fails and falls back
+    # to the "0" default set above.
+    local ver_out
+    if ver_out=$(compose_exec magpie magpie-ctl migrate --check 2>&1); then
+        PRIOR_DATA_FORMAT_VERSION=$(echo "$ver_out" | sed -nE 's/^Data-format version: ([0-9]+).*/\1/p')
+    fi
+    PRIOR_DATA_FORMAT_VERSION="${PRIOR_DATA_FORMAT_VERSION:-0}"
+
+    # A2/A4 baseline: a tagged probe artifact, if any exist. Checks up to
+    # the first 5 paths `magpie ls -r` returns for one that actually has a
+    # tag (list_artifact_paths() can include untagged uploads) -- a small
+    # fixed cap so a store with many untagged-only artifacts doesn't turn
+    # this into an unbounded scan. No tagged artifact found at all -> A2/A4
+    # are skipped as vacuously true.
+    local ls_out
+    if [[ -z "$PROBE_TOKEN" ]] || ! ls_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie ls -r 2>&1) \
+        || [[ "$ls_out" == "No artifacts found."* ]]; then
+        log "No artifacts found on the prior install (or listing them failed); A2/A4 (artifact/tag continuity) will be treated as vacuously satisfied."
+        return 0
+    fi
+
+    local path info_out tags first_tag hash checked=0
+    while IFS= read -r path && (( checked < 5 )); do
+        [[ -z "$path" ]] && continue
+        ((checked++))
+        info_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie info "$path" 2>&1) || continue
+        tags=$(echo "$info_out" | sed -nE 's/^Tags:[[:space:]]*//p')
+        [[ -z "$tags" || "$tags" == "(none)" ]] && continue
+        first_tag="${tags%%,*}"
+        first_tag="$(trim_whitespace "$first_tag")"
+        hash=$(echo "$info_out" | sed -nE 's/^Hash:[[:space:]]*//p')
+        [[ -z "$hash" ]] && continue
+
+        PROBE_ARTIFACT_PATH="$path"
+        PROBE_ARTIFACT_REF="$first_tag"
+        PROBE_ARTIFACT_SHA256="$hash"
+        break
+    done <<< "$ls_out"
+
+    if [[ -z "$PROBE_ARTIFACT_PATH" ]]; then
+        log "No tagged artifact found among the first ${checked} artifact path(s) on the prior install; A2/A4 will be treated as vacuously satisfied."
+        return 0
+    fi
+
+    log "Captured probe artifact ${PROBE_ARTIFACT_PATH}:${PROBE_ARTIFACT_REF} (hash ${PROBE_ARTIFACT_SHA256:0:12}...) for the post-update continuity check."
+}
+
+# Snapshots everything the swap below is about to overwrite -- .env,
+# docker-compose.yml, the systemd units, the prior MAGPIE_IMAGE value, and
+# the prior git ref -- under BACKUP_DIR/rollback/, so rollback_to_prior()
+# has a single self-contained restore point. Also runs capture_probe_state().
+# Must run after compute_backup_dir() and PRIOR_GIT_REF has been captured
+# (cmd_update() does this before update_repo_to_latest() mutates the repo
+# checkout), and before anything mutates INSTALL_DIR/etc/.env,
+# docker-compose.yml, or the systemd unit files.
+capture_prior_state() {
+    log "Capturing prior state for rollback (${BACKUP_DIR})..."
+    mkdir -p "${BACKUP_DIR}/rollback"
+
+    cp "${INSTALL_DIR}/etc/.env" "${BACKUP_DIR}/rollback/.env"
+    cp "${INSTALL_DIR}/docker-compose.yml" "${BACKUP_DIR}/rollback/docker-compose.yml"
+
+    local unit
+    for unit in magpie.service magpie-gc.service magpie-gc.timer; do
+        if [[ -f "/etc/systemd/system/${unit}" ]]; then
+            cp "/etc/systemd/system/${unit}" "${BACKUP_DIR}/rollback/${unit}"
+        fi
+    done
+
+    local -A prior_env=()
+    read_env_file "${INSTALL_DIR}/etc/.env" prior_env
+    PRIOR_MAGPIE_IMAGE="${prior_env[MAGPIE_IMAGE]:-}"
+    printf '%s\n' "$PRIOR_MAGPIE_IMAGE" > "${BACKUP_DIR}/rollback/prior-image"
+    printf '%s\n' "$PRIOR_GIT_REF" > "${BACKUP_DIR}/rollback/prior-git-ref"
+
+    capture_probe_state
+}
+
+# Sharp edge S4: checks free space on the filesystem backing BACKUP_DIR
+# before copying anything, sized against the mandatory small set (DB +
+# WAL/SHM; .env/admin-token/MANIFEST are always tiny, covered by a fixed
+# margin rather than measured precisely). --backup-artifacts=copy is
+# additionally sized against the artifacts tree itself; the default
+# (=link) is a hardlink snapshot -- near-free, not counted here.
+preflight_backup_space() {
+    if [[ "$NO_BACKUP" == "true" ]]; then
+        return 0
+    fi
+
+    local needed_kb=64  # fixed margin for .env/admin-token/MANIFEST
+    local db_path="${DATA_DIR}/magpie.db"
+    if [[ -f "$db_path" ]]; then
+        needed_kb=$(( needed_kb + $(du -sk "$db_path" 2>/dev/null | cut -f1) ))
+    fi
+    if [[ -f "${db_path}-wal" ]]; then
+        needed_kb=$(( needed_kb + $(du -sk "${db_path}-wal" 2>/dev/null | cut -f1) ))
+    fi
+
+    mkdir -p "$(dirname "$BACKUP_DIR")"
+    local avail_kb
+    avail_kb=$(df -Pk "$(dirname "$BACKUP_DIR")" | awk 'NR==2 {print $4}')
+
+    if [[ -n "$avail_kb" ]] && (( avail_kb < needed_kb )); then
+        die "Not enough free space to back up before updating: need ~${needed_kb}KB, ${avail_kb}KB available under ${INSTALL_DIR}/backups. Free up space, or pass --no-backup to skip (NOT recommended -- a failed update then cannot be rolled back with data intact)."
+    fi
+
+    if [[ "$BACKUP_ARTIFACTS" == "copy" && -n "$avail_kb" ]]; then
+        local artifacts_kb=0
+        [[ -d "${DATA_DIR}/artifacts" ]] && artifacts_kb=$(du -sk "${DATA_DIR}/artifacts" 2>/dev/null | cut -f1)
+        if (( avail_kb < needed_kb + artifacts_kb )); then
+            die "Not enough free space for --backup-artifacts=copy: need ~$(( needed_kb + artifacts_kb ))KB (including artifacts), ${avail_kb}KB available. Use --backup-artifacts=link (default, near-free) or --backup-artifacts=skip instead."
+        fi
+    fi
+}
+
+# Stops the running stack (which checkpoints SQLite's WAL onto the main DB
+# file as a side effect -- sharp edge S3), then snapshots the mandatory
+# small set (magpie.db(+wal/shm), .env, admin-token if present) plus, per
+# BACKUP_ARTIFACTS, the artifacts tree: hardlinked (default, near-free,
+# same filesystem only), fully copied (opt-in), or skipped entirely. Writes
+# a MANIFEST recording what was captured, for rollback_to_prior() and
+# operator forensics. No-op (but still logs why) when --no-backup was
+# passed -- NOT recommended; capture_prior_state()'s config/units/image
+# snapshot still happened, so rollback_to_prior() can restore config, just
+# not data.
+backup_data() {
+    if [[ "$NO_BACKUP" == "true" ]]; then
+        log_warn "Skipping data backup (--no-backup). If this update then fails its post-update checks, rollback can only restore config/units/image, not data."
+        return 0
+    fi
+
+    log "Stopping the running stack to back up data safely (this checkpoints the WAL)..."
+    systemctl stop magpie.service 2>/dev/null || true
+
+    mkdir -p "${BACKUP_DIR}/data"
+    local db_path="${DATA_DIR}/magpie.db"
+    if [[ -f "$db_path" ]]; then
+        cp "$db_path" "${BACKUP_DIR}/data/magpie.db"
+        [[ -f "${db_path}-wal" ]] && cp "${db_path}-wal" "${BACKUP_DIR}/data/magpie.db-wal"
+        [[ -f "${db_path}-shm" ]] && cp "${db_path}-shm" "${BACKUP_DIR}/data/magpie.db-shm"
+    fi
+    cp "${INSTALL_DIR}/etc/.env" "${BACKUP_DIR}/data/.env"
+
+    # MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH is an in-container path (always
+    # under /data by convention); the host path is DATA_DIR plus the same
+    # suffix, since /data is always the bind mount's in-container
+    # mountpoint (see docker-compose.yml).
+    local -A env_for_token=()
+    read_env_file "${INSTALL_DIR}/etc/.env" env_for_token
+    local token_file="${env_for_token[MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH]:-/data/admin-token}"
+    local host_token_file="${DATA_DIR}${token_file#/data}"
+    [[ -f "$host_token_file" ]] && cp "$host_token_file" "${BACKUP_DIR}/data/admin-token"
+
+    local artifacts_mode="skip"
+    case "$BACKUP_ARTIFACTS" in
+        link)
+            if [[ -d "${DATA_DIR}/artifacts" ]]; then
+                # cp -al: hardlink snapshot, O(inodes) not O(bytes) -- only
+                # works on the same filesystem as DATA_DIR. Falls back to a
+                # warning (not a copy) on cross-filesystem or any other cp
+                # failure; the bind-mounted artifacts themselves are
+                # untouched by this update regardless, so this is defense
+                # against a FUTURE layout migration, not the primary safety
+                # net for this release.
+                if cp -al "${DATA_DIR}/artifacts" "${BACKUP_DIR}/data/artifacts" 2>/dev/null; then
+                    artifacts_mode="link"
+                else
+                    log_warn "Could not hardlink-snapshot artifacts (likely a cross-filesystem backup dir); skipping the artifact backup. The bind-mounted artifacts are untouched by this update regardless. Use --backup-artifacts=copy to force a full copy instead."
+                fi
+            fi
+            ;;
+        copy)
+            if [[ -d "${DATA_DIR}/artifacts" ]]; then
+                cp -a "${DATA_DIR}/artifacts" "${BACKUP_DIR}/data/artifacts"
+                artifacts_mode="copy"
+            fi
+            ;;
+        skip) ;;
+    esac
+
+    local db_sha256="none"
+    [[ -f "${BACKUP_DIR}/data/magpie.db" ]] && db_sha256=$(sha256sum "${BACKUP_DIR}/data/magpie.db" | cut -d' ' -f1)
+
+    cat > "${BACKUP_DIR}/MANIFEST" << EOF
+# Magpie update backup manifest
+# Generated by magpie-deploy.sh on $(date -Iseconds)
+source_image=${PRIOR_MAGPIE_IMAGE}
+source_git_ref=${PRIOR_GIT_REF}
+target_version=${MAGPIE_VERSION}
+cross_020_upgrade=${IS_CROSS_020}
+backup_artifacts_mode=${artifacts_mode}
+db_sha256=${db_sha256}
+probe_artifact=${PROBE_ARTIFACT_PATH:-none}:${PROBE_ARTIFACT_REF:-none}
+probe_artifact_hash=${PROBE_ARTIFACT_SHA256:-none}
+EOF
+
+    log "Backup complete: ${BACKUP_DIR} (artifacts: ${artifacts_mode})"
+}
+
+# Runs magpie-ctl migrate inside the just-restarted (new-image) container:
+# stamps/advances the data-format version marker. For v0.2.0 this is a
+# no-op stamp (see this section's header comment); the mechanism exists so
+# a future release with a real transform has somewhere to register it. A
+# failure here is a hard update failure in cmd_update() (triggers
+# rollback_to_prior()) -- it means the new image couldn't even run its own
+# migration against the data the swap just made it responsible for.
+run_data_migration() {
+    log "Applying data-format migration (magpie-ctl migrate)..."
+    local out
+    if ! out=$(compose_exec magpie magpie-ctl migrate 2>&1); then
+        log_error "magpie-ctl migrate failed: $out"
+        return 1
+    fi
+    log "$out"
+}
+
+# The post-update gate (issue #561): every check here must pass before an
+# `update` is allowed to report success. Populates the global
+# ASSERT_FAILURES array with one human-readable reason per failed check;
+# empty means everything passed. A1/A5/A6 always run; A2/A3/A4 only run if
+# capture_probe_state() actually captured something to compare against --
+# per issue #561's skip rule, a skipped check counts as vacuously
+# satisfied, not as a failure.
+assert_post_update() {
+    ASSERT_FAILURES=()
+
+    # A1: health. Checked first and returns immediately on failure --
+    # nothing else here is meaningful against a container that never came
+    # up, and piling on secondary failures would just be confusing.
+    if ! wait_for_healthy; then
+        ASSERT_FAILURES+=("A1 health: service did not become healthy at $(health_check_url)")
+        return 1
+    fi
+
+    # A5: data-format version -- must never go backward. run_data_migration()
+    # (run just before this, by cmd_update()) always stamps this build's own
+    # CURRENT_DATA_FORMAT_VERSION, so equal-or-ahead is the only passing
+    # outcome; "behind" means the migrate step didn't actually take effect.
+    local ver_out post_version
+    if ver_out=$(compose_exec magpie magpie-ctl migrate --check 2>&1); then
+        post_version=$(echo "$ver_out" | sed -nE 's/^Data-format version: ([0-9]+).*/\1/p')
+    fi
+    if [[ -z "$post_version" ]]; then
+        ASSERT_FAILURES+=("A5 data-format version: could not read the post-update version (magpie-ctl migrate --check failed or produced unexpected output: ${ver_out:-no output})")
+    elif (( post_version < PRIOR_DATA_FORMAT_VERSION )); then
+        ASSERT_FAILURES+=("A5 data-format version: went backward (${PRIOR_DATA_FORMAT_VERSION} -> ${post_version})")
+    fi
+
+    # A6: token DB row count -- must be preserved exactly (includes the
+    # still-present probe token on both sides of the comparison; it's
+    # revoked below, after this check).
+    local list_out post_row_count
+    if list_out=$(compose_exec magpie magpie-ctl token list 2>&1); then
+        post_row_count=$(echo "$list_out" | sed -nE 's/^Total: ([0-9]+) token\(s\)$/\1/p')
+    fi
+    if [[ -z "$post_row_count" ]]; then
+        ASSERT_FAILURES+=("A6 token row count: could not list tokens after the update: ${list_out:-no output}")
+    elif [[ -n "$PRIOR_TOKEN_ROW_COUNT" ]] && [[ "$post_row_count" != "$PRIOR_TOKEN_ROW_COUNT" ]]; then
+        ASSERT_FAILURES+=("A6 token row count: changed (${PRIOR_TOKEN_ROW_COUNT} -> ${post_row_count})")
+    fi
+
+    # A3: token auth -- skipped (vacuously satisfied) if capture_probe_state()
+    # didn't mint a probe token (S5: prior install unreachable, or minting
+    # failed).
+    if [[ -n "$PROBE_TOKEN" ]]; then
+        if ! compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie ls >/dev/null 2>&1; then
+            ASSERT_FAILURES+=("A3 token auth: the pre-update probe token no longer authenticates")
+        fi
+        # Revoke now that it's served its purpose. Best-effort: a failure
+        # here (e.g. the container is about to be rolled back anyway) is
+        # not itself an assertion failure.
+        compose_exec magpie magpie-ctl token revoke "$PROBE_TOKEN_NAME" >/dev/null 2>&1 || true
+    else
+        log "A3 token auth: skipped (no probe token was captured before the update)"
+    fi
+
+    # A2/A4: artifact byte-identity + tag resolution -- skipped (vacuously
+    # satisfied) if capture_probe_state() found no tagged artifact.
+    if [[ -n "$PROBE_ARTIFACT_PATH" && -n "$PROBE_TOKEN" ]]; then
+        local info_out post_hash
+        if info_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie info "$PROBE_ARTIFACT_PATH" 2>&1); then
+            post_hash=$(echo "$info_out" | sed -nE 's/^Hash:[[:space:]]*//p')
+        fi
+        if [[ -z "$post_hash" ]]; then
+            ASSERT_FAILURES+=("A4 tag resolution: could not read ${PROBE_ARTIFACT_PATH}:${PROBE_ARTIFACT_REF} after the update: ${info_out:-no output}")
+        elif [[ "$post_hash" != "$PROBE_ARTIFACT_SHA256" ]]; then
+            ASSERT_FAILURES+=("A4 tag resolution: ${PROBE_ARTIFACT_PATH}:${PROBE_ARTIFACT_REF} now resolves to hash ${post_hash}, expected ${PROBE_ARTIFACT_SHA256}")
+        else
+            # A2: actual byte-identical retrieval through the NEW container
+            # -- `magpie get` always SHA-256-verifies the downloaded bytes
+            # against the server-reported hash unless --no-verify is
+            # passed (it is not, here), so success alone proves the new
+            # image serves this artifact correctly, not just that the
+            # manifest metadata is unchanged.
+            local get_out
+            if ! get_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie get "${PROBE_ARTIFACT_PATH}:${PROBE_ARTIFACT_REF}" -o /tmp/magpie-update-probe --force 2>&1); then
+                ASSERT_FAILURES+=("A2 artifact byte-identity: could not retrieve/verify ${PROBE_ARTIFACT_PATH}:${PROBE_ARTIFACT_REF} after the update: $get_out")
+            fi
+        fi
+    else
+        log "A2/A4 artifact/tag continuity: skipped (no tagged artifact was captured before the update)"
+    fi
+
+    if [[ ${#ASSERT_FAILURES[@]} -gt 0 ]]; then
+        return 1
+    fi
+    return 0
+}
+
+# Restores the prior .env/compose/units/image/data from BACKUP_DIR and
+# restarts, then re-asserts health against the RESTORED (old) topology.
+# Forward-only-once: if the restore itself fails, this stops and hands the
+# operator the backup location rather than retrying -- see issue #561's
+# scope, section 3.2. Always exits the script via die() (either reporting
+# a clean rollback or a failed one) -- callers never fall through past a
+# call to this.
+rollback_to_prior() {
+    log_error "Rolling back to the prior install (backup: ${BACKUP_DIR})..."
+
+    systemctl stop magpie.service 2>/dev/null || true
+
+    local unit
+    for unit in magpie.service magpie-gc.service magpie-gc.timer; do
+        if [[ -f "${BACKUP_DIR}/rollback/${unit}" ]]; then
+            cp "${BACKUP_DIR}/rollback/${unit}" "/etc/systemd/system/${unit}"
+        fi
+    done
+
+    if [[ -f "${BACKUP_DIR}/rollback/docker-compose.yml" ]]; then
+        cp "${BACKUP_DIR}/rollback/docker-compose.yml" "${INSTALL_DIR}/docker-compose.yml"
+    fi
+    if [[ -f "${BACKUP_DIR}/rollback/.env" ]]; then
+        cp "${BACKUP_DIR}/rollback/.env" "${INSTALL_DIR}/etc/.env"
+    fi
+
+    if [[ "$NO_BACKUP" != "true" && -f "${BACKUP_DIR}/data/magpie.db" ]]; then
+        cp "${BACKUP_DIR}/data/magpie.db" "${DATA_DIR}/magpie.db"
+        # A restored main DB file with no matching -wal/-shm is a valid,
+        # fully-checkpointed SQLite database on its own (backup_data()
+        # stopped the stack before copying, which checkpoints the WAL) --
+        # any leftover -wal/-shm from the FAILED update belongs to a
+        # database this restore is replacing, so clear them rather than
+        # risk SQLite replaying stale WAL frames against the restored file.
+        rm -f "${DATA_DIR}/magpie.db-wal" "${DATA_DIR}/magpie.db-shm"
+        [[ -f "${BACKUP_DIR}/data/magpie.db-wal" ]] && cp "${BACKUP_DIR}/data/magpie.db-wal" "${DATA_DIR}/magpie.db-wal"
+        [[ -f "${BACKUP_DIR}/data/magpie.db-shm" ]] && cp "${BACKUP_DIR}/data/magpie.db-shm" "${DATA_DIR}/magpie.db-shm"
+
+        if [[ -f "${BACKUP_DIR}/data/admin-token" ]]; then
+            local -A restored_env=()
+            read_env_file "${INSTALL_DIR}/etc/.env" restored_env
+            local token_file="${restored_env[MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH]:-/data/admin-token}"
+            local host_token_file="${DATA_DIR}${token_file#/data}"
+            cp "${BACKUP_DIR}/data/admin-token" "$host_token_file"
+        fi
+        # Artifacts are deliberately NOT restored here: for v0.2.0 no
+        # migration touches /data/artifacts at all (see this section's
+        # header comment), so the bind mount is already exactly what it
+        # was before the update -- restoring from a hardlink/copy snapshot
+        # would be a needless (and, for a same-filesystem hardlink
+        # snapshot, actually pointless -- it's the same inodes) operation.
+        # A future migration that DOES rewrite the artifact layout must
+        # extend this branch.
+    fi
+
+    local prior_image
+    prior_image=$(cat "${BACKUP_DIR}/rollback/prior-image" 2>/dev/null || echo "")
+    if [[ -n "$prior_image" ]] && ! docker image inspect "$prior_image" >/dev/null 2>&1; then
+        log_warn "Prior image ${prior_image} is no longer present locally; attempting to re-pull..."
+        docker pull "$prior_image" || log_warn "Could not re-pull ${prior_image} -- the rollback restart below may fail."
+    fi
+
+    local prior_git_ref
+    prior_git_ref=$(cat "${BACKUP_DIR}/rollback/prior-git-ref" 2>/dev/null || echo "")
+    if [[ -n "$prior_git_ref" && -d "${INSTALL_DIR}/repo" ]]; then
+        git -C "${INSTALL_DIR}/repo" checkout "$prior_git_ref" 2>/dev/null || \
+            log_warn "Could not check out prior git ref ${prior_git_ref} in ${INSTALL_DIR}/repo -- the repo checkout is left on the failed update's ref, but the restored docker-compose.yml/.env/image do reflect the prior version, which is what actually runs."
+    fi
+
+    systemctl daemon-reload
+    systemctl start magpie.service
+
+    if wait_for_healthy; then
+        die "Update failed and was ROLLED BACK to the prior version. See the failure reason(s) above. Backup and rollback state: ${BACKUP_DIR}"
+    else
+        die "Update failed AND the rollback restore did not come up healthy. Manual recovery needed -- do not retry 'update' until you've investigated. Check '$SCRIPT_NAME logs' and the MANIFEST at ${BACKUP_DIR}/MANIFEST. Backup and rollback state: ${BACKUP_DIR}"
+    fi
+}
+
+# Retention: keeps the most recent KEEP_BACKUPS backup directories under
+# INSTALL_DIR/backups, deleting older ones. Only ever called on a
+# SUCCESSFUL update -- never on the failure path, where the operator needs
+# every backup available for forensics/manual recovery.
+prune_old_backups() {
+    local backups_root="${INSTALL_DIR}/backups"
+    [[ -d "$backups_root" ]] || return 0
+
+    local -a all_backups=()
+    while IFS= read -r -d '' dir; do
+        all_backups+=("$dir")
+    done < <(find "$backups_root" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+
+    local total=${#all_backups[@]}
+    if (( total <= KEEP_BACKUPS )); then
+        return 0
+    fi
+
+    local to_remove=$(( total - KEEP_BACKUPS ))
+    local i
+    for (( i = 0; i < to_remove; i++ )); do
+        log "Pruning old backup: ${all_backups[$i]}"
+        rm -rf "${all_backups[$i]}"
+    done
+}
+
+# =============================================================================
 # Commands
 # =============================================================================
 
@@ -1481,7 +2085,14 @@ cmd_install() {
 
     # Start everything
     start_services
-    wait_for_healthy
+    # A hard failure here (see wait_for_healthy()'s docstring) means the
+    # freshly-installed container never came up at all -- there is nothing
+    # to roll back to (this is a fresh install), so the only correct
+    # outcome is to stop and say so, not to declare "Installation
+    # complete!" over a container that isn't actually running.
+    if ! wait_for_healthy; then
+        die "Installation did not complete: the service never became healthy. Check '$SCRIPT_NAME logs' for details, fix the underlying issue, then re-run 'install --force'."
+    fi
     run_init
 
     echo ""
@@ -1684,10 +2295,32 @@ cmd_update() {
         die "Fix or remove the invalid value(s) in ${env_file}, or reinstall."
     fi
 
+    # Validate the update safety envelope's own flags before anything below
+    # acts on them.
+    if ! [[ "$KEEP_BACKUPS" =~ ^[0-9]+$ ]]; then
+        die "Invalid --keep-backups value: $KEEP_BACKUPS (must be a non-negative integer)"
+    fi
+    case "$BACKUP_ARTIFACTS" in
+        link|copy|skip) ;;
+        *) die "Invalid --backup-artifacts value: $BACKUP_ARTIFACTS (must be one of: link, copy, skip)" ;;
+    esac
+
+    # Detected from the CURRENT (not-yet-touched) install state -- must run
+    # before anything below overwrites docker-compose.yml/.env. Purely
+    # informational; see detect_upgrade_shape()'s own docstring for why
+    # this doesn't gate the envelope.
+    detect_upgrade_shape
+
     # Verify repo directory exists
     if [[ ! -d "${INSTALL_DIR}/repo" ]]; then
         die "Repository directory not found at ${INSTALL_DIR}/repo\nThe installation may be corrupted. Try reinstalling with 'install --force'."
     fi
+
+    # Captured before update_repo_to_latest() below moves the repo
+    # checkout's HEAD -- rollback_to_prior() needs the ref this install was
+    # actually running from, not wherever the failed update's fetch left
+    # the working tree.
+    PRIOR_GIT_REF="$(git -C "${INSTALL_DIR}/repo" rev-parse HEAD 2>/dev/null || echo "")"
 
     # Pull latest repo code to detect current version
     log "Pulling latest repository code to detect version..."
@@ -1695,6 +2328,19 @@ cmd_update() {
 
     # Detect version from updated repo
     detect_version
+
+    # Update safety envelope (issue #561): capture everything needed to
+    # roll back, then back up the data directory, BEFORE any of the swap
+    # below runs. compute_backup_dir() needs MAGPIE_VERSION (just detected
+    # above); capture_prior_state() reads the CURRENT (still pre-swap)
+    # .env/docker-compose.yml/systemd units and probes the still-running
+    # prior container. backup_data() then stops that stack (checkpointing
+    # its WAL) and snapshots the data directory -- the prior install is
+    # not reachable again until the restart at the end of the swap below.
+    compute_backup_dir
+    capture_prior_state
+    preflight_backup_space
+    backup_data
 
     # Ensure repository is not shallow so tags can be fetched reliably
     if git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository >/dev/null 2>&1; then
@@ -1781,7 +2427,41 @@ cmd_update() {
     log "Restarting services..."
     systemctl restart magpie.service
 
-    wait_for_healthy
+    # The post-update gate (issue #561): a broken new container used to
+    # `log_warn` and report success anyway (the toothless pre-#561
+    # wait_for_healthy()) -- that boot-loops silently. Now, any hard
+    # failure here rolls back to the prior version instead. Health is
+    # checked once up front (magpie-ctl exec below needs a running
+    # container) and again, along with everything else, inside
+    # assert_post_update() itself -- a fast no-op recheck if already
+    # healthy.
+    local update_ok="true"
+    if ! wait_for_healthy; then
+        ASSERT_FAILURES=("A1 health: service did not become healthy at $(health_check_url) after the update")
+        update_ok="false"
+    elif ! run_data_migration; then
+        ASSERT_FAILURES=("data migration: magpie-ctl migrate failed against the newly-started container")
+        update_ok="false"
+    elif ! assert_post_update; then
+        update_ok="false"
+    fi
+
+    if [[ "$update_ok" != "true" ]]; then
+        log_error "Update failed its post-update checks:"
+        local failure
+        for failure in "${ASSERT_FAILURES[@]}"; do
+            log_error "  - $failure"
+        done
+        if [[ "$NO_ROLLBACK" == "true" ]]; then
+            local backup_note=""
+            [[ "$NO_BACKUP" == "true" ]] && backup_note=" (note: --no-backup means no data backup exists -- only the prior config/units/image were captured)"
+            die "Rollback is disabled (--no-rollback) -- the new version is left running as-is. Investigate and either fix forward, or roll back manually.${backup_note} Backup/rollback state: ${BACKUP_DIR}"
+        fi
+        # Always exits via die() -- see rollback_to_prior()'s docstring.
+        rollback_to_prior
+    fi
+
+    prune_old_backups
 
     log "Update complete!"
     echo ""
@@ -1791,6 +2471,9 @@ cmd_update() {
     echo "  .env was reconciled in place, not overwritten -- your existing settings are"
     echo "  preserved; only dead pre-0.2.0 keys were removed and required new keys added"
     echo "  (each logged above)."
+    if [[ "$NO_BACKUP" != "true" ]]; then
+        echo "  Backup of the prior version: ${BACKUP_DIR}"
+    fi
     echo ""
 }
 
@@ -1892,7 +2575,15 @@ cmd_status() {
     echo ""
 
     echo "--- Health Check ---"
-    local health_url="http://127.0.0.1:${HTTP_PORT:-8080}/health"
+    # HTTP_PORT is defaulted here (rather than relying on health_check_url()'s
+    # own bare $HTTP_PORT) since load_existing_config() only sets it from a
+    # present .env key -- an install predating MAGPIE_HTTP_PORT would
+    # otherwise probe "http://.../health" with an empty port. BIND_IP is
+    # always populated correctly by load_existing_config() by this point,
+    # so health_check_url() itself needs no similar guard for it.
+    HTTP_PORT="${HTTP_PORT:-8080}"
+    local health_url
+    health_url="$(health_check_url)"
     if curl -sf "$health_url" >/dev/null 2>&1; then
         echo "  API: healthy ($health_url)"
     else
@@ -2002,6 +2693,31 @@ Update options:
                                     Not needed for a persisted TLS_MODE of
                                     'off' (already HTTP-only) or an install
                                     that predates TLS_MODE entirely.
+  --no-backup                      Skip the pre-update data backup
+                                    entirely. NOT RECOMMENDED: if the
+                                    update then fails its post-update
+                                    checks, rollback can only restore
+                                    config/units/image, not data.
+  --keep-backups N                 Number of past backups to retain under
+                                    INSTALL_DIR/backups (default: 3).
+                                    Pruned only after a successful update
+                                    -- every backup from a FAILED update is
+                                    kept regardless, for forensics/manual
+                                    recovery.
+  --backup-artifacts MODE          How to back up the artifacts directory
+                                    (default: link). 'link' hardlinks it
+                                    (near-free, same filesystem only);
+                                    'copy' duplicates it fully; 'skip'
+                                    omits it. The bind-mounted artifacts
+                                    themselves are untouched by an update
+                                    regardless -- this only affects the
+                                    backup's own defense-in-depth copy.
+                                    See issue #561.
+  --no-rollback                    Do not automatically roll back if the
+                                    update fails its post-update checks --
+                                    leaves the failed new stack running
+                                    and reports what to fix instead.
+                                    Default: roll back automatically.
 
 Uninstall options:
   --yes, -y               Skip confirmation prompts (auto-confirm uninstall)
@@ -2140,6 +2856,22 @@ parse_args() {
                 ;;
             --accept-builtin-tls-removed)
                 ACCEPT_BUILTIN_TLS_REMOVED="true"
+                shift
+                ;;
+            --no-backup)
+                NO_BACKUP="true"
+                shift
+                ;;
+            --keep-backups)
+                KEEP_BACKUPS="$2"
+                shift 2
+                ;;
+            --backup-artifacts)
+                BACKUP_ARTIFACTS="$2"
+                shift 2
+                ;;
+            --no-rollback)
+                NO_ROLLBACK="true"
                 shift
                 ;;
             --bind-ip)
