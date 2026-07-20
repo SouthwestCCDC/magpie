@@ -699,6 +699,35 @@ test_prune_old_backups_noop_under_the_limit() {
     log "  ✓ no-op when under the retention limit"
 }
 
+# Regression test for a Copilot finding: a LEXICOGRAPHIC sort of
+# "<version>-<timestamp>" names breaks across a digit-count boundary in
+# the version -- "0.10.0-..." sorts BEFORE "0.9.0-..." as plain text, even
+# though 0.10.0 is the newer backup -- which could prune the wrong,
+# actually-newer one. Directory names are deliberately chosen to trigger
+# exactly that failure mode if sorting were still name-based; mtimes are
+# set explicitly (touch -d) so the test doesn't depend on real-time
+# ordering during a fast loop.
+test_prune_old_backups_sorts_by_mtime_not_name() {
+    log "Test 17b: prune_old_backups() sorts by directory mtime, not by name (digit-boundary regression)"
+
+    local install_dir="${TEST_DIR}/prune_digit_boundary"
+    mkdir -p "${install_dir}/backups/0.10.0-20260101T000000Z"
+    mkdir -p "${install_dir}/backups/0.9.0-20260102T000000Z"
+    # 0.10.0 is chronologically OLDER (touched first) despite sorting
+    # first lexicographically; 0.9.0 is chronologically NEWER despite
+    # sorting last lexicographically.
+    touch -d "2026-01-01T00:00:00" "${install_dir}/backups/0.10.0-20260101T000000Z"
+    touch -d "2026-01-02T00:00:00" "${install_dir}/backups/0.9.0-20260102T000000Z"
+
+    (
+        INSTALL_DIR="$install_dir" KEEP_BACKUPS="1" prune_old_backups
+    ) >/dev/null 2>&1
+
+    [[ -d "${install_dir}/backups/0.9.0-20260102T000000Z" ]] || fail "prune_old_backups() pruned the chronologically NEWER backup (0.9.0, mtime 2026-01-02) -- sorting by name instead of mtime"
+    [[ ! -d "${install_dir}/backups/0.10.0-20260101T000000Z" ]] || fail "prune_old_backups() kept the chronologically OLDER backup (0.10.0, mtime 2026-01-01) instead of pruning it"
+    log "  ✓ the chronologically newer backup (0.9.0) is kept even though it sorts first lexicographically"
+}
+
 # ---------------------------------------------------------------------------
 # run_data_migration()
 # ---------------------------------------------------------------------------
@@ -766,6 +795,137 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# Errexit-PRESERVED regression tests (adversarial review findings A1/A3).
+#
+# Every test above runs under this FILE's own `set +e` (asserted after
+# sourcing, near the top of this file) -- which means the entire class of
+# "an unguarded command aborts the whole script via raw set -e" bugs is
+# structurally invisible to them: a bug that would abort a real `update`
+# run mid-swap just... doesn't abort here either, and the test can't tell
+# the difference between "handled gracefully" and "this test harness
+# happens to have errexit off." These two tests explicitly re-enable
+# `set -euo pipefail` (magpie-deploy.sh's own top-of-file semantics) INSIDE
+# their subshells, so they exercise the real production failure mode.
+# ---------------------------------------------------------------------------
+test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit() {
+    log "Test 21: a real mid-swap failure, with errexit PRESERVED (not this file's set +e), reaches rollback_to_prior() rather than aborting bare"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "midswap_fail" "" "MAGPIE_HTTP_PORT=1")
+
+    # A real (if minimal) git repository at INSTALL_DIR/repo -- no remote
+    # configured (update_repo_to_latest(), which needs one, is stubbed out
+    # below; it's pre-existing #582-covered logic, not part of this PR).
+    # Deliberately has NO docker-compose.yml, so the swap's own
+    # `cp "${INSTALL_DIR}/repo/docker-compose.yml" ...` step fails for
+    # REAL -- not a simulated/stubbed failure -- which is exactly the
+    # class of mid-swap failure issue #561's A1 finding was about (a
+    # docker-pull network blip or git hiccup left the site down with
+    # rollback never called).
+    mkdir -p "${install_dir}/repo"
+    (
+        cd "${install_dir}/repo"
+        git init -q
+        git config user.email test@example.com
+        git config user.name test
+        # A local-only override for this throwaway fixture repo, not a
+        # statement about real commit policy: the ambient global git
+        # config on a dev machine may set commit.gpgsign (e.g. via
+        # 1Password), which has nothing to do with this disposable,
+        # never-pushed test repository and would otherwise fail the
+        # commit below (and print a scary, harmless "failed to write
+        # commit object" line) wherever that agent isn't reachable.
+        git config commit.gpgsign false
+        printf '[project]\nversion = "0.2.0"\n' > pyproject.toml
+        git add pyproject.toml
+        git commit -q -m init
+    )
+
+    local out
+    out=$(
+        (
+            set -euo pipefail  # magpie-deploy.sh's own real semantics
+            update_repo_to_latest() { :; }  # needs a real remote; out of scope for this test (see #582)
+            systemctl() { return 0; }
+            wait_for_healthy() { return 1; }  # fail fast rather than really retrying/probing
+            docker() { return 1; }
+            compose_exec() { return 1; }
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" NONINTERACTIVE="true" \
+            ACCEPT_EMPTY_TRUSTED_PROXIES="true" GITHUB_BRANCH="default" \
+            cmd_update
+        ) 2>&1
+    )
+    local rc=$?
+    [[ $rc -ne 0 ]] || fail "cmd_update() reported success despite a real mid-swap cp failure"
+    echo "$out" | grep -qi "Failed to copy docker-compose.yml" || fail "the specific swap-step failure message was lost: $out"
+    echo "$out" | grep -qi "Rolling back to the prior install" || fail "a real (errexit-preserved) mid-swap failure did NOT reach rollback_to_prior() -- this is issue #561's A1: the site would be left down with the old service stopped and no rollback. Output: $out"
+    log "  ✓ a real mid-swap cp failure, with errexit preserved, reaches rollback_to_prior() -- not a bare abort leaving the site down"
+}
+
+test_rollback_cp_failure_dies_loudly_under_real_errexit() {
+    log "Test 22: a real cp failure during rollback's own restore, with errexit PRESERVED, dies loudly with the backup path rather than aborting bare"
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        log "  (skipped: running as root -- cannot simulate a permission-denied cp failure via chmod)"
+        return 0
+    fi
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "rollback_cp_fail" "OLD_DB_CONTENT")
+    local backup_dir="${install_dir}/backups/cpfail"
+
+    (
+        systemctl() { return 0; }
+        # Standalone assignments (not command-prefix form) -- all consumed
+        # by capture_prior_state()/backup_data() below, sourced from
+        # magpie-deploy.sh.
+        # shellcheck disable=SC2034
+        INSTALL_DIR="$install_dir"
+        # shellcheck disable=SC2034
+        DATA_DIR="$data_dir"
+        BACKUP_DIR="$backup_dir"
+        # shellcheck disable=SC2034
+        HTTP_PORT=1
+        # shellcheck disable=SC2034
+        BIND_IP=""
+        # shellcheck disable=SC2034
+        PRIOR_GIT_REF=""
+        # shellcheck disable=SC2034
+        MAGPIE_VERSION="0.2.0"
+        # shellcheck disable=SC2034
+        NO_BACKUP="false"
+        # shellcheck disable=SC2034
+        BACKUP_ARTIFACTS="skip"
+        capture_prior_state
+        backup_data
+    ) >/dev/null 2>&1
+    [[ -f "${backup_dir}/data/magpie.db" ]] || fail "setup problem: backup_data() did not produce a DB backup to roll back from"
+
+    # Force a REAL cp failure (permission denied), not a simulated one.
+    chmod 000 "${backup_dir}/data/magpie.db"
+
+    local out
+    out=$(
+        (
+            set -euo pipefail  # magpie-deploy.sh's own real semantics
+            systemctl() { return 0; }
+            wait_for_healthy() { return 0; }
+            docker() { return 1; }
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+            NO_BACKUP="false" PRIOR_MAGPIE_IMAGE="" PRIOR_GIT_REF="" \
+            rollback_to_prior
+        ) 2>&1
+    )
+    local rc=$?
+    chmod 644 "${backup_dir}/data/magpie.db" 2>/dev/null || true  # restore perms so TEST_DIR cleanup can remove it
+
+    [[ $rc -ne 0 ]] || fail "rollback_to_prior() reported success despite a real cp failure restoring magpie.db"
+    echo "$out" | grep -qi "Rollback restore itself FAILED" || fail "a real (errexit-preserved) restore cp failure did NOT reach rollback_to_prior()'s own loud die() -- this is issue #561's A3: it would abort bare instead of the promised 'always exits via die()' contract. Output: $out"
+    echo "$out" | grep -qF "$backup_dir" || fail "the loud restore-failure die() did not include the backup path for manual recovery: $out"
+    log "  ✓ a real restore cp failure, with errexit preserved, dies loudly with the backup path -- not a bare abort"
+}
+
+# ---------------------------------------------------------------------------
 # cmd_update() flag validation for the new envelope options
 # ---------------------------------------------------------------------------
 test_cmd_update_validates_envelope_flags() {
@@ -823,8 +983,11 @@ test_rollback_fires_and_restores_prior_state
 test_rollback_reports_loudly_when_restore_itself_unhealthy
 test_prune_old_backups_keeps_newest_n
 test_prune_old_backups_noop_under_the_limit
+test_prune_old_backups_sorts_by_mtime_not_name
 test_run_data_migration_failure_propagates
 test_capture_probe_state_token_regex_handles_hyphens
+test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit
+test_rollback_cp_failure_dies_loudly_under_real_errexit
 test_cmd_update_validates_envelope_flags
 
 log ""

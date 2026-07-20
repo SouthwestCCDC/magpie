@@ -1717,6 +1717,18 @@ capture_prior_state() {
 # margin rather than measured precisely). --backup-artifacts=copy is
 # additionally sized against the artifacts tree itself; the default
 # (=link) is a hardlink snapshot -- near-free, not counted here.
+# Prints a path's size in KB (`du -sk`), or "0" if the path doesn't exist,
+# `du` fails (e.g. a permissions edge case), or its output is otherwise
+# unparseable. Callers use this in `$(( needed_kb + $(du_kb ...) ))`-style
+# arithmetic -- an empty (rather than "0") operand there is a bash syntax
+# error under `set -e`/`set -u`, which would abort the whole preflight
+# check instead of just under- or over-estimating a size.
+du_kb() {
+    local size_kb
+    size_kb=$(du -sk "$1" 2>/dev/null | cut -f1)
+    echo "${size_kb:-0}"
+}
+
 preflight_backup_space() {
     if [[ "$NO_BACKUP" == "true" ]]; then
         return 0
@@ -1725,10 +1737,18 @@ preflight_backup_space() {
     local needed_kb=64  # fixed margin for .env/admin-token/MANIFEST
     local db_path="${DATA_DIR}/magpie.db"
     if [[ -f "$db_path" ]]; then
-        needed_kb=$(( needed_kb + $(du -sk "$db_path" 2>/dev/null | cut -f1) ))
+        needed_kb=$(( needed_kb + $(du_kb "$db_path") ))
     fi
+    # -wal/-shm: SQLite's WAL-mode sidecar files. backup_data() stops the
+    # stack (checkpointing the WAL) before copying, but sizing the
+    # preflight check against the pre-checkpoint state -- both files as
+    # they exist right now -- is the conservative (never-under-provision)
+    # choice, and cheap either way (both are typically tiny).
     if [[ -f "${db_path}-wal" ]]; then
-        needed_kb=$(( needed_kb + $(du -sk "${db_path}-wal" 2>/dev/null | cut -f1) ))
+        needed_kb=$(( needed_kb + $(du_kb "${db_path}-wal") ))
+    fi
+    if [[ -f "${db_path}-shm" ]]; then
+        needed_kb=$(( needed_kb + $(du_kb "${db_path}-shm") ))
     fi
 
     mkdir -p "$(dirname "$BACKUP_DIR")"
@@ -1741,7 +1761,7 @@ preflight_backup_space() {
 
     if [[ "$BACKUP_ARTIFACTS" == "copy" && -n "$avail_kb" ]]; then
         local artifacts_kb=0
-        [[ -d "${DATA_DIR}/artifacts" ]] && artifacts_kb=$(du -sk "${DATA_DIR}/artifacts" 2>/dev/null | cut -f1)
+        [[ -d "${DATA_DIR}/artifacts" ]] && artifacts_kb=$(du_kb "${DATA_DIR}/artifacts")
         if (( avail_kb < needed_kb + artifacts_kb )); then
             die "Not enough free space for --backup-artifacts=copy: need ~$(( needed_kb + artifacts_kb ))KB (including artifacts), ${avail_kb}KB available. Use --backup-artifacts=link (default, near-free) or --backup-artifacts=skip instead."
         fi
@@ -1929,6 +1949,14 @@ assert_post_update() {
             if ! get_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie get "${PROBE_ARTIFACT_PATH}:${PROBE_ARTIFACT_REF}" -o /tmp/magpie-update-probe --force 2>&1); then
                 ASSERT_FAILURES+=("A2 artifact byte-identity: could not retrieve/verify ${PROBE_ARTIFACT_PATH}:${PROBE_ARTIFACT_REF} after the update: $get_out")
             fi
+            # Downloaded into the container's own /tmp (tmpfs -- see
+            # docker-compose.yml's read_only hardening notes) purely as a
+            # scratch destination for the hash-verifying download above;
+            # nothing reads it back. Removed regardless of success/failure
+            # so it doesn't accumulate in a long-lived container across
+            # repeated updates. Best-effort: a cleanup failure is not
+            # itself an assertion failure.
+            compose_exec magpie rm -f /tmp/magpie-update-probe >/dev/null 2>&1 || true
         fi
     else
         log "A2/A4 artifact/tag continuity: skipped (no tagged artifact was captured before the update)"
@@ -1958,40 +1986,77 @@ assert_post_update() {
 rollback_to_prior() {
     log_error "Rolling back to the prior install (backup: ${BACKUP_DIR})..."
 
+    # A restore-step failure (disk full is the plausible real-world cause --
+    # the same condition preflight_backup_space() guards against on the way
+    # IN) must never fall through to a raw `set -e` abort: every restore
+    # sub-step below is explicitly guarded so it always reaches this
+    # function's own die() with the backup location, per this function's
+    # contract (see its callers) that it always exits via die() and never
+    # falls through silently.
+    local restore_failure=""
+
     systemctl stop magpie.service 2>/dev/null || true
 
     local unit
     for unit in magpie.service magpie-gc.service magpie-gc.timer; do
         if [[ -f "${BACKUP_DIR}/rollback/${unit}" ]]; then
-            cp "${BACKUP_DIR}/rollback/${unit}" "/etc/systemd/system/${unit}"
+            cp "${BACKUP_DIR}/rollback/${unit}" "/etc/systemd/system/${unit}" \
+                || restore_failure="restoring systemd unit ${unit}"
         fi
     done
 
-    if [[ -f "${BACKUP_DIR}/rollback/docker-compose.yml" ]]; then
-        cp "${BACKUP_DIR}/rollback/docker-compose.yml" "${INSTALL_DIR}/docker-compose.yml"
+    if [[ -z "$restore_failure" && -f "${BACKUP_DIR}/rollback/docker-compose.yml" ]]; then
+        cp "${BACKUP_DIR}/rollback/docker-compose.yml" "${INSTALL_DIR}/docker-compose.yml" \
+            || restore_failure="restoring docker-compose.yml"
     fi
-    if [[ -f "${BACKUP_DIR}/rollback/.env" ]]; then
-        cp "${BACKUP_DIR}/rollback/.env" "${INSTALL_DIR}/etc/.env"
+    if [[ -z "$restore_failure" && -f "${BACKUP_DIR}/rollback/.env" ]]; then
+        cp "${BACKUP_DIR}/rollback/.env" "${INSTALL_DIR}/etc/.env" \
+            || restore_failure="restoring .env"
     fi
 
-    if [[ "$NO_BACKUP" != "true" && -f "${BACKUP_DIR}/data/magpie.db" ]]; then
-        cp "${BACKUP_DIR}/data/magpie.db" "${DATA_DIR}/magpie.db"
-        # A restored main DB file with no matching -wal/-shm is a valid,
-        # fully-checkpointed SQLite database on its own (backup_data()
-        # stopped the stack before copying, which checkpoints the WAL) --
-        # any leftover -wal/-shm from the FAILED update belongs to a
-        # database this restore is replacing, so clear them rather than
-        # risk SQLite replaying stale WAL frames against the restored file.
-        rm -f "${DATA_DIR}/magpie.db-wal" "${DATA_DIR}/magpie.db-shm"
-        [[ -f "${BACKUP_DIR}/data/magpie.db-wal" ]] && cp "${BACKUP_DIR}/data/magpie.db-wal" "${DATA_DIR}/magpie.db-wal"
-        [[ -f "${BACKUP_DIR}/data/magpie.db-shm" ]] && cp "${BACKUP_DIR}/data/magpie.db-shm" "${DATA_DIR}/magpie.db-shm"
+    if [[ -z "$restore_failure" && "$NO_BACKUP" != "true" && -f "${BACKUP_DIR}/data/magpie.db" ]]; then
+        cp "${BACKUP_DIR}/data/magpie.db" "${DATA_DIR}/magpie.db" \
+            || restore_failure="restoring magpie.db"
 
-        if [[ -f "${BACKUP_DIR}/data/admin-token" ]]; then
+        if [[ -z "$restore_failure" ]]; then
+            # A restored main DB file with no matching -wal/-shm is a
+            # valid, fully-checkpointed SQLite database on its own
+            # (backup_data() stopped the stack before copying, which
+            # checkpoints the WAL) -- any leftover -wal/-shm from the
+            # FAILED update belongs to a database this restore is
+            # replacing, so clear them rather than risk SQLite replaying
+            # stale WAL frames against the restored file. Best-effort
+            # (rm -f already never errors on a missing file); a failure
+            # to remove a genuinely-present stale file is surfaced, not
+            # silently ignored.
+            rm -f "${DATA_DIR}/magpie.db-wal" "${DATA_DIR}/magpie.db-shm" \
+                || restore_failure="clearing stale magpie.db-wal/-shm"
+        fi
+        if [[ -z "$restore_failure" && -f "${BACKUP_DIR}/data/magpie.db-wal" ]]; then
+            cp "${BACKUP_DIR}/data/magpie.db-wal" "${DATA_DIR}/magpie.db-wal" \
+                || restore_failure="restoring magpie.db-wal"
+        fi
+        if [[ -z "$restore_failure" && -f "${BACKUP_DIR}/data/magpie.db-shm" ]]; then
+            cp "${BACKUP_DIR}/data/magpie.db-shm" "${DATA_DIR}/magpie.db-shm" \
+                || restore_failure="restoring magpie.db-shm"
+        fi
+
+        if [[ -z "$restore_failure" && -f "${BACKUP_DIR}/data/admin-token" ]]; then
             local -A restored_env=()
             read_env_file "${INSTALL_DIR}/etc/.env" restored_env
             local token_file="${restored_env[MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH]:-/data/admin-token}"
             local host_token_file="${DATA_DIR}${token_file#/data}"
-            cp "${BACKUP_DIR}/data/admin-token" "$host_token_file"
+            # The sink path can be under a subdirectory of /data that
+            # doesn't otherwise get created until the container's own
+            # first-boot init runs -- mkdir -p its parent before the
+            # restore cp, or a subdir sink path fails this restore step
+            # for a reason that has nothing to do with genuine disk
+            # trouble.
+            if ! mkdir -p "$(dirname "$host_token_file")"; then
+                restore_failure="creating the admin-token directory (${host_token_file})"
+            elif ! cp "${BACKUP_DIR}/data/admin-token" "$host_token_file"; then
+                restore_failure="restoring admin-token"
+            fi
         fi
         # Artifacts are deliberately NOT restored here: for v0.2.0 no
         # migration touches /data/artifacts at all (see this section's
@@ -2003,22 +2068,67 @@ rollback_to_prior() {
         # extend this branch.
     fi
 
-    local prior_image
-    prior_image=$(cat "${BACKUP_DIR}/rollback/prior-image" 2>/dev/null || echo "")
-    if [[ -n "$prior_image" ]] && ! docker image inspect "$prior_image" >/dev/null 2>&1; then
-        log_warn "Prior image ${prior_image} is no longer present locally; attempting to re-pull..."
-        docker pull "$prior_image" || log_warn "Could not re-pull ${prior_image} -- the rollback restart below may fail."
+    if [[ -n "$restore_failure" ]]; then
+        die "Rollback restore itself FAILED (${restore_failure}) -- likely disk space or a permissions problem. This is NOT a clean rollback: the install may be in a partially-restored state. Manual recovery needed. Backup and rollback state: ${BACKUP_DIR} (MANIFEST at ${BACKUP_DIR}/MANIFEST). Do not retry 'update' until you've investigated."
     fi
 
+    local prior_image
+    prior_image=$(cat "${BACKUP_DIR}/rollback/prior-image" 2>/dev/null || echo "")
     local prior_git_ref
     prior_git_ref=$(cat "${BACKUP_DIR}/rollback/prior-git-ref" 2>/dev/null || echo "")
+
+    # Restore the repo checkout to the prior git ref -- needed either to
+    # rebuild a --from-source image below, or just so INSTALL_DIR/repo
+    # itself reflects the version actually running afterward.
     if [[ -n "$prior_git_ref" && -d "${INSTALL_DIR}/repo" ]]; then
         git -C "${INSTALL_DIR}/repo" checkout "$prior_git_ref" 2>/dev/null || \
             log_warn "Could not check out prior git ref ${prior_git_ref} in ${INSTALL_DIR}/repo -- the repo checkout is left on the failed update's ref, but the restored docker-compose.yml/.env/image do reflect the prior version, which is what actually runs."
     fi
 
+    if [[ "$prior_image" == "magpie:local" ]]; then
+        # Sharp edge S9: a --from-source install's swap runs
+        # `docker build -t magpie:local` -- retagging the SAME local name
+        # onto the NEW image. `docker image inspect magpie:local` would
+        # therefore trivially succeed even after a failed update (it's now
+        # pointing at the broken new build), which would otherwise silently
+        # "roll back" to nothing at all: the restart below would just run
+        # the same broken image under the old name, then report success.
+        # Detected by the tag name itself; always rebuild from the prior
+        # git ref rather than trusting the (now-repointed) tag.
+        log_warn "Prior image was a local (--from-source) build (magpie:local) -- rebuilding from the prior git ref rather than trusting the (now-retagged) local image name."
+        if [[ -n "$prior_git_ref" && -d "${INSTALL_DIR}/repo" ]]; then
+            if docker build --pull -f "${INSTALL_DIR}/repo/Dockerfile.bundled" -t magpie:local "${INSTALL_DIR}/repo"; then
+                log "Rebuilt magpie:local from the prior git ref (${prior_git_ref})."
+            else
+                log_warn "Could not rebuild the prior --from-source image from git ref ${prior_git_ref} -- the rollback restart below may run the broken new build under the old tag instead. Manual recovery: git -C ${INSTALL_DIR}/repo checkout ${prior_git_ref} && docker build -f ${INSTALL_DIR}/repo/Dockerfile.bundled -t magpie:local ${INSTALL_DIR}/repo"
+            fi
+        else
+            log_warn "No prior git ref was captured for this --from-source install -- cannot safely rebuild the prior image; the rollback restart below may run the broken new build under the old tag instead."
+        fi
+    elif [[ -n "$prior_image" ]] && ! docker image inspect "$prior_image" >/dev/null 2>&1; then
+        log_warn "Prior image ${prior_image} is no longer present locally; attempting to re-pull..."
+        docker pull "$prior_image" || log_warn "Could not re-pull ${prior_image} -- the rollback restart below may fail."
+    fi
+
     systemctl daemon-reload
     systemctl start magpie.service
+
+    # Re-assert against the RESTORED .env's bind IP/port, not this
+    # process's current $BIND_IP/$HTTP_PORT globals -- if the update being
+    # rolled back had also changed --bind-ip/--http-port, the current
+    # globals reflect the FAILED update's new (not-yet-reverted) request,
+    # not what the just-restored .env (and therefore the container about
+    # to start) actually uses. Probing the wrong address would falsely
+    # report "rollback did not come up healthy" against a stack that's
+    # actually fine. Falls back to the current globals if .env is missing
+    # or doesn't set these keys (matches load_existing_config()'s own
+    # fallback behavior).
+    if [[ -f "${INSTALL_DIR}/etc/.env" ]]; then
+        local -A rolled_back_env=()
+        read_env_file "${INSTALL_DIR}/etc/.env" rolled_back_env
+        [[ -n "${rolled_back_env[MAGPIE_HTTP_PORT]+set}" ]] && HTTP_PORT="${rolled_back_env[MAGPIE_HTTP_PORT]}"
+        [[ -n "${rolled_back_env[MAGPIE_BIND_IP]+set}" ]] && BIND_IP="${rolled_back_env[MAGPIE_BIND_IP]}"
+    fi
 
     if wait_for_healthy; then
         die "Update failed and was ROLLED BACK to the prior version. See the failure reason(s) above. Backup and rollback state: ${BACKUP_DIR}"
@@ -2035,10 +2145,20 @@ prune_old_backups() {
     local backups_root="${INSTALL_DIR}/backups"
     [[ -d "$backups_root" ]] || return 0
 
+    # Sorted oldest-first by directory MTIME, not by name. A lexicographic
+    # sort of "<version>-<UTC-timestamp>" names breaks across a
+    # digit-count boundary in the version -- e.g. "0.10.0-..." sorts
+    # BEFORE "0.9.0-..." as plain text, even though 0.10.0 is the newer
+    # backup -- which could prune the wrong, actually-newer one. `%T@` is
+    # each directory's mtime as seconds-since-epoch (GNU find; fine here,
+    # this installer already targets Debian). Paths are never
+    # space-containing here (INSTALL_DIR is charset-validated elsewhere,
+    # and MAGPIE_VERSION comes from pyproject.toml's dotted-numeric
+    # version string), so the plain (non-NUL-delimited) form below is safe.
     local -a all_backups=()
-    while IFS= read -r -d '' dir; do
+    while IFS= read -r dir; do
         all_backups+=("$dir")
-    done < <(find "$backups_root" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+    done < <(find "$backups_root" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -n | cut -d' ' -f2-)
 
     local total=${#all_backups[@]}
     if (( total <= KEEP_BACKUPS )); then
@@ -2353,86 +2473,113 @@ cmd_update() {
     preflight_backup_space
     backup_data
 
-    # Ensure repository is not shallow so tags can be fetched reliably
-    if git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository >/dev/null 2>&1; then
-        if [[ "$(git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository)" == "true" ]]; then
-            log "Repository is shallow; fetching full history to access tags..."
-            if ! git -C "${INSTALL_DIR}/repo" fetch --unshallow --tags; then
-                die "Failed to unshallow repository to fetch tags"
+    # The swap window: repo checkout to the target version, docker-compose.yml
+    # swap, .env reconcile, image pull/build, systemd regen. backup_data()
+    # above already stopped the OLD service (to checkpoint the WAL) -- for
+    # the ENTIRE duration of this window, the site is down and there is no
+    # running container to serve traffic. Every step here runs inside a
+    # subshell so ANY failure (an explicit die() -- which only exits the
+    # subshell, not this script -- or a raw `set -e` abort from an
+    # unguarded command) is caught uniformly by the single `if ! ( ... );`
+    # below, without having to individually annotate each step. A failure
+    # here must never fall through to a bare die() and leave the site down
+    # with no restart and no rollback -- see issue #561's A1 finding (a
+    # docker-pull network blip or git hiccup here previously left the
+    # stack stopped with the update merely reporting failure, a regression
+    # vs. pre-#561, where the old container ran untouched until the final
+    # restart). Every die()/log_error message below is unchanged from the
+    # pre-#561 version of this code -- only the catch-and-rollback wrapper
+    # around them is new.
+    if ! (
+        # Ensure repository is not shallow so tags can be fetched reliably
+        if git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository >/dev/null 2>&1; then
+            if [[ "$(git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository)" == "true" ]]; then
+                log "Repository is shallow; fetching full history to access tags..."
+                if ! git -C "${INSTALL_DIR}/repo" fetch --unshallow --tags; then
+                    die "Failed to unshallow repository to fetch tags"
+                fi
             fi
         fi
+
+        # Checkout the version tag for consistency when it exists.
+        # If no corresponding tag is found (e.g. development version), stay on the branch HEAD.
+        if git -C "${INSTALL_DIR}/repo" ls-remote --tags origin "v${MAGPIE_VERSION}" | grep -q .; then
+            log "Checking out version tag v${MAGPIE_VERSION}..."
+            if ! git -C "${INSTALL_DIR}/repo" fetch origin "refs/tags/v${MAGPIE_VERSION}:refs/tags/v${MAGPIE_VERSION}"; then
+                die "Failed to fetch version tag v${MAGPIE_VERSION}"
+            fi
+            if ! git -C "${INSTALL_DIR}/repo" checkout "v${MAGPIE_VERSION}"; then
+                die "Failed to checkout version tag v${MAGPIE_VERSION}"
+            fi
+        else
+            log_warn "No git tag v${MAGPIE_VERSION} found for detected version; continuing on branch ${GITHUB_BRANCH}"
+        fi
+
+        # Update the canonical compose file from the repo. This is the only
+        # file swapped wholesale on update -- docker-compose.override.yml is
+        # never copied (dev-only). .env is edited in place, not regenerated
+        # (only `install` calls generate_env_file()).
+        log "Updating docker-compose.yml..."
+        if ! cp "${INSTALL_DIR}/repo/docker-compose.yml" "${INSTALL_DIR}/"; then
+            die "Failed to copy docker-compose.yml from the repository checkout"
+        fi
+
+        # .env surgery runs here -- after the repo checkout/version-tag work
+        # above has already succeeded and docker-compose.yml has already been
+        # swapped to the canonical file, not before it.
+        if ! reconcile_env_file_for_update "$env_file"; then
+            die "Failed to reconcile ${env_file} for the update"
+        fi
+
+        if [[ "$FROM_SOURCE" == "true" ]]; then
+            log "Rebuilding magpie image from source..."
+            if ! docker build --pull -f "${INSTALL_DIR}/repo/Dockerfile.bundled" -t magpie:local "${INSTALL_DIR}/repo"; then
+                die "Failed to rebuild magpie image"
+            fi
+            upsert_env_key "$env_file" "MAGPIE_IMAGE" "magpie:local"
+        else
+            local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}-bundled"
+            log "Pulling magpie image from container registry..."
+            log "  Image: ${image_tag}"
+            if ! docker pull "$image_tag"; then
+                die "Failed to pull magpie image from ${image_tag}"
+            fi
+            # MAGPIE_IMAGE always reflects the version just resolved above.
+            upsert_env_key "$env_file" "MAGPIE_IMAGE" "$image_tag"
+        fi
+
+        # generate_systemd_service()/generate_gc_units() are also called by
+        # cmd_install, but `update` never re-derives the unit files any other
+        # way -- they're regenerated here too so an install whose on-disk
+        # units still predate this PR (no -f docker-compose.yml pinning, no
+        # --remove-orphans on ExecStop) actually picks up both on this update,
+        # not just on a from-scratch reinstall. Without this, `systemctl
+        # restart` below would still exec the OLD unit definition and
+        # --remove-orphans's v0.1.x-sidecar cleanup (see the comment below)
+        # would silently not happen on a real upgrade. Idempotent -- writing
+        # the same content again on an install whose units already match is a
+        # no-op in effect.
+        generate_systemd_service
+        generate_gc_units
+        if ! systemctl daemon-reload; then
+            die "Failed to reload systemd unit definitions (daemon-reload)"
+        fi
+    ); then
+        log_error "The update failed during the swap (repo checkout / docker-compose.yml swap / .env reconcile / image pull-build / systemd regen) -- see the error above."
+        ASSERT_FAILURES=("swap: failed before the new version was ever started (repo checkout / compose swap / .env reconcile / image pull-build / systemd regen) -- see the error above")
+        # Always exits via die() -- see rollback_to_prior()'s docstring.
+        # NO_ROLLBACK is deliberately NOT honored here (unlike the
+        # post-restart assertion-failure path below): the OLD service is
+        # currently STOPPED with no running container at all -- leaving it
+        # that way "as-is" per an operator's --no-rollback would mean an
+        # unattended outage rather than a running-but-unverified new
+        # version, which is what --no-rollback is meant to allow.
+        rollback_to_prior
     fi
-
-    # Checkout the version tag for consistency when it exists.
-    # If no corresponding tag is found (e.g. development version), stay on the branch HEAD.
-    if git -C "${INSTALL_DIR}/repo" ls-remote --tags origin "v${MAGPIE_VERSION}" | grep -q .; then
-        log "Checking out version tag v${MAGPIE_VERSION}..."
-        if ! git -C "${INSTALL_DIR}/repo" fetch origin "refs/tags/v${MAGPIE_VERSION}:refs/tags/v${MAGPIE_VERSION}"; then
-            die "Failed to fetch version tag v${MAGPIE_VERSION}"
-        fi
-        if ! git -C "${INSTALL_DIR}/repo" checkout "v${MAGPIE_VERSION}"; then
-            die "Failed to checkout version tag v${MAGPIE_VERSION}"
-        fi
-    else
-        log_warn "No git tag v${MAGPIE_VERSION} found for detected version; continuing on branch ${GITHUB_BRANCH}"
-    fi
-
-    # Update the canonical compose file from the repo. This is the only
-    # file swapped wholesale on update -- docker-compose.override.yml is
-    # never copied (dev-only). .env is edited in place, not regenerated
-    # (only `install` calls generate_env_file()).
-    log "Updating docker-compose.yml..."
-    cp "${INSTALL_DIR}/repo/docker-compose.yml" "${INSTALL_DIR}/"
-
-    # .env surgery runs here -- after the repo checkout/version-tag work
-    # above has already succeeded and docker-compose.yml has already been
-    # swapped to the canonical file, not before it. Reconciling .env any
-    # earlier (e.g. right after the gates, before confirming the repo
-    # checkout even exists) would leave a partially-migrated .env (dead
-    # keys stripped, new keys added) paired with the STILL-OLD
-    # docker-compose.yml if the update aborted immediately afterward (repo
-    # dir missing, fetch failure, etc.) -- a state a later unrelated
-    # restart could pick up inconsistently. Only the image pull/build below
-    # remains outside this atomicity window, which is inherent to any
-    # multi-step deploy (the running container is untouched until the
-    # final `systemctl restart`, regardless).
-    reconcile_env_file_for_update "$env_file"
-
-    if [[ "$FROM_SOURCE" == "true" ]]; then
-        log "Rebuilding magpie image from source..."
-        if ! docker build --pull -f "${INSTALL_DIR}/repo/Dockerfile.bundled" -t magpie:local "${INSTALL_DIR}/repo"; then
-            die "Failed to rebuild magpie image"
-        fi
-        upsert_env_key "$env_file" "MAGPIE_IMAGE" "magpie:local"
-    else
-        local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}-bundled"
-        log "Pulling magpie image from container registry..."
-        log "  Image: ${image_tag}"
-        if ! docker pull "$image_tag"; then
-            die "Failed to pull magpie image from ${image_tag}"
-        fi
-        # MAGPIE_IMAGE always reflects the version just resolved above.
-        upsert_env_key "$env_file" "MAGPIE_IMAGE" "$image_tag"
-    fi
-
-    # generate_systemd_service()/generate_gc_units() are also called by
-    # cmd_install, but `update` never re-derives the unit files any other
-    # way -- they're regenerated here too so an install whose on-disk
-    # units still predate this PR (no -f docker-compose.yml pinning, no
-    # --remove-orphans on ExecStop) actually picks up both on this update,
-    # not just on a from-scratch reinstall. Without this, `systemctl
-    # restart` below would still exec the OLD unit definition and
-    # --remove-orphans's v0.1.x-sidecar cleanup (see the comment below)
-    # would silently not happen on a real upgrade. Idempotent -- writing
-    # the same content again on an install whose units already match is a
-    # no-op in effect.
-    generate_systemd_service
-    generate_gc_units
-    systemctl daemon-reload
 
     # --remove-orphans (baked into ExecStop by generate_systemd_service()
-    # just above) drops a v0.1.x install's leftover 'caddy' sidecar
-    # container when the restart below stops the old stack and starts the
+    # above) drops a v0.1.x install's leftover 'caddy' sidecar container
+    # when the restart below stops the old stack and starts the
     # single-service one. /data is a bind mount, untouched by the
     # container swap.
     log "Restarting services..."
