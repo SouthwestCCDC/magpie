@@ -2209,6 +2209,18 @@ rollback_to_prior() {
     fi
 
     if wait_for_healthy; then
+        # The ephemeral probe token capture_probe_state() minted (and
+        # persisted to the OLD container's DB) BEFORE backup_data() took
+        # its snapshot is therefore present in the just-restored
+        # magpie.db too -- assert_post_update()'s own revoke only ever
+        # reached the NEW (post-swap) container's copy, which this
+        # restore just discarded. Best-effort cleanup against the
+        # restored (now healthy) container so a failed-then-rolled-back
+        # update doesn't leave a stray admin-scoped token behind; a
+        # failure here (or PROBE_TOKEN_NAME never having existed at all,
+        # e.g. the prior install was unreachable when captured) is not
+        # itself a rollback failure.
+        compose_exec magpie magpie-ctl token revoke "$PROBE_TOKEN_NAME" >/dev/null 2>&1 || true
         die "Update failed and was ROLLED BACK to the prior version. See the failure reason(s) above. Backup and rollback state: ${BACKUP_DIR}"
     else
         die "Update failed AND the rollback restore did not come up healthy. Manual recovery needed -- do not retry 'update' until you've investigated. Check '$SCRIPT_NAME logs' and the MANIFEST at ${BACKUP_DIR}/MANIFEST. Backup and rollback state: ${BACKUP_DIR}"
@@ -2713,6 +2725,14 @@ cmd_update() {
         if [[ "$NO_ROLLBACK" == "true" ]]; then
             local backup_note=""
             [[ "$NO_BACKUP" == "true" ]] && backup_note=" (note: --no-backup means no data backup exists -- only the prior config/units/image were captured)"
+            # Unlike the "Rollback restore itself FAILED" die() path (state
+            # possibly inconsistent, GC left off deliberately), this is a
+            # deliberate, informed choice to keep the NEW stack running --
+            # it's a genuine live service now, not a state needing
+            # hands-off caution, so magpie-gc.timer (stopped by
+            # backup_data() for the update window) is restarted rather
+            # than left off indefinitely.
+            systemctl start magpie-gc.timer 2>/dev/null || true
             die "Rollback is disabled (--no-rollback) -- the new version is left running as-is. Investigate and either fix forward, or roll back manually.${backup_note} Backup/rollback state: ${BACKUP_DIR}"
         fi
         # Always exits via die() -- see rollback_to_prior()'s docstring.

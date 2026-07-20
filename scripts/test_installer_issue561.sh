@@ -658,6 +658,46 @@ test_rollback_reports_loudly_when_restore_itself_unhealthy() {
     log "  ✓ a failed restore is a loud, actionable die() with the backup location -- never a silent retry"
 }
 
+# Regression test for a Copilot finding: the ephemeral probe token
+# capture_probe_state() mints (persisted into the OLD container's DB
+# BEFORE backup_data() snapshots it) is therefore present in the restored
+# magpie.db too on rollback -- assert_post_update()'s own revoke only ever
+# reached the NEW (post-swap, since-discarded) container's copy. A
+# successful rollback must clean up that leftover admin-scoped token
+# against the just-restored (old) container.
+test_rollback_revokes_probe_token_after_healthy_restore() {
+    log "Test 15b: rollback_to_prior() revokes the probe token against the restored container once it's healthy again"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "rollback_probe_revoke" "OLD_DB_CONTENT")
+    local backup_dir="${install_dir}/backups/proberevoke"
+    (
+        systemctl() { return 0; }
+        INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+        HTTP_PORT=1 BIND_IP="" PRIOR_GIT_REF="" MAGPIE_VERSION="0.2.0" \
+        NO_BACKUP="false" BACKUP_ARTIFACTS="skip"
+        capture_prior_state
+        backup_data
+    ) >/dev/null 2>&1
+
+    local calls_log="${TEST_DIR}/probe_revoke_calls.log"
+    rm -f "$calls_log"
+    (
+        systemctl() { return 0; }
+        wait_for_healthy() { return 0; }  # restored topology comes up healthy
+        docker() { return 1; }
+        compose_exec() { echo "$*" >> "$calls_log"; return 0; }
+        INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+        NO_BACKUP="false" PRIOR_MAGPIE_IMAGE="" PRIOR_GIT_REF="" \
+        PROBE_TOKEN_NAME="magpie-update-probe-99999" \
+        rollback_to_prior
+    ) >/dev/null 2>&1
+
+    grep -qF "magpie magpie-ctl token revoke magpie-update-probe-99999" "$calls_log" \
+        || fail "rollback_to_prior() did not revoke the probe token against the restored container after a healthy rollback: $(cat "$calls_log" 2>/dev/null || echo "<no calls logged>")"
+    log "  ✓ the probe token is revoked against the restored container once rollback confirms it's healthy"
+}
+
 # ---------------------------------------------------------------------------
 # prune_old_backups()
 # ---------------------------------------------------------------------------
@@ -978,6 +1018,55 @@ test_gc_timer_never_started_before_rollback_stops_it_again() {
     log "  ✓ magpie-gc.timer is never started before rollback_to_prior() has stopped it again"
 }
 
+# Regression test for a Copilot finding: in the --no-rollback failure
+# path, the operator has made a deliberate, informed choice to leave the
+# NEW (running) stack up for investigation -- it's a genuine live service
+# now, not a "state needs hands-off caution" case like a failed rollback
+# restore. magpie-gc.timer (stopped by backup_data() for the update
+# window) must be restarted here too, not left off indefinitely.
+test_no_rollback_restarts_gc_timer_before_dying() {
+    log "Test 21c: --no-rollback restarts magpie-gc.timer before dying, leaving the new stack's GC schedule intact"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "no_rollback_gctimer" "" "MAGPIE_HTTP_PORT=1")
+
+    # A real git repo with a docker-compose.yml this time, so the swap
+    # itself succeeds and cmd_update() reaches the post-update assert gate
+    # (which is what's under test here, not the swap).
+    mkdir -p "${install_dir}/repo"
+    (
+        cd "${install_dir}/repo"
+        git init -q
+        git config user.email test@example.com
+        git config user.name test
+        git config commit.gpgsign false
+        printf '[project]\nversion = "0.2.0"\n' > pyproject.toml
+        echo "services: {}" > docker-compose.yml
+        git add pyproject.toml docker-compose.yml
+        git commit -q -m init
+    )
+
+    local calls_log="${TEST_DIR}/no_rollback_gctimer_calls.log"
+    rm -f "$calls_log"
+    (
+        set -euo pipefail
+        update_repo_to_latest() { :; }
+        systemctl() { echo "$*" >> "$calls_log"; return 0; }
+        wait_for_healthy() { return 1; }  # forces the post-update assert gate to fail
+        docker() { return 0; }  # swap's docker pull/build succeeds
+        compose_exec() { return 1; }
+        INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" NONINTERACTIVE="true" \
+        ACCEPT_EMPTY_TRUSTED_PROXIES="true" GITHUB_BRANCH="default" NO_ROLLBACK="true" \
+        cmd_update
+    ) >/dev/null 2>&1
+    local rc=$?
+
+    [[ $rc -ne 0 ]] || fail "cmd_update() reported success despite --no-rollback + a failed health check"
+    grep -qx "start magpie-gc.timer" "$calls_log" \
+        || fail "the --no-rollback path did not restart magpie-gc.timer before dying -- GC would stay off indefinitely on the intentionally-kept-running new stack: $(cat "$calls_log")"
+    log "  ✓ --no-rollback restarts magpie-gc.timer before dying"
+}
+
 # Regression test for a Copilot finding: backup_data() runs BEFORE
 # cmd_update()'s swap-window subshell exists to catch anything, so its own
 # cp calls (copying magpie.db/.env/admin-token into the backup) were
@@ -1141,6 +1230,7 @@ test_assert_post_update_a6_survives_total_compose_exec_failure
 test_assert_post_update_a2_survives_total_compose_exec_failure
 test_rollback_fires_and_restores_prior_state
 test_rollback_reports_loudly_when_restore_itself_unhealthy
+test_rollback_revokes_probe_token_after_healthy_restore
 test_prune_old_backups_keeps_newest_n
 test_prune_old_backups_noop_under_the_limit
 test_prune_old_backups_sorts_by_mtime_not_name
@@ -1151,6 +1241,7 @@ test_run_data_migration_failure_propagates
 test_capture_probe_state_token_regex_handles_hyphens
 test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit
 test_gc_timer_never_started_before_rollback_stops_it_again
+test_no_rollback_restarts_gc_timer_before_dying
 test_rollback_cp_failure_dies_loudly_under_real_errexit
 test_cmd_update_validates_envelope_flags
 
