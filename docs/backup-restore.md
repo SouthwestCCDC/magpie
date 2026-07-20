@@ -32,8 +32,18 @@ assert -> rollback flow ([issue
 ├── rollback/    # config snapshot: .env, docker-compose.yml, systemd units,
 │                #   prior image tag, prior git ref
 └── data/        # data snapshot: magpie.db(+wal/shm), .env, admin-token,
-                 #   and (per --backup-artifacts) the artifacts tree
+                 #   and, best-effort per --backup-artifacts, the artifacts tree
 ```
+
+The artifacts tree is **not guaranteed** to be present even with the
+default `--backup-artifacts=link`: hardlinking falls back to skipping
+(not copying) if it fails, e.g. when `MAGPIE_DATA_DIR` is on a different
+filesystem than the backup location. Each backup's own `MANIFEST` records
+`backup_artifacts_mode` (`link`, `copy`, or `skip`) -- that field, not
+this table, is the authoritative record of what a given backup actually
+contains. The bind-mounted artifacts themselves are always untouched by
+an update regardless, so this only affects the backup's own
+defense-in-depth copy, not data safety.
 
 `<install-dir>/backups/` is under `INSTALL_DIR`, deliberately **not**
 under `MAGPIE_DATA_DIR` -- so a data-dir wipe can't take the backup with
@@ -45,7 +55,7 @@ it.
 |---|---|---|
 | `--no-backup` | off | Skip the data backup entirely. NOT recommended -- if the update then fails its post-update checks, rollback can only restore config/units/image, not data. |
 | `--keep-backups N` | `3` | How many past backups to retain. Pruned only after a *successful* update; every backup from a failed update is kept for forensics/manual recovery. |
-| `--backup-artifacts MODE` | `link` | How to back up the artifacts tree: `link` (hardlink snapshot, near-free, same filesystem only), `copy` (full independent copy), or `skip`. The bind-mounted artifacts themselves are untouched by an update regardless -- this only affects the backup's own defense-in-depth copy. |
+| `--backup-artifacts MODE` | `link` | How to back up the artifacts tree: `link` (hardlink snapshot, near-free, same filesystem only -- falls back to *skipping* the artifacts backup, not copying, if hardlinking fails, e.g. cross-filesystem), `copy` (full independent copy), or `skip`. The bind-mounted artifacts themselves are untouched by an update regardless -- this only affects the backup's own defense-in-depth copy. Check a given backup's `MANIFEST` (`backup_artifacts_mode`) for what it actually contains. |
 | `--no-rollback` | off | Don't automatically roll back on a failed post-update assertion -- leaves the failed new stack running so you can investigate in place. |
 
 On a failed update, the installer prints the backup path and (for a

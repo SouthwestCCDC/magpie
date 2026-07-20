@@ -290,6 +290,34 @@ test_backup_data_snapshots_db_env_and_writes_manifest() {
     log "  ✓ magpie.db + .env snapshotted; MANIFEST written with expected fields"
 }
 
+# Regression test for a Copilot finding: a symlink at the resolved
+# admin-token host path would otherwise be silently followed by `cp`,
+# potentially backing up an arbitrary host file the (non-root,
+# privilege-dropped) container planted a symlink to under /data.
+test_backup_data_refuses_symlinked_admin_token() {
+    log "Test 6c: backup_data() refuses to back up a symlinked admin-token rather than following it"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "backup_symlink_token")
+    echo "root-only-secret" > "${TEST_DIR}/host-secret-file"
+    ln -s "${TEST_DIR}/host-secret-file" "${data_dir}/admin-token"
+
+    local backup_dir="${install_dir}/backups/symlinktoken"
+    local out
+    out=$(
+        (
+            systemctl() { return 0; }
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+            NO_BACKUP="false" BACKUP_ARTIFACTS="skip" MAGPIE_VERSION="0.2.0" \
+            backup_data
+        ) 2>&1
+    )
+
+    [[ ! -e "${backup_dir}/data/admin-token" ]] || fail "backup_data() followed a symlinked admin-token and backed up its target's contents: $(cat "${backup_dir}/data/admin-token" 2>/dev/null)"
+    echo "$out" | grep -qi "is a symlink" || fail "backup_data() did not explain why the symlinked admin-token was skipped: $out"
+    log "  ✓ a symlinked admin-token is refused, not followed"
+}
+
 # Regression test for a Copilot finding: backup_data()/rollback_to_prior()
 # derive a host path from the operator-controlled
 # MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH via `${DATA_DIR}${token_file#/data}` --
@@ -315,6 +343,15 @@ test_resolve_admin_token_host_path_rejects_traversal() {
     [[ $rc -eq 0 ]] || fail "resolve_admin_token_host_path() rejected a legitimate /data/... path"
     [[ "$out" == "/opt/magpie/data/subdir/admin-token" ]] || fail "resolve_admin_token_host_path() resolved a legitimate path incorrectly: $out"
     log "  ✓ a legitimate /data/... path resolves correctly under DATA_DIR"
+
+    # Regression: a bare `*..*` glob would ALSO reject a legitimate
+    # filename that merely contains ".." as a substring, not a path
+    # traversal segment.
+    out=$(DATA_DIR="/opt/magpie/data" resolve_admin_token_host_path "/data/admin-token..bak" 2>/dev/null)
+    rc=$?
+    [[ $rc -eq 0 ]] || fail "resolve_admin_token_host_path() rejected a legitimate filename that merely contains '..' as a substring (not a path-traversal segment): admin-token..bak"
+    [[ "$out" == "/opt/magpie/data/admin-token..bak" ]] || fail "resolve_admin_token_host_path() resolved 'admin-token..bak' incorrectly: $out"
+    log "  ✓ a filename merely containing '..' as a substring (not a traversal segment) is accepted"
 }
 
 test_backup_data_artifacts_modes() {
@@ -903,7 +940,7 @@ test_prune_old_backups_sorts_by_mtime_not_name() {
 # service is running again, on both the success and rollback paths.
 # ---------------------------------------------------------------------------
 test_backup_data_stops_gc_timer() {
-    log "Test 17c: backup_data() stops magpie-gc.timer, not just magpie.service"
+    log "Test 17c: backup_data() stops magpie-gc.timer AND magpie-gc.service, not just magpie.service"
 
     local install_dir data_dir
     read -r install_dir data_dir < <(setup_fake_install "gc_timer_stop")
@@ -919,7 +956,13 @@ test_backup_data_stops_gc_timer() {
 
     grep -qx "stop magpie.service" "$calls_log" || fail "backup_data() did not stop magpie.service: $(cat "$calls_log")"
     grep -qx "stop magpie-gc.timer" "$calls_log" || fail "backup_data() did not stop magpie-gc.timer -- it can fire mid-backup/swap and race the running copy: $(cat "$calls_log")"
-    log "  ✓ backup_data() stops both magpie.service and magpie-gc.timer"
+    # magpie-gc.service is the oneshot GC job itself -- if the timer fired
+    # moments before backup_data() ran, stopping only the timer leaves a
+    # still-in-flight GC run free to keep mutating /data during the
+    # backup/swap window; stopping the (Type=oneshot) service too
+    # terminates it.
+    grep -qx "stop magpie-gc.service" "$calls_log" || fail "backup_data() did not stop magpie-gc.service -- an in-flight GC run (triggered by the timer moments earlier) could still be mutating /data during the backup: $(cat "$calls_log")"
+    log "  ✓ backup_data() stops magpie.service, magpie-gc.timer, AND magpie-gc.service"
 }
 
 test_rollback_and_cmd_update_restart_gc_timer() {
@@ -951,6 +994,51 @@ test_rollback_and_cmd_update_restart_gc_timer() {
     grep -qx "start magpie.service" "$calls_log" || fail "rollback_to_prior() did not restart magpie.service: $(cat "$calls_log")"
     grep -qx "start magpie-gc.timer" "$calls_log" || fail "rollback_to_prior() did not restart magpie-gc.timer -- it would stay stopped after a rolled-back update: $(cat "$calls_log")"
     log "  ✓ rollback_to_prior() restarts both magpie.service and magpie-gc.timer"
+}
+
+# Regression test for a Copilot finding: rollback_to_prior()'s re-read of
+# the restored .env for its own health re-assert only checked
+# MAGPIE_BIND_IP, missing the legacy unprefixed BIND_IP key. Rolling back
+# a pre-0.2.0 install's FIRST-EVER `update` restores a .env that may still
+# only have the legacy key (reconcile_env_file_for_update() hadn't
+# migrated it yet when this backup was taken) -- checking only the
+# prefixed key would leave $BIND_IP at the failed update's (stale, wrong)
+# value and probe the wrong address.
+test_rollback_reasserts_using_legacy_bind_ip_key() {
+    log "Test 17g: rollback_to_prior() falls back to the legacy BIND_IP key when the restored .env has no MAGPIE_BIND_IP"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "legacy_bind_ip" "OLD_DB_CONTENT" "BIND_IP=10.9.9.9")
+    local backup_dir="${install_dir}/backups/legacybindip"
+    (
+        systemctl() { return 0; }
+        INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+        HTTP_PORT=1 BIND_IP="" PRIOR_GIT_REF="" MAGPIE_VERSION="0.2.0" \
+        NO_BACKUP="false" BACKUP_ARTIFACTS="skip"
+        capture_prior_state
+        backup_data
+    ) >/dev/null 2>&1
+
+    local probed_url_file="${TEST_DIR}/legacy_bind_ip_probed_url"
+    rm -f "$probed_url_file"
+    (
+        systemctl() { return 0; }
+        wait_for_healthy() { health_check_url > "$probed_url_file"; return 0; }
+        docker() { return 1; }
+        INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" BACKUP_DIR="$backup_dir" \
+        NO_BACKUP="false" PRIOR_MAGPIE_IMAGE="" PRIOR_GIT_REF="" \
+        BIND_IP="1.2.3.4" \
+        rollback_to_prior
+    ) >/dev/null 2>&1
+
+    local probed_url
+    probed_url=$(cat "$probed_url_file" 2>/dev/null || echo "<not captured>")
+    # Port 8080 comes from the restored .env's MAGPIE_HTTP_PORT (re-read
+    # the same way as the BIND_IP fallback under test); the HTTP_PORT=1
+    # set in the first subshell only scoped capture_prior_state/backup_data
+    # above and has no bearing here.
+    [[ "$probed_url" == "http://10.9.9.9:8080/health" ]] || fail "rollback_to_prior() did not fall back to the legacy BIND_IP key from the restored .env -- probed '$probed_url', expected the legacy value 10.9.9.9 (not the stale pre-rollback BIND_IP=1.2.3.4)"
+    log "  ✓ rollback_to_prior() falls back to the legacy BIND_IP key when MAGPIE_BIND_IP is absent"
 }
 
 # ---------------------------------------------------------------------------
@@ -1063,6 +1151,46 @@ test_capture_probe_state_queries_info_by_explicit_ref() {
     grep -qF "info myproj/myart:v1" "$calls_log" \
         || fail "capture_probe_state() never made an explicitly ref-qualified 'info path:tag' call -- it's still relying on the implicit :latest untagged query for the hash: $(cat "$calls_log")"
     log "  ✓ capture_probe_state() explicitly re-queries by tag for the hash"
+}
+
+# Regression test for a Copilot finding: capture_probe_state() parses the
+# minted token via a `grep | head` pipeline inside a plain `VAR=$(...)`
+# assignment. Under `set -euo pipefail`, if `grep` matches nothing (an
+# unexpected `magpie-ctl` output format -- simulated here by a
+# `token create` response with no `mgp_...` token in it at all), pipefail
+# makes the pipeline's exit status nonzero, and a bare failing `VAR=$(...)`
+# assignment aborts the whole script -- exactly wrong for what's supposed
+# to be a best-effort capture.
+test_capture_probe_state_token_parse_failure_survives_real_errexit() {
+    log "Test 20c: capture_probe_state() survives a token-parse failure under real errexit (does not abort bare)"
+
+    local install_dir data_dir
+    read -r install_dir data_dir < <(setup_fake_install "probe_parse_fail")
+
+    local out
+    out=$(
+        (
+            set -euo pipefail  # magpie-deploy.sh's own real semantics
+            curl() { return 0; }
+            compose_exec() {
+                case "$*" in
+                    *"token create"*) echo "unexpected output with no token in it" ;;
+                    *"token list"*) echo "Total: 1 token(s)" ;;
+                    *"migrate --check"*) echo "Data-format version: 0 (current: 1)" ;;
+                    *"ls -r"*) echo "No artifacts found." ;;
+                    *) return 1 ;;
+                esac
+            }
+            INSTALL_DIR="$install_dir" DATA_DIR="$data_dir" HTTP_PORT=1 BIND_IP="" \
+            capture_probe_state
+            echo "SURVIVED"
+        ) 2>&1
+    )
+    local rc=$?
+
+    [[ $rc -eq 0 ]] || fail "capture_probe_state() aborted (rc=$rc) instead of surviving a token-parse failure as best-effort: $out"
+    echo "$out" | grep -q "SURVIVED" || fail "capture_probe_state() did not run to completion after a token-parse failure: $out"
+    log "  ✓ a token-parse failure (grep finds nothing) does not abort the script under real errexit"
 }
 
 # ---------------------------------------------------------------------------
@@ -1391,6 +1519,7 @@ test_compute_backup_dir_format
 test_compute_backup_dir_rejects_unsafe_version
 test_preflight_backup_space
 test_backup_data_snapshots_db_env_and_writes_manifest
+test_backup_data_refuses_symlinked_admin_token
 test_resolve_admin_token_host_path_rejects_traversal
 test_backup_data_artifacts_modes
 test_backup_data_no_backup_skips_everything
@@ -1413,9 +1542,11 @@ test_prune_old_backups_sorts_by_mtime_not_name
 test_backup_data_stops_gc_timer
 test_backup_data_cp_failure_triggers_rollback_under_real_errexit
 test_rollback_and_cmd_update_restart_gc_timer
+test_rollback_reasserts_using_legacy_bind_ip_key
 test_run_data_migration_failure_propagates
 test_capture_probe_state_token_regex_handles_hyphens
 test_capture_probe_state_queries_info_by_explicit_ref
+test_capture_probe_state_token_parse_failure_survives_real_errexit
 test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit
 test_gc_timer_never_started_before_rollback_stops_it_again
 test_no_rollback_restarts_gc_timer_before_dying

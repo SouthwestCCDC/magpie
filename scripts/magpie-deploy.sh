@@ -1552,8 +1552,12 @@ compose_exec() {
 # malformed sink-path setting.
 resolve_admin_token_host_path() {
     local token_file="$1"
-    if [[ "$token_file" != /data/* ]] || [[ "$token_file" == *..* ]]; then
-        log_warn "MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH ('${token_file}') is not a safe /data/... path (must start with /data/ and contain no '..' segments) -- skipping the admin-token backup/restore step."
+    # ".." must be a whole path SEGMENT (bounded by "/" or the string's
+    # own start/end), not merely a substring -- a bare `*..*` glob would
+    # also reject a legitimate filename like "/data/admin-token..bak".
+    # Same anchoring as validate_path_value() elsewhere in this script.
+    if [[ "$token_file" != /data/* ]] || [[ "$token_file" =~ (^|/)\.\.(/|$) ]]; then
+        log_warn "MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH ('${token_file}') is not a safe /data/... path (must start with /data/ and contain no '..' path segments) -- skipping the admin-token backup/restore step."
         return 1
     fi
     echo "${DATA_DIR}${token_file#/data}"
@@ -1653,10 +1657,35 @@ capture_probe_state() {
         # here must include '-' or the match silently truncates at the
         # first hyphen, producing a token-shaped-but-wrong (and always
         # invalid) value. See TokenService.generate_plaintext_token().
-        PROBE_TOKEN=$(echo "$token_out" | grep -Eo 'mgp_[A-Za-z0-9_-]+' | head -1)
+        #
+        # `|| true` guards the pipeline itself: if `grep` matches nothing
+        # (an unexpected `magpie-ctl` output format), pipefail makes the
+        # whole pipeline's exit status nonzero, and under this script's
+        # `set -e` a bare `VAR=$(...)` assignment failing would abort the
+        # WHOLE script -- exactly wrong for what's supposed to be a
+        # best-effort capture (PROBE_TOKEN simply stays empty; the
+        # `-z "$PROBE_TOKEN"` check right below is the intended handling).
+        PROBE_TOKEN=$(echo "$token_out" | grep -Eo 'mgp_[A-Za-z0-9_-]+' | head -1) || true
     fi
     if [[ -z "$PROBE_TOKEN" ]]; then
-        log_warn "Could not mint a probe token against the prior install; A3 (token auth) will be skipped: ${token_out:-no output}"
+        # token_out (the command's own output) is deliberately NOT logged
+        # raw here: if `token create` itself succeeded but the grep above
+        # failed to extract a token (a magpie-ctl output-format change,
+        # not the common case), token_out still contains the real
+        # plaintext admin-scope token in its human-readable
+        # "TOKEN CREATED: ..." block -- logging it verbatim would leak an
+        # admin token into installer output/logs. Any `mgp_...` substring
+        # is redacted first.
+        local redacted_token_out
+        redacted_token_out=$(echo "${token_out:-no output}" | sed -E 's/mgp_[A-Za-z0-9_-]+/<redacted-token>/g')
+        log_warn "Could not mint a probe token against the prior install; A3 (token auth) will be skipped: ${redacted_token_out}"
+        # Best-effort: `token create` may have actually succeeded server-side
+        # even though parsing its output failed above -- revoke by NAME
+        # (always known, unlike PROBE_TOKEN) so a token-creation success
+        # paired with a parse failure doesn't leave a stray admin-scoped
+        # token behind. A genuine creation failure makes this revoke a
+        # harmless no-op ("not found").
+        compose_exec magpie magpie-ctl token revoke "$PROBE_TOKEN_NAME" >/dev/null 2>&1 || true
     fi
 
     # A6 baseline: total token row count, from magpie-ctl token list's own
@@ -1852,15 +1881,24 @@ backup_data() {
 
     log "Stopping the running stack to back up data safely (this checkpoints the WAL)..."
     systemctl stop magpie.service 2>/dev/null || true
-    # magpie-gc.timer is a SEPARATE unit from magpie.service, untouched by
-    # the stop above -- if it fires during the stop-copy-swap window (its
-    # own `docker compose run --rm magpie-ctl gc` spins up an independent
-    # one-off container against the SAME bind-mounted /data), it can race
-    # this backup's copy or a hardlink snapshot mid-flight. Stopped for the
-    # duration of the update window; restarted unconditionally (a no-op if
-    # already active) once magpie.service is running again -- see
-    # cmd_update()'s success path and rollback_to_prior().
+    # magpie-gc.timer/-.service are SEPARATE units from magpie.service,
+    # untouched by the stop above -- if the timer fires during the
+    # stop-copy-swap window, its own `docker compose run --rm magpie-ctl
+    # gc` spins up an independent one-off container against the SAME
+    # bind-mounted /data, racing this backup's copy or a hardlink snapshot
+    # mid-flight. Stopping magpie-gc.timer alone isn't enough: if the
+    # timer fired moments earlier, the oneshot magpie-gc.service it
+    # triggered can still be actively running (a live GC in progress,
+    # mutating /data) even after the timer itself is stopped -- systemctl
+    # stop on a `Type=oneshot` unit does terminate its still-running
+    # process, so both must be stopped. Stopped for the duration of the
+    # update window; magpie-gc.timer is restarted unconditionally (a no-op
+    # if already active) once magpie.service is running again -- see
+    # cmd_update()'s success path and rollback_to_prior(). magpie-gc.service
+    # itself is never explicitly "restarted" -- as a oneshot unit it isn't
+    # a persistent process; the timer alone is what schedules its next run.
     systemctl stop magpie-gc.timer 2>/dev/null || true
+    systemctl stop magpie-gc.service 2>/dev/null || true
 
     # Every fallible step below (disk full is the plausible real-world
     # cause -- the same condition preflight_backup_space() just checked
@@ -1909,10 +1947,20 @@ backup_data() {
     read_env_file "${INSTALL_DIR}/etc/.env" env_for_token
     local token_file="${env_for_token[MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH]:-/data/admin-token}"
     local host_token_file
-    if host_token_file=$(resolve_admin_token_host_path "$token_file") \
-        && [[ -f "$host_token_file" ]] && ! cp "$host_token_file" "${BACKUP_DIR}/data/admin-token"; then
-        log_error "Failed to back up admin-token"
-        rollback_to_prior
+    if host_token_file=$(resolve_admin_token_host_path "$token_file"); then
+        if [[ -L "$host_token_file" ]]; then
+            # `-f` below would happily follow a symlink to a regular file
+            # -- refuse rather than let `cp` read through one. The admin-
+            # token path lives under the bind-mounted /data, which the
+            # (non-root, privilege-dropped) container also writes to; a
+            # symlink there planted by a compromised or misconfigured
+            # container process could otherwise make this root-run
+            # installer copy an arbitrary host file into the backup.
+            log_warn "${host_token_file} is a symlink, not a regular file -- refusing to back it up as the admin-token (this would follow the symlink and could copy an unintended host file)."
+        elif [[ -f "$host_token_file" ]] && ! cp "$host_token_file" "${BACKUP_DIR}/data/admin-token"; then
+            log_error "Failed to back up admin-token"
+            rollback_to_prior
+        fi
     fi
 
     local artifacts_mode="skip"
@@ -2086,12 +2134,16 @@ assert_post_update() {
     fi
 
     # Revoke the probe token now that every check above has had its chance
-    # to use it (A3, and A2/A4's `magpie info`/`magpie get`). Best-effort:
-    # a failure here (e.g. the container is about to be rolled back anyway)
-    # is not itself an assertion failure.
-    if [[ -n "$PROBE_TOKEN" ]]; then
-        compose_exec magpie magpie-ctl token revoke "$PROBE_TOKEN_NAME" >/dev/null 2>&1 || true
-    fi
+    # to use it (A3, and A2/A4's `magpie info`/`magpie get`). Attempted
+    # unconditionally (by NAME, not gated on $PROBE_TOKEN being non-empty):
+    # `token create` can succeed server-side even when parsing its output
+    # for PROBE_TOKEN fails (see capture_probe_state()), in which case
+    # PROBE_TOKEN is empty but a real admin-scoped token still exists under
+    # PROBE_TOKEN_NAME and must still be cleaned up. A revoke against a
+    # token that was never actually created is a harmless no-op. Best-
+    # effort throughout: a failure here (e.g. the container is about to be
+    # rolled back anyway) is not itself an assertion failure.
+    compose_exec magpie magpie-ctl token revoke "$PROBE_TOKEN_NAME" >/dev/null 2>&1 || true
 
     if [[ ${#ASSERT_FAILURES[@]} -gt 0 ]]; then
         return 1
@@ -2119,14 +2171,16 @@ rollback_to_prior() {
     local restore_failure=""
 
     systemctl stop magpie.service 2>/dev/null || true
-    # Defensive: magpie-gc.timer should already be stopped (backup_data()
-    # stops it for the whole update window, and cmd_update()'s success
-    # path only restarts it after the post-update gate passes) -- but
-    # stopping it again here, unconditionally, before the restore below
-    # touches any files, closes the gap if rollback_to_prior() is ever
-    # reached some other way with it still active. A GC run firing during
+    # Defensive: magpie-gc.timer/-.service should already be stopped
+    # (backup_data() stops both for the whole update window, and
+    # cmd_update()'s success path only restarts the timer after the
+    # post-update gate passes) -- but stopping them again here,
+    # unconditionally, before the restore below touches any files, closes
+    # the gap if rollback_to_prior() is ever reached some other way with
+    # either still active. A GC run (or one still in flight) firing during
     # THIS restore window would race the very file copies below.
     systemctl stop magpie-gc.timer 2>/dev/null || true
+    systemctl stop magpie-gc.service 2>/dev/null || true
 
     local unit
     for unit in magpie.service magpie-gc.service magpie-gc.timer; do
@@ -2186,7 +2240,16 @@ rollback_to_prior() {
                 # trouble.
                 if ! mkdir -p "$(dirname "$host_token_file")"; then
                     restore_failure="creating the admin-token directory (${host_token_file})"
-                elif ! cp "${BACKUP_DIR}/data/admin-token" "$host_token_file"; then
+                # --remove-destination: unlinks the destination first (if
+                # present, including if it's a symlink) before writing a
+                # fresh regular file, rather than opening and writing
+                # THROUGH an existing destination symlink -- which could
+                # otherwise overwrite an arbitrary host file if something
+                # planted one at $host_token_file. This script runs as
+                # root, so the destination is always writable regardless;
+                # the point is refusing to follow the link, not a
+                # permissions workaround.
+                elif ! cp --remove-destination "${BACKUP_DIR}/data/admin-token" "$host_token_file"; then
                     restore_failure="restoring admin-token"
                 fi
             fi
@@ -2278,7 +2341,19 @@ rollback_to_prior() {
         local -A rolled_back_env=()
         read_env_file "${INSTALL_DIR}/etc/.env" rolled_back_env
         [[ -n "${rolled_back_env[MAGPIE_HTTP_PORT]+set}" ]] && HTTP_PORT="${rolled_back_env[MAGPIE_HTTP_PORT]}"
-        [[ -n "${rolled_back_env[MAGPIE_BIND_IP]+set}" ]] && BIND_IP="${rolled_back_env[MAGPIE_BIND_IP]}"
+        # Prefers the current MAGPIE_BIND_IP key, falling back to the
+        # legacy unprefixed BIND_IP -- same precedence as
+        # load_existing_config(). Rolling back a pre-0.2.0 install's FIRST
+        # -EVER `update` restores a .env that may still only have the
+        # legacy key (reconcile_env_file_for_update() hadn't migrated it
+        # yet when this backup was taken); checking only the prefixed key
+        # here would leave $BIND_IP at the failed update's value and probe
+        # the wrong address below.
+        if [[ -n "${rolled_back_env[MAGPIE_BIND_IP]+set}" ]]; then
+            BIND_IP="${rolled_back_env[MAGPIE_BIND_IP]}"
+        elif [[ -n "${rolled_back_env[BIND_IP]+set}" ]]; then
+            BIND_IP="${rolled_back_env[BIND_IP]}"
+        fi
     fi
 
     if wait_for_healthy; then

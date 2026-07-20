@@ -224,10 +224,16 @@ backup/assert/rollback safety envelope ([issue
 #561](https://github.com/SouthwestCCDC/magpie/issues/561)):
 
 1. **Backs up** the data directory (`magpie.db`, `.env`, `admin-token`,
-   and the artifacts tree) to `<install>/backups/<version>-<UTC
-   timestamp>/` before touching anything -- automatic, no manual backup
-   step needed. See [Backup & Restore](backup-restore.md#automatic-pre-update-backups)
-   for the layout and the flags that control it.
+   and -- by default, best-effort -- the artifacts tree) to
+   `<install>/backups/<version>-<UTC timestamp>/` before touching
+   anything -- automatic, no manual backup step needed. The default
+   artifact mode (`--backup-artifacts=link`) hardlinks the artifacts tree
+   and falls back to *skipping* it (not copying) if hardlinking fails,
+   e.g. when the data directory is on a different filesystem than the
+   backup location; `MANIFEST`'s `backup_artifacts_mode` in each backup
+   records what actually happened. See [Backup &
+   Restore](backup-restore.md#automatic-pre-update-backups) for the
+   layout and the flags that control it.
 2. **Swaps** the topology (repo checkout, `docker-compose.yml`, `.env`
    reconcile, image pull, systemd units) as before.
 3. **Asserts** the new container is actually healthy and correctly
