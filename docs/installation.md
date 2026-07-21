@@ -250,6 +250,18 @@ The data directory (`MAGPIE_DATA_DIR`) is a bind mount and is not touched
 by the container swap itself; the backup/assert/rollback envelope above
 is what makes the swap safe to run unattended.
 
+The artifact byte-identity/tag-resolution checks in step 3 reach the
+pre-update two-container install through its own `caddy` container
+(matching this project's own `--tls-mode off` real-world deployments); a
+prior install using `--tls-mode auto`/`manual` may not be reachable this
+way, in which case those specific checks are skipped (logged) rather
+than failing the update. Health, the data-format version, the token
+*count*, and minting the probe token used by the token-authentication
+check are all checked/captured directly via `magpie-ctl`, not through
+Caddy -- unaffected either way -- and still gate every upgrade
+regardless (see [issue
+#603](https://github.com/SouthwestCCDC/magpie/issues/603)).
+
 If this install was using built-in TLS termination (`--tls-mode
 auto`/`manual`, persisted as `TLS_MODE=auto`/`manual` in
 `<install>/etc/.env`), `update` refuses to proceed until you acknowledge

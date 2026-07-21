@@ -1593,6 +1593,19 @@ resolve_admin_token_host_path() {
     echo "${DATA_DIR}${token_file#/data}"
 }
 
+# True if a SEPARATE `caddy` service is currently up under the CURRENT
+# docker-compose.yml -- the definitive live signal that this is (still) a
+# pre-0.2.0 two-container topology, as opposed to the other
+# detect_upgrade_shape() signals below, which can be true from leftover
+# config/state even when nothing matching is actually running right now.
+# Shared by detect_upgrade_shape() (informational) and
+# probe_magpie_server_url() (issue #603, needs the SAME single source of
+# truth to decide how to actually reach the app) so the one docker-compose
+# invocation and service-name assumption can't drift between the two.
+has_running_caddy_sidecar() {
+    docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps --services 2>/dev/null | grep -qx 'caddy'
+}
+
 # Sets IS_CROSS_020: whether this update is crossing the pre-0.2.0
 # two-container -> bundled single-container boundary, detected from the
 # CURRENT (not-yet-touched) install state, before any part of the swap
@@ -1619,7 +1632,7 @@ detect_upgrade_shape() {
     if ! env_key_has_value "${INSTALL_DIR}/etc/.env" "MAGPIE_IMAGE" || ! grep -qE '^MAGPIE_IMAGE=.*-bundled$' "${INSTALL_DIR}/etc/.env" 2>/dev/null; then
         reasons+=("MAGPIE_IMAGE is absent or not a -bundled tag")
     fi
-    if docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps --services 2>/dev/null | grep -qx 'caddy'; then
+    if has_running_caddy_sidecar; then
         reasons+=("a running caddy sidecar container was found")
     fi
 
@@ -1650,6 +1663,64 @@ compute_backup_dir() {
     BACKUP_DIR="${INSTALL_DIR}/backups/${MAGPIE_VERSION}-${ts}"
 }
 
+# Issue #603: the MAGPIE_SERVER base URL for probing the CURRENT (not yet
+# swapped) `magpie` container's own app layer via `compose_exec magpie
+# magpie ...`. Only meaningful BEFORE the swap -- capture_probe_state() is
+# the sole caller, probing whatever topology is currently running. (After
+# the swap, the container is unconditionally the bundled image regardless
+# of what topology it upgraded FROM, so assert_post_update()'s own probe
+# calls stay hardcoded to the bundled image's same-container Caddy port,
+# 127.0.0.1:8080, unchanged by this function.)
+#
+# The bundled 0.2.0 image runs Caddy in the SAME container as uvicorn, at
+# 127.0.0.1:8080 -- reachable directly. The pre-0.2.0 two-container
+# topology's `magpie` container runs bare uvicorn with NO Caddy of its
+# own; Caddy is a SEPARATE `caddy` service/container that owns the actual
+# HTTP-serving port. Hardcoding the bundled image's port unconditionally
+# meant this probe could never reach the app pre-swap on exactly the
+# 2->1 crossover the envelope exists to protect (A2/A4 silently reduced
+# to vacuously-satisfied every time). A CONTAINER-INTERNAL uvicorn:8000
+# hit in the two-container topology doesn't work either: `magpie
+# ls`/`info`/`get` require Caddy's forward_auth to have already validated
+# the Bearer token and injected the X-Magpie-Scope header the app's
+# require_read_scope/require_write_scope dependencies check for --
+# uvicorn itself never sees or validates the Authorization header for
+# those routes, so a direct hit is simply unauthenticated (401), Caddy
+# skipped entirely.
+#
+# Fix: when a separate `caddy` service is actually running
+# (has_running_caddy_sidecar() -- the real two-container signal, shared
+# with detect_upgrade_shape(); NOT that function's own IS_CROSS_020,
+# which also folds in non-networking signals like a persisted TLS_MODE or
+# a leftover Caddyfile that don't by themselves mean there's a caddy
+# container to route through right now), reach it via docker-compose's
+# own service-name DNS -- every service in a
+# compose project shares a default network with this resolution built in,
+# no extra config needed. Its in-container listen port for a
+# --tls-mode=off old install (this project's common real-world
+# configuration behind an external reverse proxy) is a fixed :80
+# regardless of the install's EXTERNAL published HTTP_PORT -- that old
+# install's own generated Caddyfile listens on :80 inside its container
+# for --tls-mode=off (confirmed against a real v0.1.6 install; see this
+# fix's own PR description for the live-verification output). This is
+# unrelated to the CURRENT bundled image's own internal Caddy port
+# (127.0.0.1:8080, used in the `else` branch below) -- the old and new
+# Caddy instances are different Caddyfiles with no shared convention.
+# A --tls-mode=auto/manual old install's Caddy uses a domain-matched site
+# address instead of the TLS_MODE=off http://:80 catch-all -- an
+# in-network hit here may not match it, in which case these probe calls
+# fail closed the same way an unreachable prior install already does
+# (vacuous A2/A3/A4 skip, logged) -- not a new failure mode, just the
+# existing graceful-skip behavior reached via a different path for that
+# less common configuration.
+probe_magpie_server_url() {
+    if has_running_caddy_sidecar; then
+        echo "http://caddy:80"
+    else
+        echo "http://127.0.0.1:8080"
+    fi
+}
+
 # Captures a "before" snapshot used by assert_post_update() to prove data
 # continuity across the swap: an ephemeral admin-scope probe token (works
 # regardless of the configured MAGPIE_ADMIN_TOKEN_SINK -- see sharp edge S5
@@ -1676,6 +1747,12 @@ capture_probe_state() {
         log_warn "Prior install is not reachable at ${health_url}; skipping probe capture. A2/A3/A4 will be treated as vacuously satisfied by assert_post_update()."
         return 0
     fi
+
+    # Computed once (not per call site below) -- see probe_magpie_server_url()'s
+    # own docstring for why this can't just be the bundled image's
+    # same-container 127.0.0.1:8080 unconditionally (issue #603).
+    local server_url
+    server_url="$(probe_magpie_server_url)"
 
     # A3 baseline: an ephemeral admin-scope token, independent of
     # MAGPIE_ADMIN_TOKEN_SINK (works even with a discard/exec sink, where no
@@ -1746,7 +1823,7 @@ capture_probe_state() {
     # this into an unbounded scan. No tagged artifact found at all -> A2/A4
     # are skipped as vacuously true.
     local ls_out
-    if [[ -z "$PROBE_TOKEN" ]] || ! ls_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie ls -r 2>&1) \
+    if [[ -z "$PROBE_TOKEN" ]] || ! ls_out=$(compose_exec -e MAGPIE_SERVER="$server_url" -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie ls -r 2>&1) \
         || [[ "$ls_out" == "No artifacts found."* ]]; then
         log "No artifacts found on the prior install (or listing them failed); A2/A4 (artifact/tag continuity) will be treated as vacuously satisfied."
         return 0
@@ -1765,7 +1842,7 @@ capture_probe_state() {
         # file's own `set -euo pipefail` -- silently, no die()/log_error.
         # `checked=$(( checked + 1 ))` is a plain assignment, always exit 0.
         checked=$(( checked + 1 ))
-        info_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie info "$path" 2>&1) || continue
+        info_out=$(compose_exec -e MAGPIE_SERVER="$server_url" -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie info "$path" 2>&1) || continue
         tags=$(echo "$info_out" | sed -nE 's/^Tags:[[:space:]]*//p')
         [[ -z "$tags" || "$tags" == "(none)" ]] && continue
         first_tag="${tags%%,*}"
@@ -1778,7 +1855,7 @@ capture_probe_state() {
         # whatever "latest" happens to currently be, so assert_post_update()'s
         # later A2/A4 checks (which also query by this explicit ref) are
         # verifying the actual tag being probed, not latest-by-coincidence.
-        info_out=$(compose_exec -e MAGPIE_SERVER=http://127.0.0.1:8080 -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie info "${path}:${first_tag}" 2>&1) || continue
+        info_out=$(compose_exec -e MAGPIE_SERVER="$server_url" -e MAGPIE_TOKEN="$PROBE_TOKEN" magpie magpie info "${path}:${first_tag}" 2>&1) || continue
         hash=$(echo "$info_out" | sed -nE 's/^Hash:[[:space:]]*//p')
         [[ -z "$hash" ]] && continue
 
@@ -2148,6 +2225,14 @@ assert_post_update() {
         ASSERT_FAILURES+=("A6 token row count: changed (${PRIOR_TOKEN_ROW_COUNT} -> ${post_row_count})")
     fi
 
+    # A3/A2/A4 below intentionally stay hardcoded to the bundled image's
+    # same-container Caddy port (127.0.0.1:8080), unlike
+    # capture_probe_state()'s topology-aware probe_magpie_server_url()
+    # (issue #603): by the time assert_post_update() runs, the swap has
+    # already completed, so the container IS unconditionally the bundled
+    # image regardless of what topology it upgraded FROM. There is no
+    # "old topology" to detect here.
+    #
     # A3: token auth -- skipped (vacuously satisfied) if capture_probe_state()
     # didn't mint a probe token (S5: prior install unreachable, or minting
     # failed). The token is NOT revoked here -- A2/A4 below still needs it
