@@ -1,7 +1,7 @@
 #!/bin/bash
 # Real end-to-end release-gate test for issue #561 (the "canonical upgrade
 # test" scoped as #561-B): a genuine v0.1.6 two-container install, upgraded
-# in place to v0.2.0-rc1's bundled single container via each version's OWN
+# in place to v0.2.0+'s bundled single container via each version's OWN
 # scripts/magpie-deploy.sh, against the real published ghcr.io images --
 # plus a fault-injection run proving the backup/assert/rollback envelope
 # (issue #561, PR #600) actually restores a working prior stack with data
@@ -469,14 +469,14 @@ assert_data_continuity() {
 # The successful upgrade: real `update` with no fault, crossing the
 # 0.1.x-two-container -> 0.2.0-bundled boundary.
 run_upgrade() {
-    log "=== Scenario: upgrade (v0.1.6 -> v0.2.0-rc1, no fault) ==="
+    log "=== Scenario: upgrade (v0.1.6 -> v0.2.0+ bundled, no fault) ==="
     teardown_host >/dev/null
     preflight_host_clean
 
     install_v016 || return 1
     seed_data || return 1
 
-    log "Running the real 'update' (new installer, default-branch HEAD == v0.2.0-rc1)..."
+    log "Running the real 'update' (this checkout's installer -- targets whatever version the repo's default branch resolves to)..."
     local update_out update_rc
     update_out="$(sudo bash "$NEW_SCRIPT" update --install-dir "$INSTALL_DIR" 2>&1)"
     update_rc=$?
@@ -531,7 +531,7 @@ run_upgrade() {
 # is safe/scoped) and confirm rollback_to_prior() restores a healthy prior
 # (two-container) stack with data intact.
 run_rollback() {
-    log "=== Scenario: rollback (v0.1.6 -> v0.2.0-rc1, forced image-pull failure) ==="
+    log "=== Scenario: rollback (v0.1.6 -> v0.2.0+ bundled, forced image-pull failure) ==="
     teardown_host >/dev/null
     preflight_host_clean
 
