@@ -266,7 +266,7 @@ test_assert_post_update_genuinely_compares_on_two_container_crossover() {
 
     echo "$out" | grep -qF "ASSERT_RC=0" \
         || fail "assert_post_update() did not pass against a matching post-update hash on a two-container-sourced crossover: $out"
-    echo "$out" | grep -qi "^FAILURE: A2\|^FAILURE: A4" \
+    echo "$out" | grep -qEi "^FAILURE: A2|^FAILURE: A4" \
         && fail "assert_post_update() reported an A2/A4 failure despite matching hashes -- something in the wiring is broken: $out"
     log "  ✓ assert_post_update() genuinely compares (not vacuously skips) A2/A4 fed from a two-container-sourced probe"
 }
