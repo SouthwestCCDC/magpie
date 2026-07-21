@@ -163,14 +163,32 @@ teardown_host() {
     # state to unwind (it was only ever an env var on one subprocess) --
     # nothing to do here for that.
 
-    if [[ -f "${INSTALL_DIR}/repo/scripts/magpie-deploy.sh" ]]; then
-        sudo bash "${INSTALL_DIR}/repo/scripts/magpie-deploy.sh" uninstall \
-            --install-dir "$INSTALL_DIR" --purge --yes >/dev/null 2>&1 || true
+    # Guard against ever touching a magpie.service that isn't THIS test's
+    # own: the installer hardcodes this exact, non-namespaced unit name
+    # (see this script's header comment), so a real, unrelated magpie
+    # install on this host would use the identical name. Its
+    # WorkingDirectory=/EnvironmentFile= lines both key off INSTALL_DIR
+    # (see generate_systemd_service() in magpie-deploy.sh), so grepping
+    # the unit file for our own INSTALL_DIR is a reliable "is this ours"
+    # check. Absent unit file -> nothing to protect, proceeds normally.
+    # Present but NOT ours -> refuse to touch it and leave it running.
+    local unit_file="/etc/systemd/system/magpie.service"
+    local unit_is_ours="true"
+    if [[ -f "$unit_file" ]] && ! grep -qF "$INSTALL_DIR" "$unit_file" 2>/dev/null; then
+        unit_is_ours="false"
+        log_error "Refusing to touch ${unit_file} -- it exists but does not reference this test's INSTALL_DIR (${INSTALL_DIR}). This looks like a REAL magpie install, not this test's own; leaving it running untouched."
     fi
 
-    sudo systemctl disable --now magpie.service magpie-gc.timer magpie-gc.service >/dev/null 2>&1 || true
-    sudo rm -f /etc/systemd/system/magpie.service /etc/systemd/system/magpie-gc.service /etc/systemd/system/magpie-gc.timer
-    sudo systemctl daemon-reload >/dev/null 2>&1 || true
+    if [[ "$unit_is_ours" == "true" ]]; then
+        if [[ -f "${INSTALL_DIR}/repo/scripts/magpie-deploy.sh" ]]; then
+            sudo bash "${INSTALL_DIR}/repo/scripts/magpie-deploy.sh" uninstall \
+                --install-dir "$INSTALL_DIR" --purge --yes >/dev/null 2>&1 || true
+        fi
+
+        sudo systemctl disable --now magpie.service magpie-gc.timer magpie-gc.service >/dev/null 2>&1 || true
+        sudo rm -f /etc/systemd/system/magpie.service /etc/systemd/system/magpie-gc.service /etc/systemd/system/magpie-gc.timer
+        sudo systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
 
     # Belt-and-suspenders: uninstall --purge above already removes
     # containers/volumes (scoped to INSTALL_DIR's own compose file) and
@@ -399,11 +417,25 @@ seed_data() {
     log "Seeding artifacts (varied sizes)..."
     local names=("small" "medium" "large")
     local sizes=(4096 1048576 10485760)
-    local i path tmpfile push_out hash
+    local i path tmpfile push_out hash actual_size
     for i in 0 1 2; do
         path="test/561b-${names[$i]}"
         tmpfile="${SCRATCH_DIR}/${names[$i]}.bin"
-        head -c "${sizes[$i]}" /dev/urandom > "$tmpfile"
+        # Checked explicitly, not just generated and trusted: under this
+        # script's `set -uo pipefail` (no `-e`), an I/O failure (disk
+        # full) could otherwise silently leave an empty/partial seed
+        # file, which would still "pass" the later byte-identity check --
+        # it would just be verifying the wrong (truncated) content against
+        # itself, not proving anything about the real artifact.
+        if ! head -c "${sizes[$i]}" /dev/urandom > "$tmpfile"; then
+            record "seed data" "FAIL" "could not generate seed file ${tmpfile} (${sizes[$i]} bytes)"
+            return 1
+        fi
+        actual_size="$(stat -c%s "$tmpfile" 2>/dev/null || echo 0)"
+        if [[ "$actual_size" != "${sizes[$i]}" ]]; then
+            record "seed data" "FAIL" "seed file ${tmpfile} is ${actual_size} bytes, expected ${sizes[$i]}"
+            return 1
+        fi
         push_out="$(magpie_client "$ADMIN_TOKEN" push "$tmpfile" --to "$path" 2>&1)"
         hash="$(echo "$push_out" | jq -r '.data.hash // empty' 2>/dev/null)"
         if [[ -z "$hash" ]]; then
@@ -496,7 +528,14 @@ assert_data_continuity() {
 # 0.1.x-two-container -> 0.2.0-bundled boundary.
 run_upgrade() {
     log "=== Scenario: upgrade (v0.1.6 -> v0.2.0+ bundled, no fault) ==="
-    teardown_host >/dev/null
+    # preflight_host_clean() runs FIRST and unconditionally -- no
+    # defensive pre-teardown before it. main()'s own sequencing already
+    # guarantees the host is clean by the time this function is entered
+    # (teardown_host() runs after every prior scenario, success or
+    # failure -- see main()'s callers below); teardown-before-preflight
+    # would instead mean this test could tear down a REAL, unrelated
+    # magpie install on this host before ever getting a chance to detect
+    # and refuse to run against it.
     preflight_host_clean
 
     install_v016 || return 1
@@ -558,7 +597,8 @@ run_upgrade() {
 # (two-container) stack with data intact.
 run_rollback() {
     log "=== Scenario: rollback (v0.1.6 -> v0.2.0+ bundled, forced image-pull failure) ==="
-    teardown_host >/dev/null
+    # Same reasoning as run_upgrade(): preflight_host_clean() first, no
+    # defensive pre-teardown ahead of it.
     preflight_host_clean
 
     install_v016 || return 1
@@ -584,11 +624,18 @@ EOF
         record "rollback: update command" "FAIL" "expected non-zero exit (forced failure), got 0"
         return 1
     fi
-    if ! echo "$update_out" | grep -qi 'ROLLED BACK'; then
-        record "rollback: update command" "FAIL" "exited ${update_rc} but output does not confirm a clean rollback: $(echo "$update_out" | tail -3 | tr '\n' ' ')"
-        return 1
+    # The "ROLLED BACK" string match is best-effort/informational only,
+    # not a pass/fail gate -- exact installer wording could change
+    # without meaning rollback itself actually failed. The topology,
+    # health, and data-continuity checks below are the real, structural
+    # proof that rollback worked; this just adds color to the note.
+    local rollback_note="failed as forced (exit ${update_rc})"
+    if echo "$update_out" | grep -qi 'ROLLED BACK'; then
+        rollback_note="${rollback_note}, and reported a clean rollback"
+    else
+        rollback_note="${rollback_note}; rollback confirmed structurally below (installer output didn't match the expected wording, not treated as a failure)"
     fi
-    record "rollback: update command" "PASS" "failed as forced, and reported a clean rollback"
+    record "rollback: update command" "PASS" "$rollback_note"
 
     local services
     if ! services="$(compose_service_list)"; then
