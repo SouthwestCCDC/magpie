@@ -1701,8 +1701,11 @@ compute_backup_dir() {
 # configuration behind an external reverse proxy) is a fixed :80
 # regardless of the install's EXTERNAL published HTTP_PORT -- that old
 # install's own generated Caddyfile listens on :80 inside its container
-# for --tls-mode=off, same as this project's current bundled Caddyfile
-# does for its own internal auth-gate hop (see docker/bundled/Caddyfile).
+# for --tls-mode=off (confirmed against a real v0.1.6 install; see this
+# fix's own PR description for the live-verification output). This is
+# unrelated to the CURRENT bundled image's own internal Caddy port
+# (127.0.0.1:8080, used in the `else` branch below) -- the old and new
+# Caddy instances are different Caddyfiles with no shared convention.
 # A --tls-mode=auto/manual old install's Caddy uses a domain-matched site
 # address instead of the TLS_MODE=off http://:80 catch-all -- an
 # in-network hit here may not match it, in which case these probe calls
