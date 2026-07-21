@@ -71,7 +71,17 @@ ALLOWED_CIDRS="10.0.0.0/8"       # SWCCDC-prod-shape CIDR allow, see issue #561'
 
 RESULTS=()   # "feature|status|notes" rows for the final report
 
-record() { RESULTS+=("$1|$2|$3"); }
+# $3 (notes) is frequently raw command output from callers (installer
+# stderr, docker compose output, JSON blobs) -- sanitized here, once, so
+# every call site is protected automatically: a literal '|' would
+# otherwise be misread as this function's own field delimiter by
+# print_report()'s `IFS='|' read`, and a raw newline would break out of
+# the markdown table row entirely.
+record() {
+    local notes="${3//$'\n'/ }"
+    notes="${notes//|/;}"
+    RESULTS+=("$1|$2|${notes}")
+}
 
 # =============================================================================
 # Preflight / teardown
@@ -291,7 +301,11 @@ compose_service_list() {
 wait_health() {
     local tries=0
     while (( tries < 60 )); do
-        curl -sf "http://127.0.0.1:${HTTP_PORT}/health" >/dev/null 2>&1 && return 0
+        # --max-time bounds each individual request -- without it, a
+        # stalled connect/response (a wedged network stack, a half-dead
+        # container) could hang this curl indefinitely despite the retry
+        # loop's own counter, defeating the point of a bounded wait.
+        curl -sf --max-time 5 "http://127.0.0.1:${HTTP_PORT}/health" >/dev/null 2>&1 && return 0
         sleep 2
         tries=$(( tries + 1 ))
     done
@@ -698,7 +712,7 @@ EOF
 # through a real, root-mutating, multi-minute install.
 require_prerequisites() {
     local missing=() cmd
-    for cmd in docker git curl jq uv sudo systemctl; do
+    for cmd in docker git curl jq uv sudo systemctl sha256sum stat; do
         command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
     done
     if (( ${#missing[@]} > 0 )); then
