@@ -35,8 +35,28 @@
 
 set -uo pipefail
 
+log() { printf '[test-561b] %s\n' "$*"; }
+log_error() { printf '[test-561b] ERROR: %s\n' "$*" >&2; }
+
+# REPO_ROOT/SCRATCH_DIR are checked explicitly, not just assigned via
+# unguarded command substitution: this script is root-required and
+# host-mutating (seed files, the extracted v0.1.6 installer, and later a
+# `sudo rm -rf "$INSTALL_DIR"` all key off these paths), and `set -u`
+# alone does NOT catch a command substitution that fails but still
+# produces empty output -- a failed `mktemp` or `cd`/`pwd` would otherwise
+# silently leave SCRATCH_DIR/REPO_ROOT empty, and every `${SCRATCH_DIR}/...`
+# path built below would then resolve to a bare filesystem root path
+# instead of erroring.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "$REPO_ROOT" || "$REPO_ROOT" != /* ]]; then
+    log_error "Could not resolve this script's own repo root (cd/pwd failed or returned something unexpected: '${REPO_ROOT}')."
+    exit 1
+fi
 SCRATCH_DIR="$(mktemp -d /tmp/magpie-561b-test.XXXXXX)"
+if [[ -z "$SCRATCH_DIR" || "$SCRATCH_DIR" != /tmp/magpie-561b-test.* ]]; then
+    log_error "mktemp failed to create a scratch directory (got: '${SCRATCH_DIR}') -- refusing to continue rather than risk writing seed files/the extracted installer to an unexpected path."
+    exit 1
+fi
 V016_SCRIPT="${SCRATCH_DIR}/magpie-deploy-v0.1.6.sh"
 NEW_SCRIPT="${REPO_ROOT}/scripts/magpie-deploy.sh"
 
@@ -51,8 +71,6 @@ ALLOWED_CIDRS="10.0.0.0/8"       # SWCCDC-prod-shape CIDR allow, see issue #561'
 
 RESULTS=()   # "feature|status|notes" rows for the final report
 
-log() { printf '[test-561b] %s\n' "$*"; }
-log_error() { printf '[test-561b] ERROR: %s\n' "$*" >&2; }
 record() { RESULTS+=("$1|$2|$3"); }
 
 # =============================================================================
