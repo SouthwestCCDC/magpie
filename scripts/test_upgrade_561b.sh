@@ -90,13 +90,36 @@ require_docker_usable() {
     fi
 }
 
+# Same reasoning as require_docker_usable() above, for `systemctl`: a
+# non-systemd host or a dbus/permissions problem would otherwise make
+# `systemctl list-units` fail, and a swallowed failure there reads exactly
+# like "no magpie units" (an empty grep match under `2>/dev/null`).
+require_systemctl_usable() {
+    if ! systemctl list-units >/dev/null 2>&1; then
+        log_error "'systemctl list-units' failed -- systemd is not usable in this session (non-systemd host, or a dbus/permissions problem). Refusing to proceed: this script cannot safely check for -- or clean up -- an existing magpie systemd install."
+        exit 1
+    fi
+}
+
 preflight_host_clean() {
     require_docker_usable
+    require_systemctl_usable
 
     local dirty=0
-    if systemctl list-units --all 2>/dev/null | grep -qi 'magpie'; then
+    # Captured first, then grepped, for the same reason as the docker_ps_out
+    # pattern below: piping `systemctl list-units ... | grep -qi ...`
+    # directly would make a `systemctl` failure indistinguishable from "no
+    # magpie units" under `pipefail`. require_systemctl_usable() above
+    # already confirmed the CLI works; still checked explicitly here
+    # rather than assumed.
+    local systemctl_out
+    if ! systemctl_out="$(systemctl list-units --all 2>&1)"; then
+        log_error "'systemctl list-units --all' failed after require_systemctl_usable() reported systemd usable -- refusing to proceed. Output: ${systemctl_out}"
+        exit 1
+    fi
+    if echo "$systemctl_out" | grep -qi 'magpie'; then
         log_error "A magpie systemd unit already exists on this host -- refusing to start (only one install can exist at a time)."
-        systemctl list-units --all 2>/dev/null | grep -i magpie >&2
+        echo "$systemctl_out" | grep -i magpie >&2
         dirty=1
     fi
     # Captured first, then grepped -- NOT `docker ps ... | grep -qi ...`
@@ -162,7 +185,15 @@ teardown_host() {
     sudo rm -rf "$INSTALL_DIR"
 
     local still_dirty=0
-    if systemctl list-units --all 2>/dev/null | grep -qi 'magpie'; then
+    # Same false-clean risk as the docker_ps_out capture below: a failed
+    # `systemctl list-units` must count as "couldn't verify" (dirty), not
+    # silently read as "no magpie units" the way a bare
+    # `systemctl ... 2>/dev/null | grep -qi ...` would under pipefail.
+    local systemctl_out
+    if ! systemctl_out="$(systemctl list-units --all 2>&1)"; then
+        log_error "Teardown verification FAILED: 'systemctl list-units --all' itself failed, so unit state could not be confirmed clean -- do not treat this as a clean host. Output: ${systemctl_out}"
+        still_dirty=1
+    elif echo "$systemctl_out" | grep -qi 'magpie'; then
         log_error "Teardown incomplete: a magpie systemd unit is still present."
         still_dirty=1
     fi
@@ -205,6 +236,22 @@ trap full_teardown EXIT
 
 compose_exec() {
     docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" exec -T "$@"
+}
+
+# Prints the sorted, comma-joined list of docker-compose service names for
+# INSTALL_DIR's compose file on success. On failure (a bad .env, permissions
+# issue, missing compose plugin -- not just "no services"), returns
+# non-zero with the command's own stderr on stdout instead, so every
+# topology check below can report the REAL cause rather than a confusing
+# "got: " (empty) mismatch that silently swallowed a `docker compose`
+# error.
+compose_service_list() {
+    local out
+    if ! out="$(docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps --services 2>&1)"; then
+        echo "$out"
+        return 1
+    fi
+    echo "$out" | sort | tr '\n' ','
 }
 
 wait_health() {
@@ -269,7 +316,10 @@ install_v016() {
     fi
 
     local services
-    services="$(docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps --services 2>/dev/null | sort | tr '\n' ',')"
+    if ! services="$(compose_service_list)"; then
+        record "v0.1.6 install" "FAIL" "'docker compose ps --services' failed: ${services}"
+        return 1
+    fi
     if [[ "$services" != "caddy,magpie," ]]; then
         record "v0.1.6 install" "FAIL" "expected two services (caddy,magpie), got: ${services}"
         return 1
@@ -439,7 +489,10 @@ run_upgrade() {
     record "upgrade: update command" "PASS" "exited 0"
 
     local services
-    services="$(docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps --services 2>/dev/null | sort | tr '\n' ',')"
+    if ! services="$(compose_service_list)"; then
+        record "upgrade: topology" "FAIL" "'docker compose ps --services' failed: ${services}"
+        return 1
+    fi
     if [[ "$services" != "magpie," ]]; then
         record "upgrade: topology" "FAIL" "expected single bundled 'magpie' service, got: ${services}"
         return 1
@@ -512,7 +565,10 @@ EOF
     record "rollback: update command" "PASS" "failed as forced, and reported a clean rollback"
 
     local services
-    services="$(docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps --services 2>/dev/null | sort | tr '\n' ',')"
+    if ! services="$(compose_service_list)"; then
+        record "rollback: topology" "FAIL" "'docker compose ps --services' failed: ${services}"
+        return 1
+    fi
     if [[ "$services" != "caddy,magpie," ]]; then
         record "rollback: topology" "FAIL" "expected the restored two-container topology (caddy,magpie), got: ${services}"
         return 1

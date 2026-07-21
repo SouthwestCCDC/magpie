@@ -101,3 +101,5 @@ rollback), each against its own fresh install. To iterate on just one:
 MAGPIE_RUN_LIVE_UPGRADE_TEST=1 scripts/test_upgrade_561b.sh --only-upgrade
 MAGPIE_RUN_LIVE_UPGRADE_TEST=1 scripts/test_upgrade_561b.sh --only-rollback
 ```
+
+*(This section AI-generated via Claude Code w/ Opus 4.8)*
