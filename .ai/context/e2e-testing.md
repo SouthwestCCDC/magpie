@@ -78,3 +78,18 @@ docker compose down
 
 - Existing E2E tests: `tests/e2e/`
 - Docker config: `docker-compose.yml`
+
+## Release-Gate Upgrade Test
+
+`scripts/test_upgrade_561b.sh` is a separate, heavier test: a real
+v0.1.x two-container install upgraded in place to the bundled v0.2.0+
+single container via each version's own installer, plus a fault-injection
+run proving the backup/assert/rollback envelope actually restores a
+working prior stack with data intact. It is root-required, mutates real
+systemd/Docker state, and needs network access to github.com and
+ghcr.io -- not part of `just e2e`/CI. Run it by hand (it no-ops with
+usage instructions unless `MAGPIE_RUN_LIVE_UPGRADE_TEST=1` is set):
+
+```bash
+MAGPIE_RUN_LIVE_UPGRADE_TEST=1 scripts/test_upgrade_561b.sh
+```
