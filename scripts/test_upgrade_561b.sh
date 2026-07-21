@@ -59,16 +59,42 @@ record() { RESULTS+=("$1|$2|$3"); }
 # Preflight / teardown
 # =============================================================================
 
+# Fails loudly if the docker CLI cannot be queried at all (permissions,
+# group membership not yet applied, daemon not running). Called before any
+# existing-install check below: a swallowed `docker ps` failure would
+# otherwise read as "no containers found" (an empty grep match under
+# `2>/dev/null`) and let this script sail into a destructive install on a
+# host it never actually managed to inspect.
+require_docker_usable() {
+    if ! docker ps >/dev/null 2>&1; then
+        log_error "'docker ps' failed -- Docker is not usable in this session (check group membership/permissions, and that the daemon is running). Refusing to proceed: this script cannot safely check for -- or clean up -- an existing magpie install without a working docker CLI."
+        exit 1
+    fi
+}
+
 preflight_host_clean() {
+    require_docker_usable
+
     local dirty=0
     if systemctl list-units --all 2>/dev/null | grep -qi 'magpie'; then
         log_error "A magpie systemd unit already exists on this host -- refusing to start (only one install can exist at a time)."
         systemctl list-units --all 2>/dev/null | grep -i magpie >&2
         dirty=1
     fi
-    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qi 'magpie'; then
+    # Captured first, then grepped -- NOT `docker ps ... | grep -qi ...`
+    # directly, which under `pipefail` would make a `docker ps` failure
+    # indistinguishable from "no magpie containers" (both leave the `if`
+    # false). require_docker_usable() above already confirmed the CLI
+    # works, so this capture is expected to succeed; still checked
+    # explicitly rather than assumed.
+    local docker_ps_out
+    if ! docker_ps_out="$(docker ps -a --format '{{.Names}}' 2>&1)"; then
+        log_error "'docker ps -a' failed after require_docker_usable() reported Docker usable -- refusing to proceed. Output: ${docker_ps_out}"
+        exit 1
+    fi
+    if echo "$docker_ps_out" | grep -qi 'magpie'; then
         log_error "A magpie-named container already exists on this host -- refusing to start."
-        docker ps -a --format '{{.Names}}' | grep -i magpie >&2
+        echo "$docker_ps_out" | grep -i magpie >&2
         dirty=1
     fi
     if [[ -e "$INSTALL_DIR" ]]; then
@@ -122,7 +148,19 @@ teardown_host() {
         log_error "Teardown incomplete: a magpie systemd unit is still present."
         still_dirty=1
     fi
-    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qi 'magpie'; then
+    # Captured, then checked, then grepped -- a `docker ps` failure here
+    # (daemon restarted mid-run, permissions changed) must NOT read as "no
+    # magpie containers found" the way `docker ps ... 2>/dev/null | grep
+    # -qi ...` would under pipefail (a failed left side of the pipe still
+    # leaves the right side's "no match" exit status, which the `if` can't
+    # tell apart from a genuinely clean host). The whole point of this
+    # check is guaranteeing no leftover magpie state -- "couldn't verify"
+    # must count as dirty, never as clean.
+    local docker_ps_out
+    if ! docker_ps_out="$(docker ps -a --format '{{.Names}}' 2>&1)"; then
+        log_error "Teardown verification FAILED: 'docker ps -a' itself failed, so container state could not be confirmed clean -- do not treat this as a clean host. Output: ${docker_ps_out}"
+        still_dirty=1
+    elif echo "$docker_ps_out" | grep -qi 'magpie'; then
         log_error "Teardown incomplete: a magpie-named container is still present."
         still_dirty=1
     fi
@@ -181,7 +219,22 @@ read_admin_token() {
 
 install_v016() {
     log "Extracting v0.1.6's own installer from the repo history..."
-    git -C "$REPO_ROOT" show v0.1.6:scripts/magpie-deploy.sh > "$V016_SCRIPT"
+    # Checked explicitly -- an unfetched tag (e.g. a shallow clone) makes
+    # `git show` fail, and an unchecked redirect would still write an
+    # empty/partial $V016_SCRIPT that only surfaces as a much less
+    # actionable failure several steps later (a mysterious `install`
+    # error, or a permission-denied on a 0-byte "script"). stderr is
+    # captured separately (not merged into $V016_SCRIPT) so a failure
+    # neither pollutes the script file nor loses git's own error text.
+    local git_show_err="${SCRATCH_DIR}/git-show-v016.err"
+    if ! git -C "$REPO_ROOT" show v0.1.6:scripts/magpie-deploy.sh > "$V016_SCRIPT" 2>"$git_show_err"; then
+        record "v0.1.6 install" "FAIL" "could not extract scripts/magpie-deploy.sh from the v0.1.6 tag (git show failed: $(cat "$git_show_err" 2>/dev/null); if this is a shallow clone, fetch the tag first: git -C ${REPO_ROOT} fetch --tags)"
+        return 1
+    fi
+    if [[ ! -s "$V016_SCRIPT" ]]; then
+        record "v0.1.6 install" "FAIL" "extracted v0.1.6 installer (${V016_SCRIPT}) is empty"
+        return 1
+    fi
     chmod +x "$V016_SCRIPT"
 
     log "Installing magpie v0.1.6 (two-container, tls-mode off, fronted CIDR shape)..."

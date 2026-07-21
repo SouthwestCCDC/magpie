@@ -93,3 +93,11 @@ usage instructions unless `MAGPIE_RUN_LIVE_UPGRADE_TEST=1` is set):
 ```bash
 MAGPIE_RUN_LIVE_UPGRADE_TEST=1 scripts/test_upgrade_561b.sh
 ```
+
+By default this runs both scenarios (a clean upgrade, then a fault-injection
+rollback), each against its own fresh install. To iterate on just one:
+
+```bash
+MAGPIE_RUN_LIVE_UPGRADE_TEST=1 scripts/test_upgrade_561b.sh --only-upgrade
+MAGPIE_RUN_LIVE_UPGRADE_TEST=1 scripts/test_upgrade_561b.sh --only-rollback
+```
