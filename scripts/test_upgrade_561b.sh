@@ -610,25 +610,64 @@ print_report() {
     echo ""
 }
 
-main() {
-    if [[ "${MAGPIE_RUN_LIVE_UPGRADE_TEST:-}" != "1" ]]; then
-        cat >&2 <<EOF
+usage() {
+    cat >&2 <<EOF
+Usage: MAGPIE_RUN_LIVE_UPGRADE_TEST=1 $0 [--only-upgrade|--only-rollback]
+
 This is a real, root-requiring, host-mutating test (installs magpie
 twice, for real, using systemd + Docker + the actual ghcr.io images). It
 is not part of 'just e2e' / CI.
-
-Run it explicitly:
-  MAGPIE_RUN_LIVE_UPGRADE_TEST=1 $0 [--only-upgrade|--only-rollback]
 EOF
+}
+
+# Checked before anything else runs -- a missing tool or unusable sudo
+# should fail fast and clearly, not surface as a confusing error partway
+# through a real, root-mutating, multi-minute install.
+require_prerequisites() {
+    local missing=() cmd
+    for cmd in docker git curl jq uv sudo systemctl; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+    if (( ${#missing[@]} > 0 )); then
+        log_error "Missing required command(s): ${missing[*]}. Install them before running this test."
+        exit 1
+    fi
+    if ! sudo -v; then
+        log_error "'sudo -v' failed -- this script needs sudo for systemd/install/uninstall steps (see its header comment). Configure sudo access and try again."
+        exit 1
+    fi
+}
+
+main() {
+    if [[ "${MAGPIE_RUN_LIVE_UPGRADE_TEST:-}" != "1" ]]; then
+        usage
         exit 0
     fi
 
+    # Validated strictly -- a typoed flag (e.g. --only-upgrde) must not
+    # silently fall through to running BOTH scenarios; that's twice the
+    # runtime and twice the real, root-level install/teardown for a run
+    # the operator only meant to run once.
     local run_upgrade_scenario=1
     local run_rollback_scenario=1
     case "${1:-}" in
+        "") ;;
         --only-upgrade) run_rollback_scenario=0 ;;
         --only-rollback) run_upgrade_scenario=0 ;;
+        -h|--help) usage; exit 0 ;;
+        *)
+            log_error "Unrecognized argument: '$1'"
+            usage
+            exit 1
+            ;;
     esac
+    if [[ -n "${2:-}" ]]; then
+        log_error "Unexpected extra argument: '$2'"
+        usage
+        exit 1
+    fi
+
+    require_prerequisites
 
     local overall_ok=1
 
