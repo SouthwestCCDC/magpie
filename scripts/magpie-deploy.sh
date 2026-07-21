@@ -1593,6 +1593,19 @@ resolve_admin_token_host_path() {
     echo "${DATA_DIR}${token_file#/data}"
 }
 
+# True if a SEPARATE `caddy` service is currently up under the CURRENT
+# docker-compose.yml -- the definitive live signal that this is (still) a
+# pre-0.2.0 two-container topology, as opposed to the other
+# detect_upgrade_shape() signals below, which can be true from leftover
+# config/state even when nothing matching is actually running right now.
+# Shared by detect_upgrade_shape() (informational) and
+# probe_magpie_server_url() (issue #603, needs the SAME single source of
+# truth to decide how to actually reach the app) so the one docker-compose
+# invocation and service-name assumption can't drift between the two.
+has_running_caddy_sidecar() {
+    docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps --services 2>/dev/null | grep -qx 'caddy'
+}
+
 # Sets IS_CROSS_020: whether this update is crossing the pre-0.2.0
 # two-container -> bundled single-container boundary, detected from the
 # CURRENT (not-yet-touched) install state, before any part of the swap
@@ -1619,7 +1632,7 @@ detect_upgrade_shape() {
     if ! env_key_has_value "${INSTALL_DIR}/etc/.env" "MAGPIE_IMAGE" || ! grep -qE '^MAGPIE_IMAGE=.*-bundled$' "${INSTALL_DIR}/etc/.env" 2>/dev/null; then
         reasons+=("MAGPIE_IMAGE is absent or not a -bundled tag")
     fi
-    if docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps --services 2>/dev/null | grep -qx 'caddy'; then
+    if has_running_caddy_sidecar; then
         reasons+=("a running caddy sidecar container was found")
     fi
 
@@ -1675,12 +1688,13 @@ compute_backup_dir() {
 # those routes, so a direct hit is simply unauthenticated (401), Caddy
 # skipped entirely.
 #
-# Fix: when a separate `caddy` service is actually running (the real
-# two-container signal -- checked directly here, not reused from
-# detect_upgrade_shape()'s IS_CROSS_020, which also folds in non-networking
-# signals like a persisted TLS_MODE or a leftover Caddyfile that don't by
-# themselves mean there's a caddy container to route through right now),
-# reach it via docker-compose's own service-name DNS -- every service in a
+# Fix: when a separate `caddy` service is actually running
+# (has_running_caddy_sidecar() -- the real two-container signal, shared
+# with detect_upgrade_shape(); NOT that function's own IS_CROSS_020,
+# which also folds in non-networking signals like a persisted TLS_MODE or
+# a leftover Caddyfile that don't by themselves mean there's a caddy
+# container to route through right now), reach it via docker-compose's
+# own service-name DNS -- every service in a
 # compose project shares a default network with this resolution built in,
 # no extra config needed. Its in-container listen port for a
 # --tls-mode=off old install (this project's common real-world
@@ -1697,7 +1711,7 @@ compute_backup_dir() {
 # existing graceful-skip behavior reached via a different path for that
 # less common configuration.
 probe_magpie_server_url() {
-    if docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps --services 2>/dev/null | grep -qx 'caddy'; then
+    if has_running_caddy_sidecar; then
         echo "http://caddy:80"
     else
         echo "http://127.0.0.1:8080"
