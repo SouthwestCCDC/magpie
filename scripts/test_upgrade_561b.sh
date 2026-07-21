@@ -723,6 +723,25 @@ require_prerequisites() {
         log_error "'sudo -v' failed -- this script needs sudo for systemd/install/uninstall steps (see its header comment). Configure sudo access and try again."
         exit 1
     fi
+
+    # Warms up the venv before any scenario runs. On a genuinely fresh
+    # checkout (a new worktree, a CI runner, an operator's first run),
+    # `uv run`'s FIRST invocation prints its own setup chatter ("Using
+    # CPython...", "Creating virtual environment...", "Built magpie...",
+    # "Installed N packages...") to stdout -- call sites that need
+    # magpie_client()'s JSON output (e.g. seed_data()'s
+    # `push_out="$(magpie_client ... 2>&1)"`) merge stderr into stdout so
+    # real error output makes it into FAIL messages, which means that
+    # chatter would otherwise land in front of the JSON response and
+    # break `jq`'s parsing outright (jq requires the whole stream to be
+    # valid JSON), producing a false "did not return a hash" FAIL even
+    # though the push actually succeeded. A one-time, silent `uv sync`
+    # here ensures every `uv run` call a scenario makes afterward is
+    # already warm and prints nothing extra.
+    if ! (cd "$REPO_ROOT" && uv sync) >/dev/null 2>&1; then
+        log_error "'uv sync' failed in ${REPO_ROOT} -- cannot run the magpie client. Check the error by running it manually: (cd \"${REPO_ROOT}\" && uv sync)"
+        exit 1
+    fi
 }
 
 main() {
