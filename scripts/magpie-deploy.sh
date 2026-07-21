@@ -1684,16 +1684,18 @@ compute_backup_dir() {
 # compose project shares a default network with this resolution built in,
 # no extra config needed. Its in-container listen port for a
 # --tls-mode=off old install (this project's common real-world
-# configuration behind an external reverse proxy -- see
-# generate_caddyfile()) is a fixed :80 regardless of the install's
-# EXTERNAL published HTTP_PORT, per that function's own "Docker listens
-# on port 80 inside the container" comment. A --tls-mode=auto/manual old
-# install's Caddy uses a domain-matched site address instead of the
-# TLS_MODE=off http://:80 catch-all -- an in-network hit here may not
-# match it, in which case these probe calls fail closed the same way an
-# unreachable prior install already does (vacuous A2/A3/A4 skip, logged)
-# -- not a new failure mode, just the existing graceful-skip behavior
-# reached via a different path for that less common configuration.
+# configuration behind an external reverse proxy) is a fixed :80
+# regardless of the install's EXTERNAL published HTTP_PORT -- that old
+# install's own generated Caddyfile listens on :80 inside its container
+# for --tls-mode=off, same as this project's current bundled Caddyfile
+# does for its own internal auth-gate hop (see docker/bundled/Caddyfile).
+# A --tls-mode=auto/manual old install's Caddy uses a domain-matched site
+# address instead of the TLS_MODE=off http://:80 catch-all -- an
+# in-network hit here may not match it, in which case these probe calls
+# fail closed the same way an unreachable prior install already does
+# (vacuous A2/A3/A4 skip, logged) -- not a new failure mode, just the
+# existing graceful-skip behavior reached via a different path for that
+# less common configuration.
 probe_magpie_server_url() {
     if docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps --services 2>/dev/null | grep -qx 'caddy'; then
         echo "http://caddy:80"
