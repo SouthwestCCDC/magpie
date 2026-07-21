@@ -739,7 +739,7 @@ require_prerequisites() {
     # here ensures every `uv run` call a scenario makes afterward is
     # already warm and prints nothing extra.
     if ! (cd "$REPO_ROOT" && uv sync) >/dev/null 2>&1; then
-        log_error "'uv sync' failed in ${REPO_ROOT} -- cannot run the magpie client. Check the error by running it manually: (cd ${REPO_ROOT} && uv sync)"
+        log_error "'uv sync' failed in ${REPO_ROOT} -- cannot run the magpie client. Check the error by running it manually: (cd \"${REPO_ROOT}\" && uv sync)"
         exit 1
     fi
 }
