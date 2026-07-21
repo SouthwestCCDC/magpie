@@ -224,8 +224,24 @@ teardown_host() {
 }
 
 full_teardown() {
+    # $? here is the exit status the script is about to use (whatever was
+    # passed to `exit`, or the last command's status if the script fell
+    # off the end) -- captured before teardown_host()/rm can change it.
+    # If the rest of the run otherwise reported success (0) but teardown
+    # verification itself reports a dirty/unverifiable host, that failure
+    # must not be silently swallowed: this script's whole contract is
+    # verifying the host is left clean on every exit path, so a dirty
+    # host at exit time overrides an otherwise-successful status. An
+    # ALREADY-nonzero incoming status (a real test failure) is left as
+    # is -- it's already reporting failure; no need to change it.
+    local incoming_rc=$?
     teardown_host
+    local teardown_rc=$?
     rm -rf "$SCRATCH_DIR"
+    if (( teardown_rc != 0 && incoming_rc == 0 )); then
+        log_error "Teardown verification failed on exit -- overriding an otherwise-successful run. See the teardown errors above."
+        exit 1
+    fi
 }
 
 trap full_teardown EXIT
@@ -327,9 +343,19 @@ install_v016() {
 
     # MAGPIE_ALLOWED_CIDRS is never written by the installer (only ever
     # read) -- an operator hand-adds it to etc/.env, same as the real
-    # SWCCDC prod shape. Append-then-restart to pick it up.
-    echo "MAGPIE_ALLOWED_CIDRS=${ALLOWED_CIDRS}" | sudo tee -a "${INSTALL_DIR}/etc/.env" >/dev/null
-    sudo systemctl restart magpie.service
+    # SWCCDC prod shape. Append-then-restart to pick it up. Both checked
+    # explicitly: under `set -uo pipefail` (no `-e`), a failed `sudo tee`
+    # (permissions, full disk) or `systemctl restart` would otherwise be
+    # silently ignored, and the run would continue without actually
+    # exercising the intended fronted-CIDR shape at all.
+    if ! echo "MAGPIE_ALLOWED_CIDRS=${ALLOWED_CIDRS}" | sudo tee -a "${INSTALL_DIR}/etc/.env" >/dev/null; then
+        record "v0.1.6 install" "FAIL" "could not append MAGPIE_ALLOWED_CIDRS to ${INSTALL_DIR}/etc/.env"
+        return 1
+    fi
+    if ! sudo systemctl restart magpie.service; then
+        record "v0.1.6 install" "FAIL" "'systemctl restart magpie.service' failed after adding MAGPIE_ALLOWED_CIDRS"
+        return 1
+    fi
     if ! wait_health; then
         record "v0.1.6 install" "FAIL" "did not become healthy after adding MAGPIE_ALLOWED_CIDRS"
         return 1
