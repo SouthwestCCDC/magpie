@@ -42,6 +42,8 @@ Magpie uses structured logging (`structlog`) for machine-readable output.
 - `upload_complete` - artifact_path, hash_ref, size_bytes, duration_ms, is_duplicate
 - `tag_created`, `tag_removed`, `tag_flushed` - tag_name, artifact_path
 - `gc_complete` - artifacts_scanned, blobs_deleted, space_reclaimed_bytes
+- `verify_complete` - artifacts_scanned, blobs_scanned, bytes_read, ok, mismatched, missing_blob, missing_metadata, corrupt_metadata, errors, stopped_early
+- `verify_issue` - artifact_path, blob_ref, status, expected_hash, actual_hash (logged at WARNING for each finding)
 - `auth_validation_success`, `auth_validation_failed` - token_name, scope
 
 **Example JSON log entry:**
@@ -69,6 +71,7 @@ Alert on these conditions:
 3. Error rate > 5% of requests
 4. Request latency p95 > 5 seconds
 5. Health check failures (3+ consecutive)
+6. `magpie-ctl verify` exits non-zero, or a `verify_complete` event reports `mismatched > 0` (page immediately: stored bytes no longer match their recorded hash)
 
 ## Error Tracking (Sentry)
 
@@ -108,6 +111,58 @@ Logs include `trace_id` and `span_id` for correlation with other services.
 ## GC Monitoring
 
 See [user-guide.md](user-guide.md) for garbage collection operations and retention configuration.
+
+## Integrity Monitoring (Scrub)
+
+`magpie-ctl verify` re-reads stored blobs and compares them to the SHA-256 recorded at upload time. Nothing else in Magpie re-checks stored bytes, so a scheduled scrub is the only detection for bit-rot or tampering of artifacts like OpenVPN CA/cert/key material.
+
+**Exit codes** (see [user-guide.md](user-guide.md) for the full table): `0` clean, `1` operational error, `3` missing blob/metadata, `5` content mismatch. A cron job or systemd timer that logs stderr and alerts on non-zero status is sufficient; alert separately on `5`, which indicates damaged or tampered content rather than a bookkeeping problem.
+
+**Scraping results:**
+```bash
+magpie-ctl --format json verify --path openvpn
+```
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "path_prefix": "openvpn",
+    "artifacts_scanned": 3,
+    "blobs_scanned": 7,
+    "bytes_read": 20481,
+    "ok": 6,
+    "mismatched": 1,
+    "missing_blob": 0,
+    "missing_metadata": 0,
+    "corrupt_metadata": 0,
+    "errors": 0,
+    "stopped_early": false,
+    "issues": [
+      {
+        "artifact_path": "openvpn/ca",
+        "blob_ref": "abc12345",
+        "status": "mismatch",
+        "message": "Stored content does not match recorded SHA-256",
+        "expected_hash": "...",
+        "actual_hash": "...",
+        "size_bytes": 2048
+      }
+    ]
+  }
+}
+```
+
+The command still exits non-zero when JSON output is requested, so monitoring can key on either the exit code or the counters. `stopped_early` is `true` when `--limit`/`--max-bytes` cut the run short, which means a clean result covers only the blobs actually scanned.
+
+**Scheduling:** a full scrub re-reads every byte, so run it off-peak and/or scope it. Verify crypto material often and everything else less frequently:
+
+```bash
+0 3 * * *  magpie-ctl verify --path openvpn --quiet   # Daily, crypto material only
+0 4 * * 0  magpie-ctl verify --quiet                  # Weekly full scrub
+```
+
+See [../deployment/README.md](../deployment/README.md) for ready-made cron and systemd timer units, including locking that keeps a scrub from overlapping with GC.
 
 ---
 

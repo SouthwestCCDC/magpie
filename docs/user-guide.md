@@ -178,6 +178,30 @@ docker compose exec magpie magpie-ctl gc   # Server-side
 
 Untagged blobs older than retention period (default 90 days) are eligible for removal. See [backup-restore.md](backup-restore.md) for full operations guide.
 
+**Integrity verification (scrub):**
+
+`magpie-ctl verify` re-reads stored blobs and compares them against the SHA-256 recorded in their metadata at upload time, catching bit-rot, truncation, and tampering of artifacts such as OpenVPN CA/cert/key material. It is server-side only (it reads the storage filesystem directly); there is no client-side equivalent.
+
+```bash
+docker compose exec magpie magpie-ctl verify                       # Full scrub
+docker compose exec magpie magpie-ctl verify --path openvpn        # Scope to a path prefix
+docker compose exec magpie magpie-ctl verify --limit 500 --quiet   # Bound a partial scrub
+docker compose exec magpie magpie-ctl --format json verify         # Structured output
+```
+
+A full scrub re-reads every byte in storage, so bound scheduled runs with `--path`, `--limit` (blobs), or `--max-bytes`. Blobs are hashed in 1MB chunks and never loaded into memory. `--max-issues` (default 1000) caps how many individual findings are listed; the summary counters always reflect every issue found.
+
+Exit codes are suitable for cron/monitoring:
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | Every verified blob matched its recorded hash |
+| 1 | Operational error (unreadable storage, invalid `--path`, corrupt metadata sidecar) |
+| 3 | A referenced blob or a metadata sidecar is missing |
+| 5 | Content mismatch: stored bytes do not match the recorded SHA-256 |
+
+Exit code 5 means a competition-critical artifact may be damaged or tampered with: restore that artifact from backup (see [backup-restore.md](backup-restore.md)) rather than re-uploading over it. See [monitoring.md](monitoring.md) for alerting and [../deployment/README.md](../deployment/README.md) for scheduling a periodic scrub.
+
 **S3 backup/restore:**
 ```bash
 docker compose exec magpie magpie-ctl sync to-s3 --dry-run  # Preview backup

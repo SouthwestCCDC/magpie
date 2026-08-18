@@ -229,6 +229,85 @@ magpie-ctl gc
 docker compose exec magpie magpie-ctl gc --dry-run
 ```
 
+## Integrity Verification (Scrub) Scheduling
+
+`magpie-ctl verify` re-reads stored blobs and compares them against the SHA-256
+recorded in their metadata at upload time, detecting bit-rot or tampering of
+artifacts such as OpenVPN CA/cert/key material. Nothing else in Magpie re-checks
+stored bytes, so a periodic scrub is the only detection for silent corruption.
+
+### Quick Start (systemd)
+
+```bash
+sudo cp systemd/magpie-verify.service /etc/systemd/system/
+sudo cp systemd/magpie-verify.timer /etc/systemd/system/
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now magpie-verify.timer
+
+systemctl list-timers magpie-verify.timer
+```
+
+Default schedule: weekly on Sunday at 4:00 AM (after the nightly GC run) with up
+to 30 minutes random delay.
+
+### Quick Start (cron)
+
+```bash
+sudo cp cron/magpie-verify /etc/cron.d/
+sudo chmod 644 /etc/cron.d/magpie-verify
+
+grep magpie-verify /var/log/syslog
+```
+
+The cron file ships two schedules: a weekly full scrub and a daily scoped scrub
+of crypto material (`--path openvpn`). Comment out whichever does not apply.
+
+### Bounding the Work
+
+A full scrub re-reads every byte in storage, so bound scheduled runs:
+
+```bash
+magpie-ctl verify --path openvpn      # Only artifacts under a path prefix
+magpie-ctl verify --limit 500         # At most 500 blobs
+magpie-ctl verify --max-bytes 10737418240   # Byte budget (10 GiB)
+```
+
+A common split is a daily scoped scrub of crypto material plus a weekly full
+scrub off-peak.
+
+### Locking
+
+Verification uses its own lock file (`/var/run/magpie-verify.lock`) so scrubs
+never overlap. The shipped full-scrub commands also take the GC lock
+(`/var/run/magpie-gc.lock`) so a scrub and GC do not compete for disk I/O;
+verification never writes to storage, so this is a throughput guard, not a
+correctness requirement. Drop the second `flock` if you would rather let them
+overlap.
+
+### Exit Codes and Alerting
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | Every verified blob matched its recorded hash |
+| 1 | Operational error (unreadable storage, invalid `--path`, corrupt metadata sidecar) |
+| 3 | A referenced blob or a metadata sidecar is missing |
+| 5 | Content mismatch: stored bytes do not match the recorded SHA-256 |
+
+Alert on any non-zero exit, and page on `5` — it means an artifact is damaged or
+tampered with and should be restored from backup rather than re-uploaded over.
+For scraping, `magpie-ctl --format json verify` emits per-issue detail and full
+counters and still exits non-zero. See [../docs/monitoring.md](../docs/monitoring.md).
+
+```bash
+# systemd
+journalctl -u magpie-verify.service
+systemctl status magpie-verify.service   # Non-zero exit shows as failed
+
+# cron
+grep magpie-verify /var/log/syslog
+```
+
 ## Troubleshooting
 
 ### GC Not Running

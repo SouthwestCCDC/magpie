@@ -1,0 +1,52 @@
+# Magpie Integrity Verification (Scrub) - Cron Configuration
+# Alternative to the systemd timer for systems without systemd.
+#
+# `magpie-ctl verify` re-reads stored blobs and compares them against the
+# SHA-256 recorded at upload time, detecting bit-rot or tampering of artifacts
+# (e.g., OpenVPN CA/cert/key material). Nothing else in Magpie re-checks stored
+# bytes, so this schedule is the only detection for silent corruption.
+#
+# Installation options:
+#
+# 1. Copy to /etc/cron.d/ (recommended):
+#    cp magpie-verify /etc/cron.d/
+#    chmod 644 /etc/cron.d/magpie-verify
+#
+# 2. Add to root's crontab:
+#    crontab -e
+#    # Then paste the command portion only, removing the 'root' user field.
+#
+# Exit codes: 0 clean, 1 operational error, 3 missing blob/metadata,
+# 5 content mismatch. Cron mails non-zero output to the crontab owner; the
+# examples below also log to syslog. See docs/monitoring.md for alerting.
+
+# Environment variables (adjust paths as needed)
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+MAGPIE_DIR=/opt/magpie
+
+# Host-side lock files used by flock. VERIFY_LOCK prevents overlapping scrubs;
+# taking GC_LOCK as well keeps a scrub from competing with GC for disk I/O.
+VERIFY_LOCK=/var/run/magpie-verify.lock
+GC_LOCK=/var/run/magpie-gc.lock
+
+# Weekly full scrub, Sunday at 4:00 AM (after the nightly GC run).
+# A full scrub re-reads every byte in storage, so keep it off-peak.
+# Format: minute hour day month weekday user command
+0 4 * * 0 root flock -n $VERIFY_LOCK flock -n $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --quiet 2>&1 | logger -t magpie-verify
+
+# Daily scrub of competition-critical crypto material only. Scoped with --path,
+# so it is cheap enough to run every day even on a large store.
+0 3 * * * root flock -n $VERIFY_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --path openvpn --quiet 2>&1 | logger -t magpie-verify
+
+# Alternative: bound each run instead of scrubbing everything (rolling scrub).
+# 0 4 * * * root flock -n $VERIFY_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --max-bytes 10737418240 --quiet 2>&1 | logger -t magpie-verify
+
+# Alternative: Use `exec` into the running magpie container (requires container to be running)
+# 0 4 * * 0 root flock -n $VERIFY_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl verify --quiet 2>&1 | logger -t magpie-verify
+
+# Alternative: Direct execution (if not using Docker)
+# 0 4 * * 0 root flock -n $VERIFY_LOCK /usr/local/bin/magpie-ctl verify --quiet 2>&1 | logger -t magpie-verify
+
+# Alternative: machine-readable output for a monitoring scraper.
+# 0 4 * * 0 root flock -n $VERIFY_LOCK /usr/local/bin/magpie-ctl --format json verify > /var/lib/magpie/verify.json
