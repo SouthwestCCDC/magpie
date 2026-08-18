@@ -737,16 +737,16 @@ class TestListArtifactPaths:
         paths = storage_service.list_artifact_paths(recursive=False)
         paths = [p for p in paths if not p.startswith(".tmp")]  # Filter system directories
         assert len(paths) == 1
-        assert (
-            "builds/" in paths
-        ), "Non-recursive list at root should return ['builds/'] virtual dir indicator"
+        assert "builds/" in paths, (
+            "Non-recursive list at root should return ['builds/'] virtual dir indicator"
+        )
 
         # Prefix "builds" non-recursive: returns virtual directory indicator for "infra/"
         paths = storage_service.list_artifact_paths(prefix="builds", recursive=False)
         assert len(paths) == 1
-        assert (
-            "builds/infra/" in paths
-        ), "Non-recursive list at 'builds' should return ['builds/infra/'] virtual dir indicator"
+        assert "builds/infra/" in paths, (
+            "Non-recursive list at 'builds' should return ['builds/infra/'] virtual dir indicator"
+        )
 
         # Prefix "builds/infra" non-recursive: finds the immediate child artifact
         paths = storage_service.list_artifact_paths(prefix="builds/infra", recursive=False)
