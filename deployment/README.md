@@ -78,7 +78,9 @@ Or via command-line flag (recommended for one-off overrides):
 ```bash
 # For Docker deployments, use CLI flags rather than shell environment variables
 # (shell env vars are not passed into the container)
-docker compose run --rm magpie magpie-ctl gc --retention-days 30
+# (`exec`, not `run`: the bundled image's entrypoint is a process supervisor
+# that ignores its arguments, so `run` would start a second server instead)
+docker compose exec -T magpie magpie-ctl gc --retention-days 30
 
 # Direct execution
 magpie-ctl gc --retention-days 30

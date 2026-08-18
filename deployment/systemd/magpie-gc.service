@@ -17,7 +17,7 @@
 [Unit]
 Description=Magpie Garbage Collection
 Documentation=https://github.com/SouthwestCCDC/magpie
-After=network.target docker.service
+After=network.target docker.service magpie.service
 Requires=docker.service
 
 [Service]
@@ -27,15 +27,20 @@ Type=oneshot
 # Uses `flock -n` to prevent concurrent runs. If GC is already running, flock
 # exits immediately with a non-zero status. Unlike ConditionPathExists, flock
 # automatically handles stale lock files from crashed processes.
-# Uses `docker compose run` so GC works even if the main `magpie` container is
-# stopped (e.g., during maintenance). Adjust path to match your installation.
+# Uses `docker compose exec` into the RUNNING magpie container. This requires
+# the container to be up (GC fails loudly if the service is stopped when this
+# unit triggers) -- but it is the only form that works with the v0.2.0+
+# bundled single-container image, whose entrypoint is a process supervisor
+# that ignores its arguments: `docker compose run magpie magpie-ctl gc` there
+# boots a second server that never exits, so GC never runs and the oneshot
+# blocks until TimeoutStartSec.
+# Adjust path to match your installation.
 WorkingDirectory=/opt/magpie
-ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl gc --quiet
+ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose exec -T magpie magpie-ctl gc --quiet
 
-# Alternative: Use `exec` into the running magpie container instead of `run`.
-# NOTE: This requires the `magpie` container to already be running; GC will
-# fail if the service is stopped when this unit triggers.
-# ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose exec -T magpie magpie-ctl gc --quiet
+# Alternative (pre-0.2.0 two-container topology ONLY -- see above): a one-off
+# container, which also works while the main container is stopped.
+# ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl gc --quiet
 
 # Alternative: Direct execution (if not using Docker)
 # ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/local/bin/magpie-ctl gc --quiet
@@ -69,7 +74,7 @@ PrivateTmp=true
 ReadWritePaths=/var/run
 # If using direct execution, also add:
 # ReadWritePaths=/data/artifacts
-# 
+#
 # NOTE: ProtectHome=true and ProtectSystem=strict may prevent access to
 # MAGPIE_DATA_DIR if configured to paths in /home or other protected locations.
 # If you encounter permission errors, either:
