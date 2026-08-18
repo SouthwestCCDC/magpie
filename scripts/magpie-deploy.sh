@@ -106,6 +106,24 @@ FOLLOW="false"
 LINES="100"
 FROM_SOURCE="false"
 REQUESTED_RELEASE=""  # from --release; empty means "use the default branch"
+# --source-dir: install from an existing local git checkout instead of
+# cloning ${GITHUB_REPO} from github.com. Empty means "clone from GitHub"
+# (the operator path). This exists so the installer CI (issue #354) can
+# install the code under test -- a PR's own tree, including changes to
+# Dockerfile.bundled, entrypoint.sh, and docker/bundled/Caddyfile -- which
+# a GitHub clone of the default branch would never see. Requires
+# --from-source: a local tree implies building the image from it rather
+# than pulling a published one. See clone_repo().
+SOURCE_DIR=""
+# --allow-unsupported-os: downgrade check_os()'s hard failure to a warning.
+# The supported platform is unchanged (Debian 12/13 -- see check_os()); this
+# only exists so the installer can be exercised on a Debian-derived CI
+# runner. GitHub-hosted `ubuntu-latest` runners are the only environment
+# offering a full VM with real systemd + Docker for the installer E2E
+# (issue #354), and every other prerequisite the installer relies on (apt,
+# systemd units, docker compose v2) holds there. Never document this for
+# operators.
+ALLOW_UNSUPPORTED_OS="false"
 # --accept-empty-trusted-proxies: acknowledges that an empty
 # MAGPIE_TRUSTED_PROXIES is intentional (magpie is directly exposed), so
 # the issue #579 gate proceeds instead of prompting/dying. See
@@ -281,12 +299,21 @@ check_os() {
     # shellcheck source=/dev/null
     source /etc/os-release
 
+    # One helper for both checks so --allow-unsupported-os cannot
+    # accidentally apply to only one of them.
+    local os_error=""
     if [[ "${ID:-}" != "debian" ]]; then
-        die "This script requires Debian (found: ${ID:-unknown})"
+        os_error="This script requires Debian (found: ${ID:-unknown})"
+    elif [[ ! "${VERSION_ID:-}" =~ ^(12|13)$ ]]; then
+        os_error="This script requires Debian 12 or 13 (found: ${VERSION_ID:-unknown})"
     fi
 
-    if [[ ! "${VERSION_ID:-}" =~ ^(12|13)$ ]]; then
-        die "This script requires Debian 12 or 13 (found: ${VERSION_ID:-unknown})"
+    if [[ -n "$os_error" ]]; then
+        if [[ "$ALLOW_UNSUPPORTED_OS" != "true" ]]; then
+            die "$os_error"
+        fi
+        log_warn "${os_error} -- continuing anyway because --allow-unsupported-os was given. This configuration is not supported."
+        return 0
     fi
 
     log "Detected Debian ${VERSION_ID}"
@@ -543,6 +570,28 @@ validate_config() {
     fi
     if [[ -d "$parent_dir" ]] && [[ ! -w "$parent_dir" ]]; then
         errors+=("Data directory path is not writable: $parent_dir")
+    fi
+
+    # --source-dir must name an existing local git checkout, and only makes
+    # sense together with --from-source (see SOURCE_DIR's declaration).
+    if [[ -n "$SOURCE_DIR" ]]; then
+        if [[ ! "$SOURCE_DIR" =~ ^/ ]]; then
+            errors+=("Source directory must be an absolute path: $SOURCE_DIR")
+        else
+            validate_path_value "$SOURCE_DIR" "Source directory"
+        fi
+        if [[ ! -d "$SOURCE_DIR/.git" ]]; then
+            errors+=("Source directory is not a git checkout (no .git): $SOURCE_DIR")
+        fi
+        if [[ ! -f "$SOURCE_DIR/pyproject.toml" ]] || [[ ! -f "$SOURCE_DIR/docker-compose.yml" ]]; then
+            errors+=("Source directory does not look like a magpie checkout (missing pyproject.toml or docker-compose.yml): $SOURCE_DIR")
+        fi
+        if [[ "$FROM_SOURCE" != "true" ]]; then
+            errors+=("--source-dir requires --from-source")
+        fi
+        if [[ -n "$REQUESTED_RELEASE" ]]; then
+            errors+=("--source-dir cannot be combined with --release (the local checkout's HEAD is the release)")
+        fi
     fi
 
     if [[ ${#errors[@]} -gt 0 ]]; then
@@ -1191,17 +1240,32 @@ update_repo_to_latest() {
 }
 
 clone_repo() {
-    log "Cloning magpie repository..."
-
-    local repo_url="https://github.com/${GITHUB_REPO}.git"
     local repo_dir="${INSTALL_DIR}/repo"
 
     # Remove existing repo if present
     rm -rf "$repo_dir"
 
-    # Shallow clone for speed
-    if ! git clone --depth 1 --branch "$GITHUB_BRANCH" "$repo_url" "$repo_dir"; then
-        die "Failed to clone repository from $repo_url"
+    if [[ -n "$SOURCE_DIR" ]]; then
+        # --source-dir: clone the local checkout's HEAD instead of fetching
+        # from github.com, so what gets installed is exactly the tree under
+        # test. Still a `git clone` (not a `cp -a`) so INSTALL_DIR/repo
+        # remains a real repository -- detect_version(), cmd_update()'s
+        # PRIOR_GIT_REF capture, and the rollback path all run git against
+        # it. --no-hardlinks keeps the installed copy independent of the
+        # source checkout's object store. Note this installs *committed*
+        # HEAD; uncommitted working-tree edits are not included.
+        log "Cloning magpie repository from local checkout: ${SOURCE_DIR}"
+        if ! git clone --no-hardlinks "$SOURCE_DIR" "$repo_dir"; then
+            die "Failed to clone repository from local checkout $SOURCE_DIR"
+        fi
+    else
+        log "Cloning magpie repository..."
+        local repo_url="https://github.com/${GITHUB_REPO}.git"
+
+        # Shallow clone for speed
+        if ! git clone --depth 1 --branch "$GITHUB_BRANCH" "$repo_url" "$repo_dir"; then
+            die "Failed to clone repository from $repo_url"
+        fi
     fi
 
     # Copy only the canonical operator compose file. docker-compose.override.yml
@@ -3293,6 +3357,17 @@ Install options (only used with 'install' command):
   --noninteractive        Skip interactive prompts (use defaults for all config)
   --force                 Overwrite existing installation
   --from-source           Build image from source instead of pulling from ghcr.io
+  --source-dir PATH       Install from an existing local git checkout at PATH
+                          instead of cloning from github.com. Requires
+                          --from-source, and cannot be combined with
+                          --release. Installs the checkout's committed HEAD
+                          (working-tree edits are not included). Intended
+                          for CI and development -- operators should omit it.
+  --allow-unsupported-os  Continue (with a warning) on a non-Debian-12/13
+                          host instead of refusing to install. Only the
+                          Debian versions above are supported; this exists
+                          so CI can exercise the installer on a
+                          Debian-derived runner. Not for operators.
 
 Update options:
   --from-source                    Rebuild image from source instead of
@@ -3521,6 +3596,22 @@ parse_args() {
             --from-source)
                 FROM_SOURCE="true"
                 shift
+                ;;
+            --allow-unsupported-os)
+                ALLOW_UNSUPPORTED_OS="true"
+                shift
+                ;;
+            --source-dir)
+                # Missing/empty value dies rather than falling through:
+                # an empty SOURCE_DIR is indistinguishable from "not
+                # requested" in validate_config()/clone_repo(), which
+                # would silently clone from GitHub instead of the local
+                # tree the caller asked for.
+                if [[ $# -lt 2 ]] || [[ "${2:-}" == -* ]] || [[ -z "${2:-}" ]]; then
+                    die "--source-dir requires a path argument"
+                fi
+                SOURCE_DIR="$2"
+                shift 2
                 ;;
             --purge)
                 PURGE="true"
