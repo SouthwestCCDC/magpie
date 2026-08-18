@@ -5,7 +5,7 @@ Before deploying to production:
 ## Pre-Deployment
 - [ ] A reverse proxy is planned/provisioned for TLS termination in front
       of magpie -- the bundled image serves plain HTTP only. See
-      [installation.md](installation.md#production-deployment).
+      [installation.md](installation.md#server-installation).
 - [ ] Firewall allows the port your reverse proxy listens on (typically 80/443)
 - [ ] Persistent storage provisioned for `MAGPIE_DATA_DIR`
 - [ ] Backup destination configured (see [backup-restore.md](backup-restore.md))
@@ -52,7 +52,7 @@ image (built from the plain `Dockerfile`, container port 8000, not this
 compose file's 8080). Prefer
 [`scripts/magpie-deploy.sh`](../scripts/magpie-deploy.sh) for a normal
 install -- it resolves and pins the correct tag automatically; see
-[installation.md](installation.md#production-deployment).
+[installation.md](installation.md#server-installation).
 
 `-f docker-compose.yml` pins the canonical operator file explicitly -- a
 bare `docker compose up` from a repo checkout auto-merges

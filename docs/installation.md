@@ -1,16 +1,49 @@
 # Installation Guide
 
-## Quick Start (Development)
+Magpie has **two independent things to install**: the *server* (a container, on a host you
+control) and the *client* (the `magpie` CLI, on every workstation and CI runner that pushes or
+pulls). You do not need the server checkout to use the client, and a server host does not need
+the CLI installed on the host itself -- `magpie-ctl` runs inside the container.
+
+| | Server | Client |
+|---|---|---|
+| What | Bundled container (Caddy + FastAPI) | `magpie` CLI (and `magpie-ctl`, unused on a client) |
+| Installed on | One Linux host, behind your reverse proxy | Laptops, CI runners, deploy hosts |
+| How | [`scripts/magpie-deploy.sh`](../scripts/magpie-deploy.sh), or Docker Compose | `uv tool install` |
+| Needs | Docker + Compose v2, root | `uv` (it brings its own Python 3.13) |
+| Jump to | [Server installation](#server-installation) | [Client installation](#client-installation) |
+
+For the fastest possible look at Magpie on a throwaway local stack, use the [5-Minute Quick
+Start](../README.md#5-minute-quick-start) in the README instead. For a guided real deployment,
+see the [Quick Start Guide](quickstart.md). Every environment variable mentioned on this page
+is defined once, in the [Configuration Reference](configuration.md).
+
+## Prerequisites
+
+**Server host:** Linux with Docker Engine and Compose v2 (`docker compose version`), root or
+`sudo`, a data directory on a filesystem with room for your artifacts, and a reverse proxy
+(nginx, Caddy, cloud LB) to terminate TLS in front of it. Magpie itself serves plain HTTP.
+
+**Client:** [`uv`](https://docs.astral.sh/uv/). Nothing else -- no system Python 3.13 required.
+
+## Server installation
+
+### Option A: the installer (recommended)
 
 ```bash
 git clone https://github.com/SouthwestCCDC/magpie
 cd magpie
-docker compose up --build
+sudo ./scripts/magpie-deploy.sh install
 ```
 
-Server runs at `http://localhost:8080` (change via `MAGPIE_HTTP_PORT`).
+This resolves and pins the correct `<version>-bundled` image, writes `<install dir>/etc/.env`,
+installs systemd units, and defaults `MAGPIE_ADMIN_TOKEN_SINK=file`. Add `--noninteractive` for
+unattended runs; it prompts for `--trusted-proxies` interactively otherwise. See the
+[Quick Start Guide](quickstart.md) for the full walkthrough.
 
-## Production Deployment
+### Option B: Docker Compose by hand
+
+For advanced or non-systemd deployments:
 
 ```bash
 export MAGPIE_DATA_DIR=/srv/magpie/data
@@ -33,8 +66,8 @@ it resolves and pins the correct `-bundled` tag automatically.
 `-f docker-compose.yml` pins the canonical operator file explicitly -- a
 bare `docker compose up` from a repo checkout auto-merges
 `docker-compose.override.yml` (the local-development overlay: builds from
-source, defaults the admin-token sink, enables test endpoints), which is
-correct for [Quick Start (Development)](#quick-start-development) above
+source, defaults the admin-token sink, exposes the test-endpoint toggle), which is
+correct for a [local development stack](#option-c-local-development-stack)
 but must never run in production. Every `docker compose` command on this
 page pins it the same way.
 
@@ -45,6 +78,118 @@ for HTTPS. This is also what
 [`scripts/magpie-deploy.sh`](../scripts/magpie-deploy.sh) (the recommended
 installer for a bare-metal/VM host) deploys -- see the
 [Quick Start Guide](quickstart.md).
+
+### Option C: local development stack
+
+```bash
+git clone https://github.com/SouthwestCCDC/magpie
+cd magpie
+docker compose up -d --build      # `just up` runs the same thing in the foreground
+```
+
+A bare `docker compose` command merges `docker-compose.override.yml` automatically: it builds
+the image from `Dockerfile.bundled` and defaults `MAGPIE_ADMIN_TOKEN_SINK=file`, so no
+environment setup is needed. The server is at `http://localhost:8080` and the admin token at
+`./data/admin-token`. Compose still warns that `MAGPIE_ADMIN_TOKEN_SINK` "is not set" while
+interpolating the canonical file -- harmless here, since the overlay supplies it.
+
+Never use this path in production: it builds an unpinned image from your working tree.
+
+## Client installation
+
+```bash
+uv tool install git+https://github.com/SouthwestCCDC/magpie
+```
+
+That puts `magpie` and `magpie-ctl` in `~/.local/bin` in their own isolated environment, with
+uv fetching Python 3.13 if the host doesn't have it. To pin a release instead of tracking the
+`default` branch:
+
+```bash
+uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'
+```
+
+**Match the client's minor version to the server's.** The server reads the CLI's `User-Agent`
+and refuses an older client with `426 Upgrade Required`:
+
+```
+Error: Upload failed (426): magpie-cli 0.1.6 is not compatible with server 0.2.0.
+Minimum required client version: 0.2.0.
+```
+
+Upgrade with `uv tool install --force git+https://github.com/SouthwestCCDC/magpie`. See
+[API Compatibility](api-compatibility.md#version-coupling).
+
+## First-time configuration
+
+### 1. Retrieve the admin token
+
+See [Admin Token Delivery](#admin-token-delivery) below. With the default `file` sink:
+
+```bash
+sudo cat "${MAGPIE_DATA_DIR:-./data}/admin-token"
+```
+
+### 2. Mint the tokens you'll actually use
+
+The admin token is break-glass; issue scoped tokens for day-to-day work. `magpie-ctl` runs
+inside the container, and prints each token once to your terminal (not to the container logs):
+
+```bash
+docker compose -f docker-compose.yml exec magpie \
+  magpie-ctl token create --name ci-deployer --scope write
+docker compose -f docker-compose.yml exec magpie \
+  magpie-ctl token create --name ci-reader --scope read
+docker compose -f docker-compose.yml exec magpie magpie-ctl token list
+```
+
+(The installer's units use `<install dir>/docker-compose.yml`; run the same commands from there.)
+
+### 3. Point the client at the server
+
+Use the hostname your reverse proxy fronts Magpie with -- Magpie has no domain of its own:
+
+```bash
+export MAGPIE_SERVER=https://magpie.example.com
+export MAGPIE_TOKEN=mgp_your_token_here
+```
+
+Or persist them (server URL and token only) in `~/.magpie/config.toml`:
+
+```bash
+magpie config --server https://magpie.example.com --token mgp_your_token_here
+```
+
+## Verification
+
+From the server host:
+
+```bash
+curl http://localhost:8080/health          # {"status":"ok","version":"..."}
+```
+
+From a client, with `MAGPIE_SERVER` and `MAGPIE_TOKEN` set:
+
+```bash
+magpie status                              # server version, storage used, artifact count
+echo "test" > test.txt
+magpie push test.txt --to test/hello
+magpie ls test/hello
+magpie get test/hello:latest -o roundtrip.txt && cat roundtrip.txt
+```
+
+Without `-o`, `magpie get` names the downloaded file after the artifact (`hello`), not after the
+file that was uploaded -- content is addressed by hash and the original filename is not stored.
+
+## Configuration
+
+See the **[Configuration Reference](configuration.md)** -- it is the single source of truth for
+every Magpie environment variable, including a "what do I actually need?" table.
+[`.env.example`](../.env.example) is the commented template to copy into a real `.env`.
+
+The short answer for a server: `MAGPIE_ADMIN_TOKEN_SINK` (required),
+`MAGPIE_IMAGE` (pin a `-bundled` release), `MAGPIE_DATA_DIR`, and `MAGPIE_HTTP_PORT` /
+`MAGPIE_BIND_IP`. For a client: `MAGPIE_SERVER` and `MAGPIE_TOKEN`.
 
 ## Admin Token Delivery
 
@@ -125,49 +270,6 @@ A native `vault` sink (writing directly to a Vault path, optionally with
 response-wrapping) is planned for a future release; `exec` already covers
 Vault via `vault kv put` in the meantime.
 
-## First Steps
-
-Once the admin token has been delivered (see above), use it to bootstrap
-everyday access:
-
-1. Create CI tokens:
-```bash
-docker compose -f docker-compose.yml exec magpie magpie-ctl token create --name ci-deployer --scope write
-```
-
-2. Install client:
-```bash
-uv pip install git+https://github.com/SouthwestCCDC/magpie
-```
-
-3. Configure client (using whatever hostname/TLS your reverse proxy fronts
-   magpie with -- magpie itself has no domain of its own):
-```bash
-export MAGPIE_SERVER=https://magpie.example.com
-export MAGPIE_TOKEN=mgp_your_token_here
-```
-
-4. Test:
-```bash
-curl https://magpie.example.com/health
-echo "test" > test.txt
-magpie push test.txt --to test/hello
-magpie get test/hello:latest
-```
-
-## Configuration
-
-Key environment variables (see [.env.example](../.env.example) for all):
-- `MAGPIE_DATA_DIR` - Storage path (default: `./data`)
-- `MAGPIE_IMAGE` - Image to run (default: `ghcr.io/southwestccdc/magpie:latest`)
-- `MAGPIE_HTTP_PORT` - Host port published for the container's plain-HTTP `:8080` (default: 8080)
-- `MAGPIE_BIND_IP` - Host IP the published port binds to (default: all interfaces)
-- `MAGPIE_STORAGE_PATH` - Artifact storage (default: `/data/artifacts`)
-- `MAGPIE_RETENTION_DAYS` - GC retention period (default: 90)
-- `MAGPIE_ADMIN_TOKEN_SINK` - Admin bootstrap token delivery: `file`/`exec`/`discard`/`stdout` (required, no default; see [Admin Token Delivery](#admin-token-delivery) above)
-- `MAGPIE_ALLOWED_CIDRS` - CIDR ranges allowed to bypass auth for read-only access (default: none)
-- `MAGPIE_TRUSTED_PROXIES` - IPs/CIDRs whose `X-Forwarded-For` the bundled Caddy trusts (default: none; see [Trusted Proxies](#trusted-proxies) below)
-
 ## Trusted Proxies
 
 The bundled Caddy determines the client IP used by `MAGPIE_ALLOWED_CIDRS`
@@ -178,7 +280,7 @@ which case it instead reads the client IP from that peer's
 
 **Default is empty: no proxy is trusted.** Magpie serves plain HTTP only
 and is always expected to sit behind an external reverse proxy for TLS
-(see [Production Deployment](#production-deployment) above) -- set
+(see [Server installation](#server-installation) above) -- set
 `MAGPIE_TRUSTED_PROXIES` to that proxy's exact address(es), scoped as
 tightly as possible, never a broad range. Any client positioned within a
 trusted range can set `X-Forwarded-For` and have Caddy believe it, which
@@ -212,7 +314,7 @@ v0.3.0**:
 
 Remove them from any Ansible playbooks or wrapper scripts that still pass
 them, and front magpie with your own reverse proxy for TLS instead (see
-[Production Deployment](#production-deployment) above).
+[Server installation](#server-installation) above).
 
 ## Upgrading to v0.2.0
 
@@ -268,8 +370,8 @@ auto`/`manual`, persisted as `TLS_MODE=auto`/`manual` in
 the change: the bundled image never terminates TLS, so after updating,
 magpie serves plain HTTP on `MAGPIE_HTTP_PORT` only.
 
-1. Put a reverse proxy in front of magpie for HTTPS (see [Production
-   Deployment](#production-deployment) above) before updating, if you
+1. Put a reverse proxy in front of magpie for HTTPS (see [Server
+   installation](#server-installation) above) before updating, if you
    don't already have one.
 2. Re-run `magpie-deploy.sh update --accept-builtin-tls-removed` to
    acknowledge and proceed.
@@ -287,8 +389,8 @@ See [Trusted Proxies](#trusted-proxies) above for the (unrelated, still
 current) `MAGPIE_TRUSTED_PROXIES`/`MAGPIE_ALLOWED_CIDRS` gate that `update`
 also checks.
 
-Next: [Production Checklist](production-checklist.md) → [User Guide](user-guide.md) → [Backup & Restore](backup-restore.md)
+Next: [Production Checklist](production-checklist.md) → [Configuration Reference](configuration.md) → [User Guide](user-guide.md) → [Backup & Restore](backup-restore.md)
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin)*

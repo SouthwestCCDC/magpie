@@ -1,5 +1,13 @@
 # Authentik SSO Integration Guide
 
+> **Applies to pre-v0.2.0 deployments only.** This guide edits `Caddyfile.prod` and
+> `docker-compose.prod.yml`, neither of which exists in the v0.2.0 bundled single-container
+> topology -- Caddy's config is baked into the image and is not operator-facing, and
+> `AUTHENTIK_HOST` is no longer consumed. On v0.2.0+, put SSO on the external reverse proxy
+> that terminates TLS in front of Magpie (the flow below is the pattern to reproduce there).
+> Bearer-token access for CLI, API, and automation is unaffected either way. See
+> [Architecture](architecture.md) and [Configuration Reference](configuration.md).
+
 Optional browser-based SSO for human access to artifacts. Bearer tokens remain the primary auth method for CLI, API, and automation.
 
 **Architecture:** Browser → Authentik (login) → Caddy (validates session) → /artifacts/*
