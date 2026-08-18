@@ -44,10 +44,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # No apt: `apt-get update` against the runner's Azure mirrors hung for
+      # 10 minutes and burned the whole job timeout on the first run of this
+      # workflow. GitHub's ubuntu images ship shellcheck already, so use that,
+      # and fall back to the upstream static binary (a single tarball, no
+      # package manager) if a future image drops it.
       - name: Install shellcheck
+        env:
+          SHELLCHECK_VERSION: v0.10.0
         run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
+          set -euo pipefail
+          if ! command -v shellcheck >/dev/null; then
+            url="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+            curl -fsSL --retry 3 "$url" | tar -xJ -C /tmp
+            sudo install -m 0755 "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          fi
           shellcheck --version
 
       - name: bash -n + shellcheck (all tracked shell scripts)
