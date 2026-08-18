@@ -14,6 +14,15 @@
     └── .tmp/               # Temporary uploads (exclude from backup)
 ```
 
+`{hash}` is a prefix of the blob's SHA-256: 16 hex characters as of
+v0.3.0, 8 before it ([issue
+#529](https://github.com/SouthwestCCDC/magpie/issues/529)). Both widths
+resolve, so a backup taken under either layout restores as-is and a
+restored tree may legitimately contain a mix of the two. Restoring an
+artifacts tree into an older magpie build is not supported, though: it
+reads only the 8-character names, and `magpie-ctl migrate` fails closed
+on the newer data-format stamp rather than serving partial data.
+
 ## Automatic Pre-Update Backups
 
 `magpie-deploy.sh update` (the [installer](../scripts/magpie-deploy.sh))

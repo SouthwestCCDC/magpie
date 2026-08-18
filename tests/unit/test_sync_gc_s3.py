@@ -16,6 +16,7 @@ from magpie.ctl.commands.sync import (
     _find_orphaned_blobs,
     _parse_manifest_content,
 )
+from magpie.storage.hash import HASH_NAME_LENGTH
 
 
 class TestParseManifestContent:
@@ -72,7 +73,11 @@ class TestParseManifestContent:
         assert result == {"abc12345"}
 
     def test_truncates_long_hashes(self) -> None:
-        """Should truncate hash refs to 8 characters."""
+        """Should yield a blob name for every stored hash-name width.
+
+        A remote manifest does not say which layout its blobs were written
+        with, so both the current and legacy widths count as referenced.
+        """
         content = json.dumps(
             {
                 "version": 1,
@@ -82,7 +87,7 @@ class TestParseManifestContent:
             }
         )
         result = _parse_manifest_content(content)
-        assert result == {"abc12345"}
+        assert result == {"abc12345extralong"[:HASH_NAME_LENGTH], "abc12345"}
 
     def test_deduplicates_hashes(self) -> None:
         """Should deduplicate when multiple tags point to same hash."""

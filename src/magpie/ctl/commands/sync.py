@@ -19,6 +19,7 @@ from magpie.cli.formatting import (
 from magpie.cli.progress import count_progress, processing_spinner
 from magpie.ctl import CTLContext
 from magpie.storage.manifest import Manifest, read_manifest
+from magpie.storage.paths import candidate_hash_names, resolve_blob_name, resolve_metadata_name
 from magpie.utils.formatting import format_size
 
 if TYPE_CHECKING:
@@ -73,8 +74,11 @@ def _get_blobs_for_manifest(artifact_dir: Path, manifest: Manifest) -> list[Path
     unique_hashes = set(manifest.tags.values())
 
     for hash_ref in unique_hashes:
-        # Hash refs are stored as "@abc12345" - strip @ and use first 8 chars
-        blob_name = hash_ref.lstrip("@")[:8]
+        # Manifests store full hashes; blobs are stored under a truncated name
+        # whose width depends on the release that wrote them.
+        blob_name = resolve_blob_name(artifact_dir, hash_ref)
+        if blob_name is None:
+            continue
         blob_path = blobs_dir / blob_name
         if blob_path.exists():
             blobs.append(blob_path)
@@ -101,9 +105,11 @@ def _get_metadata_for_manifest(artifact_dir: Path, manifest: Manifest) -> list[P
     unique_hashes = set(manifest.tags.values())
 
     for hash_ref in unique_hashes:
-        # Hash refs are stored as "@abc12345" - strip @ and use first 8 chars
-        metadata_name = f"{hash_ref.lstrip('@')[:8]}.json"
-        metadata_path = metadata_dir / metadata_name
+        # Sidecars mirror their blob's stored filename.
+        name = resolve_metadata_name(artifact_dir, hash_ref)
+        if name is None:
+            continue
+        metadata_path = metadata_dir / f"{name}.json"
         if metadata_path.exists():
             metadata_files.append(metadata_path)
 
@@ -492,10 +498,11 @@ def _verify_restored_data(storage_path: Path) -> tuple[int, int, list[str]]:
 
             # Check all referenced blobs exist
             for tag_name, hash_ref in manifest.tags.items():
-                blob_name = hash_ref.lstrip("@")[:8]
-                blob_path = artifact_dir / "blobs" / blob_name
-                if not blob_path.exists():
-                    errors.append(f"Missing blob for {relative_path}:{tag_name} - {blob_name}")
+                blob_name = resolve_blob_name(artifact_dir, hash_ref)
+                if blob_name is None:
+                    errors.append(
+                        f"Missing blob for {relative_path}:{tag_name} - {hash_ref.lstrip('@')}"
+                    )
                 else:
                     blobs_verified += 1
 
@@ -1302,15 +1309,22 @@ def _parse_manifest_content(content: str) -> set[str]:
         content: JSON content of the manifest file.
 
     Returns:
-        Set of blob hash names (8-char prefixes, without @ symbol).
+        Set of blob hash names (every stored prefix width, without @ symbol).
     """
     import json
 
     try:
         data = json.loads(content)
         tags = data.get("tags", {})
-        # Extract blob names from hash refs (e.g., "@abc12345" -> "abc12345")
-        return {hash_ref.lstrip("@")[:8] for hash_ref in tags.values() if hash_ref}
+        # A remote manifest gives no view of the layout its blobs were
+        # written with, so treat every stored width as referenced rather
+        # than reporting blobs from either layout as orphans.
+        return {
+            name
+            for hash_ref in tags.values()
+            if hash_ref
+            for name in candidate_hash_names(hash_ref)
+        }
     except (json.JSONDecodeError, KeyError, TypeError):
         return set()
 

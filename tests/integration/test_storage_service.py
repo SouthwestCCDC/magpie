@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import pytest
 
 from magpie.config import MagpieSettings
 from magpie.storage.exceptions import ArtifactNotFoundError
+from magpie.storage.hash import HASH_NAME_LENGTH
+from magpie.storage.paths import artifact_dir_path
 from magpie.storage.service import ArtifactInfo, StorageService
 
 
@@ -61,7 +64,7 @@ class TestStoreListGetFlow:
         assert isinstance(info, ArtifactInfo)
         assert len(info.hash) == 64  # SHA-256 hex length
         assert info.hash_ref.startswith("@")
-        assert len(info.hash_ref) == 9  # @ + 8 chars
+        assert len(info.hash_ref) == HASH_NAME_LENGTH + 1  # @ + hash name
         assert info.uploaded_by == "uploader"
         assert info.source_uri == "s3://bucket/key"
         assert info.uploaded_at is not None
@@ -734,16 +737,16 @@ class TestListArtifactPaths:
         paths = storage_service.list_artifact_paths(recursive=False)
         paths = [p for p in paths if not p.startswith(".tmp")]  # Filter system directories
         assert len(paths) == 1
-        assert "builds/" in paths, (
-            "Non-recursive list at root should return ['builds/'] virtual dir indicator"
-        )
+        assert (
+            "builds/" in paths
+        ), "Non-recursive list at root should return ['builds/'] virtual dir indicator"
 
         # Prefix "builds" non-recursive: returns virtual directory indicator for "infra/"
         paths = storage_service.list_artifact_paths(prefix="builds", recursive=False)
         assert len(paths) == 1
-        assert "builds/infra/" in paths, (
-            "Non-recursive list at 'builds' should return ['builds/infra/'] virtual dir indicator"
-        )
+        assert (
+            "builds/infra/" in paths
+        ), "Non-recursive list at 'builds' should return ['builds/infra/'] virtual dir indicator"
 
         # Prefix "builds/infra" non-recursive: finds the immediate child artifact
         paths = storage_service.list_artifact_paths(prefix="builds/infra", recursive=False)
@@ -759,3 +762,74 @@ class TestListArtifactPaths:
         paths = storage_service.list_artifact_paths(prefix="builds", recursive=True)
         assert len(paths) == 1
         assert "builds/infra/github-runner.qcow2" in paths
+
+
+class TestLegacyHashNameLayout:
+    """Artifacts written under the pre-widening 8-char layout (issue #529).
+
+    Simulates an install upgraded in place: blob and metadata files keep
+    their old names and must stay fully usable.
+    """
+
+    @staticmethod
+    def _plant_legacy_artifact(
+        storage_service: StorageService, artifact_path: str, content: bytes
+    ) -> str:
+        """Store an artifact, then rename its files to the legacy 8-char width."""
+        info, _ = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(content),
+            uploaded_by="old-release",
+        )
+        artifact_dir = artifact_dir_path(storage_service.config.storage_path, artifact_path)
+        current = info.hash[:HASH_NAME_LENGTH]
+        legacy = info.hash[:8]
+        (artifact_dir / "blobs" / current).rename(artifact_dir / "blobs" / legacy)
+        (artifact_dir / "metadata" / f"{current}.json").rename(
+            artifact_dir / "metadata" / f"{legacy}.json"
+        )
+        latest = artifact_dir / "latest"
+        latest.unlink()
+        latest.symlink_to(Path("blobs") / legacy)
+        return info.hash
+
+    def test_legacy_artifact_resolves_by_tag_and_hash_ref(
+        self, storage_service: StorageService
+    ) -> None:
+        """Tag, legacy ref, and current-width ref all resolve to the legacy files."""
+        artifact_path = "legacy/resolve"
+        content = b"stored before the hash-name widening"
+        full_hash = self._plant_legacy_artifact(storage_service, artifact_path, content)
+
+        by_tag = storage_service.get_artifact_info(artifact_path, "latest")
+        assert by_tag.hash == full_hash
+
+        by_legacy_ref = storage_service.get_artifact_info(artifact_path, f"@{full_hash[:8]}")
+        assert by_legacy_ref.hash == full_hash
+
+        by_current_ref = storage_service.get_artifact_info(
+            artifact_path, f"@{full_hash[:HASH_NAME_LENGTH]}"
+        )
+        assert by_current_ref.hash == full_hash
+
+        listed = storage_service.list_artifacts(artifact_path)
+        assert [a.hash for a in listed] == [full_hash]
+
+    def test_reupload_of_legacy_artifact_is_a_duplicate(
+        self, storage_service: StorageService
+    ) -> None:
+        """Re-uploading legacy content doesn't store a second copy under the new name."""
+        artifact_path = "legacy/duplicate"
+        content = b"stored before the hash-name widening"
+        full_hash = self._plant_legacy_artifact(storage_service, artifact_path, content)
+
+        info, is_duplicate = storage_service.store_artifact(
+            artifact_path=artifact_path,
+            file_stream=io.BytesIO(content),
+            uploaded_by="new-release",
+        )
+
+        assert is_duplicate is True
+        assert info.hash == full_hash
+        artifact_dir = artifact_dir_path(storage_service.config.storage_path, artifact_path)
+        assert {p.name for p in (artifact_dir / "blobs").iterdir()} == {full_hash[:8]}

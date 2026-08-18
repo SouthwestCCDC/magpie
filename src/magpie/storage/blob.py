@@ -7,9 +7,9 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
 
-from magpie.storage.exceptions import ArtifactNotFoundError
-from magpie.storage.hash import short_hash
-from magpie.storage.paths import blob_path
+from magpie.storage.exceptions import ArtifactNotFoundError, HashPrefixCollisionError
+from magpie.storage.hash import HASH_NAME_LENGTH, compute_hash, short_hash
+from magpie.storage.paths import blob_path, canonical_blob_path, resolve_blob_name
 
 if TYPE_CHECKING:
     from magpie.config import MagpieSettings
@@ -39,9 +39,12 @@ def store_blob(
     atomically moves to final location. Detects duplicates by checking
     if blob already exists.
 
-    Blobs are stored using the first 8 characters of the hash as the filename
-    to save space and improve readability, while the full hash is preserved
-    in metadata for verification.
+    Blobs are stored under a truncated hash as the filename (see
+    :data:`magpie.storage.hash.HASH_NAME_LENGTH`) for readability, while the
+    full hash is preserved in metadata for verification. Like
+    :func:`store_blob_from_temp`, a filename that is already taken is only
+    treated as a duplicate once the existing blob's *full* hash is verified
+    to match.
 
     Args:
         artifact_dir: Path to artifact directory.
@@ -51,8 +54,12 @@ def store_blob(
     Returns:
         Tuple of (full_hash, hash_ref, is_duplicate):
         - full_hash: Full SHA-256 hex digest (64 chars)
-        - hash_ref: Short hash reference like '@abc12345'
+        - hash_ref: Short hash reference like '@abc1234567890def'
         - is_duplicate: True if blob already existed, False if newly stored
+
+    Raises:
+        HashPrefixCollisionError: If a different file is already stored under
+            this hash's filename.
     """
     temp_dir = get_temp_path(config)
 
@@ -63,25 +70,12 @@ def store_blob(
     try:
         # Stream to temp file and compute hash simultaneously
         full_hash = _stream_to_temp(fd, file_stream)
-        hash_ref = short_hash(full_hash)
-
-        # Check if blob already exists (use short hash for storage path)
-        dest_path = blob_path(artifact_dir, hash_ref)
-
-        if dest_path.exists():
-            # Duplicate detected - clean up temp file
-            temp_file.unlink(missing_ok=True)
-            return (full_hash, hash_ref, True)
-
-        # New blob - atomic move to destination
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(temp_file), dest_path)
-        return (full_hash, hash_ref, False)
-
     except Exception:
-        # Clean up temp file on any error
         temp_file.unlink(missing_ok=True)
         raise
+
+    hash_ref, is_duplicate = store_blob_from_temp(artifact_dir, temp_file, full_hash)
+    return (full_hash, hash_ref, is_duplicate)
 
 
 def _stream_to_temp(fd: int, file_stream: BinaryIO) -> str:
@@ -142,12 +136,14 @@ def store_blob_from_temp(
     hash has been computed incrementally during streaming. It handles duplicate
     detection and atomic move to the final blob location.
 
-    Security note: Uses 8-char hash prefix for filenames (storage efficiency).
-    While content-addressable storage makes hash collisions safe (identical content
-    → identical hash), this function verifies the full hash of existing blobs to
-    detect the astronomically unlikely case of 8-char prefix collision between
-    different files (2^32 hash space). This provides defense-in-depth against
-    malicious hash collision attacks or implementation bugs.
+    Security note: filenames are a truncated hash (see
+    :data:`magpie.storage.hash.HASH_NAME_LENGTH`), so an existing file at the
+    destination is only a duplicate if its *full* hash matches; that is
+    verified here rather than assumed from the filename. Blobs written by
+    releases that used a narrower filename are honored as duplicates too,
+    but new content is always stored at the current width -- so content that
+    merely shares a narrow prefix with an older blob gets its own filename
+    instead of being permanently un-storable.
 
     Args:
         artifact_dir: Path to artifact directory.
@@ -156,44 +152,31 @@ def store_blob_from_temp(
 
     Returns:
         Tuple of (hash_ref, is_duplicate):
-        - hash_ref: Short hash reference like '@abc12345'
+        - hash_ref: Short hash reference like '@abc1234567890def'
         - is_duplicate: True if blob already existed, False if newly stored
 
     Raises:
-        ValueError: If an existing blob at the same short-hash path has a different
-            full hash (indicates hash prefix collision - should never happen with
-            SHA-256 in practice).
+        HashPrefixCollisionError: If a different file is already stored under
+            this hash's filename at the current width.
     """
-    import hashlib
-
     hash_ref = short_hash(full_hash)
 
-    # Check if blob already exists (use short hash for storage path)
-    dest_path = blob_path(artifact_dir, hash_ref)
+    # New content always lands at the current hash-name width, so a blob
+    # stored under an older, narrower name never blocks it.
+    dest_path = canonical_blob_path(artifact_dir, hash_ref)
 
-    if dest_path.exists():
-        # Defense-in-depth: Verify full hash of existing blob matches
-        # This catches the astronomically unlikely case of 8-char prefix collision
-        # between different files (2^32 hash space ≈ 4 billion possibilities)
-        with dest_path.open("rb") as f:
-            hasher = hashlib.sha256()
-            while chunk := f.read(CHUNK_SIZE):
-                hasher.update(chunk)
-            existing_hash = hasher.hexdigest()
-
-        if existing_hash != full_hash:
-            # Hash prefix collision detected - this should NEVER happen with SHA-256
-            # Raise ValueError to prevent data corruption
-            temp_file_path.unlink(missing_ok=True)
-            raise ValueError(
-                f"Hash prefix collision detected: {hash_ref} (existing: {existing_hash[:16]}..., "
-                f"new: {full_hash[:16]}...). This indicates a severe issue - "
-                f"contact system administrator."
-            )
-
-        # Hashes match - true duplicate, clean up temp file
+    if _existing_blob_matches(dest_path, full_hash, temp_file_path):
         temp_file_path.unlink(missing_ok=True)
         return (hash_ref, True)
+
+    # Same content may already be stored under a narrower filename written
+    # by an earlier release; honor that rather than storing a second copy.
+    legacy_name = resolve_blob_name(artifact_dir, full_hash)
+    if legacy_name is not None:
+        legacy_path = artifact_dir / "blobs" / legacy_name
+        if _existing_blob_matches(legacy_path, full_hash, temp_file_path, strict=False):
+            temp_file_path.unlink(missing_ok=True)
+            return (hash_ref, True)
 
     # New blob - ensure destination directory exists, then atomic move
     try:
@@ -204,6 +187,49 @@ def store_blob_from_temp(
         # Clean up temp file if move fails (permissions, disk full, etc.)
         temp_file_path.unlink(missing_ok=True)
         raise
+
+
+def _existing_blob_matches(
+    dest_path: Path,
+    full_hash: str,
+    temp_file_path: Path,
+    strict: bool = True,
+) -> bool:
+    """Check whether an existing blob file holds exactly this content.
+
+    Args:
+        dest_path: Candidate blob file (may not exist).
+        full_hash: Full SHA-256 hex digest of the content being stored.
+        temp_file_path: Temp file to clean up before raising, so a refused
+            write doesn't leak it.
+        strict: If True, a hash mismatch is a collision on the filename this
+            build writes and is refused. If False (a narrower filename from
+            an earlier release, which the caller will not write to) a
+            mismatch just means "not this blob".
+
+    Returns:
+        True if the file exists and its full hash matches.
+
+    Raises:
+        HashPrefixCollisionError: If ``strict`` and the file holds different content.
+    """
+    if not dest_path.exists():
+        return False
+
+    existing_hash = compute_hash(dest_path)
+    if existing_hash == full_hash:
+        return True
+
+    if not strict:
+        return False
+
+    temp_file_path.unlink(missing_ok=True)
+    raise HashPrefixCollisionError(
+        f"Blob filename '{dest_path.name}' is already used by different content "
+        f"(stored: {existing_hash}, uploading: {full_hash}). Refusing to overwrite "
+        f"the stored blob. Report this to the Magpie maintainers: a collision in "
+        f"{HASH_NAME_LENGTH} hex characters of SHA-256 should not be reachable."
+    )
 
 
 def check_blob_exists(artifact_dir: Path, hash_ref: str) -> bool:

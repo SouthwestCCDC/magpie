@@ -27,6 +27,7 @@ from magpie.storage.metadata import (
 from magpie.storage.paths import (
     artifact_dir_path,
     check_artifact_nesting,
+    resolve_blob_name,
     validate_artifact_path,
     verify_path_is_descendant,
 )
@@ -44,7 +45,7 @@ class ArtifactInfo:
     """Information about a stored artifact blob."""
 
     hash: str  # Full SHA-256 hash
-    hash_ref: str  # Short hash ref like @abc12345
+    hash_ref: str  # Short hash ref like @abc1234567890def
     tags: list[str]  # Tags pointing to this blob
     uploaded_by: str
     uploaded_at: datetime
@@ -118,7 +119,7 @@ class StorageService:
         Args:
             artifact_dir: Path to artifact directory.
             full_hash: Full SHA-256 hash of the blob.
-            hash_ref: Short hash reference (e.g., "@abc12345").
+            hash_ref: Short hash reference (e.g., "@abc1234567890def").
             is_duplicate: Whether the blob already existed.
             uploaded_by: Identity of uploader.
             source_uri: Optional source URI for provenance.
@@ -139,7 +140,8 @@ class StorageService:
 
         # Conditionally update manifest with "latest" tag
         if not no_latest:
-            # Store full hash for verification, symlinks will extract first 8 chars.
+            # Store full hash for verification; symlinks resolve it to the
+            # blob's stored (truncated) filename.
             # Reconcile symlinks under the same artifact_lock as the tag write
             # (via on_locked) so the on-disk symlinks can't transiently lag the
             # manifest under concurrent writers.
@@ -296,7 +298,8 @@ class StorageService:
             if metadata_file.suffix != ".json":
                 continue
 
-            # Extract short hash from filename (e.g., "abc12345.json" -> "abc12345")
+            # Extract the stored hash name from the filename
+            # (e.g., "abc1234567890def.json" -> "abc1234567890def")
             short_hash_name = metadata_file.stem
             hash_ref = f"@{short_hash_name}"
 
@@ -639,28 +642,26 @@ class StorageService:
 
         Args:
             artifact_dir: Artifact directory path.
-            hash_ref: Hash reference (with or without @ prefix). Can be short (8 chars)
-                     or full hash (64 chars) - only first 8 chars are used for lookup.
+            hash_ref: Hash reference (with or without @ prefix). May be a full
+                hash (64 chars), a short ref, or a ref abbreviated further
+                than the stored hash-name width.
 
         Returns:
-            Short hash (8 chars, no @ prefix) of the matching blob.
+            The blob's stored hash name (no @ prefix), which is also the name
+            of its metadata sidecar.
 
         Raises:
             ArtifactNotFoundError: If no matching blob found.
+            AmbiguousHashRefError: If an abbreviated ref matches several blobs.
         """
-        # Use first 8 chars for lookup (blobs are stored with short hash)
-        prefix = hash_ref.lstrip("@")[:8]
-        blobs_dir = artifact_dir / "blobs"
-
-        if not blobs_dir.exists():
+        if not (artifact_dir / "blobs").exists():
             raise ArtifactNotFoundError(f"No blobs found for hash ref {hash_ref}")
 
-        # Find blob file matching prefix
-        for blob_file in blobs_dir.iterdir():
-            if blob_file.name == prefix:
-                return blob_file.name
+        blob_name = resolve_blob_name(artifact_dir, hash_ref)
+        if blob_name is None:
+            raise ArtifactNotFoundError(f"Blob not found for hash ref {hash_ref}")
 
-        raise ArtifactNotFoundError(f"Blob not found for hash ref {hash_ref}")
+        return blob_name
 
     def list_artifact_paths(self, prefix: str = "", recursive: bool = False) -> list[str]:
         """List artifact paths under a given prefix.

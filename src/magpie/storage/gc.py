@@ -19,6 +19,7 @@ from magpie.storage.cleanup import CleanupStats, cleanup_artifact_directories
 from magpie.storage.exceptions import ArtifactNotFoundError, ManifestCorruptError
 from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
+from magpie.storage.paths import candidate_hash_names
 from magpie.storage.symlinks import ReconcileStats, reconcile_symlinks
 
 logger = structlog.get_logger()
@@ -104,7 +105,7 @@ def get_blob_age_days(artifact_dir: Path, blob_hash: str, now: datetime) -> int 
 
     Args:
         artifact_dir: Path to artifact directory.
-        blob_hash: Blob hash (short 8-char format used for file lookup).
+        blob_hash: Blob hash name as stored on disk (used for file lookup).
         now: Current datetime for comparison.
 
     Returns:
@@ -170,7 +171,7 @@ def _scan_artifacts(
         logger.debug("gc_processing_artifact", artifact_path=artifact_path)
 
         # Read manifest to get tagged hashes
-        # Manifest stores full hashes, but blobs are stored with short hashes (8 chars)
+        # Manifest stores full hashes, but blobs are stored under a truncated name
         try:
             manifest = read_manifest(artifact_dir)
         except (ManifestCorruptError, OSError) as e:
@@ -187,7 +188,10 @@ def _scan_artifacts(
                 progress_callback("scan", idx + 1, total_manifests)
             continue
 
-        tagged_hashes = {h.lstrip("@")[:8] for h in manifest.tags.values()}
+        # A tag protects its blob under any hash-name width an install may
+        # hold, so widening the stored prefix can't make GC collect a blob
+        # that a tag still points at.
+        tagged_hashes = {name for h in manifest.tags.values() for name in candidate_hash_names(h)}
 
         # Track artifact directory for cleanup pass
         artifact_dirs_to_cleanup.append(artifact_dir)

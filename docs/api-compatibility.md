@@ -164,6 +164,21 @@ async def list_artifacts(
 - **Relaxing (accepting more)**: ✅ Safe for minor release
 - **Tightening (rejecting more)**: ❌ Breaking change (exception: fixing security vulnerabilities like path traversal may justify breaking changes in minor versions)
 
+### Changing the Format of a Field's Value?
+
+The field's type and name are unchanged, so this is not automatically
+breaking -- but it is only safe if the server keeps accepting the old
+format everywhere it accepted it before.
+
+Precedent (v0.3.0, [issue
+#529](https://github.com/SouthwestCCDC/magpie/issues/529)): `hash_ref`
+grew from `@` + 8 hex chars to `@` + 16. Old refs -- including ones
+clients have already stored -- still resolve, and the server accepts any
+abbreviation from 8 to 64 hex characters, so old clients keep working.
+Clients that hardcoded the 9-character length (rather than treating
+`hash_ref` as an opaque string) do need updating; treat any such
+assumption as a client bug and prefer round-tripping the server's value.
+
 ## Testing for Compatibility
 
 When adding optional fields or parameters:

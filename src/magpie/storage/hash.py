@@ -8,6 +8,26 @@ from typing import BinaryIO
 
 CHUNK_SIZE = 8192  # 8KB chunks for streaming hash computation
 
+# Number of leading hex characters of the SHA-256 used for blob/metadata
+# filenames and for the short hash refs the API and CLI display.
+#
+# 16 hex chars = 64 bits. The previous width was 8 (32 bits), which is
+# small enough that a prefix collision is both plausible at scale (a
+# birthday collision around ~2^16 versions in a single artifact path) and
+# cheap to manufacture on purpose -- and because a colliding write is
+# refused to protect the existing blob, either one permanently blocks
+# storing the other file at that path. At 64 bits a birthday collision
+# needs ~2^32 versions in one artifact path and grinding a *targeted*
+# prefix needs ~2^64 hashes, so neither is reachable. Kept short of the
+# full 64-char digest so filenames stay readable and quotable, which is
+# the reason the layout truncates at all.
+HASH_NAME_LENGTH = 16
+
+# Hash-name widths written by earlier releases, newest first. Reads fall
+# back to these so blobs stored before the widening keep resolving; see
+# magpie.storage.paths.resolve_blob_name().
+LEGACY_HASH_NAME_LENGTHS: tuple[int, ...] = (8,)
+
 
 def compute_hash(file_or_path: BinaryIO | Path | bytes) -> str:
     """Compute SHA-256 hash of content.
@@ -59,6 +79,7 @@ def short_hash(full_hash: str) -> str:
         full_hash: Full SHA-256 hex digest string.
 
     Returns:
-        Short hash in format '@' + first 8 characters of hash.
+        Short hash in format '@' + the first :data:`HASH_NAME_LENGTH`
+        characters of the hash.
     """
-    return f"@{full_hash[:8]}"
+    return f"@{full_hash[:HASH_NAME_LENGTH]}"
