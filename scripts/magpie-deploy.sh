@@ -916,7 +916,9 @@ EnvironmentFile=${INSTALL_DIR}/etc/.env
 # -f pins the canonical operator file explicitly -- docker-compose.override.yml
 # (the dev-only from-source build overlay) is never copied into INSTALL_DIR
 # by clone_repo()/cmd_update(), but pinning here is belt-and-suspenders
-# against a bare `docker compose` auto-merging one if it ever showed up.
+# against a bare 'docker compose' invocation auto-merging one if it ever
+# showed up. (Quoted, not backticked: this heredoc is UNQUOTED, so
+# backticks in it are command substitutions -- even inside a comment.)
 ExecStart=/usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env up --no-build
 # --remove-orphans: on a 2->1 topology swap (a v0.1.x install's leftover
 # 'caddy' container), the old sidecar has no matching service in the
@@ -946,7 +948,7 @@ generate_gc_units() {
 [Unit]
 Description=Magpie Garbage Collection
 Documentation=https://github.com/${GITHUB_REPO}
-After=network.target docker.service
+After=network.target docker.service magpie.service
 Requires=docker.service
 
 [Service]
@@ -956,7 +958,21 @@ WorkingDirectory=${INSTALL_DIR}
 # Use flock to prevent concurrent runs. If GC is already running, flock exits
 # immediately. Unlike ConditionPathExists, flock automatically handles stale
 # lock files from crashed processes.
-ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env run --rm -T magpie magpie-ctl gc --quiet
+#
+# 'exec -T', not 'run --rm -T' (quoted, not backticked: this heredoc is
+# UNQUOTED, so backticks in it are command substitutions -- even inside a
+# comment): the bundled image's ENTRYPOINT (docker/bundled/wrapper.sh) is
+# a process supervisor that ignores its arguments and always starts
+# uvicorn+caddy, so 'run magpie magpie-ctl gc' would boot a SECOND
+# server that never exits -- GC would never run and
+# this oneshot would block until TimeoutStartSec. Running it inside the
+# live container is also the documented ctl path for this image (see
+# magpie-ctl-wrapper.sh, which resolves the runtime uid from
+# /run/magpie-user) and the same thing compose_exec() does elsewhere in
+# this script. It requires magpie.service to be up, hence the After=
+# above; if it is not, this unit fails loudly instead of silently doing
+# nothing.
+ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env exec -T magpie magpie-ctl gc --quiet
 
 StandardOutput=journal
 StandardError=journal

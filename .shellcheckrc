@@ -7,18 +7,22 @@
 # harnesses source scripts/magpie-deploy.sh).
 external-sources=true
 
-# The three checks below are DELIBERATELY scoped out; everything else,
-# including the whole info-level tier (SC2086 unquoted expansion and
-# friends), stays on.
+# The two checks below are DELIBERATELY scoped out; everything else,
+# including SC2006 and the whole info-level tier (SC2086 unquoted
+# expansion and friends), stays on.
 #
-#   SC2006 (legacy backticks): this repo uses $(...) everywhere in real
-#     code. The only hits are `inline code` backticks inside prose
-#     comments, which ShellCheck reads as command substitution -- so
-#     leaving it on makes an ordinary comment edit break CI.
+# SC2006 (legacy backticks) is deliberately NOT disabled, even though its
+# only hits are `inline code` backticks in prose comments: inside an
+# UNQUOTED heredoc those comments are real command substitutions. One such
+# comment in generate_systemd_service() was running `docker compose` at
+# install time and splicing its 58-line help output into the generated
+# magpie.service (fixed in the same PR that added this file). Use single
+# quotes for inline code in shell comments.
+#
 #   SC2016 (expressions don't expand in single quotes): intentional in the
 #     grep/sed/awk patterns the installer and its harnesses match against
 #     (e.g. grep -q '^MAGPIE_TRUSTED_PROXIES='), which must stay literal.
 #   SC2317 (command appears unreachable): false positive for functions
 #     invoked indirectly -- trap handlers, and the harnesses' test_*
 #     functions dispatched by name.
-disable=SC2006,SC2016,SC2317
+disable=SC2016,SC2317
