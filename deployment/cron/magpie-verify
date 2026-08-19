@@ -30,7 +30,9 @@ PATH=/usr/local/bin:/usr/bin:/bin
 MAGPIE_DIR=/opt/magpie
 
 # Host-side lock files used by flock. VERIFY_LOCK prevents overlapping scrubs;
-# taking GC_LOCK as well keeps a scrub from competing with GC for disk I/O.
+# GC_LOCK keeps a scrub from running while GC deletes blobs. Take both: GC
+# unlinks a blob before its metadata sidecar, so a scrub racing GC can report a
+# blob as missing that was in fact collected.
 VERIFY_LOCK=/var/run/magpie-verify.lock
 GC_LOCK=/var/run/magpie-gc.lock
 
@@ -41,24 +43,24 @@ GC_LOCK=/var/run/magpie-gc.lock
 
 # Daily scrub of competition-critical crypto material only. Scoped with --path,
 # so it is cheap enough to run every day even on a large store.
-0 3 * * * root flock -n $VERIFY_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --path openvpn --quiet
+0 3 * * * root flock -n $VERIFY_LOCK flock -n $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --path openvpn --quiet
 
 # Alternative: bound each run with --max-bytes. NOTE: the walk always starts at
 # the beginning of the store and keeps no cursor, so a bounded run repeatedly
 # verifies the same head of the store and never advances. Use it only to cap the
 # cost of a smoke check; to cover everything, scope separate entries with --path
 # or schedule an unbounded full scrub off-peak.
-# 0 4 * * * root flock -n $VERIFY_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --max-bytes 10737418240 --quiet
+# 0 4 * * * root flock -n $VERIFY_LOCK flock -n $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --max-bytes 10737418240 --quiet
 
 # Alternative: Use `exec` into the running magpie container (requires container to be running)
-# 0 4 * * 0 root flock -n $VERIFY_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl verify --quiet
+# 0 4 * * 0 root flock -n $VERIFY_LOCK flock -n $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl verify --quiet
 
 # Alternative: Direct execution (if not using Docker)
-# 0 4 * * 0 root flock -n $VERIFY_LOCK /usr/local/bin/magpie-ctl verify --quiet
+# 0 4 * * 0 root flock -n $VERIFY_LOCK flock -n $GC_LOCK /usr/local/bin/magpie-ctl verify --quiet
 
 # Alternative: also log to syslog. `bash -o pipefail -c` keeps the job's exit
 # status equal to the scrub's, which a plain `... | logger` would discard.
-# 0 4 * * 0 root bash -o pipefail -c 'flock -n $VERIFY_LOCK /usr/local/bin/magpie-ctl verify --quiet 2>&1 | logger -t magpie-verify'
+# 0 4 * * 0 root bash -o pipefail -c 'flock -n $VERIFY_LOCK flock -n $GC_LOCK /usr/local/bin/magpie-ctl verify --quiet 2>&1 | logger -t magpie-verify'
 
 # Alternative: machine-readable output for a monitoring scraper.
-# 0 4 * * 0 root flock -n $VERIFY_LOCK /usr/local/bin/magpie-ctl --format json verify > /var/lib/magpie/verify.json
+# 0 4 * * 0 root flock -n $VERIFY_LOCK flock -n $GC_LOCK /usr/local/bin/magpie-ctl --format json verify > /var/lib/magpie/verify.json

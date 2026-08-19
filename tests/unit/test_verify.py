@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -233,6 +234,68 @@ class TestRunVerifyCorruption:
 
         assert result.mismatched == 1
         assert result.issues[0].expected_hash == other_hash
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+class TestRunVerifyUnreadable:
+    """Storage the scrub cannot read must be reported, never silently skipped."""
+
+    def test_unreadable_subtree_is_reported_as_an_error(self, storage_path: Path) -> None:
+        write_blob(storage_path, "images/ubuntu", b"image content")
+        write_blob(storage_path, "openvpn/ca", b"ca content")
+        locked = storage_path / "openvpn"
+        locked.chmod(0o000)
+
+        try:
+            result = run_verify(storage_path)
+        finally:
+            locked.chmod(0o755)
+
+        assert result.artifacts_scanned == 1
+        assert result.errors == 1
+        assert result.issues[0].status == VerifyStatus.ERROR
+        assert "openvpn" in result.issues[0].artifact_path
+
+    def test_unreadable_blobs_directory_is_reported_as_an_error(self, storage_path: Path) -> None:
+        write_blob(storage_path, "openvpn/ca", b"ca content")
+        locked = storage_path / "openvpn/ca/blobs"
+        locked.chmod(0o000)
+
+        try:
+            result = run_verify(storage_path)
+        finally:
+            locked.chmod(0o755)
+
+        assert result.artifacts_scanned == 1
+        assert result.blobs_scanned == 0
+        assert result.errors >= 1
+        assert any(issue.status == VerifyStatus.ERROR for issue in result.issues)
+
+
+class TestRunVerifyConcurrentCollection:
+    """A blob nothing references anymore was collected, not lost."""
+
+    def test_unreferenced_missing_blob_is_not_reported(self, storage_path: Path) -> None:
+        full_hash = write_blob(storage_path, "openvpn/ca", b"content", tag=None)
+        artifact_dir = storage_path / "openvpn/ca"
+        blob_path(artifact_dir, full_hash).unlink()
+        metadata_path(artifact_dir, full_hash).unlink()
+
+        result = run_verify(storage_path)
+
+        assert result.missing_blob == 0
+        assert result.total_issues == 0
+
+    def test_tagged_missing_blob_is_reported_without_its_sidecar(self, storage_path: Path) -> None:
+        full_hash = write_blob(storage_path, "openvpn/ca", b"content")
+        artifact_dir = storage_path / "openvpn/ca"
+        blob_path(artifact_dir, full_hash).unlink()
+        metadata_path(artifact_dir, full_hash).unlink()
+
+        result = run_verify(storage_path)
+
+        assert result.missing_blob == 1
+        assert result.issues[0].status == VerifyStatus.MISSING_BLOB
 
 
 class TestRunVerifyScoping:

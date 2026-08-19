@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable
 
 import structlog
 from pydantic import ValidationError
@@ -30,6 +31,7 @@ from magpie.storage.manifest import Manifest, read_manifest
 from magpie.storage.metadata import read_metadata
 from magpie.storage.paths import (
     blob_path,
+    manifest_path,
     metadata_path,
     normalize_artifact_path,
     verify_path_is_descendant,
@@ -43,6 +45,9 @@ VERIFY_CHUNK_SIZE = 1024 * 1024  # 1MB
 
 # Progress callback: callback(phase, current, total) where phase is "verify".
 VerifyProgressCallback = Callable[[str, int, int], None]
+
+# Manifest file name, derived from the path helpers rather than hardcoded.
+MANIFEST_FILENAME = manifest_path(Path()).name
 
 
 class VerifyStatus(str, Enum):
@@ -160,6 +165,44 @@ def resolve_scope(storage_path: Path, path_prefix: str | None) -> Path:
     return scope
 
 
+def _relative_name(directory: Path, base: Path) -> str:
+    """Name a directory relative to the storage base, falling back to its path."""
+    try:
+        return str(directory.relative_to(base))
+    except ValueError:
+        return str(directory)
+
+
+def _find_manifests(scope: Path) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """Find artifact manifests under a scope, reporting unreadable directories.
+
+    ``Path.rglob`` silently swallows errors raised while descending, which would
+    let a scrub skip an unreadable subtree and still report a clean store. Walk
+    explicitly instead so those directories become findings.
+
+    Returns:
+        Tuple of (manifest files in stable order, (directory, message) pairs for
+        directories that could not be read).
+    """
+    manifest_files: list[Path] = []
+    errors: list[tuple[Path, str]] = []
+
+    def on_error(e: OSError) -> None:
+        errors.append((Path(e.filename or scope), f"Failed to read directory: {e}"))
+
+    for dirpath, dirnames, filenames in os.walk(scope, onerror=on_error):
+        dirnames.sort()
+        if MANIFEST_FILENAME in filenames:
+            manifest_files.append(Path(dirpath) / MANIFEST_FILENAME)
+
+    return sorted(manifest_files), errors
+
+
+def count_artifacts(scope: Path) -> int:
+    """Count artifacts under a scope, for sizing a progress bar."""
+    return len(_find_manifests(scope)[0])
+
+
 def _hash_blob(blob_file: Path) -> tuple[str, int]:
     """Stream a blob and return its SHA-256 digest and size.
 
@@ -180,20 +223,36 @@ def _hash_blob(blob_file: Path) -> tuple[str, int]:
     return hasher.hexdigest(), size
 
 
-def _iter_blob_files(artifact_dir: Path) -> Iterator[Path]:
-    """Yield regular blob files for an artifact in stable order.
+def _list_blob_files(artifact_dir: Path) -> tuple[list[Path], list[str]]:
+    """List regular blob files for an artifact in stable order.
 
     Symlinks are skipped: tag symlinks live in the artifact directory, and a
     symlink inside ``blobs/`` is not a stored blob.
+
+    Returns:
+        Tuple of (blob files, messages for directories that could not be read).
     """
     blobs_dir = artifact_dir / "blobs"
-    if not blobs_dir.is_dir():
-        return
 
-    for blob_file in sorted(blobs_dir.iterdir()):
-        if blob_file.is_symlink() or not blob_file.is_file():
+    try:
+        if not blobs_dir.is_dir():
+            return [], []
+        entries = sorted(blobs_dir.iterdir())
+    except OSError as e:
+        return [], [f"Failed to list blobs directory: {e}"]
+
+    blob_files = []
+    errors = []
+    for entry in entries:
+        try:
+            if entry.is_symlink() or not entry.is_file():
+                continue
+        except OSError as e:
+            errors.append(f"Failed to stat blob {entry.name}: {e}")
             continue
-        yield blob_file
+        blob_files.append(entry)
+
+    return blob_files, errors
 
 
 def _expected_hash(artifact_dir: Path, blob_ref: str) -> str:
@@ -285,7 +344,28 @@ def _verify_blob(
     )
 
 
-def _missing_blob_refs(artifact_dir: Path, manifest: Manifest | None) -> list[str]:
+def _is_still_referenced(artifact_dir: Path, blob_ref: str) -> bool:
+    """Re-read an artifact's records to see whether a blob is still referenced.
+
+    GC unlinks a blob before its metadata sidecar, so a scrub running alongside
+    GC can observe a sidecar whose blob is already gone. Re-reading the records
+    after the blob check narrows that window: a blob nothing references anymore
+    was collected, not lost. Holding the GC lock (see ``deployment/``) is what
+    rules the race out entirely.
+    """
+    try:
+        if metadata_path(artifact_dir, blob_ref).is_file():
+            return True
+        manifest = read_manifest(artifact_dir)
+    except (ArtifactNotFoundError, ManifestCorruptError, OSError):
+        return False
+
+    return any(blob_path(artifact_dir, h).name == blob_ref for h in manifest.tags.values())
+
+
+def _missing_blob_refs(
+    artifact_dir: Path, manifest: Manifest | None
+) -> tuple[list[str], list[str]]:
     """Find blob references that are recorded but whose blob file is gone.
 
     Considers both tags in the manifest and metadata sidecars. References are
@@ -294,19 +374,36 @@ def _missing_blob_refs(artifact_dir: Path, manifest: Manifest | None) -> list[st
     Args:
         artifact_dir: Path to the artifact directory.
         manifest: Parsed manifest, or None if it could not be read.
+
+    Returns:
+        Tuple of (missing blob references, messages for unreadable records).
     """
     refs: dict[str, None] = {}
+    errors: list[str] = []
 
     if manifest is not None:
         for hash_ref in manifest.tags.values():
             refs[blob_path(artifact_dir, hash_ref).name] = None
 
     metadata_dir = artifact_dir / "metadata"
-    if metadata_dir.is_dir():
-        for sidecar in sorted(metadata_dir.glob("*.json")):
-            refs[sidecar.stem] = None
+    try:
+        if metadata_dir.is_dir():
+            for sidecar in sorted(metadata_dir.glob("*.json")):
+                refs[sidecar.stem] = None
+    except OSError as e:
+        errors.append(f"Failed to list metadata sidecars: {e}")
 
-    return [ref for ref in refs if not blob_path(artifact_dir, ref).is_file()]
+    missing = []
+    for ref in refs:
+        try:
+            present = blob_path(artifact_dir, ref).is_file()
+        except OSError as e:
+            errors.append(f"Failed to stat blob {ref}: {e}")
+            continue
+        if not present and _is_still_referenced(artifact_dir, ref):
+            missing.append(ref)
+
+    return missing, errors
 
 
 def _record(result: VerifyResult, issue: VerifyIssue, max_issues: int | None) -> None:
@@ -375,12 +472,24 @@ def run_verify(
     base = storage_path.resolve()
 
     result = VerifyResult()
-    manifest_files = sorted(scope.rglob(".magpie"))
+    manifest_files, walk_errors = _find_manifests(scope)
     total_artifacts = len(manifest_files)
+
+    for directory, message in walk_errors:
+        _record(
+            result,
+            VerifyIssue(
+                artifact_path=_relative_name(directory, base),
+                blob_ref="",
+                status=VerifyStatus.ERROR,
+                message=message,
+            ),
+            max_issues,
+        )
 
     for idx, manifest_file in enumerate(manifest_files):
         artifact_dir = manifest_file.parent
-        artifact_path = str(artifact_dir.relative_to(base))
+        artifact_path = _relative_name(artifact_dir, base)
         result.artifacts_scanned += 1
 
         manifest: Manifest | None = None
@@ -398,7 +507,8 @@ def run_verify(
                 max_issues,
             )
 
-        for ref in _missing_blob_refs(artifact_dir, manifest):
+        missing_refs, record_errors = _missing_blob_refs(artifact_dir, manifest)
+        for ref in missing_refs:
             _record(
                 result,
                 VerifyIssue(
@@ -410,7 +520,20 @@ def run_verify(
                 max_issues,
             )
 
-        for blob_file in _iter_blob_files(artifact_dir):
+        blob_files, listing_errors = _list_blob_files(artifact_dir)
+        for message in (*record_errors, *listing_errors):
+            _record(
+                result,
+                VerifyIssue(
+                    artifact_path=artifact_path,
+                    blob_ref="",
+                    status=VerifyStatus.ERROR,
+                    message=message,
+                ),
+                max_issues,
+            )
+
+        for blob_file in blob_files:
             if limit is not None and result.blobs_scanned >= limit:
                 result.stopped_early = True
                 break

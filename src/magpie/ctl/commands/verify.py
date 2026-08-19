@@ -19,7 +19,7 @@ from magpie.cli.progress import count_progress
 from magpie.ctl import CTLContext
 from magpie.logging_config import configure_logging
 from magpie.storage.exceptions import InvalidArtifactPathError
-from magpie.storage.verify import VerifyResult, resolve_scope, run_verify
+from magpie.storage.verify import VerifyResult, count_artifacts, resolve_scope, run_verify
 from magpie.utils.formatting import format_size
 
 
@@ -176,7 +176,7 @@ def _run_verify_with_progress(
     quiet: bool,
 ) -> VerifyResult:
     """Run verification with a rich progress bar over artifact directories."""
-    total_artifacts = sum(1 for _ in scope.rglob(".magpie"))
+    total_artifacts = count_artifacts(scope)
 
     with count_progress("Verifying blobs", total_artifacts, quiet=quiet) as (progress, task_id):
 

@@ -285,11 +285,17 @@ scrub off-peak.
 ### Locking
 
 Verification uses its own lock file (`/var/run/magpie-verify.lock`) so scrubs
-never overlap. The shipped full-scrub commands also take the GC lock
-(`/var/run/magpie-gc.lock`) so a scrub and GC do not compete for disk I/O;
-verification never writes to storage, so this is a throughput guard, not a
-correctness requirement. Drop the second `flock` if you would rather let them
-overlap.
+never overlap. Every shipped scrub command also takes the GC lock
+(`/var/run/magpie-gc.lock`), and this is a correctness requirement, not just a
+disk-I/O guard: GC unlinks a blob before its metadata sidecar, so a scrub that
+walks an artifact mid-collection can see a sidecar whose blob is already gone and
+report it as a missing blob (exit `3`). Verification re-reads an artifact's
+records before reporting a missing blob, which closes most of that window, but
+only the lock rules it out. Keep both `flock` calls.
+
+Deletions through the API (`magpie delete`, retention pruning triggered by the
+server) do not take the host lock. If a scrub reports missing blobs while
+artifacts were being deleted, re-run it before treating the finding as data loss.
 
 ### Exit Codes and Alerting
 

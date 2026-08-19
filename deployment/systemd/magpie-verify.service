@@ -31,7 +31,8 @@ Type=oneshot
 
 # Run verification via Docker Compose with flock-based locking.
 # Uses a dedicated lock file so a scrub never overlaps with another scrub, and
-# the GC lock is also taken so a scrub and GC do not compete for disk I/O.
+# the GC lock is also taken because GC unlinks a blob before its metadata
+# sidecar: a scrub racing GC can otherwise report a collected blob as missing.
 # Uses `docker compose run` so verification works even if the main `magpie`
 # container is stopped. Adjust path to match your installation.
 WorkingDirectory=/opt/magpie
@@ -39,16 +40,16 @@ ExecStart=/usr/bin/flock -n /var/run/magpie-verify.lock /usr/bin/flock -n /var/r
 
 # Alternative: scope the scrub to competition-critical crypto material only,
 # which is cheap enough to run daily even on a large store.
-# ExecStart=/usr/bin/flock -n /var/run/magpie-verify.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl verify --path openvpn --quiet
+# ExecStart=/usr/bin/flock -n /var/run/magpie-verify.lock /usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl verify --path openvpn --quiet
 
 # Alternative: bound the work of each run. NOTE: the walk always starts at the
 # beginning of the store and keeps no cursor, so a bounded run repeatedly covers
 # the same head of the store rather than rolling forward. Prefer --path scoping
 # to cover the whole store in pieces.
-# ExecStart=/usr/bin/flock -n /var/run/magpie-verify.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl verify --max-bytes 10737418240 --quiet
+# ExecStart=/usr/bin/flock -n /var/run/magpie-verify.lock /usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl verify --max-bytes 10737418240 --quiet
 
 # Alternative: Direct execution (if not using Docker)
-# ExecStart=/usr/bin/flock -n /var/run/magpie-verify.lock /usr/local/bin/magpie-ctl verify --quiet
+# ExecStart=/usr/bin/flock -n /var/run/magpie-verify.lock /usr/bin/flock -n /var/run/magpie-gc.lock /usr/local/bin/magpie-ctl verify --quiet
 
 # User configuration (optional)
 # By default, this service runs as root. To run as a different user, uncomment

@@ -200,6 +200,8 @@ Exit codes are suitable for cron/monitoring:
 | 3 | A referenced blob or a metadata sidecar is missing |
 | 5 | Content mismatch: stored bytes do not match the recorded SHA-256 |
 
+Do not run a scrub while GC is deleting blobs: GC unlinks a blob before its metadata sidecar, so an overlapping scrub can report a collected blob as missing. The shipped cron/systemd units take the GC lock to prevent this.
+
 Exit code 5 means a competition-critical artifact may be damaged or tampered with: restore that artifact from backup (see [backup-restore.md](backup-restore.md)) rather than re-uploading over it. See [monitoring.md](monitoring.md) for alerting and [../deployment/README.md](../deployment/README.md) for scheduling a periodic scrub.
 
 **S3 backup/restore:**
