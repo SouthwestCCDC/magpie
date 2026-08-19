@@ -73,8 +73,8 @@ magpie config --clear                               # Reset configuration to def
 ```
 
 Configuration precedence applies: config file < environment variables < CLI flags. `--show`
-displays the effective value of each setting and which source it came from; it needs a config
-file to exist first.
+displays the effective value of each setting and which source it came from, whether or not a
+config file exists.
 
 ### Token Scopes
 

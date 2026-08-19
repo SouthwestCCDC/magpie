@@ -152,4 +152,8 @@ strips them from an upgraded install's `.env`; remove them from your own `.env` 
 |-------|------|-------|
 | Server, real deployment | `<install dir>/etc/.env` (installer) or `.env` next to `docker-compose.yml` | Copy [`.env.example`](../.env.example) and edit. Compose reads `.env` automatically. |
 | Server, ad-hoc | shell environment | `export MAGPIE_...` before `docker compose up`. Compose warns `The "MAGPIE_ADMIN_TOKEN_SINK" variable is not set` if it can't resolve that key from either source -- harmless when an override file supplies it, but a boot failure otherwise. |
-| Client | `~/.magpie/config.toml`, environment, or CLI flags | `magpie config --show` prints the effective values and where each came from (it needs a config file to exist -- create one with `magpie config --server ... --token ...`) |
+| Client | `~/.magpie/config.toml`, environment, or CLI flags | `magpie config --show` prints the effective value of each setting and which source it came from, whether or not a config file exists |
+
+---
+
+*(AI-generated via Devin)*

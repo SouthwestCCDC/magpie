@@ -131,3 +131,7 @@ disaster -- see [Backup & Restore](backup-restore.md).
 - [Configuration Reference](configuration.md) -- every environment variable
 - [Production Checklist](production-checklist.md) -- what to verify before going live
 - [API Compatibility](api-compatibility.md) -- client/server version coupling
+
+---
+
+*(AI-generated via Devin)*

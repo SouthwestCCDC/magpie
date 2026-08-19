@@ -171,7 +171,11 @@ curl http://localhost:8080/health          # {"status":"ok","version":"..."}
 From a client, with `MAGPIE_SERVER` and `MAGPIE_TOKEN` set:
 
 ```bash
+# `magpie status` needs an ADMIN-scope token (the break-glass admin token above);
+# the write/read tokens minted in step 2 are rejected here.
 magpie status                              # server version, storage used, artifact count
+
+# These work with the write-scope token (push/tag) or read-scope token (ls/get):
 echo "test" > test.txt
 magpie push test.txt --to test/hello
 magpie ls test/hello
