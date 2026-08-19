@@ -202,7 +202,7 @@ Exit codes are suitable for cron/monitoring:
 
 `Missing blob` is reported only for blobs a tag still points at, since those are the ones GC never collects; a blob recorded only by a leftover metadata sidecar is reported as an orphan sidecar under `Errors` (exit `1`), meaning storage bookkeeping to clean up rather than lost content.
 
-Avoid running a scrub while GC is deleting blobs: GC unlinks a blob before its metadata sidecar, so an overlapping scrub sees records in flux. The shipped cron/systemd units take the GC lock to prevent this.
+Avoid running a scrub while GC is deleting blobs: GC unlinks a blob before its metadata sidecar, so an overlapping scrub sees records in flux. The shipped cron/systemd units take the GC lock to prevent this, waiting up to an hour for it and reporting a skipped run as `75` (a `flock` status, never produced by `verify` itself) so it is not mistaken for a storage problem.
 
 Exit code 5 means a competition-critical artifact may be damaged or tampered with: restore that artifact from backup (see [backup-restore.md](backup-restore.md)) rather than re-uploading over it. See [monitoring.md](monitoring.md) for alerting and [../deployment/README.md](../deployment/README.md) for scheduling a periodic scrub.
 

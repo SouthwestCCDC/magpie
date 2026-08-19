@@ -238,7 +238,8 @@ def _list_blob_files(artifact_dir: Path) -> tuple[list[Path], list[str]]:
     symlink inside ``blobs/`` is not a stored blob.
 
     Returns:
-        Tuple of (blob files, messages for directories that could not be read).
+        Tuple of (blob files, (blob ref, message) pairs for entries that could not
+        be read; the ref is empty when the whole directory is unreadable).
     """
     blobs_dir = artifact_dir / "blobs"
 
@@ -247,16 +248,16 @@ def _list_blob_files(artifact_dir: Path) -> tuple[list[Path], list[str]]:
             return [], []
         entries = sorted(blobs_dir.iterdir())
     except OSError as e:
-        return [], [f"Failed to list blobs directory: {e}"]
+        return [], [("", f"Failed to list blobs directory: {e}")]
 
     blob_files = []
-    errors = []
+    errors: list[tuple[str, str]] = []
     for entry in entries:
         try:
             if entry.is_symlink() or not entry.is_file():
                 continue
         except OSError as e:
-            errors.append(f"Failed to stat blob {entry.name}: {e}")
+            errors.append((entry.name, f"Failed to stat blob: {e}"))
             continue
         blob_files.append(entry)
 
@@ -457,12 +458,13 @@ class _MissingRefs(NamedTuple):
         orphaned: Refs only a metadata sidecar records. The blob was untagged, so
             this is a bookkeeping inconsistency (typically a sidecar left behind
             by GC) rather than lost content.
-        errors: Messages for records that could not be read.
+        errors: (blob ref, message) pairs for records that could not be read. The
+            ref is empty when the failure is not about one blob.
     """
 
     tagged: list[str]
     orphaned: list[str]
-    errors: list[str]
+    errors: list[tuple[str, str]]
 
 
 def _missing_blob_refs(
@@ -480,7 +482,7 @@ def _missing_blob_refs(
     """
     tagged_refs: set[str] = set()
     refs: dict[str, None] = {}
-    errors: list[str] = []
+    errors: list[tuple[str, str]] = []
 
     if manifest is not None:
         for hash_ref in manifest.tags.values():
@@ -494,7 +496,7 @@ def _missing_blob_refs(
             for sidecar in sorted(metadata_dir.glob("*.json")):
                 refs[sidecar.stem] = None
     except OSError as e:
-        errors.append(f"Failed to list metadata sidecars: {e}")
+        errors.append(("", f"Failed to list metadata sidecars: {e}"))
 
     missing_tagged: list[str] = []
     orphaned: list[str] = []
@@ -502,7 +504,7 @@ def _missing_blob_refs(
         try:
             present = blob_path(artifact_dir, ref).is_file()
         except OSError as e:
-            errors.append(f"Failed to stat blob {ref}: {e}")
+            errors.append((ref, f"Failed to stat blob: {e}"))
             continue
         if present:
             continue
@@ -632,18 +634,21 @@ def run_verify(
             )
 
         orphan_messages = [
-            f"Orphan metadata sidecar {ref}: the blob is gone and no tag "
-            "references it (usually left behind by GC)"
+            (
+                ref,
+                "Orphan metadata sidecar: the blob is gone and no tag "
+                "references it (usually left behind by GC)",
+            )
             for ref in missing.orphaned
         ]
 
         blob_files, listing_errors = _list_blob_files(artifact_dir)
-        for message in (*missing.errors, *orphan_messages, *listing_errors):
+        for ref, message in (*missing.errors, *orphan_messages, *listing_errors):
             _record(
                 result,
                 VerifyIssue(
                     artifact_path=artifact_path,
-                    blob_ref="",
+                    blob_ref=ref,
                     status=VerifyStatus.ERROR,
                     message=message,
                 ),

@@ -425,6 +425,8 @@ class TestRunVerifyConcurrentCollection:
         assert result.errors == 1
         assert result.issues[0].status == VerifyStatus.ERROR
         assert "Orphan metadata sidecar" in result.issues[0].message
+        # The ref identifies the debris for a scraper keying on blob_ref.
+        assert result.issues[0].blob_ref == blob_path(storage_path / "openvpn/ca", full_hash).name
 
 
 class TestRunVerifyScoping:

@@ -118,6 +118,8 @@ See [user-guide.md](user-guide.md) for garbage collection operations and retenti
 
 **Exit codes** (see [user-guide.md](user-guide.md) for the full table): `0` clean, `1` operational error, `3` missing blob/metadata, `5` content mismatch. A cron job or systemd timer that logs stderr and alerts on non-zero status is sufficient; alert separately on `5`, which indicates damaged or tampered content rather than a bookkeeping problem.
 
+The shipped schedules add one status that does not come from the scrub: `75` means `flock` could not take the verify or GC lock, so the run was skipped and storage was **not** checked (the lock is taken with `-E 75` precisely so this is not confused with exit `1`). A single `75` is normal when a collection runs long; alert when it repeats, because then nothing is being verified at all.
+
 **Scraping results:**
 ```bash
 magpie-ctl --format json verify --path openvpn
@@ -166,7 +168,7 @@ Do not pipe these into `logger`: in a shell pipeline the job's exit status becom
 
 **`missing_blob` means a *tagged* blob is gone.** A tag is what makes a blob durable — GC never collects a tagged blob — so exit `3` is a data-loss claim. A blob recorded only by a metadata sidecar is untagged and collectable, so if its file is absent the scrub reports an orphan sidecar under `errors` (exit `1`): bookkeeping debris to clean up, not lost content.
 
-**Prefer not to overlap a scrub with GC.** GC unlinks a blob before its metadata sidecar, so a scrub walking an artifact mid-collection sees records in flux; verification re-reads the manifest after a short pause before claiming a missing blob, and takes the GC lock in the shipped units (`/var/run/magpie-gc.lock`, see [../deployment/](../deployment/)). Deletions through the API do not take that lock, so re-run a scrub that reports missing blobs during heavy deletion activity before treating it as data loss.
+**Prefer not to overlap a scrub with GC.** GC unlinks a blob before its metadata sidecar, so a scrub walking an artifact mid-collection sees records in flux; verification re-reads the manifest after a short pause before claiming a missing blob, and takes the GC lock in the shipped units (`/var/run/magpie-gc.lock`, see [../deployment/](../deployment/)). That lock is waited on with a bound (`flock -w 3600`) rather than skipped outright, so a long collection postpones the scrub instead of cancelling it. Deletions through the API do not take that lock, so re-run a scrub that reports missing blobs during heavy deletion activity before treating it as data loss.
 
 Storage the scrub cannot read is a finding, not a skip: an unreadable directory or blob is counted under `errors` and reported as a `verify_issue` with `status: "error"` (exit `1`), so a permission or hardware problem cannot masquerade as a clean store.
 

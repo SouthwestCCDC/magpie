@@ -294,6 +294,16 @@ tag still points at, and re-reads the manifest after a short pause before doing
 so, which closes most of that window; only the lock rules it out. Keep both
 `flock` calls.
 
+The GC lock is taken with a bounded wait (`flock -w 3600`) rather than
+`--nonblock`, so an overrunning collection delays the scrub instead of
+cancelling it — with a nonblocking lock, a nightly GC that runs long could stop
+the scrub from ever executing. Both locks pass `-E 75`, so a run that never
+started because a lock was held exits `75` instead of `1`, which the table below
+reserves for broken storage.
+
+Raise `-w` if collections regularly exceed an hour, and remember the wait is
+spent inside the unit's `TimeoutStartSec`.
+
 Deletions through the API (`magpie delete`, retention pruning triggered by the
 server) do not take the host lock. If a scrub reports missing blobs while
 artifacts were being deleted, re-run it before treating the finding as data loss.
@@ -306,9 +316,15 @@ artifacts were being deleted, re-run it before treating the finding as data loss
 | 1 | Operational error (unreadable storage, invalid `--path`, corrupt metadata sidecar, orphan sidecar) |
 | 3 | A tagged blob or a metadata sidecar is missing |
 | 5 | Content mismatch: stored bytes do not match the recorded SHA-256 |
+| 75 | The run was skipped because the verify or GC lock was held (from `flock -E 75`, not from the scrub) |
 
-Alert on any non-zero exit, and page on `5` — it means an artifact is damaged or
-tampered with and should be restored from backup rather than re-uploaded over.
+`75` is not a finding: the scrub never started, so storage was not checked.
+Treat a single `75` as informational and alert when it repeats, which means the
+schedule never gets a turn and nothing is being verified.
+
+Alert on any other non-zero exit, and page on `5` — it means an artifact is
+damaged or tampered with and should be restored from backup rather than
+re-uploaded over.
 For scraping, `magpie-ctl --format json verify` emits per-issue detail and full
 counters and still exits non-zero. See [../docs/monitoring.md](../docs/monitoring.md).
 
