@@ -256,11 +256,12 @@ def normalize_hash_ref(hash_ref: str) -> str:
         The reference with its '@' prefix removed.
 
     Raises:
-        InvalidArtifactPathError: If the reference contains a path separator,
-            '..' or a NUL byte.
+        InvalidArtifactPathError: If the reference is empty (an empty reference
+            names no blob but prefix-matches every one of them), or contains a
+            path separator, '..' or a NUL byte.
     """
     ref = hash_ref.lstrip("@")
-    if _UNSAFE_REF_RE.search(ref):
+    if not ref or _UNSAFE_REF_RE.search(ref):
         raise InvalidArtifactPathError(f"Invalid hash reference: {hash_ref!r}")
     return ref
 

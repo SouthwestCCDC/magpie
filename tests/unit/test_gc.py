@@ -367,6 +367,22 @@ class TestRunGC:
         assert result.blobs_deleted == 0
         assert blob_file.exists()
 
+    def test_unusable_tag_target_does_not_abort_the_run(self, storage_root: Path) -> None:
+        """One hand-edited tag target must not stop the whole GC run."""
+        artifact_dir = create_artifact_with_blobs(
+            storage_root,
+            "test/artifact",
+            tagged_hashes={"latest": "tagged_hash_abc", "broken": "../../etc/passwd"},
+            untagged_hashes=["untagged_hash_xyz"],
+            blob_ages_days={"tagged_hash_abc": 0, "untagged_hash_xyz": 100},
+        )
+
+        result, blobs = run_gc(storage_path=storage_root, retention_days=30, dry_run=False)
+
+        assert result.artifacts_scanned == 1
+        assert result.blobs_deleted == 1
+        assert (artifact_dir / "blobs" / "tagged_h").exists()
+
     def test_preserves_tagged_blobs_with_full_sha256_hash(self, storage_root: Path) -> None:
         """Tagged blobs with full SHA-256 hashes are preserved.
 

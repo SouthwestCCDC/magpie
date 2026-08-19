@@ -459,6 +459,16 @@ class TestLegacyHashNameLayout:
             with pytest.raises(InvalidArtifactPathError):
                 read_blob(artifact_dir, ref)
 
+    def test_empty_ref_is_refused(self, artifact_dir: Path) -> None:
+        """An empty ref names no blob, so it must not match the only one."""
+        _write_blob_file(artifact_dir, "abcdef0123456789", b"the only blob here")
+
+        for ref in ("@", ""):
+            with pytest.raises(InvalidArtifactPathError):
+                read_blob(artifact_dir, ref)
+            with pytest.raises(InvalidArtifactPathError):
+                check_blob_exists(artifact_dir, ref)
+
     def test_ambiguous_abbreviated_ref_is_rejected(self, artifact_dir: Path) -> None:
         """An abbreviation matching two blobs is an error, not an arbitrary pick."""
         _write_blob_file(artifact_dir, "abcdef0123456789", b"one")

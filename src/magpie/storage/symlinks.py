@@ -5,8 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import structlog
+
+from magpie.storage.exceptions import AmbiguousHashRefError, InvalidArtifactPathError
 from magpie.storage.manifest import Manifest
 from magpie.storage.paths import canonical_hash_name, resolve_blob_name
+
+logger = structlog.get_logger()
 
 
 @dataclass
@@ -114,8 +119,25 @@ def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> ReconcileStats
     """
     stats = ReconcileStats()
 
+    # A manifest is hand-editable, so a tag target that names no possible blob
+    # is left exactly as it is: reconciliation neither links it nor treats its
+    # existing symlink as an orphan. Reconciling many artifacts (GC) must not
+    # fail wholesale over one bad entry.
+    unusable_tags = set()
+    for tag_name, hash_ref in manifest.tags.items():
+        try:
+            blob_link_target(artifact_dir, hash_ref)
+        except (AmbiguousHashRefError, InvalidArtifactPathError) as e:
+            logger.warning(
+                "symlink_skipping_unusable_tag_target",
+                tag=tag_name,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            unusable_tags.add(tag_name)
+
     # Get set of expected tag names from manifest
-    expected_tags = set(manifest.tags.keys())
+    expected_tags = set(manifest.tags.keys()) - unusable_tags
 
     # Find existing symlinks in artifact directory (excluding subdirectories)
     existing_symlinks: set[str] = set()
@@ -125,7 +147,7 @@ def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> ReconcileStats
                 existing_symlinks.add(item.name)
 
     # Total symlinks to check = expected tags + orphan symlinks
-    stats.checked = len(expected_tags) + len(existing_symlinks - expected_tags)
+    stats.checked = len(expected_tags) + len(existing_symlinks - expected_tags - unusable_tags)
 
     # Create missing symlinks
     missing_tags = expected_tags - existing_symlinks
@@ -136,7 +158,7 @@ def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> ReconcileStats
         stats.created_tags.append(tag_name)
 
     # Remove orphan symlinks (symlinks not in manifest)
-    orphan_symlinks = existing_symlinks - expected_tags
+    orphan_symlinks = existing_symlinks - expected_tags - unusable_tags
     for tag_name in sorted(orphan_symlinks):
         remove_symlink(artifact_dir, tag_name)
         stats.removed += 1
