@@ -119,7 +119,7 @@ once, through `MAGPIE_ADMIN_TOKEN_SINK`:
 | Situation | What to do |
 |-----------|------------|
 | `sink=file` (the default the installer sets) | `sudo cat <data dir>/admin-token` |
-| `sink=stdout` (opt-in, dev only) | `docker compose logs magpie \| grep "ADMIN TOKEN"` |
+| `sink=stdout` (opt-in, dev only) | `docker compose logs magpie \| grep -A1 "ADMIN TOKEN"` (the token is on the line *after* the label) |
 | Token lost, or `sink=discard` | Mint a new one: `docker compose exec magpie magpie-ctl token create --name ops-admin --scope admin` |
 | Want to invalidate and re-issue the break-glass token | `docker compose exec magpie magpie-ctl init --reset-admin-token` (the new token goes through the same sink, e.g. back to the file) |
 

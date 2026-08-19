@@ -48,7 +48,7 @@ For advanced or non-systemd deployments:
 ```bash
 export MAGPIE_DATA_DIR=/srv/magpie/data
 export MAGPIE_ADMIN_TOKEN_SINK=file   # required -- see Admin Token Delivery below
-export MAGPIE_IMAGE=ghcr.io/southwestccdc/magpie:X.Y.Z-bundled   # see note below
+export MAGPIE_IMAGE=ghcr.io/southwestccdc/magpie:X.Y.Z-bundled   # e.g. 0.2.0-rc3-bundled; see note below
 docker compose -f docker-compose.yml up -d
 ```
 
@@ -106,7 +106,7 @@ uv fetching Python 3.13 if the host doesn't have it. To pin a release instead of
 `default` branch:
 
 ```bash
-uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'
+uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'   # e.g. @v0.2.0-rc3
 ```
 
 **Match the client's minor version to the server's.** The server reads the CLI's `User-Agent`
@@ -253,7 +253,8 @@ Choose one:
   ```bash
   export MAGPIE_ADMIN_TOKEN_SINK=stdout
   docker compose -f docker-compose.yml up -d
-  docker compose -f docker-compose.yml logs magpie | grep "ADMIN TOKEN"
+  # -A1: the token is printed on the line after the "ADMIN TOKEN" label
+  docker compose -f docker-compose.yml logs magpie | grep -A1 "ADMIN TOKEN"
   ```
 
 Token generation happens **only** on first boot. In every case (first-boot

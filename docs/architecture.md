@@ -67,9 +67,11 @@ Two paths behave specially:
   `MAGPIE_TRUSTED_PROXIES` names the upstream hop -- otherwise the client IP Caddy sees is the
   proxy's and every anonymous read 401s. (In v0.2.0 the allow-list accepts a single range;
   see [issue #612](https://github.com/SouthwestCCDC/magpie/issues/612).)
-- `/artifacts/public/*` is served with **no authentication at all**. Anything pushed under the
-  `public/` namespace is world-readable to whoever can reach the port. Treat that namespace as
-  a deliberate publishing mechanism, not a default.
+- `/artifacts/public/*` is served with **no authentication at all**, and Caddy enables `browse`
+  for it, so anonymous callers can *enumerate* the namespace (directory index listing `blobs/`,
+  `metadata/`, tag symlinks) as well as fetch known paths. Anything pushed under `public/` is
+  world-readable to whoever can reach the port. Treat that namespace as a deliberate publishing
+  mechanism, not a default.
 
 ## Why TLS is not Magpie's job
 

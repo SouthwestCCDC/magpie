@@ -27,7 +27,7 @@ New to Magpie? Start with the [5-Minute Quick Start](../README.md#5-minute-quick
 uv tool install git+https://github.com/SouthwestCCDC/magpie
 
 # Or pin a release tag -- see https://github.com/SouthwestCCDC/magpie/releases
-uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'
+uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'   # e.g. @v0.2.0-rc3
 ```
 
 Install the CLI at the **same minor version as the server**: an older client is rejected with

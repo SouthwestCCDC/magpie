@@ -16,8 +16,8 @@ and vice versa.
 
 | Variable | Needed? | Why |
 |----------|---------|-----|
-| `MAGPIE_ADMIN_TOKEN_SINK` | **Required** | How the first-boot admin token is delivered. No default, by design: the container refuses to start without it. Use `file` unless you have a secret store. See [Admin Token Delivery](installation.md#admin-token-delivery). |
-| `MAGPIE_IMAGE` | **Required in production** | Pin a released bundled image (`ghcr.io/southwestccdc/magpie:X.Y.Z-bundled`). The compose default (`:latest`) is *not* a bundled image and will not work with this topology. The installer sets this for you. |
+| `MAGPIE_ADMIN_TOKEN_SINK` | **Required** | How the first-boot admin token is delivered. No default, by design: without it the container exits non-zero on first-boot init and, under `restart: unless-stopped`, boot-loops (`docker compose ps` shows `Restarting (1)`). Use `file` unless you have a secret store. See [Admin Token Delivery](installation.md#admin-token-delivery). |
+| `MAGPIE_IMAGE` | **Required in production** | Pin a released bundled image (`ghcr.io/southwestccdc/magpie:X.Y.Z-bundled`; check [releases](https://github.com/SouthwestCCDC/magpie/releases) for what is actually published -- while v0.2.0 is being cut that is `0.2.0-rc3-bundled`). The compose default (`:latest`) is *not* a bundled image and will not work with this topology. The installer sets this for you. |
 | `MAGPIE_DATA_DIR` | Recommended | Host directory holding artifacts, the token database, and the admin-token file. Defaults to `./data` next to `docker-compose.yml`; set an absolute path for a real deployment. |
 | `MAGPIE_HTTP_PORT` / `MAGPIE_BIND_IP` | Recommended | Where the container's plain-HTTP `:8080` is published. Bind to a loopback/internal address if your reverse proxy is on the same host. |
 | `MAGPIE_TRUSTED_PROXIES` | Only with `MAGPIE_ALLOWED_CIDRS` | The exact address(es) of the proxy in front of Magpie, so client IPs are read from `X-Forwarded-For`. See [Trusted Proxies](installation.md#trusted-proxies). |
@@ -56,7 +56,7 @@ Read by the `magpie` CLI. All can be overridden by CLI flags
 
 | Variable | Default | Consumed by | Description |
 |----------|---------|-------------|-------------|
-| `MAGPIE_ADMIN_TOKEN_SINK` | *(none -- required)* | app | First-boot admin token delivery: `file`, `exec`, `discard`, or `stdout`. Fail-closed: an unset value means the container exits non-zero at boot. See [Admin Token Delivery](installation.md#admin-token-delivery). |
+| `MAGPIE_ADMIN_TOKEN_SINK` | *(none -- required)* | app | First-boot admin token delivery: `file`, `exec`, `discard`, or `stdout`. Fail-closed: an unset value means the container exits non-zero during first-boot init and boot-loops rather than starting. See [Admin Token Delivery](installation.md#admin-token-delivery). |
 
 ### Deployment (Docker Compose only -- not read by the application)
 
