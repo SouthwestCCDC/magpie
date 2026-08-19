@@ -831,5 +831,41 @@ class TestLegacyHashNameLayout:
 
         assert is_duplicate is True
         assert info.hash == full_hash
+        assert info.hash_ref == f"@{full_hash[:8]}"
         artifact_dir = artifact_dir_path(storage_service.config.storage_path, artifact_path)
         assert {p.name for p in (artifact_dir / "blobs").iterdir()} == {full_hash[:8]}
+
+    def test_reported_hash_ref_names_the_file_on_disk(
+        self, storage_service: StorageService
+    ) -> None:
+        """Refs double as download locators, so they must match the stored name."""
+        artifact_path = "legacy/hash-ref"
+        content = b"stored before the hash-name widening"
+        full_hash = self._plant_legacy_artifact(storage_service, artifact_path, content)
+        legacy_ref = f"@{full_hash[:8]}"
+
+        assert storage_service.get_artifact_info(artifact_path, "latest").hash_ref == legacy_ref
+        assert storage_service.get_artifact_info(artifact_path, legacy_ref).hash_ref == legacy_ref
+        assert (
+            storage_service.get_artifact_info(
+                artifact_path, f"@{full_hash[:HASH_NAME_LENGTH]}"
+            ).hash_ref
+            == legacy_ref
+        )
+        assert [a.hash_ref for a in storage_service.list_artifacts(artifact_path)] == [legacy_ref]
+        assert storage_service.create_tag(artifact_path, legacy_ref, "stable").hash_ref == (
+            legacy_ref
+        )
+        assert storage_service.amend_metadata(
+            artifact_path, legacy_ref, source_uri="https://example.test/x"
+        ).hash_ref == (legacy_ref)
+
+    def test_new_artifact_reports_current_width_ref(self, storage_service: StorageService) -> None:
+        """Artifacts written by this release keep the widened ref."""
+        info, _ = storage_service.store_artifact(
+            artifact_path="current/hash-ref",
+            file_stream=io.BytesIO(b"written after the widening"),
+            uploaded_by="new-release",
+        )
+
+        assert info.hash_ref == f"@{info.hash[:HASH_NAME_LENGTH]}"

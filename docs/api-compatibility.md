@@ -178,6 +178,10 @@ abbreviation from 8 to 64 hex characters, so old clients keep working.
 Clients that hardcoded the 9-character length (rather than treating
 `hash_ref` as an opaque string) do need updating; treat any such
 assumption as a client bug and prefer round-tripping the server's value.
+Note that on an upgraded install a returned `hash_ref` names the blob's
+actual file, so blobs written before the widening keep reporting their
+8-character ref -- responses stay usable as download locators, which is
+another reason to round-trip the value instead of recomputing it.
 
 ## Testing for Compatibility
 

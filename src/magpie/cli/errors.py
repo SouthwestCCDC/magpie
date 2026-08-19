@@ -44,6 +44,35 @@ def mask_token(token: str) -> str:
     return TOKEN_MASK
 
 
+def error_detail(response: "httpx.Response") -> str:
+    """Extract the human-readable text from an error response.
+
+    Magpie's server errors carry their explanation in ``message``, while some
+    framework-generated errors use FastAPI's ``detail``; prefer whichever is
+    populated before falling back to the raw body.
+
+    Args:
+        response: The HTTP response object.
+
+    Returns:
+        Error text for display.
+    """
+    try:
+        body = response.json()
+    except (json.JSONDecodeError, ValueError):
+        return response.text
+
+    if not isinstance(body, dict):
+        return response.text
+
+    for key in ("detail", "message"):
+        value = body.get(key)
+        if value:
+            return str(value)
+
+    return response.text
+
+
 def format_auth_error(
     response: "httpx.Response",
     operation: str,
@@ -59,12 +88,7 @@ def format_auth_error(
     Returns:
         Formatted error message string.
     """
-    try:
-        detail = response.json().get("detail", response.text)
-    except (json.JSONDecodeError, ValueError, KeyError):
-        detail = response.text
-
-    base_msg = f"{operation} failed ({response.status_code}): {detail}"
+    base_msg = f"{operation} failed ({response.status_code}): {error_detail(response)}"
 
     # Add masked token for auth errors to help debug wrong-token issues
     if response.status_code in (401, 403) and token:
@@ -138,13 +162,9 @@ def handle_response_error(
     )
 
     if is_json_output():
-        try:
-            detail = response.json().get("detail", response.text)
-        except (json.JSONDecodeError, ValueError, KeyError):
-            detail = response.text
         output_error(
             http_status_to_error_code(response.status_code),
-            detail,
+            error_detail(response),
             exit_code=http_status_to_exit_code(response.status_code),
         )
         # output_error never returns (calls sys.exit), but this makes it explicit

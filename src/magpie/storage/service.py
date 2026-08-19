@@ -26,6 +26,7 @@ from magpie.storage.metadata import (
 )
 from magpie.storage.paths import (
     artifact_dir_path,
+    canonical_hash_name,
     check_artifact_nesting,
     resolve_blob_name,
     validate_artifact_path,
@@ -160,7 +161,7 @@ class StorageService:
 
         info = ArtifactInfo(
             hash=full_hash,
-            hash_ref=hash_ref,
+            hash_ref=self._stored_hash_ref(artifact_dir, full_hash),
             tags=tags,
             uploaded_by=stored_metadata.uploaded_by,
             uploaded_at=stored_metadata.uploaded_at,
@@ -312,7 +313,7 @@ class StorageService:
 
                 info = ArtifactInfo(
                     hash=full_hash,
-                    hash_ref=hash_ref,
+                    hash_ref=self._stored_hash_ref(artifact_dir, full_hash),
                     tags=sorted(tags),
                     uploaded_by=metadata.uploaded_by,
                     uploaded_at=metadata.uploaded_at,
@@ -366,7 +367,7 @@ class StorageService:
 
         return ArtifactInfo(
             hash=full_hash,
-            hash_ref=short_hash(full_hash),
+            hash_ref=self._stored_hash_ref(artifact_dir, full_hash),
             tags=tags,
             uploaded_by=metadata.uploaded_by,
             uploaded_at=metadata.uploaded_at,
@@ -424,7 +425,7 @@ class StorageService:
 
         return ArtifactInfo(
             hash=full_hash,
-            hash_ref=short_hash(full_hash),
+            hash_ref=f"@{short_hash_name}",
             tags=tags,
             uploaded_by=metadata.uploaded_by,
             uploaded_at=metadata.uploaded_at,
@@ -630,12 +631,31 @@ class StorageService:
 
         return ArtifactInfo(
             hash=full_hash,
-            hash_ref=short_hash(full_hash),
+            hash_ref=f"@{short_hash_name}",
             tags=tags,
             uploaded_by=updated_metadata.uploaded_by,
             uploaded_at=updated_metadata.uploaded_at,
             source_uri=updated_metadata.source_uri,
         )
+
+    def _stored_hash_ref(self, artifact_dir: Path, full_hash: str) -> str:
+        """Get the hash ref that names the blob's actual file on disk.
+
+        Reported refs double as locators: clients build download URLs from
+        them (``blobs/{ref}`` is served straight off the filesystem), so a
+        blob stored under a narrower name by an earlier release must be
+        reported under that name rather than the name this build would write.
+
+        Args:
+            artifact_dir: Artifact directory path.
+            full_hash: Full SHA-256 hex digest of the blob.
+
+        Returns:
+            Hash ref with '@' prefix, falling back to the current width when
+            no blob file exists.
+        """
+        name = resolve_blob_name(artifact_dir, full_hash) or canonical_hash_name(full_hash)
+        return f"@{name}"
 
     def _validate_blob_exists(self, artifact_dir: Path, hash_ref: str) -> str:
         """Validate that a blob exists for the given hash reference.
