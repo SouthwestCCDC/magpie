@@ -991,7 +991,16 @@ WorkingDirectory=${INSTALL_DIR}
 # the entrypoint finished. 5 minutes, then fail loudly rather than hang
 # until TimeoutStartSec; the next scheduled run recovers on its own since GC
 # is retention-based, not incremental.
-ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'until /usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env ps --format {{.Health}} magpie | grep -qx healthy; do sleep 5; done'
+#
+# 'docker inspect' rather than 'compose ps --format <go-template>': the
+# template form of 'ps' needs a recent Compose v2 (check_prerequisites only
+# asserts that 'docker compose version' works), and an image with no
+# HEALTHCHECK reports an empty .State.Health, which is distinguishable here
+# but not through 'ps'. So that case exits nonzero at once with a real
+# message rather than burning the whole 300s bound waiting for a status that
+# can never arrive. No container yet (empty 'ps -q') keeps waiting:
+# magpie.service may still be creating it.
+ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'while :; do cid=\$(/usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env ps -q magpie 2>/dev/null); if [ -n "\$cid" ]; then state=\$(/usr/bin/docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}" "\$cid" 2>/dev/null); case "\$state" in healthy) exit 0 ;; nohealthcheck) echo "magpie container has no HEALTHCHECK; cannot confirm readiness before GC" >&2; exit 1 ;; esac; fi; sleep 5; done'
 ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env exec -T magpie magpie-ctl gc --quiet
 
 StandardOutput=journal

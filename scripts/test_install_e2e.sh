@@ -456,30 +456,54 @@ assert_gc_service_runs() {
 # The GC oneshot gates its `compose exec` on the container reporting healthy,
 # because After=magpie.service only orders unit start and the timer's
 # Persistent=true can replay a missed run at boot, before the container is
-# serving. Two things worth asserting cheaply: the gate is actually declared,
-# and it BLOCKS (rather than falling through) when nothing is healthy -- run
-# with a 10s bound against a service name that does not exist, so a gate that
-# wrongly succeeded would return 0 instead of timeout's 124.
+# serving. The probe is lifted verbatim out of the installed unit and run here
+# (with its 300s bound shortened) rather than paraphrased, so these assertions
+# cannot pass while the shipped command is broken. Three behaviours matter: it
+# succeeds against the healthy container, it keeps WAITING rather than falling
+# through when there is nothing healthy, and it distinguishes "image has no
+# HEALTHCHECK" from "not ready yet" so that case fails fast instead of burning
+# the whole bound.
 assert_gc_readiness_gate() {
     log_section "GC readiness gate"
-    local pre
-    pre="$(systemctl show -p ExecStartPre --value magpie-gc.service || true)"
-    if [[ "$pre" == *healthy* ]]; then
+    local probe
+    probe="$(sed -n 's/^ExecStartPre=//p' /etc/systemd/system/magpie-gc.service | head -n1)"
+    if [[ "$probe" == *healthy* && "$probe" == *"docker inspect"* ]]; then
         pass "magpie-gc.service declares a health-readiness ExecStartPre"
     else
-        fail "magpie-gc.service has no health-readiness ExecStartPre (got: ${pre:-<none>})"
+        fail "magpie-gc.service has no health-readiness ExecStartPre (got: ${probe:-<none>})"
         return 0
     fi
 
+    # systemd's quoting on this line is shell-compatible, so the extracted
+    # command can be eval'd as-is; only the timeout bound is rewritten.
+    local fast="${probe/timeout 300/timeout 20}"
     local status=0
-    timeout 10 /bin/sh -c "until docker compose -f '${COMPOSE_FILE}' --env-file '${ENV_FILE}' ps --format {{.Health}} definitely-not-a-service | grep -qx healthy; do sleep 1; done" \
-        >/dev/null 2>&1 || status=$?
+    eval "$fast" >/dev/null 2>&1 || status=$?
+    assert_eq "0" "$status" "unit's own readiness probe passes against the healthy container"
+
+    # Same command, pointed at a service that does not exist: 'ps -q' yields no
+    # container id, so a correct gate never falls through and timeout reports
+    # 124. A gate that wrongly treated "unknown" as ready would exit 0.
+    local blocked="${probe/timeout 300/timeout 10}"
+    blocked="${blocked/ps -q magpie/ps -q definitely-not-a-service}"
+    status=0
+    eval "$blocked" >/dev/null 2>&1 || status=$?
     assert_eq "124" "$status" "readiness probe keeps waiting while nothing is healthy (timeout exit)"
 
-    status=0
-    timeout 30 /bin/sh -c "until docker compose -f '${COMPOSE_FILE}' --env-file '${ENV_FILE}' ps --format {{.Health}} magpie | grep -qx healthy; do sleep 1; done" \
-        >/dev/null 2>&1 || status=$?
-    assert_eq "0" "$status" "readiness probe passes against the healthy container"
+    # A container from the same image with its HEALTHCHECK disabled is what an
+    # overridden MAGPIE_IMAGE would look like: .State.Health is absent, which
+    # the probe's template reports as 'nohealthcheck' (-> exit 1 with a message)
+    # instead of an empty string indistinguishable from 'starting'.
+    local image cid state
+    image="$(sed -n 's/^MAGPIE_IMAGE=//p' "$ENV_FILE" | head -n1)"
+    cid="$(docker run -d --rm --no-healthcheck --entrypoint /bin/sleep "$image" 60 2>/dev/null || true)"
+    if [[ -n "$cid" ]]; then
+        state="$(docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}" "$cid" 2>/dev/null || true)"
+        assert_eq "nohealthcheck" "$state" "probe template flags an image with no HEALTHCHECK"
+        docker rm -f "$cid" >/dev/null 2>&1 || true
+    else
+        log "NOTE: could not start a --no-healthcheck container from ${image}; skipped the no-HEALTHCHECK template check"
+    fi
 }
 
 # --- credentials for the assertions above -----------------------------------
