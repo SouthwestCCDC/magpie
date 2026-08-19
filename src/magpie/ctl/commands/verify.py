@@ -15,7 +15,7 @@ from magpie.cli.formatting import (
     output_error,
     output_result,
 )
-from magpie.cli.progress import count_progress
+from magpie.cli.progress import count_progress, is_tty
 from magpie.ctl import CTLContext
 from magpie.logging_config import configure_logging
 from magpie.storage.exceptions import InvalidArtifactPathError
@@ -177,8 +177,10 @@ def _run_verify_with_progress(
 ) -> VerifyResult:
     """Run verification with a rich progress bar over artifact directories."""
     # Sizing the bar costs a full extra walk of the store, so only pay for it
-    # when a bar will actually be drawn.
-    total_artifacts = 0 if quiet else count_artifacts(scope)
+    # when a bar will actually be drawn: count_progress draws nothing when quiet
+    # or off a terminal, which is every scheduled run.
+    draws_bar = not quiet and is_tty()
+    total_artifacts = count_artifacts(scope) if draws_bar else 0
 
     with count_progress("Verifying blobs", total_artifacts, quiet=quiet) as (progress, task_id):
 
