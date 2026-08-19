@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from magpie.storage.exceptions import InvalidArtifactPathError
 from magpie.storage.hash import HASH_NAME_LENGTH, compute_hash, short_hash
 from magpie.storage.paths import (
     artifact_dir_path,
@@ -146,6 +147,13 @@ class TestBlobPath:
         full_hash = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         result = blob_path(artifact_dir, full_hash)
         assert result == Path(f"/data/artifacts/project/blobs/{full_hash[:HASH_NAME_LENGTH]}")
+
+    def test_blob_path_rejects_traversal_ref(self) -> None:
+        """A hash ref becomes a filename component, so separators are refused."""
+        artifact_dir = Path("/data/artifacts/project")
+        for ref in ("@../../../../etc/passwd", "@..", "ab/cd"):
+            with pytest.raises(InvalidArtifactPathError):
+                blob_path(artifact_dir, ref)
 
 
 class TestMetadataPath:

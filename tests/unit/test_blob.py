@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from magpie.storage.exceptions import (
     AmbiguousHashRefError,
     ArtifactNotFoundError,
     HashPrefixCollisionError,
+    InvalidArtifactPathError,
 )
 from magpie.storage.hash import HASH_NAME_LENGTH, compute_hash, short_hash
 
@@ -271,6 +273,15 @@ def _write_blob_file(artifact_dir: Path, name: str, content: bytes) -> Path:
     return path
 
 
+def _write_sidecar(artifact_dir: Path, name: str, full_hash: str) -> Path:
+    """Plant a metadata sidecar recording a given full hash."""
+    metadata_dir = artifact_dir / "metadata"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    path = metadata_dir / f"{name}.json"
+    path.write_text(json.dumps({"hash": full_hash}))
+    return path
+
+
 class TestStoreBlobPrefixCollision:
     """Both store paths must verify the full hash, not just the filename.
 
@@ -410,6 +421,43 @@ class TestLegacyHashNameLayout:
         assert is_duplicate is True
         assert hash_ref == short_hash(full_hash)
         assert {p.name for p in (artifact_dir / "blobs").iterdir()} == {full_hash[:8]}
+
+    def test_long_ref_does_not_adopt_an_unrelated_legacy_blob(self, artifact_dir: Path) -> None:
+        """Sharing the legacy 8 chars is not enough to satisfy a longer ref.
+
+        The characters past the legacy width are what distinguish the two
+        blobs, so they must be verified against the stored blob rather than
+        truncated away.
+        """
+        content = b"the content being asked for"
+        full_hash = compute_hash(content)
+        planted = _write_blob_file(artifact_dir, full_hash[:8], b"an unrelated older blob")
+
+        with pytest.raises(ArtifactNotFoundError):
+            read_blob(artifact_dir, full_hash)
+        assert check_blob_exists(artifact_dir, full_hash) is False
+        assert planted.read_bytes() == b"an unrelated older blob"
+
+    def test_long_ref_trusts_the_sidecar_digest(self, artifact_dir: Path) -> None:
+        """A legacy sidecar's recorded digest resolves the ref without rehashing."""
+        content = b"stored by an older release"
+        full_hash = compute_hash(content)
+        legacy = _write_blob_file(artifact_dir, full_hash[:8], content)
+        _write_sidecar(artifact_dir, full_hash[:8], full_hash)
+
+        assert read_blob(artifact_dir, full_hash) == legacy
+
+        other_hash = compute_hash(b"a different blob entirely")
+        _write_sidecar(artifact_dir, full_hash[:8], other_hash)
+
+        with pytest.raises(ArtifactNotFoundError):
+            read_blob(artifact_dir, full_hash)
+
+    def test_traversal_ref_is_refused(self, artifact_dir: Path) -> None:
+        """A reference is a filename component, never a path."""
+        for ref in ("@../../../../etc/passwd", "@..", "@ab/cd"):
+            with pytest.raises(InvalidArtifactPathError):
+                read_blob(artifact_dir, ref)
 
     def test_ambiguous_abbreviated_ref_is_rejected(self, artifact_dir: Path) -> None:
         """An abbreviation matching two blobs is an error, not an arbitrary pick."""

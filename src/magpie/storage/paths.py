@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 from magpie.storage.exceptions import AmbiguousHashRefError, InvalidArtifactPathError
-from magpie.storage.hash import HASH_NAME_LENGTH, LEGACY_HASH_NAME_LENGTHS
+from magpie.storage.hash import HASH_NAME_LENGTH, LEGACY_HASH_NAME_LENGTHS, compute_hash
+
+# A name derived from a hash ref is joined onto the artifact directory as a
+# single path component, so a ref may not carry separators or traversal.
+_UNSAFE_REF_RE = re.compile(r"[/\\]|\.\.|\x00")
 
 
 def normalize_artifact_path(path: str) -> str:
@@ -224,11 +229,40 @@ def canonical_hash_name(hash_ref: str) -> str:
         The first :data:`~magpie.storage.hash.HASH_NAME_LENGTH` hex chars
         of the reference (or the whole reference, if it is shorter).
 
+    Raises:
+        InvalidArtifactPathError: If the reference is not usable as a filename.
+
     Examples:
         >>> canonical_hash_name("@" + "a" * 64)
         'aaaaaaaaaaaaaaaa'
     """
-    return hash_ref.lstrip("@")[:HASH_NAME_LENGTH]
+    return normalize_hash_ref(hash_ref)[:HASH_NAME_LENGTH]
+
+
+def normalize_hash_ref(hash_ref: str) -> str:
+    """Strip a hash reference's '@' prefix and refuse unsafe path characters.
+
+    The server does not pattern-validate its ``ref`` path parameter and the
+    names derived from a reference are joined onto the artifact directory, so
+    separators and traversal are rejected before a reference can become a
+    path component. Non-hex references are otherwise tolerated: manifests
+    are operator-editable data and callers like GC must be able to walk past
+    a junk tag target rather than crash on it.
+
+    Args:
+        hash_ref: Hash reference string, with or without an '@' prefix.
+
+    Returns:
+        The reference with its '@' prefix removed.
+
+    Raises:
+        InvalidArtifactPathError: If the reference contains a path separator,
+            '..' or a NUL byte.
+    """
+    ref = hash_ref.lstrip("@")
+    if _UNSAFE_REF_RE.search(ref):
+        raise InvalidArtifactPathError(f"Invalid hash reference: {hash_ref!r}")
+    return ref
 
 
 def candidate_hash_names(hash_ref: str) -> tuple[str, ...]:
@@ -246,8 +280,11 @@ def candidate_hash_names(hash_ref: str) -> tuple[str, ...]:
 
     Returns:
         De-duplicated candidate filenames, current width first.
+
+    Raises:
+        InvalidArtifactPathError: If the reference is not usable as a filename.
     """
-    ref = hash_ref.lstrip("@")
+    ref = normalize_hash_ref(hash_ref)
     names: list[str] = []
     for length in (HASH_NAME_LENGTH, *LEGACY_HASH_NAME_LENGTHS):
         name = ref[:length]
@@ -298,6 +335,44 @@ def _resolve_abbreviated(directory: Path, ref: str, suffix: str) -> str | None:
     return matches[0]
 
 
+def _sidecar_digest(artifact_dir: Path, name: str) -> str | None:
+    """Read the full digest a metadata sidecar records, if it is readable."""
+    sidecar = artifact_dir / "metadata" / f"{name}.json"
+    try:
+        recorded = json.loads(sidecar.read_text())["hash"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return recorded.lower() if isinstance(recorded, str) else None
+
+
+def _stored_name_has_prefix(artifact_dir: Path, name: str, ref: str) -> bool:
+    """Check that a narrower stored name really holds the requested blob.
+
+    Truncating a reference to a legacy width discards the characters past
+    that width, so an existing legacy blob sharing the leading characters is
+    not necessarily the blob asked for -- unchecked, a long ref (or a full
+    digest) could resolve to an unrelated blob on an install that still holds
+    pre-widening names. The sidecar's recorded digest settles this without
+    reading the blob; a blob whose sidecar is missing or unreadable is
+    hashed, which is rare and cheaper than serving the wrong content.
+
+    Args:
+        artifact_dir: Artifact directory path.
+        name: Candidate stored name, narrower than the reference.
+        ref: Hash reference with any '@' prefix already stripped.
+
+    Returns:
+        True if the stored blob's full digest starts with the reference.
+    """
+    digest = _sidecar_digest(artifact_dir, name)
+    if digest is None:
+        blob = artifact_dir / "blobs" / name
+        if not blob.is_file():
+            return False
+        digest = compute_hash(blob)
+    return digest.startswith(ref.lower())
+
+
 def resolve_blob_name(artifact_dir: Path, hash_ref: str) -> str | None:
     """Find the filename an existing blob is stored under.
 
@@ -316,12 +391,15 @@ def resolve_blob_name(artifact_dir: Path, hash_ref: str) -> str | None:
     Raises:
         AmbiguousHashRefError: If the reference is shorter than the stored
             width and abbreviates more than one stored blob.
+        InvalidArtifactPathError: If the reference is not usable as a filename.
     """
     blobs_dir = artifact_dir / "blobs"
-    ref = hash_ref.lstrip("@")
+    ref = normalize_hash_ref(hash_ref)
 
     for name in candidate_hash_names(ref):
         if (blobs_dir / name).is_file():
+            if len(ref) > len(name) and not _stored_name_has_prefix(artifact_dir, name, ref):
+                continue
             return name
 
     if len(ref) < HASH_NAME_LENGTH:
@@ -351,16 +429,20 @@ def resolve_metadata_name(artifact_dir: Path, hash_ref: str) -> str | None:
     Raises:
         AmbiguousHashRefError: If the reference is shorter than the stored
             width and abbreviates more than one stored blob or sidecar.
+        InvalidArtifactPathError: If the reference is not usable as a filename.
     """
     blob_name = resolve_blob_name(artifact_dir, hash_ref)
     if blob_name is not None:
         return blob_name
 
     metadata_dir = artifact_dir / "metadata"
-    ref = hash_ref.lstrip("@")
+    ref = normalize_hash_ref(hash_ref)
 
     for name in candidate_hash_names(ref):
         if (metadata_dir / f"{name}.json").is_file():
+            digest = _sidecar_digest(artifact_dir, name)
+            if len(ref) > len(name) and not (digest or "").startswith(ref.lower()):
+                continue
             return name
 
     if len(ref) < HASH_NAME_LENGTH:
