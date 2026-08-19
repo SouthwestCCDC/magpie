@@ -274,6 +274,26 @@ class TestRunVerifyUnreadable:
         assert result.blobs_scanned == 0
         assert result.errors >= 1
         assert any(issue.status == VerifyStatus.ERROR for issue in result.issues)
+        # Unreadable is not gone: never claim data loss for content we could not look at.
+        assert result.missing_blob == 0
+        assert result.missing_metadata == 0
+
+    def test_unreadable_metadata_directory_is_reported_as_an_error(
+        self, storage_path: Path
+    ) -> None:
+        write_blob(storage_path, "openvpn/ca", b"ca content")
+        locked = storage_path / "openvpn/ca/metadata"
+        locked.chmod(0o000)
+
+        try:
+            result = run_verify(storage_path)
+        finally:
+            locked.chmod(0o755)
+
+        assert result.errors >= 1
+        assert result.missing_metadata == 0
+        assert result.missing_blob == 0
+        assert result.ok == 0
 
 
 class TestRunVerifyConcurrentUpload:
