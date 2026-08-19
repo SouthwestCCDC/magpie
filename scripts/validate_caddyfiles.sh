@@ -59,6 +59,8 @@ declare -a caddyfiles=()
 if (( $# > 0 )); then
     caddyfiles=("$@")
 else
+    # Repo-relative, matching the paths an explicit argument is resolved
+    # against below.
     while IFS= read -r -d '' file; do
         caddyfiles+=("$file")
     done < <(git ls-files -z 'Caddyfile*' '*/Caddyfile*')
@@ -83,6 +85,21 @@ log "validating ${#caddyfiles[@]} Caddyfile(s) against ${#cases[@]} env case(s)"
 declare -a failures=()
 
 for caddyfile in "${caddyfiles[@]}"; do
+    # Bind mounts need an absolute source, and docker silently CREATES an empty
+    # directory for one that does not exist -- so a mangled path fails as
+    # "caddy validate on a directory" rather than "no such file". Resolve here
+    # instead: repo-relative for the git ls-files default, left alone when the
+    # caller passed an absolute path.
+    if [[ "$caddyfile" == /* ]]; then
+        caddyfile_src="$caddyfile"
+    else
+        caddyfile_src="${REPO_ROOT}/${caddyfile}"
+    fi
+    if [[ ! -f "$caddyfile_src" ]]; then
+        echo "[caddy-validate] ERROR: not a file: ${caddyfile_src}" >&2
+        exit 1
+    fi
+
     for spec in "${cases[@]}"; do
         IFS='|' read -r label allowed_cidrs trusted_proxies <<< "$spec"
         log "${caddyfile}: ${label}"
@@ -91,7 +108,7 @@ for caddyfile in "${caddyfiles[@]}"; do
         # (the step that actually catches a bad matcher value), without
         # binding any port.
         if ! docker run --rm \
-            -v "${REPO_ROOT}/${caddyfile}:/etc/caddy/Caddyfile:ro" \
+            -v "${caddyfile_src}:/etc/caddy/Caddyfile:ro" \
             -e "MAGPIE_ALLOWED_CIDRS=${allowed_cidrs}" \
             -e "MAGPIE_TRUSTED_PROXIES=${trusted_proxies}" \
             "$CADDY_IMAGE" \
