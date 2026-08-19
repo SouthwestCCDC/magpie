@@ -1000,7 +1000,14 @@ WorkingDirectory=${INSTALL_DIR}
 # message rather than burning the whole 300s bound waiting for a status that
 # can never arrive. No container yet (empty 'ps -q') keeps waiting:
 # magpie.service may still be creating it.
-ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'while :; do cid=\$(/usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env ps -q magpie 2>/dev/null); if [ -n "\$cid" ]; then state=\$(/usr/bin/docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}" "\$cid" 2>/dev/null); case "\$state" in healthy) exit 0 ;; nohealthcheck) echo "magpie container has no HEALTHCHECK; cannot confirm readiness before GC" >&2; exit 1 ;; esac; fi; sleep 5; done'
+#
+# The is-active check up front is what separates "coming up" from
+# "deliberately stopped": during planned downtime the container never
+# appears, and without it every timer firing would sit here for the full
+# 300s and then report a bare exit 124. Ordering means magpie.service has
+# already been started when this runs, so 'not active' is a real answer, not
+# a race.
+ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'if ! /usr/bin/systemctl is-active --quiet magpie.service; then echo "magpie.service is not active; not running GC (start it to resume scheduled GC)" >&2; exit 1; fi; while :; do cid=\$(/usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env ps -q magpie 2>/dev/null); if [ -n "\$cid" ]; then state=\$(/usr/bin/docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}" "\$cid" 2>/dev/null); case "\$state" in healthy) exit 0 ;; nohealthcheck) echo "magpie container has no HEALTHCHECK; cannot confirm readiness before GC" >&2; exit 1 ;; esac; fi; sleep 5; done'
 ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env exec -T magpie magpie-ctl gc --quiet
 
 StandardOutput=journal

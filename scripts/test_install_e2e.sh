@@ -230,8 +230,18 @@ assert_units_active() {
 
 assert_container_healthy() {
     log_section "Container health"
-    local container_id
-    container_id="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q magpie || true)"
+    # After a 'systemctl start' the container takes a moment to be created, so
+    # poll for its id rather than sampling once (the installer path has it
+    # already).
+    local container_id="" spent=0
+    while (( spent < 60 )); do
+        container_id="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q magpie || true)"
+        if [[ -n "$container_id" ]]; then
+            break
+        fi
+        sleep 3
+        spent=$((spent + 3))
+    done
     if [[ -z "$container_id" ]]; then
         fail "no running container for compose service 'magpie'"
         return 0
@@ -504,6 +514,28 @@ assert_gc_readiness_gate() {
     else
         log "NOTE: could not start a --no-healthcheck container from ${image}; skipped the no-HEALTHCHECK template check"
     fi
+
+    # Planned downtime must not look like "still coming up": with magpie.service
+    # stopped the container never appears, so without the is-active check every
+    # timer firing would block for the full bound and report a bare 124. Expect
+    # a fast nonzero (1, not 124) and a journal-worthy message instead.
+    log "stopping magpie.service to check the deliberately-stopped path"
+    systemctl stop magpie.service
+    local output
+    status=0
+    output="$(eval "$fast" 2>&1)" || status=$?
+    if (( status != 0 && status != 124 )); then
+        pass "readiness probe fails fast while magpie.service is stopped (${status})"
+    else
+        fail "readiness probe did not fail fast with magpie.service stopped (status ${status})"
+    fi
+    if [[ "$output" == *"is not active"* ]]; then
+        pass "readiness probe says why it refused to run GC"
+    else
+        fail "readiness probe gave no reason for refusing (got: ${output:-<none>})"
+    fi
+    systemctl start magpie.service
+    assert_container_healthy
 }
 
 # --- credentials for the assertions above -----------------------------------
