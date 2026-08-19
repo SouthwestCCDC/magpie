@@ -15,8 +15,27 @@ from magpie.ctl.commands.sync import (
     _extract_blob_name_from_path,
     _find_orphaned_blobs,
     _parse_manifest_content,
+    _parse_manifest_tag_targets,
 )
 from magpie.storage.hash import HASH_NAME_LENGTH
+
+
+class TestParseManifestTagTargets:
+    """Tests for _parse_manifest_tag_targets function."""
+
+    def test_counts_each_tagged_blob_once(self) -> None:
+        """Reported counts follow tag targets, not per-width candidate names."""
+        full_hash = "a" * 64
+        content = json.dumps({"version": 1, "tags": {"latest": f"@{full_hash}", "v1.0": full_hash}})
+
+        assert _parse_manifest_tag_targets(content) == {full_hash}
+        # The orphan-safety set holds one name per stored width
+        assert len(_parse_manifest_content(content)) == 2
+
+    def test_handles_unusable_manifests(self) -> None:
+        """Malformed content yields no targets rather than raising."""
+        for content in ("not valid json{", "", json.dumps({"version": 1})):
+            assert _parse_manifest_tag_targets(content) == set()
 
 
 class TestParseManifestContent:

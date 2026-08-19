@@ -367,6 +367,38 @@ class TestRunGC:
         assert result.blobs_deleted == 0
         assert blob_file.exists()
 
+    def test_preserves_blob_tagged_by_an_abbreviated_target(self, storage_root: Path) -> None:
+        """Protection matches what reads resolve, not just prefix truncation."""
+        artifact_dir = storage_root / "test/artifact"
+        blobs_dir = artifact_dir / "blobs"
+        metadata_dir = artifact_dir / "metadata"
+        blobs_dir.mkdir(parents=True)
+        metadata_dir.mkdir(parents=True)
+
+        full_hash = "abcdef0123456789" + "0" * 48
+        blob_name = full_hash[:16]
+        (blobs_dir / blob_name).write_bytes(b"tagged content")
+        (metadata_dir / f"{blob_name}.json").write_text(
+            json.dumps(
+                {
+                    "hash": full_hash,
+                    "uploaded_by": "test",
+                    "uploaded_at": (datetime.now(timezone.utc) - timedelta(days=365)).isoformat(),
+                    "source_uri": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+        # A hand-written tag target of a width no release writes
+        (artifact_dir / ".magpie").write_text(
+            json.dumps({"version": 1, "tags": {"latest": f"@{full_hash[:12]}"}}), encoding="utf-8"
+        )
+
+        result, blobs = run_gc(storage_path=storage_root, retention_days=30, dry_run=False)
+
+        assert result.blobs_deleted == 0
+        assert (blobs_dir / blob_name).exists()
+
     def test_unusable_tag_target_does_not_abort_the_run(self, storage_root: Path) -> None:
         """One hand-edited tag target must not stop the whole GC run."""
         artifact_dir = create_artifact_with_blobs(

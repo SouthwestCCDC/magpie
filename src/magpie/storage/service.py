@@ -12,6 +12,7 @@ import structlog
 
 from magpie.storage.blob import store_blob, store_blob_from_temp
 from magpie.storage.exceptions import (
+    AmbiguousHashRefError,
     ArtifactNotFoundError,
     InvalidArtifactPathError,
     ManifestCorruptError,
@@ -320,8 +321,9 @@ class StorageService:
                     source_uri=metadata.source_uri,
                 )
                 results.append(info)
-            except ArtifactNotFoundError:
-                # Skip files that can't be read as metadata
+            except (ArtifactNotFoundError, AmbiguousHashRefError, InvalidArtifactPathError):
+                # Skip files that can't be read as metadata, or whose name
+                # names no single blob: one odd sidecar must not fail the list
                 continue
 
         return results

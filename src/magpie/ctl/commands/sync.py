@@ -1343,6 +1343,29 @@ def _parse_manifest_content(content: str) -> set[str]:
     return names
 
 
+def _parse_manifest_tag_targets(content: str) -> set[str]:
+    """Parse manifest JSON and extract the distinct blobs its tags point at.
+
+    Reported counts use this rather than :func:`_parse_manifest_content`,
+    whose set holds one name per stored width per tag target and so overstates
+    how many blobs are tagged.
+
+    Args:
+        content: JSON content of the manifest file.
+
+    Returns:
+        Set of tag targets with any '@' prefix removed.
+    """
+    import json
+
+    try:
+        data = json.loads(content)
+        tags = data.get("tags", {})
+        return {hash_ref.lstrip("@").lower() for hash_ref in tags.values() if hash_ref}
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        return set()
+
+
 def _extract_blob_name_from_path(path: str) -> str | None:
     """Extract blob name from a blob path.
 
@@ -1407,16 +1430,17 @@ def _find_orphaned_blobs(
         click.echo("Parsing manifests...")
 
     tagged_blobs: set[str] = set()
+    tag_targets: set[str] = set()
     for manifest_path in manifest_paths:
         content = get_content(bucket, prefix, manifest_path, debug)
         if content:
-            hashes = _parse_manifest_content(content)
-            tagged_blobs.update(hashes)
+            tagged_blobs.update(_parse_manifest_content(content))
+            tag_targets.update(_parse_manifest_tag_targets(content))
         else:
             errors.append(f"Failed to read manifest: {manifest_path}")
 
     if debug:
-        click.echo(f"Found {len(tagged_blobs)} unique tagged blob hashes", err=True)
+        click.echo(f"Found {len(tag_targets)} unique tagged blob hashes", err=True)
 
     # Step 3: List all blob files in S3
     if not quiet and not is_json_output():
@@ -1436,7 +1460,7 @@ def _find_orphaned_blobs(
         if blob_name and blob_name not in tagged_blobs:
             orphaned_paths.append(blob_path)
 
-    return orphaned_paths, len(manifest_paths), len(tagged_blobs), len(blob_paths), errors
+    return orphaned_paths, len(manifest_paths), len(tag_targets), len(blob_paths), errors
 
 
 @sync.command("gc-s3")

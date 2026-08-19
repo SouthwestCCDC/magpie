@@ -17,13 +17,14 @@ import structlog
 
 from magpie.storage.cleanup import CleanupStats, cleanup_artifact_directories
 from magpie.storage.exceptions import (
+    AmbiguousHashRefError,
     ArtifactNotFoundError,
     InvalidArtifactPathError,
     ManifestCorruptError,
 )
 from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
-from magpie.storage.paths import candidate_hash_names
+from magpie.storage.paths import candidate_hash_names, resolve_blob_name
 from magpie.storage.symlinks import ReconcileStats, reconcile_symlinks
 
 logger = structlog.get_logger()
@@ -125,8 +126,17 @@ def get_blob_age_days(artifact_dir: Path, blob_hash: str, now: datetime) -> int 
             upload_time = upload_time.replace(tzinfo=timezone.utc)
         age = now - upload_time
         return age.days
-    except (FileNotFoundError, ArtifactNotFoundError, json.JSONDecodeError, KeyError, ValueError):
-        # Expected cases: metadata doesn't exist, is malformed, or missing fields
+    except (
+        FileNotFoundError,
+        ArtifactNotFoundError,
+        AmbiguousHashRefError,
+        InvalidArtifactPathError,
+        json.JSONDecodeError,
+        KeyError,
+        ValueError,
+    ):
+        # Expected cases: metadata doesn't exist, is malformed, is missing
+        # fields, or names no single blob
         pass
     except (PermissionError, OSError) as e:
         # Unexpected I/O errors - log and fall back
@@ -199,10 +209,16 @@ def _scan_artifacts(
         for tag_hash in manifest.tags.values():
             try:
                 tagged_hashes.update(candidate_hash_names(tag_hash))
-            except InvalidArtifactPathError:
-                # An unusable tag target names no stored blob, so it protects
-                # nothing; a hand-edited manifest must not abort the scan.
+                # Truncation alone would miss a hand-written tag target of
+                # intermediate width, which reads resolve by abbreviation.
+                resolved = resolve_blob_name(artifact_dir, tag_hash)
+            except (AmbiguousHashRefError, InvalidArtifactPathError):
+                # An unusable or ambiguous tag target names no single stored
+                # blob, so it protects nothing under any width; a hand-edited
+                # manifest must not abort the scan.
                 continue
+            if resolved is not None:
+                tagged_hashes.add(resolved)
 
         # Track artifact directory for cleanup pass
         artifact_dirs_to_cleanup.append(artifact_dir)
