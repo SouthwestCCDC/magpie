@@ -79,7 +79,7 @@ Magpie follows [Semantic Versioning](https://semver.org/) with the following sem
 
 The CLI and server ship from the same repository with matching version numbers. This simplifies compatibility reasoning:
 
-- **Recommendation: Deploy CLI and server at matching minor versions**: CLI `0.2.x` with server `0.2.x` ensures compatibility. Version checking is not currently enforced by the CLI (tracked in issue #451 for v0.1.3 milestone).
+- **Deploy CLI and server at matching minor versions**: CLI `0.2.x` with server `0.2.x` ensures compatibility. This is now *enforced by the server*: it reads the CLI's `User-Agent`, and a client older than the server's minor floor (server `0.2.0` → minimum client `0.2.0`) gets `426 Upgrade Required` with an `X-Magpie-Min-Client-Version` header. A compatible-but-older client gets an `X-Magpie-Upgrade-Available` hint instead.
 - **Patch versions are interchangeable within a minor**: CLI `0.2.1` should work with server `0.2.3` and vice versa
 - **Cross-minor compatibility is not guaranteed**: CLI `0.2.x` may not work with server `0.3.x`
 
