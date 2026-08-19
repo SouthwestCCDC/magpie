@@ -106,6 +106,29 @@ FOLLOW="false"
 LINES="100"
 FROM_SOURCE="false"
 REQUESTED_RELEASE=""  # from --release; empty means "use the default branch"
+# Whether REQUESTED_RELEASE came from the --release flag rather than the
+# MAGPIE_VERSION/GITHUB_REF env override, which resolve_and_validate_release()
+# also writes into REQUESTED_RELEASE. Anything that must reason about what the
+# CALLER asked for has to consult this, not REQUESTED_RELEASE alone.
+RELEASE_FROM_CLI="false"
+# --source-dir: install from an existing local git checkout instead of
+# cloning ${GITHUB_REPO} from github.com. Empty means "clone from GitHub"
+# (the operator path). This exists so the installer CI (issue #354) can
+# install the code under test -- a PR's own tree, including changes to
+# Dockerfile.bundled, entrypoint.sh, and docker/bundled/Caddyfile -- which
+# a GitHub clone of the default branch would never see. Requires
+# --from-source: a local tree implies building the image from it rather
+# than pulling a published one. See clone_repo().
+SOURCE_DIR=""
+# --allow-unsupported-os: downgrade check_os()'s hard failure to a warning.
+# The supported platform is unchanged (Debian 12/13 -- see check_os()); this
+# only exists so the installer can be exercised on a Debian-derived CI
+# runner. GitHub-hosted `ubuntu-latest` runners are the only environment
+# offering a full VM with real systemd + Docker for the installer E2E
+# (issue #354), and every other prerequisite the installer relies on (apt,
+# systemd units, docker compose v2) holds there. Never document this for
+# operators.
+ALLOW_UNSUPPORTED_OS="false"
 # --accept-empty-trusted-proxies: acknowledges that an empty
 # MAGPIE_TRUSTED_PROXIES is intentional (magpie is directly exposed), so
 # the issue #579 gate proceeds instead of prompting/dying. See
@@ -281,12 +304,21 @@ check_os() {
     # shellcheck source=/dev/null
     source /etc/os-release
 
+    # One helper for both checks so --allow-unsupported-os cannot
+    # accidentally apply to only one of them.
+    local os_error=""
     if [[ "${ID:-}" != "debian" ]]; then
-        die "This script requires Debian (found: ${ID:-unknown})"
+        os_error="This script requires Debian (found: ${ID:-unknown})"
+    elif [[ ! "${VERSION_ID:-}" =~ ^(12|13)$ ]]; then
+        os_error="This script requires Debian 12 or 13 (found: ${VERSION_ID:-unknown})"
     fi
 
-    if [[ ! "${VERSION_ID:-}" =~ ^(12|13)$ ]]; then
-        die "This script requires Debian 12 or 13 (found: ${VERSION_ID:-unknown})"
+    if [[ -n "$os_error" ]]; then
+        if [[ "$ALLOW_UNSUPPORTED_OS" != "true" ]]; then
+            die "$os_error"
+        fi
+        log_warn "${os_error} -- continuing anyway because --allow-unsupported-os was given. This configuration is not supported."
+        return 0
     fi
 
     log "Detected Debian ${VERSION_ID}"
@@ -543,6 +575,35 @@ validate_config() {
     fi
     if [[ -d "$parent_dir" ]] && [[ ! -w "$parent_dir" ]]; then
         errors+=("Data directory path is not writable: $parent_dir")
+    fi
+
+    # --source-dir must name an existing local git checkout, and only makes
+    # sense together with --from-source (see SOURCE_DIR's declaration).
+    if [[ -n "$SOURCE_DIR" ]]; then
+        if [[ ! "$SOURCE_DIR" =~ ^/ ]]; then
+            errors+=("Source directory must be an absolute path: $SOURCE_DIR")
+        else
+            validate_path_value "$SOURCE_DIR" "Source directory"
+        fi
+        # Ask git rather than testing for a .git DIRECTORY: in a linked worktree
+        # (or a 'clone --separate-git-dir') .git is a file pointing elsewhere,
+        # and the 'git clone --no-hardlinks' in clone_repo() handles those fine.
+        if ! git -C "$SOURCE_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+            errors+=("Source directory is not a git checkout: $SOURCE_DIR")
+        fi
+        if [[ ! -f "$SOURCE_DIR/pyproject.toml" ]] || [[ ! -f "$SOURCE_DIR/docker-compose.yml" ]]; then
+            errors+=("Source directory does not look like a magpie checkout (missing pyproject.toml or docker-compose.yml): $SOURCE_DIR")
+        fi
+        if [[ "$FROM_SOURCE" != "true" ]]; then
+            errors+=("--source-dir requires --from-source")
+        fi
+        # RELEASE_FROM_CLI, not REQUESTED_RELEASE: the latter also holds the
+        # MAGPIE_VERSION/GITHUB_REF env override by this point (validate_config
+        # runs after resolve_and_validate_release), and blaming a flag the
+        # caller never passed for an inherited env var would be a lie.
+        if [[ "$RELEASE_FROM_CLI" == "true" ]]; then
+            errors+=("--source-dir cannot be combined with --release (the local checkout's HEAD is the release)")
+        fi
     fi
 
     if [[ ${#errors[@]} -gt 0 ]]; then
@@ -867,7 +928,9 @@ EnvironmentFile=${INSTALL_DIR}/etc/.env
 # -f pins the canonical operator file explicitly -- docker-compose.override.yml
 # (the dev-only from-source build overlay) is never copied into INSTALL_DIR
 # by clone_repo()/cmd_update(), but pinning here is belt-and-suspenders
-# against a bare `docker compose` auto-merging one if it ever showed up.
+# against a bare 'docker compose' invocation auto-merging one if it ever
+# showed up. (Quoted, not backticked: this heredoc is UNQUOTED, so
+# backticks in it are command substitutions -- even inside a comment.)
 ExecStart=/usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env up --no-build
 # --remove-orphans: on a 2->1 topology swap (a v0.1.x install's leftover
 # 'caddy' container), the old sidecar has no matching service in the
@@ -897,7 +960,7 @@ generate_gc_units() {
 [Unit]
 Description=Magpie Garbage Collection
 Documentation=https://github.com/${GITHUB_REPO}
-After=network.target docker.service
+After=network.target docker.service magpie.service
 Requires=docker.service
 
 [Service]
@@ -907,7 +970,48 @@ WorkingDirectory=${INSTALL_DIR}
 # Use flock to prevent concurrent runs. If GC is already running, flock exits
 # immediately. Unlike ConditionPathExists, flock automatically handles stale
 # lock files from crashed processes.
-ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env run --rm -T magpie magpie-ctl gc --quiet
+#
+# 'exec -T', not 'run --rm -T' (quoted, not backticked: this heredoc is
+# UNQUOTED, so backticks in it are command substitutions -- even inside a
+# comment): the bundled image's ENTRYPOINT (docker/bundled/wrapper.sh) is
+# a process supervisor that ignores its arguments and always starts
+# uvicorn+caddy, so 'run magpie magpie-ctl gc' would boot a SECOND
+# server that never exits -- GC would never run and
+# this oneshot would block until TimeoutStartSec. Running it inside the
+# live container is also the documented ctl path for this image (see
+# magpie-ctl-wrapper.sh, which resolves the runtime uid from
+# /run/magpie-user) and the same thing compose_exec() does elsewhere in
+# this script. It requires magpie.service to be up, hence the After=
+# above; if it is not, this unit fails loudly instead of silently doing
+# nothing.
+#
+# After= only orders unit START, and magpie.service is Type=simple running
+# 'docker compose up', so it counts as started long before the container is
+# serving. With the timer's Persistent=true, a missed run is replayed at
+# boot, where the exec below would otherwise race the container coming up.
+# So wait (bounded) for the container to report healthy first -- the image's
+# HEALTHCHECK covers uvicorn answering /health, which implies the DB init in
+# the entrypoint finished. 5 minutes, then fail loudly rather than hang
+# until TimeoutStartSec; the next scheduled run recovers on its own since GC
+# is retention-based, not incremental.
+#
+# 'docker inspect' rather than 'compose ps --format <go-template>': the
+# template form of 'ps' needs a recent Compose v2 (check_prerequisites only
+# asserts that 'docker compose version' works), and an image with no
+# HEALTHCHECK reports an empty .State.Health, which is distinguishable here
+# but not through 'ps'. So that case exits nonzero at once with a real
+# message rather than burning the whole 300s bound waiting for a status that
+# can never arrive. No container yet (empty 'ps -q') keeps waiting:
+# magpie.service may still be creating it.
+#
+# The is-active check up front is what separates "coming up" from
+# "deliberately stopped": during planned downtime the container never
+# appears, and without it every timer firing would sit here for the full
+# 300s and then report a bare exit 124. Ordering means magpie.service has
+# already been started when this runs, so 'not active' is a real answer, not
+# a race.
+ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'if ! /usr/bin/systemctl is-active --quiet magpie.service; then echo "magpie.service is not active; not running GC (start it to resume scheduled GC)" >&2; exit 1; fi; while :; do cid=\$(/usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env ps -q magpie 2>/dev/null); if [ -n "\$cid" ]; then state=\$(/usr/bin/docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}" "\$cid" 2>/dev/null); case "\$state" in healthy) exit 0 ;; nohealthcheck) echo "magpie container has no HEALTHCHECK; cannot confirm readiness before GC" >&2; exit 1 ;; esac; fi; sleep 5; done'
+ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env exec -T magpie magpie-ctl gc --quiet
 
 StandardOutput=journal
 StandardError=journal
@@ -1083,8 +1187,20 @@ resolve_and_validate_release() {
     # / GITHUB_REF env override (captured at script start, before the
     # Constants section repurposed the MAGPIE_VERSION name) > the default
     # branch. See issue #559.
-    local from_cli="true"
+    local from_cli="$RELEASE_FROM_CLI"
     if [[ -z "$REQUESTED_RELEASE" ]]; then
+        # --source-dir already names the tree to install, so an inherited
+        # MAGPIE_VERSION/GITHUB_REF (routinely set in CI shells) must not
+        # silently become a release request -- it would fail the
+        # --source-dir/--release conflict check and pay for a remote
+        # ls-remote verification of a ref that is never cloned. An explicit
+        # --release with --source-dir is still rejected by validate_config().
+        if [[ -n "$SOURCE_DIR" ]]; then
+            if [[ -n "$REQUESTED_RELEASE_ENV" ]]; then
+                log_warn "Ignoring release env override '${REQUESTED_RELEASE_ENV}' (MAGPIE_VERSION/GITHUB_REF): --source-dir installs the local checkout's HEAD"
+            fi
+            return 0
+        fi
         REQUESTED_RELEASE="$REQUESTED_RELEASE_ENV"
         from_cli="false"
     fi
@@ -1191,17 +1307,32 @@ update_repo_to_latest() {
 }
 
 clone_repo() {
-    log "Cloning magpie repository..."
-
-    local repo_url="https://github.com/${GITHUB_REPO}.git"
     local repo_dir="${INSTALL_DIR}/repo"
 
     # Remove existing repo if present
     rm -rf "$repo_dir"
 
-    # Shallow clone for speed
-    if ! git clone --depth 1 --branch "$GITHUB_BRANCH" "$repo_url" "$repo_dir"; then
-        die "Failed to clone repository from $repo_url"
+    if [[ -n "$SOURCE_DIR" ]]; then
+        # --source-dir: clone the local checkout's HEAD instead of fetching
+        # from github.com, so what gets installed is exactly the tree under
+        # test. Still a `git clone` (not a `cp -a`) so INSTALL_DIR/repo
+        # remains a real repository -- detect_version(), cmd_update()'s
+        # PRIOR_GIT_REF capture, and the rollback path all run git against
+        # it. --no-hardlinks keeps the installed copy independent of the
+        # source checkout's object store. Note this installs *committed*
+        # HEAD; uncommitted working-tree edits are not included.
+        log "Cloning magpie repository from local checkout: ${SOURCE_DIR}"
+        if ! git clone --no-hardlinks "$SOURCE_DIR" "$repo_dir"; then
+            die "Failed to clone repository from local checkout $SOURCE_DIR"
+        fi
+    else
+        log "Cloning magpie repository..."
+        local repo_url="https://github.com/${GITHUB_REPO}.git"
+
+        # Shallow clone for speed
+        if ! git clone --depth 1 --branch "$GITHUB_BRANCH" "$repo_url" "$repo_dir"; then
+            die "Failed to clone repository from $repo_url"
+        fi
     fi
 
     # Copy only the canonical operator compose file. docker-compose.override.yml
@@ -3293,6 +3424,17 @@ Install options (only used with 'install' command):
   --noninteractive        Skip interactive prompts (use defaults for all config)
   --force                 Overwrite existing installation
   --from-source           Build image from source instead of pulling from ghcr.io
+  --source-dir PATH       Install from an existing local git checkout at PATH
+                          instead of cloning from github.com. Requires
+                          --from-source, and cannot be combined with
+                          --release. Installs the checkout's committed HEAD
+                          (working-tree edits are not included). Intended
+                          for CI and development -- operators should omit it.
+  --allow-unsupported-os  Continue (with a warning) on a non-Debian-12/13
+                          host instead of refusing to install. Only the
+                          Debian versions above are supported; this exists
+                          so CI can exercise the installer on a
+                          Debian-derived runner. Not for operators.
 
 Update options:
   --from-source                    Rebuild image from source instead of
@@ -3522,6 +3664,22 @@ parse_args() {
                 FROM_SOURCE="true"
                 shift
                 ;;
+            --allow-unsupported-os)
+                ALLOW_UNSUPPORTED_OS="true"
+                shift
+                ;;
+            --source-dir)
+                # Missing/empty value dies rather than falling through:
+                # an empty SOURCE_DIR is indistinguishable from "not
+                # requested" in validate_config()/clone_repo(), which
+                # would silently clone from GitHub instead of the local
+                # tree the caller asked for.
+                if [[ $# -lt 2 ]] || [[ "${2:-}" == -* ]] || [[ -z "${2:-}" ]]; then
+                    die "--source-dir requires a path argument"
+                fi
+                SOURCE_DIR="$2"
+                shift 2
+                ;;
             --purge)
                 PURGE="true"
                 shift
@@ -3565,6 +3723,7 @@ parse_args() {
                     die "--release requires a value, e.g. --release v0.1.4"
                 fi
                 REQUESTED_RELEASE="$2"
+                RELEASE_FROM_CLI="true"
                 shift 2
                 ;;
             -*)
@@ -3589,6 +3748,16 @@ parse_args() {
     # See issue #559.
     if [[ -n "$REQUESTED_RELEASE" ]] && [[ "$command" != "install" ]]; then
         die "--release is only supported by the 'install' command (got: $command)"
+    fi
+
+    # Same for --source-dir: only clone_repo() (install) consults SOURCE_DIR,
+    # while 'update' refreshes INSTALL_DIR/repo from origin/$GITHUB_BRANCH. An
+    # accepted-but-ignored flag there would deploy GitHub's code while the
+    # caller believes it deployed their local tree, so refuse instead. Unlike
+    # --release this has no env-var form, so a set value is always an explicit
+    # request.
+    if [[ -n "$SOURCE_DIR" ]] && [[ "$command" != "install" ]]; then
+        die "--source-dir is only supported by the 'install' command (got: $command)"
     fi
 
     # Execute command

@@ -22,6 +22,16 @@ sudo systemctl enable --now magpie-gc.timer
 systemctl list-timers magpie-gc.timer
 ```
 
+The unit's `ExecStartPre=` waits (up to 5 minutes) for the `magpie` container to
+report healthy before it runs GC, since `docker compose exec` against a
+container that is not yet serving fails. If a unit named `magpie.service` exists
+(as it does for installs made by `scripts/magpie-deploy.sh`) and is not active,
+it refuses immediately instead of waiting -- planned downtime is not a startup
+race. Without that unit, e.g. a stack you bring up with `docker compose up -d`,
+only the container wait applies. Delete the `ExecStartPre=` line if you switch
+to one of the alternative `ExecStart=` lines the unit documents (see the
+non-Docker section below).
+
 ### Quick Start (cron)
 
 ```bash
@@ -78,7 +88,9 @@ Or via command-line flag (recommended for one-off overrides):
 ```bash
 # For Docker deployments, use CLI flags rather than shell environment variables
 # (shell env vars are not passed into the container)
-docker compose run --rm magpie magpie-ctl gc --retention-days 30
+# (`exec`, not `run`: the bundled image's entrypoint is a process supervisor
+# that ignores its arguments, so `run` would start a second server instead)
+docker compose exec -T magpie magpie-ctl gc --retention-days 30
 
 # Direct execution
 magpie-ctl gc --retention-days 30
@@ -161,10 +173,13 @@ Then reload: `systemctl daemon-reload`
 
 ### Non-Docker Deployments
 
-If running Magpie directly (not via Docker Compose), update the ExecStart:
+If running Magpie directly (not via Docker Compose), update the ExecStart and
+delete the container-readiness `ExecStartPre=` line (there is no container to
+wait for):
 
 **systemd**:
 ```ini
+# remove the ExecStartPre=... line shipped in magpie-gc.service
 ExecStart=/usr/local/bin/magpie-ctl gc --quiet
 ```
 
