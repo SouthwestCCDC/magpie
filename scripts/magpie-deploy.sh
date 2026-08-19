@@ -585,8 +585,11 @@ validate_config() {
         else
             validate_path_value "$SOURCE_DIR" "Source directory"
         fi
-        if [[ ! -d "$SOURCE_DIR/.git" ]]; then
-            errors+=("Source directory is not a git checkout (no .git): $SOURCE_DIR")
+        # Ask git rather than testing for a .git DIRECTORY: in a linked worktree
+        # (or a 'clone --separate-git-dir') .git is a file pointing elsewhere,
+        # and the 'git clone --no-hardlinks' in clone_repo() handles those fine.
+        if ! git -C "$SOURCE_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+            errors+=("Source directory is not a git checkout: $SOURCE_DIR")
         fi
         if [[ ! -f "$SOURCE_DIR/pyproject.toml" ]] || [[ ! -f "$SOURCE_DIR/docker-compose.yml" ]]; then
             errors+=("Source directory does not look like a magpie checkout (missing pyproject.toml or docker-compose.yml): $SOURCE_DIR")
