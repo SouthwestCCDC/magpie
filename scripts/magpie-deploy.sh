@@ -981,6 +981,17 @@ WorkingDirectory=${INSTALL_DIR}
 # this script. It requires magpie.service to be up, hence the After=
 # above; if it is not, this unit fails loudly instead of silently doing
 # nothing.
+#
+# After= only orders unit START, and magpie.service is Type=simple running
+# 'docker compose up', so it counts as started long before the container is
+# serving. With the timer's Persistent=true, a missed run is replayed at
+# boot, where the exec below would otherwise race the container coming up.
+# So wait (bounded) for the container to report healthy first -- the image's
+# HEALTHCHECK covers uvicorn answering /health, which implies the DB init in
+# the entrypoint finished. 5 minutes, then fail loudly rather than hang
+# until TimeoutStartSec; the next scheduled run recovers on its own since GC
+# is retention-based, not incremental.
+ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'until /usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env ps --format {{.Health}} magpie | grep -qx healthy; do sleep 5; done'
 ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env exec -T magpie magpie-ctl gc --quiet
 
 StandardOutput=journal

@@ -453,6 +453,35 @@ assert_gc_service_runs() {
     assert_eq "success" "$result" "magpie-gc.service result"
 }
 
+# The GC oneshot gates its `compose exec` on the container reporting healthy,
+# because After=magpie.service only orders unit start and the timer's
+# Persistent=true can replay a missed run at boot, before the container is
+# serving. Two things worth asserting cheaply: the gate is actually declared,
+# and it BLOCKS (rather than falling through) when nothing is healthy -- run
+# with a 10s bound against a service name that does not exist, so a gate that
+# wrongly succeeded would return 0 instead of timeout's 124.
+assert_gc_readiness_gate() {
+    log_section "GC readiness gate"
+    local pre
+    pre="$(systemctl show -p ExecStartPre --value magpie-gc.service || true)"
+    if [[ "$pre" == *healthy* ]]; then
+        pass "magpie-gc.service declares a health-readiness ExecStartPre"
+    else
+        fail "magpie-gc.service has no health-readiness ExecStartPre (got: ${pre:-<none>})"
+        return 0
+    fi
+
+    local status=0
+    timeout 10 /bin/sh -c "until docker compose -f '${COMPOSE_FILE}' --env-file '${ENV_FILE}' ps --format {{.Health}} definitely-not-a-service | grep -qx healthy; do sleep 1; done" \
+        >/dev/null 2>&1 || status=$?
+    assert_eq "124" "$status" "readiness probe keeps waiting while nothing is healthy (timeout exit)"
+
+    status=0
+    timeout 30 /bin/sh -c "until docker compose -f '${COMPOSE_FILE}' --env-file '${ENV_FILE}' ps --format {{.Health}} magpie | grep -qx healthy; do sleep 1; done" \
+        >/dev/null 2>&1 || status=$?
+    assert_eq "0" "$status" "readiness probe passes against the healthy container"
+}
+
 # --- credentials for the assertions above -----------------------------------
 
 read_admin_token() {
@@ -549,6 +578,7 @@ main() {
     assert_forward_auth
     assert_forged_headers_rejected
     assert_round_trip
+    assert_gc_readiness_gate
     assert_gc_service_runs
 
     assert_purge_leaves_nothing
