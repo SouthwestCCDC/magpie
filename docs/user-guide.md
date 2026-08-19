@@ -7,7 +7,9 @@ Content-addressed artifact storage with mutable tags for distributing build arti
 **Key Concepts:**
 - **Blob**: Artifact file stored by SHA-256 hash (immutable)
 - **Tag**: Human-readable name (mutable, e.g., `latest`, `v1.0`)
-- **Hash Ref**: Short reference to blob: `@abc12345` (first 8 chars)
+- **Hash Ref**: Short reference to blob: `@a1b2c3d4e5f67890` (first 16 chars of the SHA-256). Refs printed by
+  releases before v0.3.0 were 8 chars; those still resolve, and any
+  abbreviation of 8-64 hex chars is accepted.
 
 **Authentication:**
 - Bearer tokens (required for CLI and API access)
@@ -123,7 +125,7 @@ magpie ls images/ubuntu
 ```bash
 magpie get images/ubuntu                 # Latest
 magpie get images/ubuntu:stable          # By tag
-magpie get images/ubuntu:@a1b2c3d4       # By hash
+magpie get images/ubuntu:@a1b2c3d4e5f67890  # By hash
 magpie get images/ubuntu:latest -o file  # Custom path
 magpie get images/ubuntu --force         # Force re-download
 ```
@@ -133,7 +135,7 @@ magpie get images/ubuntu --force         # Force re-download
 magpie tag images/ubuntu:latest --as stable   # Create tag
 magpie untag images/ubuntu v1.0               # Remove tag
 magpie flush-tag deprecated --dry-run         # Remove globally (preview)
-magpie info images/ubuntu:@a1b2c3d4           # View metadata
+magpie info images/ubuntu:@a1b2c3d4e5f67890   # View metadata
 magpie amend images/ubuntu:latest --source-uri https://github.com/example/repo  # Update metadata
 ```
 

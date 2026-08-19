@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import structlog
+
+from magpie.storage.exceptions import AmbiguousHashRefError, InvalidArtifactPathError
 from magpie.storage.manifest import Manifest
+from magpie.storage.paths import canonical_hash_name, resolve_blob_name
+
+logger = structlog.get_logger()
 
 
 @dataclass
@@ -49,11 +55,9 @@ def create_symlink(artifact_dir: Path, tag_name: str, hash_ref: str) -> None:
     """
     symlink_path = artifact_dir / tag_name
 
-    # Strip @ prefix if present and use first 8 chars for the target path
-    # (blobs are stored with 8-char short hash, but manifest may have full hash)
-    target_name = hash_ref.lstrip("@")[:8]
-    # Use relative path: blobs/{short_hash}
-    target = Path("blobs") / target_name
+    # Manifests store full hashes; blobs are stored under a truncated name,
+    # so point at the name the blob actually has on disk.
+    target = blob_link_target(artifact_dir, hash_ref)
 
     # Remove existing symlink if present (atomic update)
     if symlink_path.is_symlink():
@@ -64,6 +68,24 @@ def create_symlink(artifact_dir: Path, tag_name: str, hash_ref: str) -> None:
 
     # Create symlink with relative target
     symlink_path.symlink_to(target)
+
+
+def blob_link_target(artifact_dir: Path, hash_ref: str) -> Path:
+    """Get the relative symlink target for a hash reference.
+
+    Shared by symlink creation and reconciliation so both agree on the
+    target even when the blob is stored under a filename written by an
+    earlier release (a narrower hash prefix).
+
+    Args:
+        artifact_dir: Path to artifact directory.
+        hash_ref: Hash reference to link to (with or without @ prefix).
+
+    Returns:
+        Relative path of the form ``blobs/{hash_name}``.
+    """
+    name = resolve_blob_name(artifact_dir, hash_ref) or canonical_hash_name(hash_ref)
+    return Path("blobs") / name
 
 
 def remove_symlink(artifact_dir: Path, tag_name: str) -> None:
@@ -97,8 +119,25 @@ def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> ReconcileStats
     """
     stats = ReconcileStats()
 
+    # A manifest is hand-editable, so a tag target that names no possible blob
+    # is left exactly as it is: reconciliation neither links it nor treats its
+    # existing symlink as an orphan. Reconciling many artifacts (GC) must not
+    # fail wholesale over one bad entry.
+    unusable_tags = set()
+    for tag_name, hash_ref in manifest.tags.items():
+        try:
+            blob_link_target(artifact_dir, hash_ref)
+        except (AmbiguousHashRefError, InvalidArtifactPathError) as e:
+            logger.warning(
+                "symlink_skipping_unusable_tag_target",
+                tag=tag_name,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            unusable_tags.add(tag_name)
+
     # Get set of expected tag names from manifest
-    expected_tags = set(manifest.tags.keys())
+    expected_tags = set(manifest.tags.keys()) - unusable_tags
 
     # Find existing symlinks in artifact directory (excluding subdirectories)
     existing_symlinks: set[str] = set()
@@ -108,7 +147,7 @@ def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> ReconcileStats
                 existing_symlinks.add(item.name)
 
     # Total symlinks to check = expected tags + orphan symlinks
-    stats.checked = len(expected_tags) + len(existing_symlinks - expected_tags)
+    stats.checked = len(expected_tags) + len(existing_symlinks - expected_tags - unusable_tags)
 
     # Create missing symlinks
     missing_tags = expected_tags - existing_symlinks
@@ -119,7 +158,7 @@ def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> ReconcileStats
         stats.created_tags.append(tag_name)
 
     # Remove orphan symlinks (symlinks not in manifest)
-    orphan_symlinks = existing_symlinks - expected_tags
+    orphan_symlinks = existing_symlinks - expected_tags - unusable_tags
     for tag_name in sorted(orphan_symlinks):
         remove_symlink(artifact_dir, tag_name)
         stats.removed += 1
@@ -128,7 +167,7 @@ def reconcile_symlinks(artifact_dir: Path, manifest: Manifest) -> ReconcileStats
     # Update existing symlinks that point to wrong target
     for tag_name in sorted(expected_tags & existing_symlinks):
         symlink_path = artifact_dir / tag_name
-        expected_target = Path("blobs") / manifest.tags[tag_name].lstrip("@")[:8]
+        expected_target = blob_link_target(artifact_dir, manifest.tags[tag_name])
 
         # Check if current target matches expected
         try:

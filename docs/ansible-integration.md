@@ -28,7 +28,7 @@ vault_magpie_token: "mgp_your_token_here"
 
 **By version tag:** Change `latest` to `v2.1` or `stable`
 
-**By hash (immutable):** Use `/blobs/a1b2c3d4` instead of tag
+**By hash (immutable):** Use `/blobs/a1b2c3d4e5f67890` instead of tag
 
 **Download and extract:**
 ```yaml

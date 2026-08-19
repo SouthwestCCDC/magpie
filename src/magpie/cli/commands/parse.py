@@ -11,8 +11,8 @@ Examples:
     images/ubuntu:@abc12345    -> ArtifactRef("images/ubuntu", "@abc12345")
     images/ubuntu              -> ArtifactRef("images/ubuntu", "latest")  [default ref]
 
-The @ prefix is used for hash references (short hashes), while bare names
-are tag references.
+The @ prefix is used for hash references (abbreviated or full SHA-256 digests),
+while bare names are tag references.
 
 ---
 AI-generated: This module was authored with Claude Code (Opus 4.5).
@@ -26,8 +26,16 @@ from dataclasses import dataclass
 from magpie.storage.exceptions import InvalidArtifactPathError
 from magpie.storage.paths import normalize_artifact_path
 
-# Pattern for validating hash refs: @ followed by 8 hex characters
-HASH_REF_PATTERN = re.compile(r"^@[0-9a-f]{8}$")
+# Minimum hash-ref width accepted, kept at the width older releases printed
+# so refs copied from them still work.
+MIN_HASH_REF_LENGTH = 8
+FULL_HASH_LENGTH = 64
+
+# Pattern for validating hash refs: @ followed by 8-64 lowercase hex characters.
+# The stored width is a server-side detail (see magpie.storage.hash), so the
+# client accepts anything from an abbreviated ref to a full digest and lets the
+# server resolve it.
+HASH_REF_PATTERN = re.compile(rf"^@[0-9a-f]{{{MIN_HASH_REF_LENGTH},{FULL_HASH_LENGTH}}}$")
 
 # Pattern for valid tag names: alphanumeric, dash, underscore, dot
 # Must start with alphanumeric
@@ -225,25 +233,25 @@ def _validate_path(path: str) -> None:
 def _validate_ref(ref: str) -> None:
     """Validate ref format (tag name or hash ref).
 
-    Hash refs start with @ followed by 8 hex characters.
+    Hash refs start with @ followed by 8-64 lowercase hex characters.
     Tag names are alphanumeric with dash, underscore, dot allowed.
     """
     if not ref:
         raise ParseError("Ref cannot be empty")
 
     if ref.startswith("@"):
-        # Hash ref - must be @ followed by 8 hex chars
         if not HASH_REF_PATTERN.match(ref):
             # Provide helpful error for common mistakes
-            if len(ref) < 9:
+            digest = ref[1:]
+            if len(digest) < MIN_HASH_REF_LENGTH:
                 raise ParseError(
                     f"Invalid hash ref '{ref}'. Hash refs must be @ followed by "
-                    f"exactly 8 hex characters (e.g., '@abc12345')."
+                    f"at least {MIN_HASH_REF_LENGTH} hex characters (e.g., '@abc12345')."
                 )
-            elif len(ref) > 9:
+            elif len(digest) > FULL_HASH_LENGTH:
                 raise ParseError(
-                    f"Hash ref '{ref}' is too long. Use the short form with "
-                    f"8 hex characters (e.g., '@{ref[1:9]}')."
+                    f"Hash ref '{ref}' is too long. A SHA-256 digest is at most "
+                    f"{FULL_HASH_LENGTH} hex characters (e.g., '@{digest[:FULL_HASH_LENGTH]}')."
                 )
             else:
                 raise ParseError(

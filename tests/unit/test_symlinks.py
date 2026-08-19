@@ -174,6 +174,18 @@ class TestReconcileSymlinks:
         assert stats.updated == 0
         assert sorted(stats.created_tags) == ["latest", "v1.0"]
 
+    def test_reconcile_skips_unusable_tag_target(self, artifact_dir: Path) -> None:
+        """A hand-edited tag target must not abort reconciliation of the rest."""
+        (artifact_dir / "blobs" / "abc12345").write_text("content1")
+        manifest = Manifest(tags={"latest": "@abc12345", "broken": "@../../etc/passwd"})
+
+        stats = reconcile_symlinks(artifact_dir, manifest)
+
+        assert (artifact_dir / "latest").is_symlink()
+        assert not (artifact_dir / "broken").exists()
+        assert stats.created_tags == ["latest"]
+        assert stats.removed == 0
+
     def test_reconcile_removes_orphan_symlinks(self, artifact_dir: Path) -> None:
         """reconcile_symlinks should remove symlinks not in manifest."""
         # Create orphan symlinks

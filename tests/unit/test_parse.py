@@ -141,13 +141,24 @@ class TestParseArtifactRefHashRefs:
 
     def test_hash_ref_too_short_raises_error(self) -> None:
         """Hash ref shorter than 8 chars raises error."""
-        with pytest.raises(ParseError, match="exactly 8 hex characters"):
+        with pytest.raises(ParseError, match="at least 8 hex characters"):
             parse_artifact_ref("images/ubuntu:@abc123")
 
-    def test_hash_ref_too_long_raises_error(self) -> None:
-        """Hash ref longer than 8 chars raises error with suggestion."""
-        with pytest.raises(ParseError, match="too long.*@a1b2c3d4"):
-            parse_artifact_ref("images/ubuntu:@a1b2c3d4e5f6")
+    def test_hash_ref_wider_than_legacy_prefix_accepted(self) -> None:
+        """Refs wider than the legacy 8-char prefix are accepted."""
+        result = parse_artifact_ref("images/ubuntu:@a1b2c3d4e5f67890")
+        assert result.ref == "@a1b2c3d4e5f67890"
+
+    def test_full_hash_ref_accepted(self) -> None:
+        """A full 64-char digest is a valid hash ref."""
+        full_hash = "a" * 64
+        result = parse_artifact_ref(f"images/ubuntu:@{full_hash}")
+        assert result.ref == f"@{full_hash}"
+
+    def test_hash_ref_longer_than_digest_raises_error(self) -> None:
+        """Hash ref longer than a SHA-256 digest raises error with suggestion."""
+        with pytest.raises(ParseError, match="too long.*64 hex characters"):
+            parse_artifact_ref(f"images/ubuntu:@{'a' * 65}")
 
     def test_hash_ref_invalid_chars_raises_error(self) -> None:
         """Hash ref with non-hex chars raises error."""

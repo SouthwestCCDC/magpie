@@ -73,6 +73,24 @@ class TestRunMigrations:
         # len(applied) == 2, not 5.
         assert len(applied) == len(_MIGRATIONS)
 
+    def test_upgrade_from_v1_install_applies_only_newer_steps(self, tmp_path: Path) -> None:
+        """A v0.2.0 install (stamped v1) advances without re-running the baseline."""
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+        conn = get_connection(db_path)
+        try:
+            conn.execute("PRAGMA user_version = 1")
+            conn.commit()
+            version_before, version_after, applied = run_migrations(conn)
+        finally:
+            conn.close()
+
+        assert version_before == 1
+        assert version_after == CURRENT_DATA_FORMAT_VERSION
+        assert applied == [
+            f"v{step.version}: {step.description}" for step in _MIGRATIONS if step.version > 1
+        ]
+
     def test_idempotent_on_already_current_database(self, tmp_path: Path) -> None:
         """Running migrations twice applies nothing the second time."""
         db_path = tmp_path / "magpie.db"

@@ -16,6 +16,7 @@ import subprocess
 import httpx
 import pytest
 
+from magpie.storage.hash import short_hash
 from tests.e2e.conftest import PROJECT_ROOT
 
 
@@ -100,7 +101,7 @@ class TestTagUpdate:
 
         # Tag v1 as "stable" (upload already auto-tags as "latest")
         # API expects ref to be either a tag name or @{short_hash} format
-        hash_ref_v1 = f"@{hash_v1[:8]}"
+        hash_ref_v1 = short_hash(hash_v1)
         authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/tag-update-test/{hash_ref_v1}/tags",
             json={"tag_name": "stable"},
@@ -115,7 +116,7 @@ class TestTagUpdate:
 
         # Update "stable" tag to point to v2
         # API expects ref to be either a tag name or @{short_hash} format
-        hash_ref_v2 = f"@{hash_v2[:8]}"
+        hash_ref_v2 = short_hash(hash_v2)
         response = authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/tag-update-test/{hash_ref_v2}/tags",
             json={"tag_name": "stable"},
@@ -152,7 +153,7 @@ class TestTagRemoval:
 
         # Create tag
         # API expects ref to be either a tag name or @{short_hash} format
-        hash_ref = f"@{artifact_hash[:8]}"
+        hash_ref = short_hash(artifact_hash)
         authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/untag-test/{hash_ref}/tags",
             json={"tag_name": "to-remove"},
@@ -190,7 +191,7 @@ class TestTagRemoval:
 
         # Create tag
         # API expects ref to be either a tag name or @{short_hash} format
-        hash_ref = f"@{artifact_hash[:8]}"
+        hash_ref = short_hash(artifact_hash)
         authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/cli-untag-test/{hash_ref}/tags",
             json={"tag_name": "cli-remove"},
@@ -279,7 +280,7 @@ class TestGarbageCollection:
 
         # Tag it to prevent GC
         # API expects ref to be either a tag name or @{short_hash} format
-        hash_ref = f"@{artifact_hash[:8]}"
+        hash_ref = short_hash(artifact_hash)
         authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/gc-preserve-test/{hash_ref}/tags",
             json={"tag_name": "keep"},

@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
-from magpie.storage.exceptions import InvalidArtifactPathError
+from magpie.storage.exceptions import AmbiguousHashRefError, InvalidArtifactPathError
+from magpie.storage.hash import (
+    HASH_NAME_LENGTH,
+    LEGACY_HASH_NAME_LENGTHS,
+    MIN_HASH_REF_LENGTH,
+    compute_hash,
+)
+
+# A name derived from a hash ref is joined onto the artifact directory as a
+# single path component, so a ref may not carry separators or traversal.
+_UNSAFE_REF_RE = re.compile(r"[/\\]|\.\.|\x00")
 
 
 def normalize_artifact_path(path: str) -> str:
@@ -212,42 +223,323 @@ def artifact_dir_path(base: Path, artifact_path: str, verify_security: bool = Tr
     return result
 
 
-def blob_path(artifact_dir: Path, hash_ref: str) -> Path:
-    """Get path to blob file for a given hash reference.
+def canonical_hash_name(hash_ref: str) -> str:
+    """Get the filename this build stores a hash reference under.
 
-    Blobs are stored using only the first 8 characters of the hash.
-    This function accepts either a short hash (@abc12345 or abc12345)
-    or a full 64-character hash and normalizes to the 8-char filename.
+    Args:
+        hash_ref: Hash reference string, with or without an '@' prefix,
+            either abbreviated or a full 64-character digest.
+
+    Returns:
+        The first :data:`~magpie.storage.hash.HASH_NAME_LENGTH` hex chars
+        of the reference (or the whole reference, if it is shorter).
+
+    Raises:
+        InvalidArtifactPathError: If the reference is not usable as a filename.
+
+    Examples:
+        >>> canonical_hash_name("@" + "a" * 64)
+        'aaaaaaaaaaaaaaaa'
+    """
+    return normalize_hash_ref(hash_ref)[:HASH_NAME_LENGTH]
+
+
+def normalize_hash_ref(hash_ref: str) -> str:
+    """Strip a hash reference's '@' prefix and refuse unsafe path characters.
+
+    The server does not pattern-validate its ``ref`` path parameter and the
+    names derived from a reference are joined onto the artifact directory, so
+    separators and traversal are rejected before a reference can become a
+    path component. Non-hex references are otherwise tolerated: manifests
+    are operator-editable data and callers like GC must be able to walk past
+    a junk tag target rather than crash on it.
+
+    Args:
+        hash_ref: Hash reference string, with or without an '@' prefix.
+
+    Returns:
+        The reference with its '@' prefix removed.
+
+    Raises:
+        InvalidArtifactPathError: If the reference is empty (an empty reference
+            names no blob but prefix-matches every one of them), or contains a
+            path separator, '..' or a NUL byte.
+    """
+    ref = hash_ref.lstrip("@")
+    if not ref or _UNSAFE_REF_RE.search(ref):
+        raise InvalidArtifactPathError(f"Invalid hash reference: {hash_ref!r}")
+    return ref
+
+
+def candidate_hash_names(hash_ref: str) -> tuple[str, ...]:
+    """Get every filename a hash reference could be stored under, best first.
+
+    The current width comes first, then the widths written by earlier
+    releases (:data:`~magpie.storage.hash.LEGACY_HASH_NAME_LENGTHS`), so a
+    single install can hold blobs written before and after the widening
+    without a data rewrite. Truncations that would exceed the length of
+    the reference itself are dropped, so an already-abbreviated reference
+    yields just itself.
+
+    Args:
+        hash_ref: Hash reference string, with or without an '@' prefix.
+
+    Returns:
+        De-duplicated candidate filenames, current width first.
+
+    Raises:
+        InvalidArtifactPathError: If the reference is not usable as a filename.
+    """
+    ref = normalize_hash_ref(hash_ref)
+    names: list[str] = []
+    for length in (HASH_NAME_LENGTH, *LEGACY_HASH_NAME_LENGTHS):
+        name = ref[:length]
+        if name and name not in names:
+            names.append(name)
+    return tuple(names)
+
+
+def _resolve_abbreviated(directory: Path, ref: str, suffix: str) -> str | None:
+    """Find the single stored name a too-short reference abbreviates.
+
+    Used only for references shorter than the stored width (a user typing
+    a hash ref copied from an older release, for instance) -- an exact
+    filename match is always preferred and checked before this. A reference
+    narrower than :data:`~magpie.storage.hash.MIN_HASH_REF_LENGTH` matches
+    nothing: the API does not pattern-validate its ``ref`` parameter, and a
+    one- or two-character reference should not resolve a blob (or scan the
+    directory) just because it shares those characters.
+
+    Args:
+        directory: Directory to scan ('blobs' or 'metadata').
+        ref: Hash reference with any '@' prefix already stripped.
+        suffix: Filename suffix to strip before comparing ('' for blobs,
+            '.json' for metadata sidecars).
+
+    Returns:
+        The matching stored name (suffix stripped), or None if nothing matches.
+
+    Raises:
+        AmbiguousHashRefError: If more than one stored name shares the prefix.
+    """
+    if len(ref) < MIN_HASH_REF_LENGTH or not directory.is_dir():
+        return None
+
+    matches = sorted(
+        {
+            entry.name.removesuffix(suffix)
+            for entry in directory.iterdir()
+            if entry.is_file()
+            and entry.name.endswith(suffix)
+            and entry.name.removesuffix(suffix).startswith(ref)
+        }
+    )
+
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise AmbiguousHashRefError(
+            f"Hash ref '{ref}' matches multiple blobs ({', '.join(matches)}) - "
+            f"use more characters of the hash"
+        )
+    return matches[0]
+
+
+def _sidecar_digest(artifact_dir: Path, name: str) -> str | None:
+    """Read the full digest a metadata sidecar records, if it is readable."""
+    sidecar = artifact_dir / "metadata" / f"{name}.json"
+    try:
+        recorded = json.loads(sidecar.read_text())["hash"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return recorded.lower() if isinstance(recorded, str) else None
+
+
+def _needs_prefix_check(name: str, ref: str) -> bool:
+    """Check whether a candidate name discards characters of the reference.
+
+    A name at the current width is the canonical truncation of the reference,
+    so there is nothing to disambiguate -- only a narrower legacy name can
+    belong to a different blob that merely shares the leading characters.
+    Skipping the check at the current width keeps full-hash resolution (tag
+    writes, listings, GC) off the blob-hashing fallback.
+
+    Args:
+        name: Candidate stored name.
+        ref: Hash reference with any '@' prefix already stripped.
+
+    Returns:
+        True if the stored blob's full digest has to be verified.
+    """
+    return len(name) < HASH_NAME_LENGTH and len(ref) > len(name)
+
+
+def _stored_name_has_prefix(artifact_dir: Path, name: str, ref: str) -> bool:
+    """Check that a narrower stored name really holds the requested blob.
+
+    Truncating a reference to a legacy width discards the characters past
+    that width, so an existing legacy blob sharing the leading characters is
+    not necessarily the blob asked for -- unchecked, a long ref (or a full
+    digest) could resolve to an unrelated blob on an install that still holds
+    pre-widening names. The sidecar's recorded digest settles this without
+    reading the blob; a blob whose sidecar is missing or unreadable is
+    hashed, which is rare and cheaper than serving the wrong content.
 
     Args:
         artifact_dir: Artifact directory path.
-        hash_ref: Hash reference string (e.g., '@abc12345' or full hash).
+        name: Candidate stored name, narrower than the reference.
+        ref: Hash reference with any '@' prefix already stripped.
+
+    Returns:
+        True if the stored blob's full digest starts with the reference.
+    """
+    digest = _sidecar_digest(artifact_dir, name)
+    if digest is None:
+        blob = artifact_dir / "blobs" / name
+        if not blob.is_file():
+            return False
+        digest = compute_hash(blob)
+    return digest.startswith(ref.lower())
+
+
+def resolve_blob_name(artifact_dir: Path, hash_ref: str) -> str | None:
+    """Find the filename an existing blob is stored under.
+
+    Reads must tolerate both the current hash-name width and the narrower
+    width earlier releases wrote (including data restored from a backup
+    taken before the widening), so this checks each candidate name for an
+    existing file rather than deriving one name arithmetically.
+
+    Args:
+        artifact_dir: Artifact directory path.
+        hash_ref: Hash reference string, with or without an '@' prefix.
+
+    Returns:
+        The blob's filename, or None if no matching blob exists.
+
+    Raises:
+        AmbiguousHashRefError: If the reference is shorter than the stored
+            width and abbreviates more than one stored blob.
+        InvalidArtifactPathError: If the reference is not usable as a filename.
+    """
+    blobs_dir = artifact_dir / "blobs"
+    ref = normalize_hash_ref(hash_ref)
+
+    for name in candidate_hash_names(ref):
+        if (blobs_dir / name).is_file():
+            if _needs_prefix_check(name, ref) and not _stored_name_has_prefix(
+                artifact_dir, name, ref
+            ):
+                continue
+            return name
+
+    if len(ref) < HASH_NAME_LENGTH:
+        return _resolve_abbreviated(blobs_dir, ref, "")
+
+    return None
+
+
+def resolve_metadata_name(artifact_dir: Path, hash_ref: str) -> str | None:
+    """Find the name an existing metadata sidecar is stored under.
+
+    A sidecar always mirrors its blob's filename, so a resolved blob name
+    is authoritative even when the sidecar itself is missing -- that is
+    what makes writing a sidecar for a newly stored blob land next to that
+    blob instead of on a same-prefix neighbor written by an older release.
+    The metadata directory is only scanned directly for sidecars whose
+    blob is gone.
+
+    Args:
+        artifact_dir: Artifact directory path.
+        hash_ref: Hash reference string, with or without an '@' prefix.
+
+    Returns:
+        The sidecar's name without the '.json' suffix, or None if neither a
+        blob nor a sidecar matches.
+
+    Raises:
+        AmbiguousHashRefError: If the reference is shorter than the stored
+            width and abbreviates more than one stored blob or sidecar.
+        InvalidArtifactPathError: If the reference is not usable as a filename.
+    """
+    blob_name = resolve_blob_name(artifact_dir, hash_ref)
+    if blob_name is not None:
+        return blob_name
+
+    metadata_dir = artifact_dir / "metadata"
+    ref = normalize_hash_ref(hash_ref)
+
+    for name in candidate_hash_names(ref):
+        if (metadata_dir / f"{name}.json").is_file():
+            digest = _sidecar_digest(artifact_dir, name)
+            if _needs_prefix_check(name, ref) and not (digest or "").startswith(ref.lower()):
+                continue
+            return name
+
+    if len(ref) < HASH_NAME_LENGTH:
+        return _resolve_abbreviated(metadata_dir, ref, ".json")
+
+    return None
+
+
+def blob_path(artifact_dir: Path, hash_ref: str) -> Path:
+    """Get path to the blob file for a given hash reference.
+
+    Resolves against what is actually on disk (see
+    :func:`resolve_blob_name`) so references keep working across the
+    hash-name widening, falling back to the name this build would write.
+    Writers that must not adopt an existing same-prefix name -- storing a
+    genuinely different file -- should use :func:`canonical_blob_path`.
+
+    Args:
+        artifact_dir: Artifact directory path.
+        hash_ref: Hash reference string (e.g., '@abc12345...' or full hash).
 
     Returns:
         Path to the blob file.
+
+    Raises:
+        AmbiguousHashRefError: If an abbreviated reference matches multiple blobs.
     """
-    # Strip @ prefix if present, then use first 8 chars
-    hash_name = hash_ref.lstrip("@")[:8]
-    return artifact_dir / "blobs" / hash_name
+    name = resolve_blob_name(artifact_dir, hash_ref) or canonical_hash_name(hash_ref)
+    return artifact_dir / "blobs" / name
+
+
+def canonical_blob_path(artifact_dir: Path, hash_ref: str) -> Path:
+    """Get the blob path this build writes for a hash reference.
+
+    Unlike :func:`blob_path` this ignores what is on disk, so a new blob is
+    always stored at the current hash-name width.
+
+    Args:
+        artifact_dir: Artifact directory path.
+        hash_ref: Hash reference string (e.g., '@abc12345...' or full hash).
+
+    Returns:
+        Path to the blob file at the current hash-name width.
+    """
+    return artifact_dir / "blobs" / canonical_hash_name(hash_ref)
 
 
 def metadata_path(artifact_dir: Path, hash_ref: str) -> Path:
     """Get path to metadata JSON sidecar for a given hash reference.
 
-    Metadata files are stored using only the first 8 characters of the hash,
-    matching the blob storage scheme. This function accepts either a short
-    hash (@abc12345 or abc12345) or a full 64-character hash.
+    Sidecars are named after their blob, so this resolves through
+    :func:`resolve_metadata_name` and falls back to the name this build
+    would write.
 
     Args:
         artifact_dir: Artifact directory path.
-        hash_ref: Hash reference string (e.g., '@abc12345' or full hash).
+        hash_ref: Hash reference string (e.g., '@abc12345...' or full hash).
 
     Returns:
         Path to the metadata JSON file.
+
+    Raises:
+        AmbiguousHashRefError: If an abbreviated reference matches multiple blobs.
     """
-    # Strip @ prefix if present, then use first 8 chars
-    hash_name = hash_ref.lstrip("@")[:8]
-    return artifact_dir / "metadata" / f"{hash_name}.json"
+    name = resolve_metadata_name(artifact_dir, hash_ref) or canonical_hash_name(hash_ref)
+    return artifact_dir / "metadata" / f"{name}.json"
 
 
 def manifest_path(artifact_dir: Path) -> Path:

@@ -95,7 +95,7 @@ Prefer small, focused changes in high-risk areas. Token and auth code changes re
 
 Resolved design questions:
 
-- **Hash prefix:** 8 characters (SHA-256)
+- **Hash prefix:** 16 characters (SHA-256); 8 characters before v0.3.0, still readable
 - **Config hierarchy:** file < env < CLI arg
 - **CLI config:** `~/.magpie/config.toml`
 - **Server config:** Pydantic Settings with `MAGPIE_` prefix
@@ -187,7 +187,7 @@ Flag these with **CRITICAL** priority:
 - **Filesystem is source of truth**: No database for artifacts - verify file operations are correct
 - **CLI vs server separation**: Client CLI should not import server internals
 - **Config hierarchy**: file < env < CLI arg - verify precedence is respected
-- **Hash-based storage**: Artifacts identified by SHA-256 hash prefix (8 chars)
+- **Hash-based storage**: Artifacts identified by a SHA-256 hash prefix (16 chars; 8 chars before v0.3.0, still readable)
 
 ### Review Self-Assessment
 

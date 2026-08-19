@@ -52,7 +52,7 @@ Magpie uses structured logging (`structlog`) for machine-readable output.
   "event": "upload_complete",
   "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "artifact_path": "images/ubuntu",
-  "hash_ref": "abc12345",
+  "hash_ref": "a1b2c3d4e5f67890",
   "size_bytes": 51200,
   "duration_ms": 45.12,
   "is_duplicate": false

@@ -1,11 +1,11 @@
 """Migrate command for the data-format version marker (issue #561).
 
 Provides the forward-only migration mechanism `magpie-deploy.sh update`
-calls after swapping in a new image, so a future release that actually
-changes the token DB schema or the on-disk /data layout has somewhere to
-register a transform. As of v0.2.0 there is nothing to transform (the
-bundled single-container image reads the same /data layout the pre-0.2.0
-two-container topology used), so this only stamps a baseline version.
+calls after swapping in a new image, so a release that changes the token
+DB schema or the on-disk /data layout has somewhere to register a
+transform. No step transforms data yet: v1 stamped a baseline, and v2
+records the widened blob hash-name prefix, which needs no rewrite because
+reads resolve both the old and new widths (see _step_2's docstring).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # constant becomes that step's version. Read back by
 # `magpie-deploy.sh update`'s assert_post_update() (via --check) to confirm
 # a migration actually advanced the stamp.
-CURRENT_DATA_FORMAT_VERSION = 1
+CURRENT_DATA_FORMAT_VERSION = 2
 
 
 class MigrationStep(NamedTuple):
@@ -62,10 +62,35 @@ def _step_1_baseline(conn: sqlite3.Connection) -> None:
     """
 
 
+def _step_2_widened_blob_hash_names(conn: sqlite3.Connection) -> None:
+    """Version 2: blobs are named by a wider SHA-256 prefix (issue #529).
+
+    No data transform. Blobs and metadata sidecars written from this
+    release on are named by the first
+    :data:`magpie.storage.hash.HASH_NAME_LENGTH` hex characters of the
+    digest instead of the first 8, but every read resolves a hash ref
+    against both widths (see :func:`magpie.storage.paths.resolve_blob_name`),
+    so existing blobs -- including data restored from a pre-v0.3.0 backup --
+    keep resolving in place. Renaming them in bulk would rewrite the whole
+    blob store for no functional gain and would break rollback to an older
+    image, so the two layouts are simply allowed to coexist.
+
+    The stamp still matters: an older build reads only 8-character names
+    and so cannot serve blobs this release writes. Advancing the marker
+    makes such a downgrade fail closed via run_migrations()'s
+    newer-than-supported check rather than silently 404 on recent uploads.
+    """
+
+
 # Ordered oldest-to-newest; run_migrations() applies every step whose
 # version exceeds the database's current stamp, in this order.
 _MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(1, "baseline data-format version marker", _step_1_baseline),
+    MigrationStep(
+        2,
+        "widened blob hash-name prefix (reads stay backward-compatible)",
+        _step_2_widened_blob_hash_names,
+    ),
 )
 
 
