@@ -229,6 +229,114 @@ magpie-ctl gc
 docker compose exec magpie magpie-ctl gc --dry-run
 ```
 
+## Integrity Verification (Scrub) Scheduling
+
+`magpie-ctl verify` re-reads stored blobs and compares them against the SHA-256
+recorded in their metadata at upload time, detecting bit-rot or tampering of
+artifacts such as OpenVPN CA/cert/key material. Nothing else in Magpie re-checks
+stored bytes, so a periodic scrub is the only detection for silent corruption.
+
+### Quick Start (systemd)
+
+```bash
+sudo cp systemd/magpie-verify.service /etc/systemd/system/
+sudo cp systemd/magpie-verify.timer /etc/systemd/system/
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now magpie-verify.timer
+
+systemctl list-timers magpie-verify.timer
+```
+
+Default schedule: weekly on Sunday at 4:00 AM (after the nightly GC run) with up
+to 30 minutes random delay.
+
+### Quick Start (cron)
+
+```bash
+sudo cp cron/magpie-verify /etc/cron.d/
+sudo chmod 644 /etc/cron.d/magpie-verify
+```
+
+The cron file ships two schedules: a weekly full scrub and a daily scoped scrub
+of crypto material (`--path openvpn`). Comment out whichever does not apply.
+The shipped entries do not pipe into `logger`, so cron mails their output and
+sees the scrub's exit status; a piped variant that preserves the status via
+`bash -o pipefail -c` is included as a commented alternative.
+
+### Bounding the Work
+
+A full scrub re-reads every byte in storage, so bound scheduled runs:
+
+```bash
+magpie-ctl verify --path openvpn      # Only artifacts under a path prefix
+magpie-ctl verify --limit 500         # At most 500 blobs
+magpie-ctl verify --max-bytes 10737418240   # Byte budget (10 GiB)
+```
+
+`--limit`/`--max-bytes` always start at the beginning of the store and keep no
+cursor, so repeated bounded runs re-verify the same head of the store instead of
+rolling forward. Use them to cap the cost of a smoke check; to cover everything,
+split the store with `--path` scopes or schedule an unbounded full scrub.
+
+A common split is a daily scoped scrub of crypto material plus a weekly full
+scrub off-peak.
+
+### Locking
+
+Verification uses its own lock file (`/var/run/magpie-verify.lock`) so scrubs
+never overlap. Every shipped scrub command also takes the GC lock
+(`/var/run/magpie-gc.lock`), and this is a correctness requirement, not just a
+disk-I/O guard: GC unlinks a blob before its metadata sidecar, so a scrub that
+walks an artifact mid-collection can see a sidecar whose blob is already gone and
+report inconsistent records. Verification only claims a missing blob for a blob a
+tag still points at, and re-reads the manifest after a short pause before doing
+so, which closes most of that window; only the lock rules it out. Keep both
+`flock` calls.
+
+The GC lock is taken with a bounded wait (`flock -w 3600`) rather than
+`--nonblock`, so an overrunning collection delays the scrub instead of
+cancelling it — with a nonblocking lock, a nightly GC that runs long could stop
+the scrub from ever executing. Both locks pass `-E 75`, so a run that never
+started because a lock was held exits `75` instead of `1`, which the table below
+reserves for broken storage.
+
+Raise `-w` if collections regularly exceed an hour, and remember the wait is
+spent inside the unit's `TimeoutStartSec`.
+
+Deletions through the API (`magpie delete`, retention pruning triggered by the
+server) do not take the host lock. If a scrub reports missing blobs while
+artifacts were being deleted, re-run it before treating the finding as data loss.
+
+### Exit Codes and Alerting
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | Every verified blob matched its recorded hash |
+| 1 | Operational error (unreadable storage, invalid `--path`, corrupt metadata sidecar, orphan sidecar) |
+| 3 | A tagged blob or a metadata sidecar is missing |
+| 5 | Content mismatch: stored bytes do not match the recorded SHA-256 |
+| 75 | The run was skipped because the verify or GC lock was held (from `flock -E 75`, not from the scrub) |
+
+`75` is not a finding: the scrub never started, so storage was not checked.
+Treat a single `75` as informational and alert when it repeats, which means the
+schedule never gets a turn and nothing is being verified.
+
+Alert on any other non-zero exit, and page on `5` — it means an artifact is
+damaged or tampered with and should be restored from backup rather than
+re-uploaded over.
+For scraping, `magpie-ctl --format json verify` emits per-issue detail and full
+counters and still exits non-zero. See [../docs/monitoring.md](../docs/monitoring.md).
+
+```bash
+# systemd
+journalctl -u magpie-verify.service
+systemctl status magpie-verify.service   # Non-zero exit shows as failed
+
+# cron (mailed to the crontab owner, or syslog if using the piped alternative)
+grep magpie-verify /var/log/syslog
+```
+
 ## Troubleshooting
 
 ### GC Not Running

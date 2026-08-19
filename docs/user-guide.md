@@ -178,6 +178,34 @@ docker compose exec magpie magpie-ctl gc   # Server-side
 
 Untagged blobs older than retention period (default 90 days) are eligible for removal. See [backup-restore.md](backup-restore.md) for full operations guide.
 
+**Integrity verification (scrub):**
+
+`magpie-ctl verify` re-reads stored blobs and compares them against the SHA-256 recorded in their metadata at upload time, catching bit-rot, truncation, and tampering of artifacts such as OpenVPN CA/cert/key material. It is server-side only (it reads the storage filesystem directly); there is no client-side equivalent.
+
+```bash
+docker compose exec magpie magpie-ctl verify                       # Full scrub
+docker compose exec magpie magpie-ctl verify --path openvpn        # Scope to a path prefix
+docker compose exec magpie magpie-ctl verify --limit 500 --quiet   # Bound a partial scrub
+docker compose exec magpie magpie-ctl --format json verify         # Structured output
+```
+
+A full scrub re-reads every byte in storage, so bound scheduled runs with `--path`, `--limit` (blobs), or `--max-bytes`. Blobs are hashed in 1MB chunks and never loaded into memory. `--max-issues` (default 1000) caps how many individual findings are listed; the summary counters always reflect every issue found.
+
+Exit codes are suitable for cron/monitoring:
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | Every verified blob matched its recorded hash |
+| 1 | Operational error (unreadable storage, invalid `--path`, corrupt metadata sidecar, orphan sidecar) |
+| 3 | A tagged blob or a metadata sidecar is missing |
+| 5 | Content mismatch: stored bytes do not match the recorded SHA-256 |
+
+`Missing blob` is reported only for blobs a tag still points at, since those are the ones GC never collects; a blob recorded only by a leftover metadata sidecar is reported as an orphan sidecar under `Errors` (exit `1`), meaning storage bookkeeping to clean up rather than lost content.
+
+Avoid running a scrub while GC is deleting blobs: GC unlinks a blob before its metadata sidecar, so an overlapping scrub sees records in flux. The shipped cron/systemd units take the GC lock to prevent this, waiting up to an hour for it and reporting a skipped run as `75` (a `flock` status, never produced by `verify` itself) so it is not mistaken for a storage problem.
+
+Exit code 5 means a competition-critical artifact may be damaged or tampered with: restore that artifact from backup (see [backup-restore.md](backup-restore.md)) rather than re-uploading over it. See [monitoring.md](monitoring.md) for alerting and [../deployment/README.md](../deployment/README.md) for scheduling a periodic scrub.
+
 **S3 backup/restore:**
 ```bash
 docker compose exec magpie magpie-ctl sync to-s3 --dry-run  # Preview backup
