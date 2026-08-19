@@ -17,6 +17,7 @@ from magpie.cli.formatting import (
 )
 from magpie.cli.progress import count_progress
 from magpie.ctl import CTLContext
+from magpie.logging_config import configure_logging
 from magpie.storage.exceptions import InvalidArtifactPathError
 from magpie.storage.verify import VerifyResult, resolve_scope, run_verify
 from magpie.utils.formatting import format_size
@@ -93,6 +94,12 @@ def verify(
     """
     settings = ctx.settings
     storage_path = settings.storage_path
+
+    # magpie-ctl leaves structlog on its library defaults, which render to
+    # stdout; verify's own log events would then corrupt the JSON document and
+    # interleave with the human report. Route them to stderr instead so both
+    # the structured log stream and stdout stay usable.
+    configure_logging(settings)
 
     try:
         scope = resolve_scope(storage_path, path_prefix)

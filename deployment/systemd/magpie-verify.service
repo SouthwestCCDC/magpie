@@ -41,7 +41,10 @@ ExecStart=/usr/bin/flock -n /var/run/magpie-verify.lock /usr/bin/flock -n /var/r
 # which is cheap enough to run daily even on a large store.
 # ExecStart=/usr/bin/flock -n /var/run/magpie-verify.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl verify --path openvpn --quiet
 
-# Alternative: bound the work of each run (partial rolling scrub).
+# Alternative: bound the work of each run. NOTE: the walk always starts at the
+# beginning of the store and keeps no cursor, so a bounded run repeatedly covers
+# the same head of the store rather than rolling forward. Prefer --path scoping
+# to cover the whole store in pieces.
 # ExecStart=/usr/bin/flock -n /var/run/magpie-verify.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl verify --max-bytes 10737418240 --quiet
 
 # Alternative: Direct execution (if not using Docker)

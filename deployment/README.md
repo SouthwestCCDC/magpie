@@ -256,12 +256,13 @@ to 30 minutes random delay.
 ```bash
 sudo cp cron/magpie-verify /etc/cron.d/
 sudo chmod 644 /etc/cron.d/magpie-verify
-
-grep magpie-verify /var/log/syslog
 ```
 
 The cron file ships two schedules: a weekly full scrub and a daily scoped scrub
 of crypto material (`--path openvpn`). Comment out whichever does not apply.
+The shipped entries do not pipe into `logger`, so cron mails their output and
+sees the scrub's exit status; a piped variant that preserves the status via
+`bash -o pipefail -c` is included as a commented alternative.
 
 ### Bounding the Work
 
@@ -272,6 +273,11 @@ magpie-ctl verify --path openvpn      # Only artifacts under a path prefix
 magpie-ctl verify --limit 500         # At most 500 blobs
 magpie-ctl verify --max-bytes 10737418240   # Byte budget (10 GiB)
 ```
+
+`--limit`/`--max-bytes` always start at the beginning of the store and keep no
+cursor, so repeated bounded runs re-verify the same head of the store instead of
+rolling forward. Use them to cap the cost of a smoke check; to cover everything,
+split the store with `--path` scopes or schedule an unbounded full scrub.
 
 A common split is a daily scoped scrub of crypto material plus a weekly full
 scrub off-peak.
@@ -304,7 +310,7 @@ counters and still exits non-zero. See [../docs/monitoring.md](../docs/monitorin
 journalctl -u magpie-verify.service
 systemctl status magpie-verify.service   # Non-zero exit shows as failed
 
-# cron
+# cron (mailed to the crontab owner, or syslog if using the piped alternative)
 grep magpie-verify /var/log/syslog
 ```
 

@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Generator
 
@@ -282,7 +285,7 @@ class TestVerifyJsonOutput:
         result = runner.invoke(ctl_cli, ["--format", "json", "verify"])
 
         assert result.exit_code == 0
-        response = json.loads(result.output)
+        response = json.loads(result.stdout)
         assert set(response.keys()) == {"status", "data"}
         assert response["status"] == "ok"
 
@@ -313,7 +316,7 @@ class TestVerifyJsonOutput:
         result = runner.invoke(ctl_cli, ["--format", "json", "verify", "--path", "openvpn"])
 
         assert result.exit_code == 5
-        data = json.loads(result.output)["data"]
+        data = json.loads(result.stdout)["data"]
         assert data["path_prefix"] == "openvpn"
         assert data["mismatched"] == 1
         issue = data["issues"][0]
@@ -330,4 +333,34 @@ class TestVerifyJsonOutput:
 
         result = runner.invoke(ctl_cli, ["--format", "json", "verify"])
 
-        assert result.output.lstrip().startswith("{")
+        assert result.stdout.lstrip().startswith("{")
+
+    def test_json_stdout_is_parseable_in_a_real_process(
+        self, tmp_path: Path, verify_env: tuple[CliRunner, Path, StorageService]
+    ) -> None:
+        """Log events must go to stderr so stdout stays a single JSON document.
+
+        The in-process runner cannot catch this: the test suite pins structlog's
+        output, while a real magpie-ctl process starts on structlog's defaults,
+        which render to stdout.
+        """
+        _, storage_path, service = verify_env
+        full_hash = store(service, "openvpn/ca", b"critical key material")
+        blob_path(storage_path / "openvpn/ca", full_hash).write_bytes(b"tampered!!!!!!!!!!!!!")
+
+        completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [sys.executable, "-m", "magpie.ctl", "--format", "json", "verify"],
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "MAGPIE_STORAGE_PATH": str(storage_path),
+                "MAGPIE_DATABASE_PATH": str(tmp_path / "magpie.db"),
+            },
+            check=False,
+        )
+
+        assert completed.returncode == 5
+        data = json.loads(completed.stdout)["data"]
+        assert data["mismatched"] == 1
+        assert "verify_issue" in completed.stderr

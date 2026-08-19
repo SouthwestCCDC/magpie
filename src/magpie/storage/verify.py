@@ -138,7 +138,8 @@ def resolve_scope(storage_path: Path, path_prefix: str | None) -> Path:
             an artifact or any parent directory of artifacts.
 
     Returns:
-        Directory to walk (``storage_path`` when no prefix is given).
+        Directory to walk, fully resolved (the storage directory itself when no
+        prefix is given).
 
     Raises:
         FileNotFoundError: If the resolved directory does not exist.
@@ -148,7 +149,7 @@ def resolve_scope(storage_path: Path, path_prefix: str | None) -> Path:
         raise FileNotFoundError(f"Storage path does not exist: {storage_path}")
 
     if path_prefix is None:
-        return storage_path
+        return storage_path.resolve()
 
     normalized = normalize_artifact_path(path_prefix)
     scope = verify_path_is_descendant(storage_path, normalized)
@@ -368,6 +369,10 @@ def run_verify(
         InvalidArtifactPathError: If path_prefix escapes the storage directory.
     """
     scope = resolve_scope(storage_path, path_prefix)
+    # Scopes are always resolved, so name artifacts relative to the resolved
+    # base: a storage path that is relative or contains a symlinked component
+    # otherwise has a different spelling than the walked directories.
+    base = storage_path.resolve()
 
     result = VerifyResult()
     manifest_files = sorted(scope.rglob(".magpie"))
@@ -375,7 +380,7 @@ def run_verify(
 
     for idx, manifest_file in enumerate(manifest_files):
         artifact_dir = manifest_file.parent
-        artifact_path = str(artifact_dir.relative_to(storage_path))
+        artifact_path = str(artifact_dir.relative_to(base))
         result.artifacts_scanned += 1
 
         manifest: Manifest | None = None

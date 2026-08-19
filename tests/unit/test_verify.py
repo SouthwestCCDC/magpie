@@ -277,7 +277,19 @@ class TestRunVerifyScoping:
             run_verify(tmp_path / "absent")
 
     def test_resolve_scope_defaults_to_storage_root(self, storage_path: Path) -> None:
-        assert resolve_scope(storage_path, None) == storage_path
+        assert resolve_scope(storage_path, None) == storage_path.resolve()
+
+    def test_symlinked_storage_path_names_artifacts_relative_to_the_base(
+        self, storage_path: Path, tmp_path: Path
+    ) -> None:
+        write_blob(storage_path, "openvpn/ca", b"ca content", stored_content=b"tampered!!")
+        link = tmp_path / "storage-link"
+        link.symlink_to(storage_path)
+
+        result = run_verify(link, path_prefix="openvpn")
+
+        assert result.mismatched == 1
+        assert result.issues[0].artifact_path == "openvpn/ca"
 
 
 class TestRunVerifyBounds:

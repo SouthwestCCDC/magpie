@@ -153,7 +153,7 @@ magpie-ctl --format json verify --path openvpn
 }
 ```
 
-The command still exits non-zero when JSON output is requested, so monitoring can key on either the exit code or the counters. `stopped_early` is `true` when `--limit`/`--max-bytes` cut the run short, which means a clean result covers only the blobs actually scanned.
+The command still exits non-zero when JSON output is requested, so monitoring can key on either the exit code or the counters. Only the result document goes to stdout — `verify_complete` and `verify_issue` log events go to stderr — so stdout can be piped straight into a JSON parser. `stopped_early` is `true` when `--limit`/`--max-bytes` cut the run short, which means a clean result covers only the blobs actually scanned; bounded runs always start at the beginning of the store, so they repeat the same head rather than rolling forward.
 
 **Scheduling:** a full scrub re-reads every byte, so run it off-peak and/or scope it. Verify crypto material often and everything else less frequently:
 
@@ -161,6 +161,8 @@ The command still exits non-zero when JSON output is requested, so monitoring ca
 0 3 * * *  magpie-ctl verify --path openvpn --quiet   # Daily, crypto material only
 0 4 * * 0  magpie-ctl verify --quiet                  # Weekly full scrub
 ```
+
+Do not pipe these into `logger`: in a shell pipeline the job's exit status becomes the status of the last command, which discards the scrub result. Let cron capture the output, or wrap the pipeline in `bash -o pipefail -c`.
 
 See [../deployment/README.md](../deployment/README.md) for ready-made cron and systemd timer units, including locking that keeps a scrub from overlapping with GC.
 
