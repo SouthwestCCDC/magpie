@@ -16,7 +16,11 @@ from typing import Callable
 import structlog
 
 from magpie.storage.cleanup import CleanupStats, cleanup_artifact_directories
-from magpie.storage.exceptions import ArtifactNotFoundError, ManifestCorruptError
+from magpie.storage.exceptions import (
+    ArtifactNotFoundError,
+    InvalidArtifactPathError,
+    ManifestCorruptError,
+)
 from magpie.storage.manifest import read_manifest
 from magpie.storage.metadata import read_metadata
 from magpie.storage.paths import candidate_hash_names
@@ -191,7 +195,14 @@ def _scan_artifacts(
         # A tag protects its blob under any hash-name width an install may
         # hold, so widening the stored prefix can't make GC collect a blob
         # that a tag still points at.
-        tagged_hashes = {name for h in manifest.tags.values() for name in candidate_hash_names(h)}
+        tagged_hashes = set()
+        for tag_hash in manifest.tags.values():
+            try:
+                tagged_hashes.update(candidate_hash_names(tag_hash))
+            except InvalidArtifactPathError:
+                # An unusable tag target names no stored blob, so it protects
+                # nothing; a hand-edited manifest must not abort the scan.
+                continue
 
         # Track artifact directory for cleanup pass
         artifact_dirs_to_cleanup.append(artifact_dir)

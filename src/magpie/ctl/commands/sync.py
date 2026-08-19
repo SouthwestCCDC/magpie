@@ -18,6 +18,7 @@ from magpie.cli.formatting import (
 )
 from magpie.cli.progress import count_progress, processing_spinner
 from magpie.ctl import CTLContext
+from magpie.storage.exceptions import AmbiguousHashRefError, InvalidArtifactPathError
 from magpie.storage.manifest import Manifest, read_manifest
 from magpie.storage.paths import candidate_hash_names, resolve_blob_name, resolve_metadata_name
 from magpie.utils.formatting import format_size
@@ -75,8 +76,13 @@ def _get_blobs_for_manifest(artifact_dir: Path, manifest: Manifest) -> list[Path
 
     for hash_ref in unique_hashes:
         # Manifests store full hashes; blobs are stored under a truncated name
-        # whose width depends on the release that wrote them.
-        blob_name = resolve_blob_name(artifact_dir, hash_ref)
+        # whose width depends on the release that wrote them. A manifest is
+        # operator-editable, so an unusable tag target skips this hash rather
+        # than aborting the sync.
+        try:
+            blob_name = resolve_blob_name(artifact_dir, hash_ref)
+        except (AmbiguousHashRefError, InvalidArtifactPathError):
+            continue
         if blob_name is None:
             continue
         blob_path = blobs_dir / blob_name
@@ -106,7 +112,10 @@ def _get_metadata_for_manifest(artifact_dir: Path, manifest: Manifest) -> list[P
 
     for hash_ref in unique_hashes:
         # Sidecars mirror their blob's stored filename.
-        name = resolve_metadata_name(artifact_dir, hash_ref)
+        try:
+            name = resolve_metadata_name(artifact_dir, hash_ref)
+        except (AmbiguousHashRefError, InvalidArtifactPathError):
+            continue
         if name is None:
             continue
         metadata_path = metadata_dir / f"{name}.json"
@@ -1316,17 +1325,22 @@ def _parse_manifest_content(content: str) -> set[str]:
     try:
         data = json.loads(content)
         tags = data.get("tags", {})
-        # A remote manifest gives no view of the layout its blobs were
-        # written with, so treat every stored width as referenced rather
-        # than reporting blobs from either layout as orphans.
-        return {
-            name
-            for hash_ref in tags.values()
-            if hash_ref
-            for name in candidate_hash_names(hash_ref)
-        }
     except (json.JSONDecodeError, KeyError, TypeError):
         return set()
+
+    # A remote manifest gives no view of the layout its blobs were written
+    # with, so treat every stored width as referenced rather than reporting
+    # blobs from either layout as orphans. An unusable tag target names no
+    # blob, so it contributes nothing.
+    names: set[str] = set()
+    for hash_ref in tags.values():
+        if not hash_ref:
+            continue
+        try:
+            names.update(candidate_hash_names(hash_ref))
+        except InvalidArtifactPathError:
+            continue
+    return names
 
 
 def _extract_blob_name_from_path(path: str) -> str | None:

@@ -241,6 +241,11 @@ def check_blob_exists(artifact_dir: Path, hash_ref: str) -> bool:
 
     Returns:
         True if blob exists, False otherwise.
+
+    Raises:
+        AmbiguousHashRefError: If an abbreviated reference matches multiple blobs
+            (an unanswerable question, not a "no").
+        InvalidArtifactPathError: If the reference is not usable as a filename.
     """
     path = blob_path(artifact_dir, hash_ref)
     return path.exists()
