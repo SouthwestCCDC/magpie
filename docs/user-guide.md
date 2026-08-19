@@ -125,7 +125,7 @@ magpie ls images/ubuntu
 ```bash
 magpie get images/ubuntu                 # Latest
 magpie get images/ubuntu:stable          # By tag
-magpie get images/ubuntu:@a1b2c3d4       # By hash
+magpie get images/ubuntu:@a1b2c3d4e5f67890  # By hash
 magpie get images/ubuntu:latest -o file  # Custom path
 magpie get images/ubuntu --force         # Force re-download
 ```
@@ -135,7 +135,7 @@ magpie get images/ubuntu --force         # Force re-download
 magpie tag images/ubuntu:latest --as stable   # Create tag
 magpie untag images/ubuntu v1.0               # Remove tag
 magpie flush-tag deprecated --dry-run         # Remove globally (preview)
-magpie info images/ubuntu:@a1b2c3d4           # View metadata
+magpie info images/ubuntu:@a1b2c3d4e5f67890   # View metadata
 magpie amend images/ubuntu:latest --source-uri https://github.com/example/repo  # Update metadata
 ```
 

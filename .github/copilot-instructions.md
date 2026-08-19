@@ -95,7 +95,7 @@ Prefer small, focused changes in high-risk areas. Token and auth code changes re
 
 Resolved design questions:
 
-- **Hash prefix:** 8 characters (SHA-256)
+- **Hash prefix:** 16 characters (SHA-256); 8 characters before v0.3.0, still readable
 - **Config hierarchy:** file < env < CLI arg
 - **CLI config:** `~/.magpie/config.toml`
 - **Server config:** Pydantic Settings with `MAGPIE_` prefix

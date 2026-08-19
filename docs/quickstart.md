@@ -53,7 +53,7 @@ magpie get demo/greeting:latest
 # Tag management
 magpie push app.tar.gz --to apps/myapp
 magpie tag apps/myapp:latest --as stable
-magpie tag apps/myapp@abcdef12 --as v1.0.0  # Pin specific version
+magpie tag apps/myapp@abcdef1234567890 --as v1.0.0  # Pin specific version
 
 # Scripting
 magpie get apps/myapp:stable -o myapp.tar.gz

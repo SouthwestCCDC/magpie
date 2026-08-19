@@ -12,6 +12,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from magpie.storage.hash import short_hash
 from tests.e2e.conftest import create_token_via_api
 
 
@@ -150,8 +151,8 @@ class TestReadTokenPermissions:
         artifact_hash = upload_response.json()["hash"]
 
         # Try to create tag with read token
-        # API expects ref to be either a tag name or @{short_hash} format
-        hash_ref = f"@{artifact_hash[:8]}"
+        # API expects ref to be either a tag name or {short_hash(artifact_hash)} format
+        hash_ref = short_hash(artifact_hash)
         response = http_client.post(
             f"/api/v1/artifacts/e2e-tests/read-tag-test/{hash_ref}/tags",
             json={"tag_name": "stable"},
@@ -237,8 +238,8 @@ class TestWriteTokenPermissions:
         artifact_hash = upload_response.json()["hash"]
 
         # Create tag
-        # API expects ref to be either a tag name or @{short_hash} format
-        hash_ref = f"@{artifact_hash[:8]}"
+        # API expects ref to be either a tag name or {short_hash(artifact_hash)} format
+        hash_ref = short_hash(artifact_hash)
         response = http_client.post(
             f"/api/v1/artifacts/e2e-tests/write-tag-test/{hash_ref}/tags",
             json={"tag_name": "stable"},
@@ -427,9 +428,8 @@ class TestAuthenticationEnforcement:
         artifact_hash = upload_response.json()["hash"]
 
         # Construct the static file path
-        # Format: /artifacts/{artifact_path}/@{short_hash}/artifact
-        short_hash = artifact_hash[:8]
-        static_path = f"/artifacts/e2e-tests/auth-enforcement/@{short_hash}/"
+        # Format: /artifacts/{artifact_path}/@{hash_name}/artifact
+        static_path = f"/artifacts/e2e-tests/auth-enforcement/{short_hash(artifact_hash)}/"
 
         # Unauthenticated request should be rejected
         response = http_client.get(static_path)
@@ -455,8 +455,9 @@ class TestAuthenticationEnforcement:
         artifact_hash = upload_response.json()["hash"]
 
         # Construct the direct file path
-        short_hash = artifact_hash[:8]
-        file_path = f"/artifacts/e2e-tests/auth-file-enforcement/@{short_hash}/artifact"
+        file_path = (
+            f"/artifacts/e2e-tests/auth-file-enforcement/{short_hash(artifact_hash)}/artifact"
+        )
 
         # Unauthenticated request should be rejected
         response = http_client.get(file_path)
@@ -523,8 +524,7 @@ class TestAuthenticationEnforcement:
         artifact_hash = upload_response.json()["hash"]
 
         # Try to access the nested path without auth
-        short_hash = artifact_hash[:8]
-        nested_path = f"/artifacts/deep/nested/path/test/@{short_hash}/artifact"
+        nested_path = f"/artifacts/deep/nested/path/test/{short_hash(artifact_hash)}/artifact"
 
         response = http_client.get(nested_path)
         assert response.status_code == 401
