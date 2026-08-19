@@ -20,8 +20,13 @@ v0.3.0, 8 before it ([issue
 resolve, so a backup taken under either layout restores as-is and a
 restored tree may legitimately contain a mix of the two. Restoring an
 artifacts tree into an older magpie build is not supported, though: it
-reads only the 8-character names, and `magpie-ctl migrate` fails closed
-on the newer data-format stamp rather than serving partial data.
+reads only the 8-character names and simply returns 404 for the rest.
+Nothing in the artifacts tree records its layout -- the data-format stamp
+lives in `magpie.db`, so only a restore that also brings back that
+database gets the fail-closed check (`magpie-ctl migrate` refuses a
+newer stamp); the server never reads the stamp itself. Restore the
+database alongside the artifacts tree, and do not point an older build at
+a tree written by a newer one.
 
 ## Automatic Pre-Update Backups
 
