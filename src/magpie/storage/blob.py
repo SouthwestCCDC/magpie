@@ -74,7 +74,11 @@ def store_blob(
         temp_file.unlink(missing_ok=True)
         raise
 
-    hash_ref, is_duplicate = store_blob_from_temp(artifact_dir, temp_file, full_hash)
+    try:
+        hash_ref, is_duplicate = store_blob_from_temp(artifact_dir, temp_file, full_hash)
+    except Exception:
+        temp_file.unlink(missing_ok=True)
+        raise
     return (full_hash, hash_ref, is_duplicate)
 
 

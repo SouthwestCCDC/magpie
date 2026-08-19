@@ -346,6 +346,25 @@ def _sidecar_digest(artifact_dir: Path, name: str) -> str | None:
     return recorded.lower() if isinstance(recorded, str) else None
 
 
+def _needs_prefix_check(name: str, ref: str) -> bool:
+    """Check whether a candidate name discards characters of the reference.
+
+    A name at the current width is the canonical truncation of the reference,
+    so there is nothing to disambiguate -- only a narrower legacy name can
+    belong to a different blob that merely shares the leading characters.
+    Skipping the check at the current width keeps full-hash resolution (tag
+    writes, listings, GC) off the blob-hashing fallback.
+
+    Args:
+        name: Candidate stored name.
+        ref: Hash reference with any '@' prefix already stripped.
+
+    Returns:
+        True if the stored blob's full digest has to be verified.
+    """
+    return len(name) < HASH_NAME_LENGTH and len(ref) > len(name)
+
+
 def _stored_name_has_prefix(artifact_dir: Path, name: str, ref: str) -> bool:
     """Check that a narrower stored name really holds the requested blob.
 
@@ -399,7 +418,9 @@ def resolve_blob_name(artifact_dir: Path, hash_ref: str) -> str | None:
 
     for name in candidate_hash_names(ref):
         if (blobs_dir / name).is_file():
-            if len(ref) > len(name) and not _stored_name_has_prefix(artifact_dir, name, ref):
+            if _needs_prefix_check(name, ref) and not _stored_name_has_prefix(
+                artifact_dir, name, ref
+            ):
                 continue
             return name
 
@@ -442,7 +463,7 @@ def resolve_metadata_name(artifact_dir: Path, hash_ref: str) -> str | None:
     for name in candidate_hash_names(ref):
         if (metadata_dir / f"{name}.json").is_file():
             digest = _sidecar_digest(artifact_dir, name)
-            if len(ref) > len(name) and not (digest or "").startswith(ref.lower()):
+            if _needs_prefix_check(name, ref) and not (digest or "").startswith(ref.lower()):
                 continue
             return name
 

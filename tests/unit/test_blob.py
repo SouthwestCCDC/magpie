@@ -152,6 +152,21 @@ class TestStoreBlob:
         temp_files = list(test_config.temp_path.glob("blob_*.tmp"))
         assert len(temp_files) == 0
 
+    def test_store_blob_temp_file_cleanup_on_store_failure(
+        self, artifact_dir: Path, test_config: MagpieSettings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unexpected failure while storing must not abandon the temp file."""
+
+        def boom(*args: object, **kwargs: object) -> None:
+            raise OSError("disk went away")
+
+        monkeypatch.setattr("magpie.storage.blob.store_blob_from_temp", boom)
+
+        with pytest.raises(OSError, match="disk went away"):
+            store_blob(artifact_dir, io.BytesIO(b"content"), test_config)
+
+        assert list(test_config.temp_path.glob("blob_*.tmp")) == []
+
     def test_store_blob_creates_blobs_dir(
         self, tmp_path: Path, test_config: MagpieSettings
     ) -> None:
