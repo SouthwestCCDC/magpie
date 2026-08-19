@@ -3731,6 +3731,16 @@ parse_args() {
         die "--release is only supported by the 'install' command (got: $command)"
     fi
 
+    # Same for --source-dir: only clone_repo() (install) consults SOURCE_DIR,
+    # while 'update' refreshes INSTALL_DIR/repo from origin/$GITHUB_BRANCH. An
+    # accepted-but-ignored flag there would deploy GitHub's code while the
+    # caller believes it deployed their local tree, so refuse instead. Unlike
+    # --release this has no env-var form, so a set value is always an explicit
+    # request.
+    if [[ -n "$SOURCE_DIR" ]] && [[ "$command" != "install" ]]; then
+        die "--source-dir is only supported by the 'install' command (got: $command)"
+    fi
+
     # Execute command
     case "$command" in
         install) cmd_install ;;
