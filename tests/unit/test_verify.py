@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,6 +15,7 @@ import pytest
 from magpie.storage.exceptions import InvalidArtifactPathError
 from magpie.storage.paths import blob_path, metadata_path
 from magpie.storage.verify import (
+    RECHECK_DELAY_SECONDS,
     VerifyStatus,
     resolve_scope,
     run_verify,
@@ -272,6 +275,49 @@ class TestRunVerifyUnreadable:
         assert any(issue.status == VerifyStatus.ERROR for issue in result.issues)
 
 
+class TestRunVerifyConcurrentUpload:
+    """A sidecar still being written is an upload in flight, not lost records."""
+
+    def test_sidecar_written_during_the_recheck_is_verified(self, storage_path: Path) -> None:
+        content = b"freshly uploaded content"
+        write_blob(storage_path, "openvpn/ca", content, metadata=False)
+        artifact_dir = storage_path / "openvpn/ca"
+        full_hash = hashlib.sha256(content).hexdigest()
+
+        def finish_upload() -> None:
+            time.sleep(RECHECK_DELAY_SECONDS / 4)
+            sidecar = metadata_path(artifact_dir, full_hash)
+            sidecar.parent.mkdir(parents=True, exist_ok=True)
+            sidecar.write_text(
+                json.dumps(
+                    {
+                        "hash": full_hash,
+                        "uploaded_by": "test",
+                        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                        "source_uri": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+        writer = threading.Thread(target=finish_upload)
+        writer.start()
+        try:
+            result = run_verify(storage_path)
+        finally:
+            writer.join()
+
+        assert result.missing_metadata == 0
+        assert result.ok == 1
+
+    def test_sidecar_that_stays_absent_is_still_reported(self, storage_path: Path) -> None:
+        write_blob(storage_path, "openvpn/ca", b"content", metadata=False)
+
+        result = run_verify(storage_path)
+
+        assert result.missing_metadata == 1
+
+
 class TestRunVerifyConcurrentCollection:
     """A blob nothing references anymore was collected, not lost."""
 
@@ -286,6 +332,39 @@ class TestRunVerifyConcurrentCollection:
         assert result.missing_blob == 0
         assert result.total_issues == 0
 
+    def test_blob_collected_mid_hash_is_not_reported(
+        self, storage_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        full_hash = write_blob(storage_path, "openvpn/ca", b"content", tag=None)
+        artifact_dir = storage_path / "openvpn/ca"
+
+        def collect(blob_file: Path) -> tuple[str, int]:
+            blob_file.unlink()
+            metadata_path(artifact_dir, full_hash).unlink()
+            raise FileNotFoundError(2, "No such file or directory", str(blob_file))
+
+        monkeypatch.setattr("magpie.storage.verify._hash_blob", collect)
+
+        result = run_verify(storage_path)
+
+        assert result.blobs_scanned == 0
+        assert result.total_issues == 0
+
+    def test_tagged_blob_that_vanishes_mid_hash_is_reported(
+        self, storage_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        write_blob(storage_path, "openvpn/ca", b"content")
+
+        def vanish(blob_file: Path) -> tuple[str, int]:
+            blob_file.unlink()
+            raise FileNotFoundError(2, "No such file or directory", str(blob_file))
+
+        monkeypatch.setattr("magpie.storage.verify._hash_blob", vanish)
+
+        result = run_verify(storage_path)
+
+        assert result.missing_blob == 1
+
     def test_tagged_missing_blob_is_reported_without_its_sidecar(self, storage_path: Path) -> None:
         full_hash = write_blob(storage_path, "openvpn/ca", b"content")
         artifact_dir = storage_path / "openvpn/ca"
@@ -296,6 +375,17 @@ class TestRunVerifyConcurrentCollection:
 
         assert result.missing_blob == 1
         assert result.issues[0].status == VerifyStatus.MISSING_BLOB
+
+    def test_orphan_sidecar_is_an_error_not_data_loss(self, storage_path: Path) -> None:
+        full_hash = write_blob(storage_path, "openvpn/ca", b"content", tag=None)
+        blob_path(storage_path / "openvpn/ca", full_hash).unlink()
+
+        result = run_verify(storage_path)
+
+        assert result.missing_blob == 0
+        assert result.errors == 1
+        assert result.issues[0].status == VerifyStatus.ERROR
+        assert "Orphan metadata sidecar" in result.issues[0].message
 
 
 class TestRunVerifyScoping:

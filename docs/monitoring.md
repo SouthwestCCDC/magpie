@@ -164,7 +164,9 @@ The command still exits non-zero when JSON output is requested, so monitoring ca
 
 Do not pipe these into `logger`: in a shell pipeline the job's exit status becomes the status of the last command, which discards the scrub result. Let cron capture the output, or wrap the pipeline in `bash -o pipefail -c`.
 
-**Do not overlap a scrub with GC.** GC unlinks a blob before its metadata sidecar, so a scrub that walks an artifact mid-collection can report a collected blob as missing (exit `3`). Verification re-reads an artifact's records before reporting a missing blob, which closes most of that window; taking the GC lock (`/var/run/magpie-gc.lock`, as the shipped units in [../deployment/](../deployment/) do) rules it out. Deletions through the API do not take that lock, so re-run a scrub that reports missing blobs during heavy deletion activity before treating it as data loss.
+**`missing_blob` means a *tagged* blob is gone.** A tag is what makes a blob durable — GC never collects a tagged blob — so exit `3` is a data-loss claim. A blob recorded only by a metadata sidecar is untagged and collectable, so if its file is absent the scrub reports an orphan sidecar under `errors` (exit `1`): bookkeeping debris to clean up, not lost content.
+
+**Prefer not to overlap a scrub with GC.** GC unlinks a blob before its metadata sidecar, so a scrub walking an artifact mid-collection sees records in flux; verification re-reads the manifest after a short pause before claiming a missing blob, and takes the GC lock in the shipped units (`/var/run/magpie-gc.lock`, see [../deployment/](../deployment/)). Deletions through the API do not take that lock, so re-run a scrub that reports missing blobs during heavy deletion activity before treating it as data loss.
 
 Storage the scrub cannot read is a finding, not a skip: an unreadable directory or blob is counted under `errors` and reported as a `verify_issue` with `status: "error"` (exit `1`), so a permission or hardware problem cannot masquerade as a clean store.
 

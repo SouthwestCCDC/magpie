@@ -289,9 +289,10 @@ never overlap. Every shipped scrub command also takes the GC lock
 (`/var/run/magpie-gc.lock`), and this is a correctness requirement, not just a
 disk-I/O guard: GC unlinks a blob before its metadata sidecar, so a scrub that
 walks an artifact mid-collection can see a sidecar whose blob is already gone and
-report it as a missing blob (exit `3`). Verification re-reads an artifact's
-records before reporting a missing blob, which closes most of that window, but
-only the lock rules it out. Keep both `flock` calls.
+report inconsistent records. Verification only claims a missing blob for a blob a
+tag still points at, and re-reads the manifest after a short pause before doing
+so, which closes most of that window; only the lock rules it out. Keep both
+`flock` calls.
 
 Deletions through the API (`magpie delete`, retention pruning triggered by the
 server) do not take the host lock. If a scrub reports missing blobs while
@@ -302,8 +303,8 @@ artifacts were being deleted, re-run it before treating the finding as data loss
 | Code | Meaning |
 | ---- | ------- |
 | 0 | Every verified blob matched its recorded hash |
-| 1 | Operational error (unreadable storage, invalid `--path`, corrupt metadata sidecar) |
-| 3 | A referenced blob or a metadata sidecar is missing |
+| 1 | Operational error (unreadable storage, invalid `--path`, corrupt metadata sidecar, orphan sidecar) |
+| 3 | A tagged blob or a metadata sidecar is missing |
 | 5 | Content mismatch: stored bytes do not match the recorded SHA-256 |
 
 Alert on any non-zero exit, and page on `5` — it means an artifact is damaged or

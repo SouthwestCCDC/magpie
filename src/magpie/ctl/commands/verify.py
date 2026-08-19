@@ -176,7 +176,9 @@ def _run_verify_with_progress(
     quiet: bool,
 ) -> VerifyResult:
     """Run verification with a rich progress bar over artifact directories."""
-    total_artifacts = count_artifacts(scope)
+    # Sizing the bar costs a full extra walk of the store, so only pay for it
+    # when a bar will actually be drawn.
+    total_artifacts = 0 if quiet else count_artifacts(scope)
 
     with count_progress("Verifying blobs", total_artifacts, quiet=quiet) as (progress, task_id):
 

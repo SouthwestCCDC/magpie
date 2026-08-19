@@ -18,10 +18,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NamedTuple
 
 import structlog
 from pydantic import ValidationError
@@ -48,6 +49,13 @@ VerifyProgressCallback = Callable[[str, int, int], None]
 
 # Manifest file name, derived from the path helpers rather than hardcoded.
 MANIFEST_FILENAME = manifest_path(Path()).name
+
+# Uploads store a blob before writing its metadata sidecar, and the sidecar is
+# not written atomically, so a scrub can observe a blob whose records are still
+# in flight. Records that look wrong are re-read once after this pause, bounded
+# across a run so a genuinely damaged store is not slowed down.
+RECHECK_DELAY_SECONDS = 0.1
+RECHECK_BUDGET_SECONDS = 5.0
 
 
 class VerifyStatus(str, Enum):
@@ -270,40 +278,92 @@ def _expected_hash(artifact_dir: Path, blob_ref: str) -> str:
         ) from e
 
 
-def _verify_blob(
-    artifact_dir: Path, artifact_path: str, blob_file: Path
-) -> tuple[VerifyIssue | None, int]:
-    """Verify a single blob against its recorded hash.
+class _RecheckBudget:
+    """Bounded total time a run may spend re-reading records that look wrong."""
 
-    Returns:
-        Tuple of (issue or None if the blob verified OK, bytes read).
+    def __init__(self, seconds: float = RECHECK_BUDGET_SECONDS) -> None:
+        self.remaining = seconds
+
+    def wait(self) -> bool:
+        """Pause for the recheck delay, or report that the budget is spent."""
+        if self.remaining < RECHECK_DELAY_SECONDS:
+            return False
+        self.remaining -= RECHECK_DELAY_SECONDS
+        time.sleep(RECHECK_DELAY_SECONDS)
+        return True
+
+
+def _reread_expected_hash(artifact_dir: Path, blob_ref: str, budget: _RecheckBudget) -> str | None:
+    """Re-read a sidecar that looked absent or unparseable.
+
+    Returns the recorded hash if the sidecar has since become readable (the
+    upload that was writing it finished), else None.
     """
+    if not budget.wait():
+        return None
+
+    try:
+        return _expected_hash(artifact_dir, blob_ref)
+    except (ArtifactNotFoundError, ManifestCorruptError, OSError):
+        return None
+
+
+class _BlobOutcome(NamedTuple):
+    """Result of checking one blob.
+
+    Attributes:
+        issue: The problem found, or None when the blob verified OK.
+        bytes_read: Bytes hashed.
+        present: False when the blob disappeared mid-walk and nothing references
+            it anymore, i.e. it was collected rather than verified. Such a blob
+            is neither counted nor reported.
+    """
+
+    issue: VerifyIssue | None
+    bytes_read: int
+    present: bool = True
+
+
+def _verify_blob(
+    artifact_dir: Path, artifact_path: str, blob_file: Path, budget: _RecheckBudget
+) -> _BlobOutcome:
+    """Verify a single blob against its recorded hash."""
     blob_ref = blob_file.name
 
     try:
         expected = _expected_hash(artifact_dir, blob_ref)
     except ArtifactNotFoundError:
-        return (
-            VerifyIssue(
-                artifact_path=artifact_path,
-                blob_ref=blob_ref,
-                status=VerifyStatus.MISSING_METADATA,
-                message="No metadata sidecar; recorded hash is unknown",
-            ),
-            0,
-        )
+        reread = _reread_expected_hash(artifact_dir, blob_ref, budget)
+        if reread is None:
+            if not _exists(blob_file):
+                return _BlobOutcome(None, 0, present=False)
+            return _BlobOutcome(
+                VerifyIssue(
+                    artifact_path=artifact_path,
+                    blob_ref=blob_ref,
+                    status=VerifyStatus.MISSING_METADATA,
+                    message="No metadata sidecar; recorded hash is unknown",
+                ),
+                0,
+            )
+        expected = reread
     except ManifestCorruptError as e:
-        return (
-            VerifyIssue(
-                artifact_path=artifact_path,
-                blob_ref=blob_ref,
-                status=VerifyStatus.CORRUPT_METADATA,
-                message=str(e),
-            ),
-            0,
-        )
+        reread = _reread_expected_hash(artifact_dir, blob_ref, budget)
+        if reread is None:
+            if not _exists(blob_file):
+                return _BlobOutcome(None, 0, present=False)
+            return _BlobOutcome(
+                VerifyIssue(
+                    artifact_path=artifact_path,
+                    blob_ref=blob_ref,
+                    status=VerifyStatus.CORRUPT_METADATA,
+                    message=str(e),
+                ),
+                0,
+            )
+        expected = reread
     except OSError as e:
-        return (
+        return _BlobOutcome(
             VerifyIssue(
                 artifact_path=artifact_path,
                 blob_ref=blob_ref,
@@ -315,8 +375,23 @@ def _verify_blob(
 
     try:
         actual, size = _hash_blob(blob_file)
+    except FileNotFoundError:
+        # The blob was unlinked between listing and hashing. Only a tagged blob
+        # is data loss; an untagged one was collected by GC.
+        if not _is_still_tagged(artifact_dir, blob_ref, budget):
+            return _BlobOutcome(None, 0, present=False)
+        return _BlobOutcome(
+            VerifyIssue(
+                artifact_path=artifact_path,
+                blob_ref=blob_ref,
+                status=VerifyStatus.MISSING_BLOB,
+                message="Referenced blob file is missing from storage",
+                expected_hash=expected,
+            ),
+            0,
+        )
     except OSError as e:
-        return (
+        return _BlobOutcome(
             VerifyIssue(
                 artifact_path=artifact_path,
                 blob_ref=blob_ref,
@@ -328,9 +403,9 @@ def _verify_blob(
         )
 
     if actual == expected:
-        return None, size
+        return _BlobOutcome(None, size)
 
-    return (
+    return _BlobOutcome(
         VerifyIssue(
             artifact_path=artifact_path,
             blob_ref=blob_ref,
@@ -344,18 +419,25 @@ def _verify_blob(
     )
 
 
-def _is_still_referenced(artifact_dir: Path, blob_ref: str) -> bool:
-    """Re-read an artifact's records to see whether a blob is still referenced.
-
-    GC unlinks a blob before its metadata sidecar, so a scrub running alongside
-    GC can observe a sidecar whose blob is already gone. Re-reading the records
-    after the blob check narrows that window: a blob nothing references anymore
-    was collected, not lost. Holding the GC lock (see ``deployment/``) is what
-    rules the race out entirely.
-    """
+def _exists(path: Path) -> bool:
+    """Test for a path, treating an unreadable parent as "still there"."""
     try:
-        if metadata_path(artifact_dir, blob_ref).is_file():
-            return True
+        return path.is_file()
+    except OSError:
+        return True
+
+
+def _is_still_tagged(artifact_dir: Path, blob_ref: str, budget: _RecheckBudget) -> bool:
+    """Re-read the manifest to see whether a tag still points at a blob.
+
+    A tag is what makes a blob durable: GC never collects a tagged blob, so a
+    tagged blob whose file is gone is data loss. Re-reading the manifest after a
+    short pause (drawn from a per-run budget) collapses the window in which a
+    scrub sees a tag that concurrent activity has already moved.
+    """
+    budget.wait()
+
+    try:
         manifest = read_manifest(artifact_dir)
     except (ArtifactNotFoundError, ManifestCorruptError, OSError):
         return False
@@ -363,9 +445,26 @@ def _is_still_referenced(artifact_dir: Path, blob_ref: str) -> bool:
     return any(blob_path(artifact_dir, h).name == blob_ref for h in manifest.tags.values())
 
 
+class _MissingRefs(NamedTuple):
+    """Blob references whose file is gone, split by what still records them.
+
+    Attributes:
+        tagged: Refs a tag points at. GC never collects a tagged blob, so these
+            are data loss.
+        orphaned: Refs only a metadata sidecar records. The blob was untagged, so
+            this is a bookkeeping inconsistency (typically a sidecar left behind
+            by GC) rather than lost content.
+        errors: Messages for records that could not be read.
+    """
+
+    tagged: list[str]
+    orphaned: list[str]
+    errors: list[str]
+
+
 def _missing_blob_refs(
-    artifact_dir: Path, manifest: Manifest | None
-) -> tuple[list[str], list[str]]:
+    artifact_dir: Path, manifest: Manifest | None, budget: _RecheckBudget
+) -> _MissingRefs:
     """Find blob references that are recorded but whose blob file is gone.
 
     Considers both tags in the manifest and metadata sidecars. References are
@@ -374,16 +473,17 @@ def _missing_blob_refs(
     Args:
         artifact_dir: Path to the artifact directory.
         manifest: Parsed manifest, or None if it could not be read.
-
-    Returns:
-        Tuple of (missing blob references, messages for unreadable records).
+        budget: Recheck budget for confirming a finding.
     """
+    tagged_refs: set[str] = set()
     refs: dict[str, None] = {}
     errors: list[str] = []
 
     if manifest is not None:
         for hash_ref in manifest.tags.values():
-            refs[blob_path(artifact_dir, hash_ref).name] = None
+            ref = blob_path(artifact_dir, hash_ref).name
+            tagged_refs.add(ref)
+            refs[ref] = None
 
     metadata_dir = artifact_dir / "metadata"
     try:
@@ -393,17 +493,24 @@ def _missing_blob_refs(
     except OSError as e:
         errors.append(f"Failed to list metadata sidecars: {e}")
 
-    missing = []
+    missing_tagged: list[str] = []
+    orphaned: list[str] = []
     for ref in refs:
         try:
             present = blob_path(artifact_dir, ref).is_file()
         except OSError as e:
             errors.append(f"Failed to stat blob {ref}: {e}")
             continue
-        if not present and _is_still_referenced(artifact_dir, ref):
-            missing.append(ref)
+        if present:
+            continue
 
-    return missing, errors
+        if ref in tagged_refs:
+            if _is_still_tagged(artifact_dir, ref, budget):
+                missing_tagged.append(ref)
+        elif _exists(metadata_path(artifact_dir, ref)):
+            orphaned.append(ref)
+
+    return _MissingRefs(missing_tagged, orphaned, errors)
 
 
 def _record(result: VerifyResult, issue: VerifyIssue, max_issues: int | None) -> None:
@@ -472,6 +579,7 @@ def run_verify(
     base = storage_path.resolve()
 
     result = VerifyResult()
+    budget = _RecheckBudget()
     manifest_files, walk_errors = _find_manifests(scope)
     total_artifacts = len(manifest_files)
 
@@ -507,21 +615,27 @@ def run_verify(
                 max_issues,
             )
 
-        missing_refs, record_errors = _missing_blob_refs(artifact_dir, manifest)
-        for ref in missing_refs:
+        missing = _missing_blob_refs(artifact_dir, manifest, budget)
+        for ref in missing.tagged:
             _record(
                 result,
                 VerifyIssue(
                     artifact_path=artifact_path,
                     blob_ref=ref,
                     status=VerifyStatus.MISSING_BLOB,
-                    message="Referenced blob file is missing from storage",
+                    message="Tagged blob file is missing from storage",
                 ),
                 max_issues,
             )
 
+        orphan_messages = [
+            f"Orphan metadata sidecar {ref}: the blob is gone and no tag "
+            "references it (usually left behind by GC)"
+            for ref in missing.orphaned
+        ]
+
         blob_files, listing_errors = _list_blob_files(artifact_dir)
-        for message in (*record_errors, *listing_errors):
+        for message in (*missing.errors, *orphan_messages, *listing_errors):
             _record(
                 result,
                 VerifyIssue(
@@ -538,14 +652,17 @@ def run_verify(
                 result.stopped_early = True
                 break
 
-            issue, bytes_read = _verify_blob(artifact_dir, artifact_path, blob_file)
-            result.blobs_scanned += 1
-            result.bytes_read += bytes_read
+            outcome = _verify_blob(artifact_dir, artifact_path, blob_file, budget)
+            if not outcome.present:
+                continue
 
-            if issue is None:
+            result.blobs_scanned += 1
+            result.bytes_read += outcome.bytes_read
+
+            if outcome.issue is None:
                 result.ok += 1
             else:
-                _record(result, issue, max_issues)
+                _record(result, outcome.issue, max_issues)
 
             if max_bytes is not None and result.bytes_read >= max_bytes:
                 result.stopped_early = True
