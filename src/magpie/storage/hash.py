@@ -28,6 +28,13 @@ HASH_NAME_LENGTH = 16
 # magpie.storage.paths.resolve_blob_name().
 LEGACY_HASH_NAME_LENGTHS: tuple[int, ...] = (8,)
 
+# Shortest reference that may resolve a blob by abbreviation. This is the
+# narrowest width ever stored, which is what the documented API contract
+# ("any abbreviation from 8 to 64 hex characters") and the client's own ref
+# pattern promise; a shorter reference resolves nothing rather than picking
+# whichever blob happens to share those few characters.
+MIN_HASH_REF_LENGTH = min((HASH_NAME_LENGTH, *LEGACY_HASH_NAME_LENGTHS))
+
 
 def compute_hash(file_or_path: BinaryIO | Path | bytes) -> str:
     """Compute SHA-256 hash of content.

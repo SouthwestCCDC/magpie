@@ -7,7 +7,12 @@ import re
 from pathlib import Path
 
 from magpie.storage.exceptions import AmbiguousHashRefError, InvalidArtifactPathError
-from magpie.storage.hash import HASH_NAME_LENGTH, LEGACY_HASH_NAME_LENGTHS, compute_hash
+from magpie.storage.hash import (
+    HASH_NAME_LENGTH,
+    LEGACY_HASH_NAME_LENGTHS,
+    MIN_HASH_REF_LENGTH,
+    compute_hash,
+)
 
 # A name derived from a hash ref is joined onto the artifact directory as a
 # single path component, so a ref may not carry separators or traversal.
@@ -299,7 +304,11 @@ def _resolve_abbreviated(directory: Path, ref: str, suffix: str) -> str | None:
 
     Used only for references shorter than the stored width (a user typing
     a hash ref copied from an older release, for instance) -- an exact
-    filename match is always preferred and checked before this.
+    filename match is always preferred and checked before this. A reference
+    narrower than :data:`~magpie.storage.hash.MIN_HASH_REF_LENGTH` matches
+    nothing: the API does not pattern-validate its ``ref`` parameter, and a
+    one- or two-character reference should not resolve a blob (or scan the
+    directory) just because it shares those characters.
 
     Args:
         directory: Directory to scan ('blobs' or 'metadata').
@@ -313,7 +322,7 @@ def _resolve_abbreviated(directory: Path, ref: str, suffix: str) -> str | None:
     Raises:
         AmbiguousHashRefError: If more than one stored name shares the prefix.
     """
-    if not directory.is_dir():
+    if len(ref) < MIN_HASH_REF_LENGTH or not directory.is_dir():
         return None
 
     matches = sorted(

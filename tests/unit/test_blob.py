@@ -484,6 +484,21 @@ class TestLegacyHashNameLayout:
             with pytest.raises(InvalidArtifactPathError):
                 check_blob_exists(artifact_dir, ref)
 
+    def test_ref_below_the_documented_minimum_resolves_nothing(self, artifact_dir: Path) -> None:
+        """A one- or two-character ref must not pick the blob it happens to prefix.
+
+        The server does not pattern-validate its ref parameter, so the
+        abbreviation scan itself enforces the documented 8-character floor.
+        """
+        _write_blob_file(artifact_dir, "abcdef0123456789", b"the only blob here")
+
+        for ref in ("@a", "@ab", "@abcdef0"):
+            assert check_blob_exists(artifact_dir, ref) is False
+            with pytest.raises(ArtifactNotFoundError):
+                read_blob(artifact_dir, ref)
+
+        assert check_blob_exists(artifact_dir, "@abcdef01") is True
+
     def test_ambiguous_abbreviated_ref_is_rejected(self, artifact_dir: Path) -> None:
         """An abbreviation matching two blobs is an error, not an arbitrary pick."""
         _write_blob_file(artifact_dir, "abcdef0123456789", b"one")

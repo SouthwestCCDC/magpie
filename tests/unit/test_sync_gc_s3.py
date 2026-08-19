@@ -37,6 +37,20 @@ class TestParseManifestTagTargets:
         for content in ("not valid json{", "", json.dumps({"version": 1})):
             assert _parse_manifest_tag_targets(content) == set()
 
+    def test_handles_unexpected_manifest_shapes(self) -> None:
+        """A body that is valid JSON but not a manifest must not raise.
+
+        One odd file in the backup would otherwise abort the whole gc-s3 run.
+        """
+        for content in (
+            json.dumps("hello"),
+            json.dumps([]),
+            json.dumps({"tags": []}),
+            json.dumps({"tags": {"latest": 17}}),
+        ):
+            assert _parse_manifest_tag_targets(content) == set()
+            assert _parse_manifest_content(content) == set()
+
 
 class TestParseManifestContent:
     """Tests for _parse_manifest_content function."""
@@ -309,6 +323,40 @@ class TestFindOrphanedBlobs:
 
         assert len(errors) == 1
         assert "Failed to read manifest" in errors[0]
+
+    @patch("magpie.ctl.commands.sync._list_s3_files_rclone")
+    @patch("magpie.ctl.commands.sync._get_s3_file_content_rclone")
+    def test_unreadable_manifest_protects_its_own_blobs(
+        self,
+        mock_get_content: MagicMock,
+        mock_list_files: MagicMock,
+    ) -> None:
+        """A manifest of an unexpected shape must not make its blobs orphans.
+
+        Its tag targets are unknown, so deleting under it could destroy a
+        tagged blob; other artifacts are still collected.
+        """
+
+        def list_files_side_effect(bucket: str, prefix: str, pattern: str, debug: bool) -> list:
+            if ".magpie" in pattern:
+                return ["broken/.magpie", "art/.magpie"]
+            if "blobs" in pattern:
+                return ["broken/blobs/abc12345", "art/blobs/orphaned"]
+            return []
+
+        contents = {
+            "broken/.magpie": json.dumps("not a manifest"),
+            "art/.magpie": json.dumps({"version": 1, "tags": {}}),
+        }
+
+        mock_list_files.side_effect = list_files_side_effect
+        mock_get_content.side_effect = lambda bucket, prefix, path, debug: contents[path]
+
+        orphaned, _, _, _, errors = _find_orphaned_blobs("test-bucket", "", "rclone", False, True)
+
+        assert orphaned == ["art/blobs/orphaned"]
+        assert len(errors) == 1
+        assert "broken/.magpie" in errors[0]
 
 
 class TestGcS3Command:

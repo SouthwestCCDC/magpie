@@ -1311,6 +1311,39 @@ def _get_s3_file_size_aws(
         return {}
 
 
+def _parse_manifest_tags(content: str) -> dict[str, str] | None:
+    """Parse a manifest's tag map, or report that it cannot be read.
+
+    A backup holds whatever an operator (or an older release) wrote, so the
+    content may not even be an object with a tag map. Distinguishing that
+    from a manifest that simply has no tags matters: a manifest whose
+    targets cannot be read must not let its blobs look orphaned.
+
+    Args:
+        content: JSON content of the manifest file.
+
+    Returns:
+        The tag names mapped to their targets, dropping entries whose target
+        is not a non-empty string, or None if the content is not a manifest.
+    """
+    import json
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    tags = data.get("tags", {})
+    if not isinstance(tags, dict):
+        return None
+    return {
+        name: target
+        for name, target in tags.items()
+        if isinstance(name, str) and isinstance(target, str) and target
+    }
+
+
 def _parse_manifest_content(content: str) -> set[str]:
     """Parse manifest JSON and extract tagged blob hashes.
 
@@ -1319,23 +1352,15 @@ def _parse_manifest_content(content: str) -> set[str]:
 
     Returns:
         Set of blob hash names (every stored prefix width, without @ symbol).
+        Unreadable content yields no names; callers that delete on the result
+        must handle that case through :func:`_parse_manifest_tags`.
     """
-    import json
-
-    try:
-        data = json.loads(content)
-        tags = data.get("tags", {})
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return set()
-
     # A remote manifest gives no view of the layout its blobs were written
     # with, so treat every stored width as referenced rather than reporting
     # blobs from either layout as orphans. An unusable tag target names no
     # blob, so it contributes nothing.
     names: set[str] = set()
-    for hash_ref in tags.values():
-        if not hash_ref:
-            continue
+    for hash_ref in (_parse_manifest_tags(content) or {}).values():
         try:
             names.update(candidate_hash_names(hash_ref))
         except InvalidArtifactPathError:
@@ -1356,14 +1381,8 @@ def _parse_manifest_tag_targets(content: str) -> set[str]:
     Returns:
         Set of tag targets with any '@' prefix removed.
     """
-    import json
-
-    try:
-        data = json.loads(content)
-        tags = data.get("tags", {})
-        return {hash_ref.lstrip("@").lower() for hash_ref in tags.values() if hash_ref}
-    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
-        return set()
+    tags = _parse_manifest_tags(content) or {}
+    return {hash_ref.lstrip("@").lower() for hash_ref in tags.values()}
 
 
 def _extract_blob_name_from_path(path: str) -> str | None:
@@ -1431,13 +1450,18 @@ def _find_orphaned_blobs(
 
     tagged_blobs: set[str] = set()
     tag_targets: set[str] = set()
+    # Blobs under an artifact whose manifest could not be read are left alone:
+    # its tag targets are unknown, so calling them orphans could delete a
+    # tagged blob.
+    unreadable_blob_dirs: set[str] = set()
     for manifest_path in manifest_paths:
         content = get_content(bucket, prefix, manifest_path, debug)
-        if content:
-            tagged_blobs.update(_parse_manifest_content(content))
-            tag_targets.update(_parse_manifest_tag_targets(content))
-        else:
+        if not content or _parse_manifest_tags(content) is None:
             errors.append(f"Failed to read manifest: {manifest_path}")
+            unreadable_blob_dirs.add(f"{manifest_path.removesuffix('.magpie')}blobs/")
+            continue
+        tagged_blobs.update(_parse_manifest_content(content))
+        tag_targets.update(_parse_manifest_tag_targets(content))
 
     if debug:
         click.echo(f"Found {len(tag_targets)} unique tagged blob hashes", err=True)
@@ -1456,6 +1480,8 @@ def _find_orphaned_blobs(
     # Step 4: Find orphaned blobs (not referenced by any manifest)
     orphaned_paths: list[str] = []
     for blob_path in blob_paths:
+        if any(blob_path.startswith(blob_dir) for blob_dir in unreadable_blob_dirs):
+            continue
         blob_name = _extract_blob_name_from_path(blob_path)
         if blob_name and blob_name not in tagged_blobs:
             orphaned_paths.append(blob_path)
