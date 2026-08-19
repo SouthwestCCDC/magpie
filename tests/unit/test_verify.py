@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from magpie.storage import verify as verify_module
 from magpie.storage.exceptions import InvalidArtifactPathError
 from magpie.storage.paths import blob_path, metadata_path
 from magpie.storage.verify import (
@@ -307,6 +308,44 @@ class TestRunVerifyConcurrentUpload:
         finally:
             writer.join()
 
+        assert result.missing_metadata == 0
+        assert result.ok == 1
+
+    def test_sidecar_is_reread_even_with_no_recheck_budget_left(self, storage_path: Path) -> None:
+        content = b"freshly uploaded content"
+        write_blob(storage_path, "openvpn/ca", content, metadata=False)
+        artifact_dir = storage_path / "openvpn/ca"
+        full_hash = hashlib.sha256(content).hexdigest()
+        sidecar_written = threading.Event()
+
+        def finish_upload() -> None:
+            sidecar = metadata_path(artifact_dir, full_hash)
+            sidecar.parent.mkdir(parents=True, exist_ok=True)
+            sidecar.write_text(
+                json.dumps(
+                    {
+                        "hash": full_hash,
+                        "uploaded_by": "test",
+                        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                        "source_uri": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            sidecar_written.set()
+
+        original_wait = verify_module._RecheckBudget.wait
+
+        def spend_budget_then_wait(self: verify_module._RecheckBudget) -> None:
+            self.remaining = 0.0
+            finish_upload()
+            original_wait(self)
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(verify_module._RecheckBudget, "wait", spend_budget_then_wait)
+            result = run_verify(storage_path)
+
+        assert sidecar_written.is_set()
         assert result.missing_metadata == 0
         assert result.ok == 1
 

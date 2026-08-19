@@ -279,18 +279,22 @@ def _expected_hash(artifact_dir: Path, blob_ref: str) -> str:
 
 
 class _RecheckBudget:
-    """Bounded total time a run may spend re-reading records that look wrong."""
+    """Bounded total time a run may spend *waiting* before it re-reads records.
+
+    Only the pause is budgeted; a re-read itself is always worth doing, so a run
+    that has spent its budget still looks again, just without giving the writer
+    extra time to finish.
+    """
 
     def __init__(self, seconds: float = RECHECK_BUDGET_SECONDS) -> None:
         self.remaining = seconds
 
-    def wait(self) -> bool:
-        """Pause for the recheck delay, or report that the budget is spent."""
+    def wait(self) -> None:
+        """Pause for the recheck delay, unless the budget is spent."""
         if self.remaining < RECHECK_DELAY_SECONDS:
-            return False
+            return
         self.remaining -= RECHECK_DELAY_SECONDS
         time.sleep(RECHECK_DELAY_SECONDS)
-        return True
 
 
 def _reread_expected_hash(artifact_dir: Path, blob_ref: str, budget: _RecheckBudget) -> str | None:
@@ -299,8 +303,7 @@ def _reread_expected_hash(artifact_dir: Path, blob_ref: str, budget: _RecheckBud
     Returns the recorded hash if the sidecar has since become readable (the
     upload that was writing it finished), else None.
     """
-    if not budget.wait():
-        return None
+    budget.wait()
 
     try:
         return _expected_hash(artifact_dir, blob_ref)
