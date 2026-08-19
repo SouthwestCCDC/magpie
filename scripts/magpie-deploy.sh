@@ -106,6 +106,11 @@ FOLLOW="false"
 LINES="100"
 FROM_SOURCE="false"
 REQUESTED_RELEASE=""  # from --release; empty means "use the default branch"
+# Whether REQUESTED_RELEASE came from the --release flag rather than the
+# MAGPIE_VERSION/GITHUB_REF env override, which resolve_and_validate_release()
+# also writes into REQUESTED_RELEASE. Anything that must reason about what the
+# CALLER asked for has to consult this, not REQUESTED_RELEASE alone.
+RELEASE_FROM_CLI="false"
 # --source-dir: install from an existing local git checkout instead of
 # cloning ${GITHUB_REPO} from github.com. Empty means "clone from GitHub"
 # (the operator path). This exists so the installer CI (issue #354) can
@@ -589,7 +594,11 @@ validate_config() {
         if [[ "$FROM_SOURCE" != "true" ]]; then
             errors+=("--source-dir requires --from-source")
         fi
-        if [[ -n "$REQUESTED_RELEASE" ]]; then
+        # RELEASE_FROM_CLI, not REQUESTED_RELEASE: the latter also holds the
+        # MAGPIE_VERSION/GITHUB_REF env override by this point (validate_config
+        # runs after resolve_and_validate_release), and blaming a flag the
+        # caller never passed for an inherited env var would be a lie.
+        if [[ "$RELEASE_FROM_CLI" == "true" ]]; then
             errors+=("--source-dir cannot be combined with --release (the local checkout's HEAD is the release)")
         fi
     fi
@@ -1148,8 +1157,20 @@ resolve_and_validate_release() {
     # / GITHUB_REF env override (captured at script start, before the
     # Constants section repurposed the MAGPIE_VERSION name) > the default
     # branch. See issue #559.
-    local from_cli="true"
+    local from_cli="$RELEASE_FROM_CLI"
     if [[ -z "$REQUESTED_RELEASE" ]]; then
+        # --source-dir already names the tree to install, so an inherited
+        # MAGPIE_VERSION/GITHUB_REF (routinely set in CI shells) must not
+        # silently become a release request -- it would fail the
+        # --source-dir/--release conflict check and pay for a remote
+        # ls-remote verification of a ref that is never cloned. An explicit
+        # --release with --source-dir is still rejected by validate_config().
+        if [[ -n "$SOURCE_DIR" ]]; then
+            if [[ -n "$REQUESTED_RELEASE_ENV" ]]; then
+                log_warn "Ignoring release env override '${REQUESTED_RELEASE_ENV}' (MAGPIE_VERSION/GITHUB_REF): --source-dir installs the local checkout's HEAD"
+            fi
+            return 0
+        fi
         REQUESTED_RELEASE="$REQUESTED_RELEASE_ENV"
         from_cli="false"
     fi
@@ -3672,6 +3693,7 @@ parse_args() {
                     die "--release requires a value, e.g. --release v0.1.4"
                 fi
                 REQUESTED_RELEASE="$2"
+                RELEASE_FROM_CLI="true"
                 shift 2
                 ;;
             -*)
