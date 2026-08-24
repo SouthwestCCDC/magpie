@@ -6,7 +6,7 @@ authors = [{ name = "SWCCDC Team" }]
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "fastapi>=0.139.2",
+    "fastapi>=0.141.1",
     "uvicorn[standard]",
     "click>=8.3.3",
     "httpx",
