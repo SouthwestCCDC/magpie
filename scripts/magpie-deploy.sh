@@ -33,6 +33,11 @@ REQUESTED_RELEASE_ENV="${MAGPIE_VERSION:-${GITHUB_REF:-}}"
 
 SCRIPT_NAME="$(basename "$0")"
 GITHUB_REPO="SouthwestCCDC/magpie"
+# Where a no-flag 'update' looks up the latest published release. GitHub's
+# releases/latest endpoint only ever returns a published, non-draft,
+# non-prerelease release. Overridable for tests and for hosts that reach
+# the API through a mirror.
+LATEST_RELEASE_URL="${MAGPIE_DEPLOY_LATEST_RELEASE_URL:-https://api.github.com/repos/${GITHUB_REPO}/releases/latest}"
 DEFAULT_GITHUB_BRANCH="default"
 GITHUB_BRANCH="$DEFAULT_GITHUB_BRANCH"
 GHCR_IMAGE="ghcr.io/southwestccdc/magpie"
@@ -111,6 +116,14 @@ REQUESTED_RELEASE=""  # from --release; empty means "use the default branch"
 # also writes into REQUESTED_RELEASE. Anything that must reason about what the
 # CALLER asked for has to consult this, not REQUESTED_RELEASE alone.
 RELEASE_FROM_CLI="false"
+# update: --branch NAME tracks a branch's HEAD instead of a release tag
+# (explicit opt-in only), and --accept-downgrade allows moving to an older
+# version. Set by resolve_update_target(): the ref 'update' moves to.
+UPDATE_BRANCH=""
+ACCEPT_DOWNGRADE="false"
+UPDATE_TARGET_KIND=""    # tag | branch
+UPDATE_TARGET_REF=""
+UPDATE_TARGET_COMMIT=""
 # --source-dir: install from an existing local git checkout instead of
 # cloning ${GITHUB_REPO} from github.com. Empty means "clone from GitHub"
 # (the operator path). This exists so the installer CI (issue #354) can
@@ -1370,9 +1383,221 @@ resolve_and_validate_release() {
     check_requested_image_exists
 }
 
-update_repo_to_latest() {
-    # Update repository to latest code from remote branch
-    # Expects repo to already exist at ${INSTALL_DIR}/repo
+# Prints the tag of the latest published non-prerelease release
+# (LATEST_RELEASE_URL). Any failure -- unreachable API, rate limit, no
+# release, a prerelease/draft answer, an unparsable tag -- is fatal with a
+# message saying how to pick a target explicitly; there is deliberately no
+# fallback to a branch. Run in a command substitution: die() only exits
+# that subshell, so callers must propagate the failure.
+resolve_latest_release_tag() {
+    local response http_code body tag curl_rc=0
+    response="$(curl -sS -L --max-time 30 \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'X-GitHub-Api-Version: 2022-11-28' \
+        -w '\n%{http_code}' "$LATEST_RELEASE_URL" 2>/dev/null)" || curl_rc=$?
+    http_code="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    local how="Not falling back to a branch. Re-run with '--release <tag>' to pick a release explicitly (or '--branch <name>' to deliberately track a branch's HEAD)."
+    case "$http_code" in
+        200)
+            if (( curl_rc != 0 )); then
+                die "Could not resolve the latest magpie release: the response from ${LATEST_RELEASE_URL} was incomplete (curl exit ${curl_rc}). ${how}"
+            fi
+            ;;
+        403|429)
+            die "Could not resolve the latest magpie release: ${LATEST_RELEASE_URL} returned HTTP ${http_code} -- most likely GitHub's API rate limit for unauthenticated requests (60/hour per IP). ${how}" ;;
+        404)
+            die "Could not resolve the latest magpie release: ${LATEST_RELEASE_URL} returned HTTP 404 (no published release). ${how}" ;;
+        000|"")
+            die "Could not resolve the latest magpie release: ${LATEST_RELEASE_URL} was unreachable (curl exit ${curl_rc}). ${how}" ;;
+        *)
+            die "Could not resolve the latest magpie release: ${LATEST_RELEASE_URL} returned HTTP ${http_code}. ${how}" ;;
+    esac
+    if grep -qE '"(prerelease|draft)"[[:space:]]*:[[:space:]]*true' <<< "$body"; then
+        die "Could not resolve the latest magpie release: ${LATEST_RELEASE_URL} answered with a prerelease or draft. ${how}"
+    fi
+    tag="$(sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' <<< "$body" | head -n1)"
+    if [[ -z "$tag" ]] || ! is_valid_git_ref "$tag"; then
+        die "Could not resolve the latest magpie release: no usable tag_name in the response from ${LATEST_RELEASE_URL}. ${how}"
+    fi
+    printf '%s\n' "$tag"
+}
+
+# Prints a version as five sortable integers (major minor patch pre-rank
+# pre-number) for compare_versions(). Accepts what pyproject.toml/tags use:
+# 0.2.0, v0.2.0, 0.2.0-rc3, 0.2.0rc3, 0.2.0.dev1, 0.2.0b1. Returns 1 for
+# anything else.
+version_sort_key() {
+    local v="${1#v}" pre rank num
+    [[ "$v" =~ ^([0-9]+)(\.([0-9]+))?(\.([0-9]+))?[-._]?(.*)$ ]] || return 1
+    local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[3]:-0}" patch="${BASH_REMATCH[5]:-0}"
+    pre="${BASH_REMATCH[6],,}"
+    if [[ -z "$pre" ]]; then
+        rank=9; num=0
+    elif [[ "$pre" =~ ^(dev|a|alpha|b|beta|c|rc|pre|preview)[-._]?([0-9]*)$ ]]; then
+        case "${BASH_REMATCH[1]}" in
+            dev) rank=0 ;;
+            a|alpha) rank=1 ;;
+            b|beta) rank=2 ;;
+            *) rank=3 ;;
+        esac
+        num="${BASH_REMATCH[2]:-0}"
+    else
+        return 1
+    fi
+    echo "$((10#$major)) $((10#$minor)) $((10#$patch)) ${rank} $((10#$num))"
+}
+
+# Prints -1, 0 or 1 as version A is older than, equal to or newer than B.
+# Returns 1 (printing nothing) if either can't be parsed.
+compare_versions() {
+    local key_a key_b i
+    key_a="$(version_sort_key "$1")" || return 1
+    key_b="$(version_sort_key "$2")" || return 1
+    local -a a b
+    read -r -a a <<< "$key_a"
+    read -r -a b <<< "$key_b"
+    for i in 0 1 2 3 4; do
+        if (( a[i] < b[i] )); then echo "-1"; return 0; fi
+        if (( a[i] > b[i] )); then echo "1"; return 0; fi
+    done
+    echo "0"
+}
+
+# Decides what 'update' moves to, fetches it into ${INSTALL_DIR}/repo
+# without touching the checkout, and sets UPDATE_TARGET_KIND/REF/COMMIT:
+#   --branch NAME   -> that branch's current HEAD (explicit opt-in only)
+#   --release TAG   -> exactly that tag (prereleases allowed)
+#   (neither)       -> the latest published non-prerelease release
+# The env override install honors (MAGPIE_VERSION/GITHUB_REF) is ignored
+# here: an inherited CI variable must not silently pick the target.
+resolve_update_target() {
+    local repo="${INSTALL_DIR}/repo"
+    if [[ -n "$UPDATE_BRANCH" ]]; then
+        if ! is_valid_git_ref "$UPDATE_BRANCH"; then
+            die "Invalid --branch value '${UPDATE_BRANCH}'"
+        fi
+        GITHUB_BRANCH="$UPDATE_BRANCH"
+        log_warn "Tracking branch '${UPDATE_BRANCH}' (--branch): this deploys whatever its HEAD is right now, including unreleased commits."
+        fetch_branch_head
+        UPDATE_TARGET_KIND="branch"
+        UPDATE_TARGET_REF="$UPDATE_BRANCH"
+        UPDATE_TARGET_COMMIT="$(git -C "$repo" rev-parse --verify "refs/remotes/origin/${UPDATE_BRANCH}^{commit}")" \
+            || die "Failed to resolve origin/${UPDATE_BRANCH} after fetching it"
+        return 0
+    fi
+
+    local tag
+    if [[ -n "$REQUESTED_RELEASE" ]]; then
+        tag="${REQUESTED_RELEASE#refs/tags/}"
+        if [[ "$tag" == refs/* ]]; then
+            die "--release takes a release tag such as v0.2.0 (got '${REQUESTED_RELEASE}'); use --branch <name> to track a branch"
+        fi
+        if ! is_valid_git_ref "$tag"; then
+            die "Invalid --release value '${REQUESTED_RELEASE}'"
+        fi
+        log "Target: release ${tag} (--release)"
+    else
+        log "Resolving the latest published magpie release (${LATEST_RELEASE_URL})..."
+        tag="$(resolve_latest_release_tag)" || exit 1
+        log "Target: latest published release ${tag}"
+    fi
+
+    local ls_err ls_rc=0
+    ls_err="$(git -C "$repo" ls-remote --exit-code --tags origin "refs/tags/${tag}" 2>&1 >/dev/null)" || ls_rc=$?
+    if (( ls_rc == 2 )); then
+        die "Release tag '${tag}' does not exist in $(git -C "$repo" remote get-url origin 2>/dev/null || echo origin)"
+    elif (( ls_rc != 0 )); then
+        die "Could not look up release tag '${tag}' in the repository's origin: ${ls_err}"
+    fi
+    # Explicit refspec: a tag-only shallow clone (install --release) scopes
+    # remote.origin.fetch to its own tag, which this does not depend on.
+    if ! git -C "$repo" fetch --depth 1 --no-tags origin "+refs/tags/${tag}:refs/tags/${tag}"; then
+        die "Failed to fetch release tag ${tag}"
+    fi
+    UPDATE_TARGET_KIND="tag"
+    UPDATE_TARGET_REF="$tag"
+    UPDATE_TARGET_COMMIT="$(git -C "$repo" rev-parse --verify "refs/tags/${tag}^{commit}")" \
+        || die "Failed to resolve release tag ${tag} to a commit"
+}
+
+# Reads the target's version (MAGPIE_VERSION), refuses a downgrade from the
+# running version unless --accept-downgrade, and -- for a registry install
+# -- refuses a target whose bundled image is confirmed missing, all before
+# the update stops anything. magpie-ctl migrate's data-format check still
+# runs after the swap (and fails the update into a rollback) whatever is
+# decided here; this check is about versions, that one about data.
+check_update_target() {
+    local repo="${INSTALL_DIR}/repo" installed_version=""
+    if [[ -n "$PRIOR_GIT_REF" ]]; then
+        installed_version="$(git -C "$repo" show "${PRIOR_GIT_REF}:pyproject.toml" 2>/dev/null | extract_pyproject_version || true)"
+    fi
+    MAGPIE_VERSION="$(git -C "$repo" show "${UPDATE_TARGET_COMMIT}:pyproject.toml" | extract_pyproject_version)" || MAGPIE_VERSION=""
+    if [[ -z "$MAGPIE_VERSION" ]]; then
+        die "Failed to read the version from pyproject.toml at ${UPDATE_TARGET_KIND} ${UPDATE_TARGET_REF} (${UPDATE_TARGET_COMMIT})"
+    fi
+    log "Target version: ${MAGPIE_VERSION} (${UPDATE_TARGET_KIND} ${UPDATE_TARGET_REF}, commit ${UPDATE_TARGET_COMMIT})"
+    if [[ "$UPDATE_TARGET_KIND" == "tag" && "${UPDATE_TARGET_REF#v}" != "$MAGPIE_VERSION" ]]; then
+        log_warn "Release tag ${UPDATE_TARGET_REF} carries version ${MAGPIE_VERSION} in pyproject.toml; the image is chosen by that version."
+    fi
+
+    local cmp=""
+    if [[ -z "$installed_version" ]]; then
+        log_warn "Could not determine the installed version; skipping the downgrade check."
+    elif ! cmp="$(compare_versions "$MAGPIE_VERSION" "$installed_version")"; then
+        log_warn "Cannot compare versions '${installed_version}' and '${MAGPIE_VERSION}'; skipping the downgrade check."
+    elif [[ "$cmp" == "-1" ]]; then
+        if [[ "$ACCEPT_DOWNGRADE" != "true" ]]; then
+            die "Refusing to downgrade from ${installed_version} to ${MAGPIE_VERSION} (${UPDATE_TARGET_KIND} ${UPDATE_TARGET_REF}). Re-run with --accept-downgrade to do it anyway; magpie-ctl migrate still refuses to run against data in a newer format than the target supports, and the update then rolls back."
+        fi
+        log_warn "=================================================================="
+        log_warn "DOWNGRADING magpie from ${installed_version} to ${MAGPIE_VERSION} (--accept-downgrade)."
+        log_warn "=================================================================="
+    fi
+
+    if [[ "$FROM_SOURCE" != "true" ]]; then
+        local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}-bundled" rc=0
+        ghcr_image_exists "$image_tag" || rc=$?
+        if (( rc == 1 )); then
+            die "No published image for version ${MAGPIE_VERSION}: ${image_tag} does not exist on ghcr.io (confirmed absent). Refusing to update."
+        elif (( rc != 0 )); then
+            log_warn "Could not confirm image ${image_tag} exists (registry check was inconclusive); 'docker pull' will fail the update into a rollback if it's missing."
+        fi
+    fi
+}
+
+# Records what this install runs in its .env: MAGPIE_RELEASE_TAG (the
+# release tag, empty when not installed from one), MAGPIE_RELEASE_BRANCH
+# (the tracked branch, empty unless installed from a branch) and
+# MAGPIE_RELEASE_COMMIT. MAGPIE_IMAGE, the third part of that state, is
+# written alongside by the callers. Lives in .env so update's rollback,
+# which restores .env, restores it with everything else.
+record_release_state() {
+    local env_file="$1" tag="$2" branch="$3" commit="$4"
+    upsert_env_key "$env_file" "MAGPIE_RELEASE_TAG" "$tag"
+    upsert_env_key "$env_file" "MAGPIE_RELEASE_BRANCH" "$branch"
+    upsert_env_key "$env_file" "MAGPIE_RELEASE_COMMIT" "$commit"
+}
+
+# install's half of record_release_state(): a --source-dir checkout is
+# neither a release nor a branch of the repo; otherwise GITHUB_BRANCH is
+# whatever was cloned, a tag (--release) or a branch.
+record_install_release_state() {
+    local repo="${INSTALL_DIR}/repo" commit tag="" branch=""
+    commit="$(git -C "$repo" rev-parse HEAD)" || die "Failed to read the installed commit"
+    if [[ -z "$SOURCE_DIR" ]]; then
+        if git -C "$repo" show-ref --verify --quiet "refs/tags/${GITHUB_BRANCH}"; then
+            tag="$GITHUB_BRANCH"
+        else
+            branch="$GITHUB_BRANCH"
+        fi
+    fi
+    record_release_state "${INSTALL_DIR}/etc/.env" "$tag" "$branch" "$commit"
+}
+
+# Fetches origin/$GITHUB_BRANCH's HEAD into ${INSTALL_DIR}/repo without
+# moving the checkout.
+fetch_branch_head() {
 
     # `install --release <tag>` clones with `--depth 1 --branch <tag>`. When
     # <tag> is an actual tag (not a branch), git's implied --single-branch
@@ -1390,6 +1615,12 @@ update_repo_to_latest() {
     if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "$GITHUB_BRANCH"; then
         die "Failed to fetch latest repository code"
     fi
+}
+
+update_repo_to_latest() {
+    # Update repository to latest code from remote branch
+    # Expects repo to already exist at ${INSTALL_DIR}/repo
+    fetch_branch_head
     if ! git -C "${INSTALL_DIR}/repo" reset --hard "origin/$GITHUB_BRANCH"; then
         die "Failed to reset repository to latest code"
     fi
@@ -2364,6 +2595,7 @@ backup_data() {
 source_image=${PRIOR_MAGPIE_IMAGE}
 source_git_ref=${PRIOR_GIT_REF}
 target_version=${MAGPIE_VERSION}
+target_ref=${UPDATE_TARGET_KIND}:${UPDATE_TARGET_REF}@${UPDATE_TARGET_COMMIT}
 cross_020_upgrade=${IS_CROSS_020}
 backup_artifacts_mode=${artifacts_mode}
 db_sha256=${db_sha256}
@@ -2871,6 +3103,7 @@ cmd_install() {
 
     # Generate configuration files
     generate_env_file
+    record_install_release_state
     generate_compose_wrapper
     generate_systemd_service
     generate_gc_units
@@ -3111,23 +3344,19 @@ cmd_update() {
         die "Repository directory not found at ${INSTALL_DIR}/repo\nThe installation may be corrupted. Try reinstalling with 'install --force'."
     fi
 
-    # Captured before update_repo_to_latest() below moves the repo
+    # Captured before anything below moves the repo
     # checkout's HEAD -- rollback_to_prior() needs the ref this install was
     # actually running from, not wherever the failed update's fetch left
     # the working tree.
     PRIOR_GIT_REF="$(git -C "${INSTALL_DIR}/repo" rev-parse HEAD 2>/dev/null || echo "")"
 
-    # Pull latest repo code to detect current version
-    log "Pulling latest repository code to detect version..."
-    update_repo_to_latest
-
-    # Detect version from updated repo
-    detect_version
+    resolve_update_target
+    check_update_target
 
     # Update safety envelope (issue #561): capture everything needed to
     # roll back, then back up the data directory, BEFORE any of the swap
-    # below runs. compute_backup_dir() needs MAGPIE_VERSION (just detected
-    # above); capture_prior_state() reads the CURRENT (still pre-swap)
+    # below runs. compute_backup_dir() needs MAGPIE_VERSION (just read from
+    # the target above); capture_prior_state() reads the CURRENT (still pre-swap)
     # .env/docker-compose.yml/systemd units and probes the still-running
     # prior container. backup_data() then stops that stack (checkpointing
     # its WAL) and snapshots the data directory -- the prior install is
@@ -3160,28 +3389,11 @@ cmd_update() {
     # pre-#561 version of this code -- only the catch-and-rollback wrapper
     # around them is new.
     if ! (
-        # Ensure repository is not shallow so tags can be fetched reliably
-        if git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository >/dev/null 2>&1; then
-            if [[ "$(git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository)" == "true" ]]; then
-                log "Repository is shallow; fetching full history to access tags..."
-                if ! git -C "${INSTALL_DIR}/repo" fetch --unshallow --tags; then
-                    die "Failed to unshallow repository to fetch tags"
-                fi
-            fi
-        fi
-
-        # Checkout the version tag for consistency when it exists.
-        # If no corresponding tag is found (e.g. development version), stay on the branch HEAD.
-        if git -C "${INSTALL_DIR}/repo" ls-remote --tags origin "v${MAGPIE_VERSION}" | grep -q .; then
-            log "Checking out version tag v${MAGPIE_VERSION}..."
-            if ! git -C "${INSTALL_DIR}/repo" fetch origin "refs/tags/v${MAGPIE_VERSION}:refs/tags/v${MAGPIE_VERSION}"; then
-                die "Failed to fetch version tag v${MAGPIE_VERSION}"
-            fi
-            if ! git -C "${INSTALL_DIR}/repo" checkout "v${MAGPIE_VERSION}"; then
-                die "Failed to checkout version tag v${MAGPIE_VERSION}"
-            fi
-        else
-            log_warn "No git tag v${MAGPIE_VERSION} found for detected version; continuing on branch ${GITHUB_BRANCH}"
+        # Exactly the commit resolve_update_target() fetched -- a release
+        # tag's, or (--branch only) the branch HEAD's.
+        log "Checking out ${UPDATE_TARGET_KIND} ${UPDATE_TARGET_REF} (${UPDATE_TARGET_COMMIT})..."
+        if ! git -C "${INSTALL_DIR}/repo" checkout -q -f --detach "$UPDATE_TARGET_COMMIT"; then
+            die "Failed to check out ${UPDATE_TARGET_KIND} ${UPDATE_TARGET_REF} (${UPDATE_TARGET_COMMIT})"
         fi
 
         # Update the canonical compose file from the repo. This is the only
@@ -3215,6 +3427,11 @@ cmd_update() {
             fi
             # MAGPIE_IMAGE always reflects the version just resolved above.
             upsert_env_key "$env_file" "MAGPIE_IMAGE" "$image_tag"
+        fi
+        if [[ "$UPDATE_TARGET_KIND" == "tag" ]]; then
+            record_release_state "$env_file" "$UPDATE_TARGET_REF" "" "$UPDATE_TARGET_COMMIT"
+        else
+            record_release_state "$env_file" "" "$UPDATE_TARGET_REF" "$UPDATE_TARGET_COMMIT"
         fi
 
         # generate_systemd_service()/generate_gc_units() are also called by
@@ -3440,6 +3657,23 @@ cmd_status() {
     echo "=== Magpie Status ==="
     echo ""
 
+    echo "--- Release ---"
+    local -A release_env=()
+    read_env_file "${INSTALL_DIR}/etc/.env" release_env
+    local release_tag="${release_env[MAGPIE_RELEASE_TAG]:-}"
+    local release_branch="${release_env[MAGPIE_RELEASE_BRANCH]:-}"
+    if [[ -n "$release_tag" ]]; then
+        echo "  Release: ${release_tag}"
+    elif [[ -n "$release_branch" ]]; then
+        echo "  Release: none (tracking branch ${release_branch})"
+    else
+        echo "  Release: none recorded (local --source-dir checkout, or installed by an older installer)"
+    fi
+    echo "  Version: $(extract_pyproject_version < "${INSTALL_DIR}/repo/pyproject.toml" 2>/dev/null || echo unknown)"
+    echo "  Commit:  ${release_env[MAGPIE_RELEASE_COMMIT]:-$(git -C "${INSTALL_DIR}/repo" rev-parse HEAD 2>/dev/null || echo unknown)}"
+    echo "  Image:   ${release_env[MAGPIE_IMAGE]:-unknown}"
+    echo ""
+
     echo "--- Systemd Service ---"
     systemctl status magpie.service --no-pager 2>/dev/null || echo "  Service not running"
     echo ""
@@ -3502,7 +3736,7 @@ Usage: $SCRIPT_NAME <command> [options]
 
 Commands:
   install     Install magpie (fresh installation)
-  update      Update to latest version
+  update      Update to the latest published release (or --release TAG)
   uninstall   Remove magpie
   status      Show service status
   logs        View container logs
@@ -3552,6 +3786,24 @@ Install options (only used with 'install' command):
                           Debian-derived runner. Not for operators.
 
 Update options:
+  (no target flag)                 Update to the latest published,
+                                    non-prerelease release (GitHub's
+                                    releases/latest). If that lookup fails
+                                    (e.g. API rate limit), update stops --
+                                    it never falls back to a branch.
+                                    Env override of the lookup URL:
+                                    MAGPIE_DEPLOY_LATEST_RELEASE_URL.
+  --release TAG                    Update to exactly this release tag;
+                                    prereleases are fine when named
+                                    (e.g. --release v0.2.0-rc4).
+  --branch NAME                    Track branch NAME's current HEAD
+                                    instead of a release (explicit opt-in;
+                                    deploys unreleased commits).
+  --accept-downgrade               Allow moving to an older version than
+                                    the one installed (refused otherwise).
+                                    magpie-ctl migrate still refuses data
+                                    in a newer format than the target
+                                    supports.
   --from-source                    Rebuild image from source instead of
                                     pulling from ghcr.io
   --trusted-proxies CIDR           See Install options above -- also
@@ -3637,8 +3889,9 @@ Examples:
   # Install a specific tagged release instead of the default branch
   sudo $SCRIPT_NAME install --release v0.1.3
 
-  # Update existing installation
+  # Update to the latest published release, or to an exact one
   sudo $SCRIPT_NAME update
+  sudo $SCRIPT_NAME update --release v0.2.0
 
   # View logs
   sudo $SCRIPT_NAME logs -f
@@ -3841,6 +4094,17 @@ parse_args() {
                 RELEASE_FROM_CLI="true"
                 shift 2
                 ;;
+            --branch)
+                if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+                    die "--branch requires a branch name, e.g. --branch default"
+                fi
+                UPDATE_BRANCH="$2"
+                shift 2
+                ;;
+            --accept-downgrade)
+                ACCEPT_DOWNGRADE="true"
+                shift
+                ;;
             -*)
                 die "Unknown option: $1\nUse --help for usage information."
                 ;;
@@ -3856,13 +4120,21 @@ parse_args() {
         exit 1
     fi
 
-    # --release selects a release to install and is only meaningful for
-    # 'install' -- the env-var override (MAGPIE_VERSION/GITHUB_REF) is
-    # deliberately not checked here, since it may be set in an operator's
-    # environment for unrelated reasons and shouldn't break other commands.
-    # See issue #559.
-    if [[ -n "$REQUESTED_RELEASE" ]] && [[ "$command" != "install" ]]; then
-        die "--release is only supported by the 'install' command (got: $command)"
+    # --release selects the release to install or update to -- the env-var
+    # override (MAGPIE_VERSION/GITHUB_REF) is deliberately not checked here,
+    # since it may be set in an operator's environment for unrelated reasons
+    # and shouldn't break other commands. See issues #559 and #632.
+    if [[ -n "$REQUESTED_RELEASE" ]] && [[ "$command" != "install" && "$command" != "update" ]]; then
+        die "--release is only supported by the 'install' and 'update' commands (got: $command)"
+    fi
+    if [[ -n "$UPDATE_BRANCH" ]] && [[ "$command" != "update" ]]; then
+        die "--branch is only supported by the 'update' command (got: $command); 'install --release <branch>' installs a branch"
+    fi
+    if [[ "$ACCEPT_DOWNGRADE" == "true" ]] && [[ "$command" != "update" ]]; then
+        die "--accept-downgrade is only supported by the 'update' command (got: $command)"
+    fi
+    if [[ -n "$UPDATE_BRANCH" && -n "$REQUESTED_RELEASE" ]]; then
+        die "--branch and --release are mutually exclusive"
     fi
 
     # Same for --source-dir: only clone_repo() (install) consults SOURCE_DIR,

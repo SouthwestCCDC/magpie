@@ -1460,8 +1460,8 @@ test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit() {
     read -r install_dir data_dir < <(setup_fake_install "midswap_fail" "" "MAGPIE_HTTP_PORT=1")
 
     # A real (if minimal) git repository at INSTALL_DIR/repo -- no remote
-    # configured (update_repo_to_latest(), which needs one, is stubbed out
-    # below; it's pre-existing #582-covered logic, not part of this PR).
+    # configured (resolve_update_target(), which needs one, is stubbed out
+    # below).
     # Deliberately has NO docker-compose.yml, so the swap's own
     # `cp "${INSTALL_DIR}/repo/docker-compose.yml" ...` step fails for
     # REAL -- not a simulated/stubbed failure -- which is exactly the
@@ -1491,7 +1491,11 @@ test_cmd_update_mid_swap_failure_triggers_rollback_under_real_errexit() {
     out=$(
         (
             set -euo pipefail  # magpie-deploy.sh's own real semantics
-            update_repo_to_latest() { :; }  # needs a real remote; out of scope for this test (see #582)
+            # The release lookup needs a real remote (out of scope here; see #632):
+            # target the fixture repo's own HEAD, and skip the ghcr.io probe.
+            # shellcheck disable=SC2034  # read by cmd_update()
+            resolve_update_target() { UPDATE_TARGET_KIND="tag"; UPDATE_TARGET_REF="v0.2.0"; UPDATE_TARGET_COMMIT="$(git -C "${install_dir}/repo" rev-parse HEAD)"; }
+            ghcr_image_exists() { return 0; }
             systemctl() { [[ "$1" == "is-active" ]] && return 1; return 0; }  # "is-active" reports inactive -- stop "succeeded" for real
             wait_for_healthy() { return 1; }  # fail fast rather than really retrying/probing
             docker() { return 1; }
@@ -1537,7 +1541,11 @@ test_gc_timer_never_started_before_rollback_stops_it_again() {
     rm -f "$calls_log"
     (
         set -euo pipefail
-        update_repo_to_latest() { :; }
+        # The release lookup needs a real remote (out of scope here; see #632):
+        # target the fixture repo's own HEAD, and skip the ghcr.io probe.
+        # shellcheck disable=SC2034  # read by cmd_update()
+        resolve_update_target() { UPDATE_TARGET_KIND="tag"; UPDATE_TARGET_REF="v0.2.0"; UPDATE_TARGET_COMMIT="$(git -C "${install_dir}/repo" rev-parse HEAD)"; }
+        ghcr_image_exists() { return 0; }
         systemctl() { echo "$*" >> "$calls_log"; [[ "$1" == "is-active" ]] && return 1; return 0; }
         wait_for_healthy() { return 1; }
         docker() { return 1; }
@@ -1597,7 +1605,11 @@ test_no_rollback_restarts_gc_timer_before_dying() {
     rm -f "$calls_log"
     (
         set -euo pipefail
-        update_repo_to_latest() { :; }
+        # The release lookup needs a real remote (out of scope here; see #632):
+        # target the fixture repo's own HEAD, and skip the ghcr.io probe.
+        # shellcheck disable=SC2034  # read by cmd_update()
+        resolve_update_target() { UPDATE_TARGET_KIND="tag"; UPDATE_TARGET_REF="v0.2.0"; UPDATE_TARGET_COMMIT="$(git -C "${install_dir}/repo" rev-parse HEAD)"; }
+        ghcr_image_exists() { return 0; }
         systemctl() { echo "$*" >> "$calls_log"; [[ "$1" == "is-active" ]] && return 1; return 0; }
         wait_for_healthy() { return 1; }  # forces the post-update assert gate to fail
         docker() { return 0; }  # swap's docker pull/build succeeds

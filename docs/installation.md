@@ -181,6 +181,20 @@ applies the same file set. A copy of the repository's development override
 is refused, not merged. The compose project name stays pinned to the
 install directory's name, so a top-level `name:` in the override is ignored.
 
+### Choosing what `update` installs
+
+`magpie-deploy.sh update` with no target moves to the latest published,
+non-prerelease GitHub release (`releases/latest`), never the default
+branch's HEAD. `update --release <tag>` moves to exactly that tag
+(prereleases too, e.g. `--release v0.2.0-rc4`). `update --branch <name>`
+tracks a branch's HEAD and is meant only for development. If the release
+lookup fails (e.g. GitHub's unauthenticated API rate limit), `update`
+stops with an error instead of falling back. To move to an older version,
+pass `--accept-downgrade`; `magpie-ctl migrate` still refuses data in a
+newer format than the target supports. The installed release tag, commit
+and image are recorded in `<install>/etc/.env` (`MAGPIE_RELEASE_*`,
+`MAGPIE_IMAGE`) and shown by `magpie-deploy.sh status`.
+
 ## Trusted Proxies
 
 The bundled Caddy determines the client IP used by `MAGPIE_ALLOWED_CIDRS`
