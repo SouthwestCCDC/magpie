@@ -16,8 +16,16 @@ jobs:
     outputs:
       version: ${{ steps.get_version.outputs.version }}
       is_prerelease: ${{ steps.get_version.outputs.is_prerelease }}
+      major: ${{ steps.rolling.outputs.major }}
+      minor: ${{ steps.rolling.outputs.minor }}
+      move_latest: ${{ steps.rolling.outputs.move_latest }}
+      move_major: ${{ steps.rolling.outputs.move_major }}
+      move_minor: ${{ steps.rolling.outputs.move_minor }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          # All tags, so the rolling-tag guard can see every prior release.
+          fetch-depth: 0
 
       - name: Get version from tag
         id: get_version
@@ -45,17 +53,25 @@ jobs:
 
           echo "Version validated: $TAG_VERSION"
 
+      - name: Decide which rolling tags move
+        id: rolling
+        run: |
+          git tag -l 'v*' | scripts/release_tag_flags.sh "${GITHUB_REF#refs/tags/v}" | tee -a "$GITHUB_OUTPUT"
+
   build-and-push:
-    # Publishes the two-container image (./Dockerfile, FastAPI service
-    # only, paired with a separate Caddy container -- see
-    # docker-compose.prod.yml) as the primary `magpie` image. This stays
-    # the installer-compatible image (scripts/magpie-deploy.sh's default
-    # `FROM_SOURCE=false` path pulls this tag and expects a bare FastAPI
-    # backend on :8000, not the bundled image's Caddy front door) until a
-    # later PR flips the primary tag over to the bundled image and
-    # retires this build -- see build-and-push-bundled below for that
-    # image, published only under a transitional `-bundled` tag in the
-    # meantime.
+    # Publishes the bundled single-container image (Dockerfile.bundled,
+    # Caddy + uvicorn under one supervisor) as THE magpie image, from
+    # v0.2.0 on (#634; reverses the "Option B" record in #609):
+    #   <version>, <version>-bundled  every release, RC and final
+    #   <major>.<minor>, <major>, latest  stable only, and only when this
+    #     is the highest stable release in that scope
+    #     (scripts/release_tag_flags.sh), so a later hotfix on an older
+    #     line can't move them backwards.
+    # `-bundled` stays as an alias: the installer and rc1-rc3 compose/env
+    # pins use it. The two-container image (./Dockerfile) is no longer
+    # published -- nothing in 0.2.x consumes it (0.1.x -> 0.2.0 upgrades
+    # run the 0.2.0 installer, which pulls -bundled). Removing the
+    # Dockerfile itself is 0.3.0 work.
     name: Build and push container
     runs-on: ubuntu-latest
     needs: validate
@@ -83,73 +99,20 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Every tag is spelled out below; never let metadata-action add
+          # `latest` on its own.
+          flavor: |
+            latest=false
+          # All `type=raw` from validate's outputs, not `type=semver`
+          # patterns: metadata-action ignores `pattern` for prerelease refs
+          # and emits the bare raw tag instead, which silently dropped the
+          # `-bundled` suffix on RCs.
           tags: |
-            # Tag with version (v1.0.0 -> 1.0.0)
-            type=semver,pattern={{version}}
-            # Tag with major.minor (v1.0.0 -> 1.0) - stable releases only
-            type=semver,pattern={{major}}.{{minor}},enable=${{ needs.validate.outputs.is_prerelease == 'false' }}
-            # Tag with major (v1.0.0 -> 1) - stable releases only
-            type=semver,pattern={{major}},enable=${{ needs.validate.outputs.is_prerelease == 'false' }}
-            # Tag latest only for stable releases (not prereleases)
-            type=raw,value=latest,enable=${{ needs.validate.outputs.is_prerelease == 'false' }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  build-and-push-bundled:
-    # Publishes the bundled single-container image (Dockerfile.bundled,
-    # Caddy + uvicorn under one supervisor -- see #586/#589/#591) under a
-    # transitional `<version>-bundled` tag only -- never the primary
-    # `<version>`/`latest`/major/minor tags, and never `latest-bundled`.
-    # It's not yet the installer-compatible topology (see the comment on
-    # build-and-push above), so it must not collide with the primary tag
-    # until a later PR migrates the installer/compose topology and flips
-    # the primary tag over.
-    name: Build and push bundled container
-    runs-on: ubuntu-latest
-    needs: validate
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            # Transitional alias -- exact version only, RC and final both
-            # get `<version>-bundled`, no `latest-bundled`. Built from the
-            # already-validated version output (not a `type=semver`
-            # pattern suffix): metadata-action ignores `pattern` for
-            # prerelease refs and always emits the bare raw tag instead,
-            # so a `{{version}}-bundled` pattern silently loses the
-            # `-bundled` suffix on RCs. This form is correct for both RC
-            # and final.
+            type=raw,value=${{ needs.validate.outputs.version }}
             type=raw,value=${{ needs.validate.outputs.version }}-bundled
+            type=raw,value=${{ needs.validate.outputs.minor }},enable=${{ needs.validate.outputs.move_minor == 'true' }}
+            type=raw,value=${{ needs.validate.outputs.major }},enable=${{ needs.validate.outputs.move_major == 'true' }}
+            type=raw,value=latest,enable=${{ needs.validate.outputs.move_latest == 'true' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -166,7 +129,7 @@ jobs:
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [validate, build-and-push, build-and-push-bundled]
+    needs: [validate, build-and-push]
     permissions:
       contents: write
     steps:
