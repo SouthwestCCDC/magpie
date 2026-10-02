@@ -85,11 +85,11 @@ two-container backend image under the same names.
   and the 0.2.0 release candidates pin it.
 - Release candidates get only their exact version tags. They never move
   `latest`, `<major>` or `<major>.<minor>`.
-- A rolling tag (`latest`, `<major>`, `<major>.<minor>`) moves only if the
-  release is the highest published stable version in that tag's scope. A
-  hotfix on an older line never pulls `latest` or `<major>` back onto it.
-  The workflow's `promote` job applies this after the image is pushed
-  (`scripts/release_tag_flags.sh`).
+- A rolling tag (`latest`, `<major>`, `<major>.<minor>`) always points at
+  the highest published stable version in its scope. A hotfix on an older
+  line never pulls `latest` or `<major>` back onto it. After each stable
+  release's image is pushed, the workflow's `promote` job reconciles every
+  alias (`scripts/release_rolling_tags.sh`).
 
 ## Release Assets
 
@@ -140,7 +140,7 @@ A tag push runs the release workflow **as it exists at the tagged commit**.
 A 0.1.x hotfix tagged from an old commit therefore runs the old workflow,
 which moves `latest` and `0` unconditionally, back onto the two-container
 image. Before tagging such a hotfix, port the `promote` job and
-`scripts/release_tag_flags.sh` onto the hotfix branch, and remove the
+`scripts/release_rolling_tags.sh` onto the hotfix branch, and remove the
 unconditional rolling tags from its build job.
 
 ## Upgrade Paths
@@ -176,7 +176,7 @@ lets the actual clone/pull be the real gate. A `MAGPIE_VERSION` or
 `GITHUB_REF` environment variable is honored as an override too (the
 env-var form of `--release`), for scripted installs.
 
-**Warning:** If you use mutable tags like `:2` or `:2.0`, you may automatically pull an RC when one is released. For production, always pin to full version tags (e.g., `:1.5.0`) to avoid unintended RC upgrades.
+Mutable tags like `:2` or `:2.0` never point at an RC; to test one, pull its exact tag. For production, pin full version tags (e.g., `:1.5.0`).
 
 ### From Release Candidate to Stable
 

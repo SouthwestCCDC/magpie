@@ -117,19 +117,18 @@ jobs:
           cache-to: type=gha,mode=max
 
   promote:
-    # Moves the mutable aliases (<major>.<minor>, <major>, latest) onto the
-    # image build-and-push just published, for stable releases only. It's a
-    # separate job so that:
-    #   - eligibility is decided AFTER the build, against releases whose
-    #     image actually exists in the registry (a tag whose build failed
-    #     doesn't block an older release from owning the alias);
-    #   - runs are serialized and each re-reads the tags, so two
-    #     overlapping releases can't leave an older image on an alias.
-    # An alias moves only if this is the highest published stable release
-    # in its scope (scripts/release_tag_flags.sh): a hotfix on an older line
-    # never pulls :latest or :<major> back. Re-running this job is safe.
-    # If GitHub cancels a queued run (a third release queued behind it),
-    # re-run it.
+    # Points the mutable aliases (<major>.<minor>, <major>, latest) at the
+    # highest published stable release in each scope. It runs after the
+    # build and reconciles EVERY alias from scratch
+    # (scripts/release_rolling_tags.sh), so:
+    #   - a hotfix on an older line only moves its own <major>.<minor>;
+    #   - overlapping, out-of-order or re-run releases converge, and a run
+    #     GitHub cancels while queued (concurrency keeps one pending run) is
+    #     repaired by whichever run comes after it;
+    #   - "published" means the <version> image exists in the registry, so a
+    #     tag whose build failed doesn't count. Any inspect error other than
+    #     "not found" aborts, so a registry hiccup can't make a newer release
+    #     look absent and move aliases backwards. Re-running is safe.
     name: Move rolling tags
     runs-on: ubuntu-latest
     needs: [validate, build-and-push]
@@ -156,34 +155,29 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Move rolling tags
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           image="${REGISTRY}/${IMAGE_NAME,,}"
           git fetch --force --tags origin
 
-          published_stable() {
-            git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | while read -r tag; do
-              if docker buildx imagetools inspect "${image}:${tag#v}" >/dev/null 2>&1; then
-                echo "$tag"
-              fi
+          published=()
+          while read -r tag; do
+            v="${tag#v}"
+            if err="$(docker buildx imagetools inspect "${image}:${v}" 2>&1 >/dev/null)"; then
+              published+=("$v")
+            elif [[ "$err" == *": not found" ]]; then
+              echo "Skipping ${v}: no image in the registry"
+            else
+              echo "::error::Could not inspect ${image}:${v}; not moving any alias: ${err}"
+              exit 1
+            fi
+          done < <(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
+
+          printf '%s\n' "${published[@]}" | scripts/release_rolling_tags.sh |
+            while read -r alias v; do
+              echo "${alias} -> ${v}"
+              docker buildx imagetools create -t "${image}:${alias}" "${image}:${v}"
             done
-          }
-
-          flags="$(published_stable | scripts/release_tag_flags.sh "$VERSION")"
-          echo "$flags"
-          flag() { sed -n "s/^$1=//p" <<<"$flags"; }
-
-          targets=()
-          if [[ "$(flag move_minor)" == true ]]; then targets+=(-t "${image}:$(flag minor)"); fi
-          if [[ "$(flag move_major)" == true ]]; then targets+=(-t "${image}:$(flag major)"); fi
-          if [[ "$(flag move_latest)" == true ]]; then targets+=(-t "${image}:latest"); fi
-          if (( ${#targets[@]} == 0 )); then
-            echo "A newer stable release owns every alias; nothing to move."
-            exit 0
-          fi
-          docker buildx imagetools create "${targets[@]}" "${image}:${VERSION}"
 
   release:
     name: Create GitHub Release
