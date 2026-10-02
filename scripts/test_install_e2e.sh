@@ -828,7 +828,7 @@ assert_release_updates() {
     log "stub releases: v9.0.0-rc1 ${rc_commit}, v9.0.0 ${final_commit} (latest), v9.0.1 ${broken_commit} (broken build)"
 
     expect_update 0 "update --release v9.0.0-rc1 (named prerelease)" missing --release v9.0.0-rc1
-    assert_release_state "--release v9.0.0-rc1" "v9.0.0-rc1" "$rc_commit" "9.0.0rc1"
+    assert_release_state "--release v9.0.0-rc1" "v9.0.0-rc1" "$rc_commit" "9.0.0-rc1"
 
     # The site override from assert_site_override_applies survives update.
     local marker
@@ -856,7 +856,7 @@ assert_release_updates() {
 
     expect_update 0 "downgrade with --accept-downgrade" missing --release v9.0.0-rc1 --accept-downgrade
     update_log_has "DOWNGRADING magpie from 9.0.0 to 9.0.0-rc1" "forced downgrade warns loudly"
-    assert_release_state "after forced downgrade" "v9.0.0-rc1" "$rc_commit" "9.0.0rc1"
+    assert_release_state "after forced downgrade" "v9.0.0-rc1" "$rc_commit" "9.0.0-rc1"
 }
 
 # --- credentials for the assertions above -----------------------------------
