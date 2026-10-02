@@ -1,6 +1,7 @@
 """Release assets pin the image by digest (scripts/render_release_assets.sh, #633)."""
 
 import hashlib
+import os
 import subprocess
 from pathlib import Path
 
@@ -12,12 +13,15 @@ DIGEST = "sha256:" + "ab" * 32
 PINNED = f"ghcr.io/southwestccdc/magpie:0.2.0@{DIGEST}"
 
 
-def _render(out: Path, digest: str = DIGEST) -> subprocess.CompletedProcess:
+def _render(
+    out: Path, digest: str = DIGEST, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
     return subprocess.run(  # noqa: S603
         ["bash", str(SCRIPT), "0.2.0", digest, str(out)],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
@@ -60,3 +64,12 @@ def test_sha256sums_cover_every_asset(assets: Path):
 @pytest.mark.parametrize("digest", ["", "sha256:abc", "latest", "md5:" + "0" * 32])
 def test_rejects_bad_digest(tmp_path: Path, digest: str):
     assert _render(tmp_path, digest).returncode != 0
+
+
+def test_fork_image_repo_pins_fork_image(tmp_path: Path):
+    env = {**os.environ, "IMAGE_REPO": "ghcr.io/alice/magpie"}
+    result = _render(tmp_path, env=env)
+    assert result.returncode == 0, result.stderr
+    fork_pinned = f"ghcr.io/alice/magpie:0.2.0@{DIGEST}"
+    assert f"${{MAGPIE_IMAGE:-{fork_pinned}}}" in (tmp_path / "docker-compose.yml").read_text()
+    assert f"# MAGPIE_IMAGE={fork_pinned}" in (tmp_path / ".env.example").read_text()

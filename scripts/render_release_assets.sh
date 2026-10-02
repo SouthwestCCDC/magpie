@@ -10,7 +10,10 @@ set -euo pipefail
 version="${1:?usage: render_release_assets.sh <version> <digest> <outdir>}"
 digest="${2:?missing image digest}"
 outdir="${3:?missing output directory}"
-image_repo="${IMAGE_REPO:-ghcr.io/southwestccdc/magpie}"
+# The templates always name the upstream image; IMAGE_REPO only picks what
+# the rendered assets point at, so forks pin their own image.
+template_repo="ghcr.io/southwestccdc/magpie"
+image_repo="${IMAGE_REPO:-$template_repo}"
 
 if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
     echo "render_release_assets: not a sha256 digest: '${digest}'" >&2
@@ -36,15 +39,15 @@ render() {
 }
 
 render "${repo_root}/docker-compose.yml" "${outdir}/docker-compose.yml.tmp" \
-    "\${MAGPIE_IMAGE:-${image_repo}:latest}" "\${MAGPIE_IMAGE:-${pinned}}"
+    "\${MAGPIE_IMAGE:-${template_repo}:latest}" "\${MAGPIE_IMAGE:-${pinned}}"
 render "${outdir}/docker-compose.yml.tmp" "${outdir}/docker-compose.yml" \
-    "(default: ${image_repo}:latest)" "(default: ${pinned})"
+    "(default: ${template_repo}:latest)" "(default: ${pinned})"
 rm "${outdir}/docker-compose.yml.tmp"
 
 render "${repo_root}/.env.example" "${outdir}/.env.example.tmp" \
-    "# Default: ${image_repo}:latest" "# Default: ${pinned}"
+    "# Default: ${template_repo}:latest" "# Default: ${pinned}"
 render "${outdir}/.env.example.tmp" "${outdir}/.env.example" \
-    "# MAGPIE_IMAGE=${image_repo}:latest" "# MAGPIE_IMAGE=${pinned}"
+    "# MAGPIE_IMAGE=${template_repo}:latest" "# MAGPIE_IMAGE=${pinned}"
 rm "${outdir}/.env.example.tmp"
 
 cp "${repo_root}/scripts/magpie-deploy.sh" "${outdir}/magpie-deploy.sh"

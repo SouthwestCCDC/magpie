@@ -110,7 +110,10 @@ base=https://github.com/SouthwestCCDC/magpie/releases/download/$V
 curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/.env.example" -fsSLO "$base/SHA256SUMS"
 # Verify exactly the files you downloaded; a missing one fails the check.
 grep -E ' (docker-compose\.yml|\.env\.example)$' SHA256SUMS | sha256sum -c
-cp .env.example .env   # then edit
+cp .env.example .env
+# Required: choose how the first-boot admin token is delivered (file, exec,
+# discard or stdout). The container refuses to start without it.
+echo 'MAGPIE_ADMIN_TOKEN_SINK=file' >> .env   # then edit the rest of .env
 docker compose up -d
 ```
 
