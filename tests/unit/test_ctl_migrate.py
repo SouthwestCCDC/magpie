@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from magpie.auth.database import get_connection, init_database
+from magpie.auth.database import create_schema, get_connection, init_database
 from magpie.config import MagpieSettings
 from magpie.ctl import cli
 from magpie.ctl.commands.migrate import (
@@ -18,6 +18,7 @@ from magpie.ctl.commands.migrate import (
     MigrationStep,
     _check_current_version_matches_migrations,
     get_data_format_version,
+    migrate_database,
     run_migrations,
 )
 
@@ -183,6 +184,67 @@ class TestRunMigrations:
 
 class TestRunMigrationsTransactional:
     """run_migrations() is all-or-nothing and serializes concurrent callers."""
+
+    def test_noop_inside_callers_transaction_keeps_pending_writes(self, tmp_path: Path) -> None:
+        """With a transaction already open, run_migrations() neither fails nor commits it."""
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+        conn = get_connection(db_path)
+        try:
+            run_migrations(conn)
+            conn.execute(
+                "INSERT INTO tokens (name, token_hash, scope, enabled, created_at) "
+                "VALUES ('pending', 'h', 'read', 1, '2026-01-01T00:00:00')"
+            )
+            assert conn.in_transaction
+            _, _, applied = run_migrations(conn)
+            assert applied == []
+            assert conn.in_transaction
+            conn.rollback()
+            assert conn.execute("SELECT COUNT(*) FROM tokens").fetchone()[0] == 0
+        finally:
+            conn.close()
+
+    def test_failing_step_inside_callers_transaction_rolls_back_only_itself(
+        self, tmp_path: Path
+    ) -> None:
+        """A failed step inside a caller's transaction undoes the migration, not the caller's writes."""
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+
+        def create_then_fail(c: sqlite3.Connection) -> None:
+            c.execute("CREATE TABLE migrated_marker (x INTEGER)")
+            raise RuntimeError("step failed")
+
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "INSERT INTO tokens (name, token_hash, scope, enabled, created_at) "
+                "VALUES ('pending', 'h', 'read', 1, '2026-01-01T00:00:00')"
+            )
+            with (
+                patch(
+                    "magpie.ctl.commands.migrate._MIGRATIONS",
+                    (MigrationStep(1, "fail", create_then_fail),),
+                ),
+                pytest.raises(RuntimeError, match="step failed"),
+            ):
+                run_migrations(conn)
+            assert conn.in_transaction
+            conn.commit()
+        finally:
+            conn.close()
+
+        conn2 = sqlite3.connect(db_path)
+        try:
+            assert get_data_format_version(conn2) == 0
+            tables = {
+                row[0] for row in conn2.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            assert "migrated_marker" not in tables
+            assert conn2.execute("SELECT name FROM tokens").fetchall() == [("pending",)]
+        finally:
+            conn2.close()
 
     def test_failing_step_rolls_back_earlier_steps_and_stamp(self, tmp_path: Path) -> None:
         """A step that raises leaves the database exactly as it was before the run."""
@@ -468,6 +530,38 @@ class TestMigrateCommand:
             conn.close()
         assert tables == []
 
+    def test_version_check_and_schema_creation_share_one_write_lock(self, tmp_path: Path) -> None:
+        """No other writer can stamp the database between the version check and init.
+
+        Otherwise a newer build could advance the stamp after this build's
+        check and this build would then create its own schema on data it
+        doesn't understand before refusing.
+        """
+        db_path = tmp_path / "magpie.db"
+        observed: list[str] = []
+
+        def probing_create_schema(c: sqlite3.Connection) -> None:
+            assert c.in_transaction
+            other = sqlite3.connect(db_path, timeout=0)
+            try:
+                other.execute("PRAGMA user_version = 99")
+            except sqlite3.OperationalError as e:
+                observed.append(str(e))
+            finally:
+                other.close()
+            create_schema(c)
+
+        with patch("magpie.ctl.commands.migrate.create_schema", probing_create_schema):
+            migrate_database(db_path)
+
+        assert observed and "locked" in observed[0]
+        conn = sqlite3.connect(db_path)
+        try:
+            assert get_data_format_version(conn) == CURRENT_DATA_FORMAT_VERSION
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        finally:
+            conn.close()
+
     def test_migrate_reports_failed_step_cleanly_and_leaves_database_unchanged(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
@@ -505,6 +599,6 @@ class TestMigrateCommand:
             result = cli_runner.invoke(cli, ["migrate"])
 
         assert result.exit_code != 0, f"Output: {result.output}"
-        assert "Could not read the data-format version" in result.output
+        assert "failed and was rolled back" in result.output
         assert "Traceback" not in result.output
         assert db_path.read_bytes() == garbage

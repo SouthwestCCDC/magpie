@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 import click
 
-from magpie.auth.database import get_connection, init_database
+from magpie.auth.database import create_schema
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -161,21 +161,25 @@ def _set_data_format_version(conn: sqlite3.Connection, version: int) -> None:
 
 
 def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
-    """Apply every pending migration step, in order, in one transaction.
+    """Apply every pending migration step, in order, atomically.
 
     The version read, every pending step, and the new version stamp all
-    run inside a single ``BEGIN IMMEDIATE`` transaction: the write lock is
-    taken before the version is read, so concurrent callers against the
-    same database serialize (the second one sees the first one's stamp and
-    applies nothing), and any exception rolls everything back -- the
-    database is never left partially migrated. PRAGMA user_version lives in
-    the database header, so the stamp commits or rolls back with the rest.
+    run as one unit: any exception rolls all of it back, so the database is
+    never left partially migrated. PRAGMA user_version lives in the
+    database header, so the stamp commits or rolls back with the rest.
+
+    If ``conn`` has no open transaction, this owns one: ``BEGIN IMMEDIATE``
+    takes the write lock before the version is read, so concurrent callers
+    against the same database serialize (the second one sees the first
+    one's stamp and applies nothing), and it commits on success. If the
+    caller already has a transaction open, the work runs in a savepoint
+    inside it instead and the caller remains responsible for committing.
 
     Idempotent: running this against an already-current database applies
     nothing (version_before == version_after, applied == []).
 
     Args:
-        conn: Open database connection, not already inside a transaction.
+        conn: Open database connection.
 
     Returns:
         Tuple of (version_before, version_after, list of applied step
@@ -187,7 +191,8 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
             _check_not_newer_than_supported). Nothing is modified.
         Exception: Whatever a failing step raised, after rolling back.
     """
-    conn.execute("BEGIN IMMEDIATE")
+    owns_transaction = not conn.in_transaction
+    conn.execute("BEGIN IMMEDIATE" if owns_transaction else "SAVEPOINT magpie_migrate")
     try:
         version_before = get_data_format_version(conn)
         _check_not_newer_than_supported(version_before)
@@ -211,12 +216,49 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
 
         if applied:
             _set_data_format_version(conn, version)
-        conn.commit()
+        if owns_transaction:
+            conn.commit()
+        else:
+            conn.execute("RELEASE SAVEPOINT magpie_migrate")
     except BaseException:
-        conn.rollback()
+        if owns_transaction:
+            conn.rollback()
+        else:
+            conn.execute("ROLLBACK TO SAVEPOINT magpie_migrate")
+            conn.execute("RELEASE SAVEPOINT magpie_migrate")
         raise
 
     return version_before, version, applied
+
+
+def migrate_database(db_path: Path) -> tuple[int, int, list[str]]:
+    """Create (if needed) and migrate the database at ``db_path``.
+
+    Everything that writes -- the newer-than-supported check, creating the
+    tokens table, every pending step, and the stamp -- happens under one
+    ``BEGIN IMMEDIATE`` write lock, taken before the version is read. A
+    database a newer build stamps concurrently is therefore seen (and
+    refused) before this build changes anything, and journal_mode is only
+    switched to WAL after the stamp is known to be supported.
+
+    Returns/raises as run_migrations().
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            _check_not_newer_than_supported(get_data_format_version(conn))
+            create_schema(conn)
+            result = run_migrations(conn)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        conn.execute("PRAGMA journal_mode=WAL;")
+    finally:
+        conn.close()
+    return result
 
 
 @click.command()
@@ -266,11 +308,7 @@ def migrate(ctx: CTLContext, check: bool, quiet: bool) -> None:
         if not settings.database_path.exists():
             version = 0
         else:
-            conn = get_connection(settings.database_path)
-            try:
-                version = get_data_format_version(conn)
-            finally:
-                conn.close()
+            version = read_data_format_version(settings.database_path)
 
         if is_json_output():
             output_result(
@@ -286,42 +324,19 @@ def migrate(ctx: CTLContext, check: bool, quiet: bool) -> None:
         click.echo(f"Data-format version: {version} (current: {CURRENT_DATA_FORMAT_VERSION})")
         return
 
-    # Checked before init_database() so a database this build doesn't
-    # understand is refused without being touched at all.
-    if settings.database_path.exists():
-        try:
-            _check_not_newer_than_supported(read_data_format_version(settings.database_path))
-        except ValueError as e:
-            output_error(ErrorCode.CONFLICT, str(e))
-        except sqlite3.Error as e:
-            output_error(
-                ErrorCode.SERVER_ERROR,
-                f"Could not read the data-format version of {settings.database_path}: {e}",
-            )
-
-    # init_database() is itself idempotent (CREATE TABLE IF NOT EXISTS) --
-    # safe to call so 'migrate' works standalone even against a database
-    # that doesn't exist yet (e.g. run ahead of `init`).
-    init_database(settings.database_path)
-
-    conn = get_connection(settings.database_path)
     try:
-        try:
-            version_before, version_after, applied = run_migrations(conn)
-        except ValueError as e:
-            # A clean, structured error (both output formats) rather than
-            # a raw traceback -- run_migrations() only raises ValueError
-            # for the newer-than-supported-stamp (likely downgrade) case;
-            # see its docstring.
-            output_error(ErrorCode.CONFLICT, str(e))
-        except sqlite3.Error as e:
-            output_error(
-                ErrorCode.SERVER_ERROR,
-                f"Data-format migration failed and was rolled back; the database "
-                f"was left unchanged: {e}",
-            )
-    finally:
-        conn.close()
+        version_before, version_after, applied = migrate_database(settings.database_path)
+    except ValueError as e:
+        # A clean, structured error (both output formats) rather than a raw
+        # traceback -- only raised for the newer-than-supported-stamp
+        # (likely downgrade) case; see run_migrations()'s docstring.
+        output_error(ErrorCode.CONFLICT, str(e))
+    except sqlite3.Error as e:
+        output_error(
+            ErrorCode.SERVER_ERROR,
+            f"Data-format migration of {settings.database_path} failed and was "
+            f"rolled back; the database was left unchanged: {e}",
+        )
 
     if is_json_output():
         output_result(
