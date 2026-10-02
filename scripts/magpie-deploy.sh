@@ -1399,7 +1399,11 @@ resolve_latest_release_tag() {
     body="${response%$'\n'*}"
     local how="Not falling back to a branch. Re-run with '--release <tag>' to pick a release explicitly (or '--branch <name>' to deliberately track a branch's HEAD)."
     case "$http_code" in
-        200) ;;
+        200)
+            if (( curl_rc != 0 )); then
+                die "Could not resolve the latest magpie release: the response from ${LATEST_RELEASE_URL} was incomplete (curl exit ${curl_rc}). ${how}"
+            fi
+            ;;
         403|429)
             die "Could not resolve the latest magpie release: ${LATEST_RELEASE_URL} returned HTTP ${http_code} -- most likely GitHub's API rate limit for unauthenticated requests (60/hour per IP). ${how}" ;;
         404)
