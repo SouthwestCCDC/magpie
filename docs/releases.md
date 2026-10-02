@@ -91,6 +91,32 @@ two-container backend image under the same names.
   release's image is pushed, the workflow's `promote` job reconciles every
   alias (`scripts/release_promote.sh`).
 
+## Release Assets
+
+Every GitHub release (RC and final) attaches:
+
+| File | What |
+|------|------|
+| `docker-compose.yml` | The canonical compose file, with the image default pinned to this release by digest (`magpie:<version>@sha256:...`) |
+| `.env.example` | The configuration template, naming the same pinned image |
+| `magpie-deploy.sh` | The installer, with `HARDCODED_VERSION` set to this release |
+| `SHA256SUMS` | Checksums of the three files above |
+
+To deploy a release without cloning the repository:
+
+```bash
+V=v0.2.0
+base=https://github.com/SouthwestCCDC/magpie/releases/download/$V
+curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/.env.example" -fsSLO "$base/SHA256SUMS"
+# Verify exactly the files you downloaded; a missing one fails the check.
+grep -E ' (docker-compose\.yml|\.env\.example)$' SHA256SUMS | sha256sum -c
+cp .env.example .env   # then edit
+docker compose up -d
+```
+
+`MAGPIE_IMAGE` in `.env` still overrides the pinned default. The assets are
+rendered by `scripts/render_release_assets.sh`.
+
 ## Tag Mutability Policy
 
 ### Immutable Tags
@@ -233,4 +259,4 @@ Release candidate feedback helps ensure the final stable release is production-r
 
 ---
 
-*(AI-generated via Claude Code w/ Opus 4.6)*
+*(AI-generated via Claude Code w/ Opus 4.6; container tag and release asset sections via Devin)*
