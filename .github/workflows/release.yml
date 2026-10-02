@@ -117,7 +117,7 @@ jobs:
     # Points the mutable aliases (<major>.<minor>, <major>, latest) at the
     # highest published stable release in each scope. It runs after the
     # build and reconciles EVERY alias from scratch
-    # (scripts/release_rolling_tags.sh), so:
+    # (scripts/release_promote.sh), so:
     #   - a hotfix on an older line only moves its own <major>.<minor>;
     #   - overlapping, out-of-order or re-run releases converge, and a run
     #     GitHub cancels while queued (concurrency keeps one pending run) is
@@ -153,28 +153,8 @@ jobs:
 
       - name: Move rolling tags
         run: |
-          set -euo pipefail
-          image="${REGISTRY}/${IMAGE_NAME,,}"
           git fetch --force --tags origin
-
-          published=()
-          while read -r tag; do
-            v="${tag#v}"
-            if err="$(docker buildx imagetools inspect "${image}:${v}" 2>&1 >/dev/null)"; then
-              published+=("$v")
-            elif [[ "$err" == *": not found" ]]; then
-              echo "Skipping ${v}: no image in the registry"
-            else
-              echo "::error::Could not inspect ${image}:${v}; not moving any alias: ${err}"
-              exit 1
-            fi
-          done < <(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
-
-          printf '%s\n' "${published[@]}" | scripts/release_rolling_tags.sh |
-            while read -r alias v; do
-              echo "${alias} -> ${v}"
-              docker buildx imagetools create -t "${image}:${alias}" "${image}:${v}"
-            done
+          scripts/release_promote.sh "${REGISTRY}/${IMAGE_NAME,,}"
 
   release:
     name: Create GitHub Release
