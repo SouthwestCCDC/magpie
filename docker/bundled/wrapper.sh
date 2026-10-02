@@ -9,8 +9,8 @@
 # the non-root runtime uid via gosu in that same exec, so tini itself
 # ends up running non-root, not root in front of a non-root child. tini
 # then forks a fresh, non-root invocation of this same script as ITS
-# child ($$ != 1 this time), which is what actually runs the DB init,
-# uvicorn, and Caddy supervisor loop below. This matters because tini
+# child ($$ != 1 this time), which is what actually runs the DB
+# init/migration, uvicorn, and Caddy supervisor loop below. This matters because tini
 # forwards `docker stop`'s SIGTERM to its child itself, via a real
 # kill(): if tini were root and its child non-root, that's a
 # different-uid signal needing CAP_KILL; same-uid (both non-root now)
@@ -306,10 +306,16 @@ trap term_handler TERM INT
 # whatever it points at (nothing here can chown).
 magpie_resolve_storage_paths
 
-# Auto-initialize the database if it doesn't exist yet, guarded by the
-# same flock entrypoint.sh used to use (concurrent container starts
-# racing for /data). No gosu here: this whole process is already running
-# as the target uid.
+# Bring the database to this build's data format before anything serves
+# traffic: `magpie-ctl init` on a fresh volume, then `magpie-ctl migrate`
+# on every start (a cheap, silent no-op once already current). Both run
+# under the same flock entrypoint.sh used to use, so concurrent container
+# starts against one /data serialize: the second sees the first's
+# database and stamp and has nothing left to do. migrate applies every
+# pending step in one transaction and refuses (without modifying
+# anything) a database stamped newer than this build supports, so on any
+# failure the container exits non-zero before uvicorn or Caddy start. No
+# gosu here: this whole process is already running as the target uid.
 #
 # The lock file itself is opened for the `200>"$DB_LOCK_FILE"`
 # redirection below inside the backgrounded subshell, not here -- if
@@ -338,7 +344,7 @@ fi
 	flock -x -w 30 200 || flock_status=$?
 	if [ "$flock_status" -ne 0 ]; then
 		if [ "$flock_status" -eq 1 ]; then
-			log "error: failed to acquire database init lock on $DB_LOCK_FILE within 30 seconds (another process may be initializing the database)"
+			log "error: failed to acquire database init lock on $DB_LOCK_FILE within 30 seconds (another process may be initializing or migrating the database)"
 		else
 			log "error: flock failed with exit code $flock_status while trying to lock $DB_LOCK_FILE (is flock available and working?)"
 		fi
@@ -358,6 +364,13 @@ fi
 			exit 1
 		fi
 	fi
+
+	migrate_status=0
+	/app/.venv/bin/python -m magpie.ctl migrate --quiet || migrate_status=$?
+	if [ "$migrate_status" -ne 0 ]; then
+		log "error: magpie-ctl migrate failed with exit code $migrate_status (see the error above) -- refusing to start against $DB_PATH"
+		exit 1
+	fi
 ) 200>"$DB_LOCK_FILE" &
 DB_INIT_PID=$!
 # Same race as uvicorn's/caddy's below: catch up on a signal that arrived
@@ -372,7 +385,7 @@ if [ "$SHUTTING_DOWN" -eq 1 ]; then
 	exit 0
 fi
 if [ "$DB_INIT_EXIT" -ne 0 ]; then
-	log "database init failed (exit=$DB_INIT_EXIT), failing container"
+	log "database init/migration failed (exit=$DB_INIT_EXIT), failing container"
 	exit 1
 fi
 
