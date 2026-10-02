@@ -91,6 +91,31 @@ two-container backend image under the same names.
   The workflow's `promote` job applies this after the image is pushed
   (`scripts/release_tag_flags.sh`).
 
+## Release Assets
+
+Every GitHub release (RC and final) attaches:
+
+| File | What |
+|------|------|
+| `docker-compose.yml` | The canonical compose file, with the image default pinned to this release by digest (`magpie:<version>@sha256:...`) |
+| `.env.example` | The configuration template, naming the same pinned image |
+| `magpie-deploy.sh` | The installer, with `HARDCODED_VERSION` set to this release |
+| `SHA256SUMS` | Checksums of the three files above |
+
+To deploy a release without cloning the repository:
+
+```bash
+V=v0.2.0
+base=https://github.com/SouthwestCCDC/magpie/releases/download/$V
+curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/.env.example" -fsSLO "$base/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
+cp .env.example .env   # then edit
+docker compose up -d
+```
+
+`MAGPIE_IMAGE` in `.env` still overrides the pinned default. The assets are
+rendered by `scripts/render_release_assets.sh`.
+
 ## Tag Mutability Policy
 
 ### Immutable Tags
