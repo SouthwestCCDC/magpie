@@ -191,9 +191,11 @@ tracks a branch's HEAD and is meant only for development. If the release
 lookup fails (e.g. GitHub's unauthenticated API rate limit), `update`
 stops with an error instead of falling back. To move to an older version,
 pass `--accept-downgrade`; `magpie-ctl migrate` still refuses data in a
-newer format than the target supports. The installed release tag, commit
-and image are recorded in `<install>/etc/.env` (`MAGPIE_RELEASE_*`,
-`MAGPIE_IMAGE`) and shown by `magpie-deploy.sh status`.
+newer format than the target supports (see
+[Downgrading the data format](#downgrading-the-data-format) to revert it
+first). The installed release tag, commit and image are recorded in
+`<install>/etc/.env` (`MAGPIE_RELEASE_*`, `MAGPIE_IMAGE`) and shown by
+`magpie-deploy.sh status`.
 
 ## Trusted Proxies
 
@@ -329,6 +331,34 @@ otherwise boot-loop.
 See [Trusted Proxies](#trusted-proxies) above for the (unrelated, still
 current) `MAGPIE_TRUSTED_PROXIES`/`MAGPIE_ALLOWED_CIDRS` gate that `update`
 also checks.
+
+### Downgrading the data format
+
+Container startup only ever migrates forward. To go back to an older
+image whose data format is lower, revert the data with the *newer* image
+first -- only it knows how to undo its own migration steps:
+
+1. [Back up](backup-restore.md#backup-procedures) the data directory.
+2. Find the older image's data-format version N: it is the `current: N`
+   that the older image prints when it refuses to start against the newer
+   data (it exits without modifying anything).
+3. With the newer image running, revert to N, then immediately switch the
+   image and restart (a restart of the newer image would migrate forward
+   again):
+
+   ```bash
+   docker compose exec magpie magpie-ctl migrate --to N
+   # set MAGPIE_IMAGE to the older image, then:
+   docker compose up -d
+   ```
+
+`migrate --to N` reverts every step above N, newest first, in a single
+transaction under the same write lock as forward migration, and writes the
+new version stamp last. It changes nothing and exits non-zero if N is above
+the current version or not a version that image knows, or if a step in the
+way is marked irreversible -- in that case,
+[restore a backup](backup-restore.md#restore-procedures) taken before the
+upgrade instead. `magpie-deploy.sh update` does not do this for you.
 
 Next: [Production Checklist](production-checklist.md) → [User Guide](user-guide.md) → [Backup & Restore](backup-restore.md)
 
