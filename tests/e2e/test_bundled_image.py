@@ -34,12 +34,14 @@ IMAGE_TAG = "magpie-bundled-e2e-test:latest"
 @pytest.fixture(scope="module")
 def bundled_image() -> Generator[str, None, None]:
     """Build the bundled image once for all tests in this module."""
-    subprocess.run(
+    result = subprocess.run(
         ["docker", "build", "-f", "Dockerfile.bundled", "-t", IMAGE_TAG, "."],
         cwd=PROJECT_ROOT,
-        check=True,
         capture_output=True,
+        text=True,
     )
+    if result.returncode != 0:
+        pytest.fail(f"docker build failed ({result.returncode}):\n{result.stderr[-4000:]}")
     yield IMAGE_TAG
     subprocess.run(["docker", "rmi", IMAGE_TAG], capture_output=True)
 
@@ -306,9 +308,9 @@ class TestBundledImageShutdownClassification:
                         break
                     time.sleep(1)
 
-                assert _exit_code(name) == 1, (
-                    "a real crash (uvicorn killed after steady state) must still fail the container"
-                )
+                assert (
+                    _exit_code(name) == 1
+                ), "a real crash (uvicorn killed after steady state) must still fail the container"
             finally:
                 _cleanup(name)
 
@@ -404,9 +406,10 @@ class TestBundledImageNonRootCaddy:
                     ("uvicorn", uvicorn_user),
                     ("caddy", caddy_user),
                 ):
-                    assert user not in ("root", "0"), (
-                        f"{proc_name} must not run as root in steady state, got user={user!r}"
-                    )
+                    assert user not in (
+                        "root",
+                        "0",
+                    ), f"{proc_name} must not run as root in steady state, got user={user!r}"
                 assert tini_user == wrapper_user == uvicorn_user == caddy_user, (
                     "tini, the supervisor, and both children must all run as the same uid "
                     f"(so caddy can read what uvicorn writes under /data, and tini's own "
