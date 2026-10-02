@@ -168,6 +168,18 @@ Key environment variables (see [.env.example](../.env.example) for all):
 - `MAGPIE_ALLOWED_CIDRS` - CIDR ranges allowed to bypass auth for read-only access (default: none)
 - `MAGPIE_TRUSTED_PROXIES` - IPs/CIDRs whose `X-Forwarded-For` the bundled Caddy trusts (default: none; see [Trusted Proxies](#trusted-proxies) below)
 
+### Site-specific compose settings
+
+On an install made by `magpie-deploy.sh`, put site-specific compose
+settings (service uid/gid, `cap_drop`/`cap_add`, extra environment) in
+`<install>/docker-compose.override.yml`. Every compose command the
+installer and its systemd units run uses `docker-compose.yml` plus that
+file when it exists, so creating or editing it only needs
+`systemctl restart magpie.service`. `update` never touches it. For manual
+compose commands, use `<install>/bin/magpie-compose <subcommand>`, which
+applies the same file set. A copy of the repository's development override
+is refused, not merged.
+
 ## Trusted Proxies
 
 The bundled Caddy determines the client IP used by `MAGPIE_ALLOWED_CIDRS`
