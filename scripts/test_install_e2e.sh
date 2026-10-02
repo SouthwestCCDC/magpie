@@ -50,6 +50,8 @@ HTTP_PORT="${MAGPIE_E2E_HTTP_PORT:-8080}"
 BASE_URL="http://127.0.0.1:${HTTP_PORT}"
 ENV_FILE="${INSTALL_DIR}/etc/.env"
 COMPOSE_FILE="${INSTALL_DIR}/docker-compose.yml"
+SITE_OVERRIDE="${INSTALL_DIR}/docker-compose.override.yml"
+COMPOSE_WRAPPER="${INSTALL_DIR}/bin/magpie-compose"
 DEPLOY_SCRIPT="${REPO_ROOT}/scripts/magpie-deploy.sh"
 
 WORK_DIR=""
@@ -96,6 +98,16 @@ assert_eq() {
     fi
 }
 
+# docker compose against the installed file set, built independently of the
+# installer's own wrapper so assertions about the wrapper are not circular:
+# the canonical file, plus the site override when one exists, under the
+# project the install's directory name gives it.
+test_compose() {
+    local args=(-p "$(basename "$INSTALL_DIR")" -f "$COMPOSE_FILE")
+    if [[ -f "$SITE_OVERRIDE" ]]; then args+=(-f "$SITE_OVERRIDE"); fi
+    docker compose "${args[@]}" --env-file "$ENV_FILE" "$@"
+}
+
 # HTTP status code for a request, or "000" if the request never completed.
 # curl's own failure is folded into the printed code rather than aborting,
 # so a connection refusal shows up as a failed assertion with context.
@@ -139,6 +151,7 @@ preflight() {
     WORK_DIR="$(mktemp -d)"
     log "install dir: ${INSTALL_DIR}  data dir: ${DATA_DIR}  url: ${BASE_URL}"
     log "source checkout: ${REPO_ROOT} (HEAD $(git -C "$REPO_ROOT" rev-parse --short HEAD))"
+    log "$(docker compose version)"
 }
 
 # Belt-and-braces teardown, always run. `uninstall --purge` is the tested
@@ -163,7 +176,7 @@ cleanup() {
         systemctl stop magpie.service magpie-gc.timer magpie-gc.service 2>/dev/null || true
         systemctl disable magpie.service magpie-gc.timer 2>/dev/null || true
         if [[ -f "$COMPOSE_FILE" ]]; then
-            docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down --volumes --remove-orphans 2>/dev/null || true
+            test_compose down --volumes --remove-orphans 2>/dev/null || true
         fi
         rm -f /etc/systemd/system/magpie.service \
               /etc/systemd/system/magpie-gc.service \
@@ -181,8 +194,8 @@ dump_diagnostics() {
     systemctl status magpie.service --no-pager --full 2>&1 | head -40 || true
     journalctl -u magpie.service --no-pager --lines 100 2>&1 | tail -100 || true
     if [[ -f "$COMPOSE_FILE" ]]; then
-        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps 2>&1 || true
-        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" logs --tail 100 2>&1 || true
+        test_compose ps 2>&1 || true
+        test_compose logs --tail 100 2>&1 || true
     fi
 }
 
@@ -235,7 +248,7 @@ assert_container_healthy() {
     # already).
     local container_id="" spent=0
     while (( spent < 60 )); do
-        container_id="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q magpie || true)"
+        container_id="$(test_compose ps -q magpie || true)"
         if [[ -n "$container_id" ]]; then
             break
         fi
@@ -491,11 +504,12 @@ assert_gc_readiness_gate() {
     eval "$fast" >/dev/null 2>&1 || status=$?
     assert_eq "0" "$status" "unit's own readiness probe passes against the healthy container"
 
-    # Same command, pointed at a service that does not exist: 'ps -q' yields no
-    # container id, so a correct gate never falls through and timeout reports
-    # 124. A gate that wrongly treated "unknown" as ready would exit 0.
+    # Same command, filtered to a state the running container is not in: 'ps -q'
+    # succeeds with no container id, so a correct gate never falls through and
+    # timeout reports 124. A gate that wrongly treated "unknown" as ready would
+    # exit 0.
     local blocked="${probe/timeout 300/timeout 10}"
-    blocked="${blocked/ps -q magpie/ps -q definitely-not-a-service}"
+    blocked="${blocked/ps -q magpie/ps -q --status paused magpie}"
     status=0
     eval "$blocked" >/dev/null 2>&1 || status=$?
     assert_eq "124" "$status" "readiness probe keeps waiting while nothing is healthy (timeout exit)"
@@ -538,6 +552,110 @@ assert_gc_readiness_gate() {
     assert_container_healthy
 }
 
+# The site-specific extension point (issue #636): an override written to
+# ${INSTALL_DIR}/docker-compose.override.yml AFTER install -- which is what the
+# downstream Ansible role does -- must be merged on the next plain restart,
+# with no installer re-run, by every compose invocation the units make
+# (start, and GC's readiness probe and exec). The repository checkout's
+# dev-only override must never be: it is not copied into INSTALL_DIR, and a
+# copy placed there by hand is refused rather than merged.
+assert_site_override_applies() {
+    log_section "Site compose override (docker-compose.override.yml)"
+
+    if [[ -e "$SITE_OVERRIDE" ]]; then
+        fail "install created ${SITE_OVERRIDE}; only an operator should"
+    else
+        pass "install did not create ${SITE_OVERRIDE}"
+    fi
+    if [[ -f "${INSTALL_DIR}/repo/docker-compose.override.yml" ]]; then
+        pass "precondition: the checkout under ${INSTALL_DIR}/repo carries the dev override"
+    else
+        fail "precondition: no dev override in ${INSTALL_DIR}/repo, so the isolation checks below prove nothing"
+    fi
+    local config_json
+    config_json="$("$COMPOSE_WRAPPER" config --format json || true)"
+    assert_eq "null" "$(jq -c '.services.magpie.build // null' <<< "$config_json" || true)" \
+        "deployed file set has no dev-override build section"
+    assert_eq "null" "$(jq -c '.services.magpie.environment.MAGPIE_ENABLE_TEST_ENDPOINTS // null' <<< "$config_json" || true)" \
+        "deployed file set has no dev-override test-endpoint setting"
+
+    local marker="site-override-$RANDOM$RANDOM" old_cid
+    old_cid="$(test_compose ps -q magpie || true)"
+    # The top-level name must not move the stack to another compose project:
+    # the restart's stop has to find the running container.
+    cat > "$SITE_OVERRIDE" << EOF
+name: magpie-e2e-renamed
+services:
+  magpie:
+    environment:
+      - MAGPIE_E2E_SITE_OVERRIDE=${marker}
+EOF
+    log "wrote ${SITE_OVERRIDE}; restarting magpie.service (no installer re-run)"
+    systemctl restart magpie.service
+    assert_container_healthy
+
+    local cid
+    cid="$(test_compose ps -q magpie || true)"
+    if [[ -n "$cid" && "$cid" != "$old_cid" ]]; then
+        pass "restart recreated the container"
+    else
+        fail "restart did not recreate the container (before ${old_cid:-<none>}, after ${cid:-<none>})"
+    fi
+    assert_eq "$marker" "$(docker exec "$cid" printenv MAGPIE_E2E_SITE_OVERRIDE 2>/dev/null || true)" \
+        "override's env var is visible in the running container"
+    assert_eq "$(basename "$INSTALL_DIR")" \
+        "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$cid" 2>/dev/null || true)" \
+        "an override's top-level name does not change the compose project"
+    if [[ -z "$(docker ps -aq --filter label=com.docker.compose.project=magpie-e2e-renamed)" ]]; then
+        pass "no containers under the override's project name"
+    else
+        fail "containers exist under the override's project name (magpie-e2e-renamed)"
+    fi
+
+    # GC's readiness probe and exec go through the same file set.
+    assert_gc_readiness_probe_passes
+    assert_gc_service_runs
+
+    # Defense in depth: a copy of the dev override is refused by both the
+    # units' wrapper and the installer's own compose calls.
+    local site_backup="${WORK_DIR}/site-override.yml" status=0 output
+    cp "$SITE_OVERRIDE" "$site_backup"
+    cp "${INSTALL_DIR}/repo/docker-compose.override.yml" "$SITE_OVERRIDE"
+    output="$("$COMPOSE_WRAPPER" config 2>&1)" || status=$?
+    if (( status != 0 )) && [[ "$output" == *"development-only override"* ]]; then
+        pass "wrapper refuses a copy of the dev override (${status})"
+    else
+        fail "wrapper did not refuse a copy of the dev override (status ${status})"
+    fi
+    status=0
+    output="$("$DEPLOY_SCRIPT" logs --lines 1 --install-dir "$INSTALL_DIR" 2>&1)" || status=$?
+    if (( status != 0 )) && [[ "$output" == *"development-only override"* ]]; then
+        pass "installer refuses a copy of the dev override (${status})"
+    else
+        fail "installer did not refuse a copy of the dev override (status ${status})"
+    fi
+    # GC's readiness probe reports the refusal at once instead of waiting
+    # out its bound as if the container were missing.
+    local probe
+    probe="$(sed -n 's/^ExecStartPre=//p' /etc/systemd/system/magpie-gc.service | head -n1)"
+    status=0
+    output="$(eval "${probe/timeout 300/timeout 30}" 2>&1)" || status=$?
+    if (( status == 1 )) && [[ "$output" == *"development-only override"* ]]; then
+        pass "GC readiness probe fails fast on a refused file set (${status})"
+    else
+        fail "GC readiness probe did not fail fast on a refused file set (status ${status})"
+    fi
+    cp "$site_backup" "$SITE_OVERRIDE"
+}
+
+# The unit's own GC readiness probe, run as-is with a shorter bound.
+assert_gc_readiness_probe_passes() {
+    local probe status=0
+    probe="$(sed -n 's/^ExecStartPre=//p' /etc/systemd/system/magpie-gc.service | head -n1)"
+    eval "${probe/timeout 300/timeout 60}" >/dev/null 2>&1 || status=$?
+    assert_eq "0" "$status" "GC readiness probe passes with the site override present"
+}
+
 # --- credentials for the assertions above -----------------------------------
 
 read_admin_token() {
@@ -555,8 +673,7 @@ read_admin_token() {
 create_token() {
     local name="$1" scope="$2"
     local json
-    json="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
-        exec -T magpie magpie-ctl --format json token create --name "$name" --scope "$scope")"
+    json="$(test_compose exec -T magpie magpie-ctl --format json token create --name "$name" --scope "$scope")"
     jq -r '.data.token // empty' <<< "$json"
 }
 
@@ -636,6 +753,7 @@ main() {
     assert_round_trip
     assert_gc_readiness_gate
     assert_gc_service_runs
+    assert_site_override_applies
 
     assert_purge_leaves_nothing
 
