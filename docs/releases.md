@@ -89,7 +89,7 @@ two-container backend image under the same names.
   the highest published stable version in its scope. A hotfix on an older
   line never pulls `latest` or `<major>` back onto it. After each stable
   release's image is pushed, the workflow's `promote` job reconciles every
-  alias (`scripts/release_rolling_tags.sh`).
+  alias (`scripts/release_promote.sh`).
 
 ## Release Assets
 
@@ -140,7 +140,7 @@ A tag push runs the release workflow **as it exists at the tagged commit**.
 A 0.1.x hotfix tagged from an old commit therefore runs the old workflow,
 which moves `latest` and `0` unconditionally, back onto the two-container
 image. Before tagging such a hotfix, port the `promote` job and
-`scripts/release_rolling_tags.sh` onto the hotfix branch, and remove the
+`scripts/release_promote.sh` and `scripts/release_rolling_tags.sh` onto the hotfix branch, and remove the
 unconditional rolling tags from its build job.
 
 ## Upgrade Paths
