@@ -20,7 +20,7 @@ dependencies = [
     "tomli_w",
     "structlog",
     "truststore>=0.8.0",
-    "protobuf>=6.33.5,<7",
+    "protobuf>=7.36.0,<8",
     "packaging",
     "requests>=2.33.0",
     "urllib3>=2.7.0",
