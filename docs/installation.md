@@ -339,9 +339,11 @@ image whose data format is lower, revert the data with the *newer* image
 first -- only it knows how to undo its own migration steps:
 
 1. [Back up](backup-restore.md#backup-procedures) the data directory.
-2. Find the older image's data-format version N: it is the `current: N`
-   that the older image prints when it refuses to start against the newer
-   data (it exits without modifying anything).
+2. Find the older image's data-format version N: set `MAGPIE_IMAGE` to the
+   older image and `docker compose up -d`. It refuses to start against the
+   newer data, exits without modifying anything, and logs `current: N`
+   (`docker compose logs magpie`). Then set `MAGPIE_IMAGE` back to the
+   newer image and `docker compose up -d` again.
 3. With the newer image running, revert to N, then immediately switch the
    image and restart (a restart of the newer image would migrate forward
    again):
