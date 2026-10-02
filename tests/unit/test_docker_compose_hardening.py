@@ -197,6 +197,19 @@ def test_debug_mode_is_hardcoded_off():
     )
 
 
+def test_runtime_uid_gid_are_passed_through():
+    """Pinned MAGPIE_UID/MAGPIE_GID must reach the wrapper (#637).
+
+    Empty-default (`:-`), not a fixed value: unset must keep meaning
+    "auto-detect from /data", which the wrapper's `[ -n ... ]` checks give.
+    """
+    env = _env_dict(_load_compose(COMPOSE_FILE)["services"]["magpie"])
+    for var in ("MAGPIE_UID", "MAGPIE_GID"):
+        assert env.get(var) == f"${{{var}:-}}", (
+            f"{var} must be passed through as ${{{var}:-}} -- got: {env.get(var)!r}"
+        )
+
+
 def test_test_endpoints_not_wired_in_operator_file():
     service = _load_compose(COMPOSE_FILE)["services"]["magpie"]
     env = _env_dict(service)
