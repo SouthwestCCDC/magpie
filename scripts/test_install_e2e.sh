@@ -100,9 +100,10 @@ assert_eq() {
 
 # docker compose against the installed file set, built independently of the
 # installer's own wrapper so assertions about the wrapper are not circular:
-# the canonical file, plus the site override when one exists.
+# the canonical file, plus the site override when one exists, under the
+# project the install's directory name gives it.
 test_compose() {
-    local args=(-f "$COMPOSE_FILE")
+    local args=(-p "$(basename "$INSTALL_DIR")" -f "$COMPOSE_FILE")
     if [[ -f "$SITE_OVERRIDE" ]]; then args+=(-f "$SITE_OVERRIDE"); fi
     docker compose "${args[@]}" --env-file "$ENV_FILE" "$@"
 }
@@ -503,11 +504,12 @@ assert_gc_readiness_gate() {
     eval "$fast" >/dev/null 2>&1 || status=$?
     assert_eq "0" "$status" "unit's own readiness probe passes against the healthy container"
 
-    # Same command, pointed at a service that does not exist: 'ps -q' yields no
-    # container id, so a correct gate never falls through and timeout reports
-    # 124. A gate that wrongly treated "unknown" as ready would exit 0.
+    # Same command, filtered to a state the running container is not in: 'ps -q'
+    # succeeds with no container id, so a correct gate never falls through and
+    # timeout reports 124. A gate that wrongly treated "unknown" as ready would
+    # exit 0.
     local blocked="${probe/timeout 300/timeout 10}"
-    blocked="${blocked/ps -q magpie/ps -q definitely-not-a-service}"
+    blocked="${blocked/ps -q magpie/ps -q --status paused magpie}"
     status=0
     eval "$blocked" >/dev/null 2>&1 || status=$?
     assert_eq "124" "$status" "readiness probe keeps waiting while nothing is healthy (timeout exit)"
@@ -579,7 +581,10 @@ assert_site_override_applies() {
 
     local marker="site-override-$RANDOM$RANDOM" old_cid
     old_cid="$(test_compose ps -q magpie || true)"
+    # The top-level name must not move the stack to another compose project:
+    # the restart's stop has to find the running container.
     cat > "$SITE_OVERRIDE" << EOF
+name: magpie-e2e-renamed
 services:
   magpie:
     environment:
@@ -598,6 +603,14 @@ EOF
     fi
     assert_eq "$marker" "$(docker exec "$cid" printenv MAGPIE_E2E_SITE_OVERRIDE 2>/dev/null || true)" \
         "override's env var is visible in the running container"
+    assert_eq "$(basename "$INSTALL_DIR")" \
+        "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$cid" 2>/dev/null || true)" \
+        "an override's top-level name does not change the compose project"
+    if [[ -z "$(docker ps -aq --filter label=com.docker.compose.project=magpie-e2e-renamed)" ]]; then
+        pass "no containers under the override's project name"
+    else
+        fail "containers exist under the override's project name (magpie-e2e-renamed)"
+    fi
 
     # GC's readiness probe and exec go through the same file set.
     assert_gc_readiness_probe_passes
@@ -620,6 +633,17 @@ EOF
         pass "installer refuses a copy of the dev override (${status})"
     else
         fail "installer did not refuse a copy of the dev override (status ${status})"
+    fi
+    # GC's readiness probe reports the refusal at once instead of waiting
+    # out its bound as if the container were missing.
+    local probe
+    probe="$(sed -n 's/^ExecStartPre=//p' /etc/systemd/system/magpie-gc.service | head -n1)"
+    status=0
+    output="$(eval "${probe/timeout 300/timeout 30}" 2>&1)" || status=$?
+    if (( status == 1 )) && [[ "$output" == *"development-only override"* ]]; then
+        pass "GC readiness probe fails fast on a refused file set (${status})"
+    else
+        fail "GC readiness probe did not fail fast on a refused file set (status ${status})"
     fi
     cp "$site_backup" "$SITE_OVERRIDE"
 }

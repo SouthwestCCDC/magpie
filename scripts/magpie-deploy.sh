@@ -152,6 +152,7 @@ BACKUP_ARTIFACTS="link"  # link|copy|skip -- see backup_data()
 NO_ROLLBACK="false"
 # Set by resolve_compose_file_args().
 COMPOSE_FILE_ARGS=()
+COMPOSE_PROJECT=""
 
 # Populated by compute_backup_dir()/capture_prior_state()/backup_data() and
 # consumed by rollback_to_prior()/prune_old_backups(). Declared here (not
@@ -930,10 +931,22 @@ EOF
 # a site override that is byte-identical to it is refused rather than
 # merged. A dangling symlink is passed through so compose fails loudly
 # instead of the override being silently skipped.
+#
+# The project name is pinned with -p to what compose derives from the
+# canonical file alone (INSTALL_DIR's basename, normalized the way compose
+# normalizes it), so a top-level `name:` in a site override can never move
+# the stack to a different project between a unit's start and stop, and
+# installs whose containers predate this pinning keep their project.
 resolve_compose_file_args() {
     local site_override="${INSTALL_DIR}/docker-compose.override.yml"
     local dev_override="${INSTALL_DIR}/repo/docker-compose.override.yml"
-    COMPOSE_FILE_ARGS=(-f "${INSTALL_DIR}/docker-compose.yml")
+    local project="${INSTALL_DIR%/}"
+    project="${project##*/}"
+    project="${project,,}"
+    project="${project//[^a-z0-9_-]/}"
+    project="${project#"${project%%[!_-]*}"}"
+    COMPOSE_PROJECT="$project"
+    COMPOSE_FILE_ARGS=(-p "$project" -f "${INSTALL_DIR}/docker-compose.yml")
     if [[ -e "$site_override" || -L "$site_override" ]]; then
         if [[ -f "$dev_override" ]] && cmp -s "$site_override" "$dev_override"; then
             echo "magpie: refusing to merge ${site_override}: it is a copy of the repository's development-only override (${dev_override}), which must never run in a real deployment. Remove it, or replace it with your site-specific settings." >&2
@@ -1086,7 +1099,7 @@ WorkingDirectory=${INSTALL_DIR}
 # 300s and then report a bare exit 124. Ordering means magpie.service has
 # already been started when this runs, so 'not active' is a real answer, not
 # a race.
-ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'if ! /usr/bin/systemctl is-active --quiet magpie.service; then echo "magpie.service is not active; not running GC (start it to resume scheduled GC)" >&2; exit 1; fi; while :; do cid=\$(${INSTALL_DIR}/bin/magpie-compose ps -q magpie 2>/dev/null); if [ -n "\$cid" ]; then state=\$(/usr/bin/docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}" "\$cid" 2>/dev/null); case "\$state" in healthy) exit 0 ;; nohealthcheck) echo "magpie container has no HEALTHCHECK; cannot confirm readiness before GC" >&2; exit 1 ;; esac; fi; sleep 5; done'
+ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'if ! /usr/bin/systemctl is-active --quiet magpie.service; then echo "magpie.service is not active; not running GC (start it to resume scheduled GC)" >&2; exit 1; fi; while :; do if ! cid=\$(${INSTALL_DIR}/bin/magpie-compose ps -q magpie); then echo "magpie-compose ps failed (see above); not running GC" >&2; exit 1; fi; if [ -n "\$cid" ]; then state=\$(/usr/bin/docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}" "\$cid" 2>/dev/null); case "\$state" in healthy) exit 0 ;; nohealthcheck) echo "magpie container has no HEALTHCHECK; cannot confirm readiness before GC" >&2; exit 1 ;; esac; fi; sleep 5; done'
 ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock ${INSTALL_DIR}/bin/magpie-compose exec -T magpie magpie-ctl gc --quiet
 
 StandardOutput=journal
@@ -3376,11 +3389,18 @@ cmd_uninstall() {
     # this doesn't depend on INSTALL_DIR still being a valid working
     # directory -- it's about to be rm -rf'd below. See issue #161.
     log "Removing containers and volumes..."
-    # Falls back to the canonical file alone if the file set is refused
-    # (see resolve_compose_file_args()) so uninstall still tears down.
-    magpie_compose down --volumes 2>/dev/null \
-        || docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" down --volumes 2>/dev/null \
-        || true
+    # If the file set can't be loaded (a refused or broken site override),
+    # tear the pinned project down by name instead: compose finds its
+    # containers, including any an override added, by project label.
+    if ! magpie_compose down --volumes --remove-orphans; then
+        log_warn "Could not run 'down' with this install's compose file set; removing compose project '${COMPOSE_PROJECT}' by name instead"
+        docker compose -p "$COMPOSE_PROJECT" down --volumes --remove-orphans || true
+    fi
+    local leftover
+    leftover="$(docker ps -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" 2>/dev/null || true)"
+    if [[ -n "$leftover" ]]; then
+        die "Containers of compose project '${COMPOSE_PROJECT}' are still present after teardown (${leftover//$'\n'/ }); not removing ${INSTALL_DIR}. Remove them (docker rm -f ...) and re-run uninstall."
+    fi
 
     log "Removing systemd units..."
     rm -f /etc/systemd/system/magpie.service

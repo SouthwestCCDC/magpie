@@ -178,7 +178,8 @@ file when it exists, so creating or editing it only needs
 `systemctl restart magpie.service`. `update` never touches it. For manual
 compose commands, use `<install>/bin/magpie-compose <subcommand>`, which
 applies the same file set. A copy of the repository's development override
-is refused, not merged.
+is refused, not merged. The compose project name stays pinned to the
+install directory's name, so a top-level `name:` in the override is ignored.
 
 ## Trusted Proxies
 
