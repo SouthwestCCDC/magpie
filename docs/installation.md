@@ -338,20 +338,26 @@ Container startup only ever migrates forward. To go back to an older
 image whose data format is lower, revert the data with the *newer* image
 first -- only it knows how to undo its own migration steps:
 
+The commands below use `docker compose -f docker-compose.yml` (never the
+bare form, which merges the development override). On an installer-managed
+host, run `<install>/bin/magpie-compose` in its place, and `MAGPIE_IMAGE`
+lives in `<install>/etc/.env`.
+
 1. [Back up](backup-restore.md#backup-procedures) the data directory.
 2. Find the older image's data-format version N: set `MAGPIE_IMAGE` to the
-   older image and `docker compose up -d`. It refuses to start against the
-   newer data, exits without modifying anything, and logs `current: N`
-   (`docker compose logs magpie`). Then set `MAGPIE_IMAGE` back to the
-   newer image and `docker compose up -d` again.
+   older image and run `docker compose -f docker-compose.yml up -d`. It
+   refuses to start against the newer data, exits without modifying
+   anything, and logs `current: N`
+   (`docker compose -f docker-compose.yml logs magpie`). Then set
+   `MAGPIE_IMAGE` back to the newer image and run `up -d` again.
 3. With the newer image running, revert to N, then immediately switch the
    image and restart (a restart of the newer image would migrate forward
    again):
 
    ```bash
-   docker compose exec magpie magpie-ctl migrate --to N
+   docker compose -f docker-compose.yml exec magpie magpie-ctl migrate --to N
    # set MAGPIE_IMAGE to the older image, then:
-   docker compose up -d
+   docker compose -f docker-compose.yml up -d
    ```
 
 `migrate --to N` reverts every step above N, newest first, in a single
