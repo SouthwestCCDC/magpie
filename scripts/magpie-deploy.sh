@@ -3391,10 +3391,13 @@ cmd_uninstall() {
     log "Removing containers and volumes..."
     # If the file set can't be loaded (a refused or broken site override),
     # tear the pinned project down by name instead: compose finds its
-    # containers, including any an override added, by project label.
+    # containers, including any an override added, by project label. Run
+    # from / without COMPOSE_FILE so no compose file -- in particular the
+    # broken override, if the caller's cwd is INSTALL_DIR -- is
+    # auto-discovered and parsed.
     if ! magpie_compose down --volumes --remove-orphans; then
         log_warn "Could not run 'down' with this install's compose file set; removing compose project '${COMPOSE_PROJECT}' by name instead"
-        docker compose -p "$COMPOSE_PROJECT" down --volumes --remove-orphans || true
+        (cd / && env -u COMPOSE_FILE docker compose -p "$COMPOSE_PROJECT" down --volumes --remove-orphans) || true
     fi
     local leftover
     leftover="$(docker ps -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" 2>/dev/null || true)"
