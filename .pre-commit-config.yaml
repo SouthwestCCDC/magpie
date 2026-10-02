@@ -14,12 +14,23 @@ repos:
       - id: detect-private-key
       - id: mixed-line-ending
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
+  # ruff runs from the project venv so its version comes from uv.lock --
+  # the same one CI's `just lint` uses. A separately pinned hook rev drifts,
+  # and the two formatters then disagree.
+  - repo: local
     hooks:
       - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
+        name: ruff
+        entry: uv run --frozen ruff check --fix --exit-non-zero-on-fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
       - id: ruff-format
+        name: ruff-format
+        entry: uv run --frozen ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
 
   - repo: https://github.com/PyCQA/bandit
     rev: 1.8.2
