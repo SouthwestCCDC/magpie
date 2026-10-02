@@ -38,6 +38,8 @@
 #                            /opt/magpie/data is what gets exercised)
 #   MAGPIE_E2E_FORCE=1       proceed even if a magpie install already exists
 #   MAGPIE_E2E_KEEP_INSTALL=1  leave the installation in place on exit
+#   MAGPIE_E2E_RELEASE_STUB_PORT  loopback port of the stub GitHub
+#                            releases/latest API (default 18765)
 
 set -euo pipefail
 
@@ -55,6 +57,8 @@ COMPOSE_WRAPPER="${INSTALL_DIR}/bin/magpie-compose"
 DEPLOY_SCRIPT="${REPO_ROOT}/scripts/magpie-deploy.sh"
 
 WORK_DIR=""
+RELEASE_STUB_PID=""
+RELEASE_STUB_PORT="${MAGPIE_E2E_RELEASE_STUB_PORT:-18765}"
 INSTALL_PERFORMED="false"
 PURGE_VERIFIED="false"
 
@@ -162,6 +166,9 @@ preflight() {
 cleanup() {
     local exit_code=$?
     set +u  # trap can fire before the globals below are assigned
+    if [[ -n "$RELEASE_STUB_PID" ]]; then
+        kill "$RELEASE_STUB_PID" 2>/dev/null || true
+    fi
     if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
         rm -rf "$WORK_DIR"
     fi
@@ -656,6 +663,202 @@ assert_gc_readiness_probe_passes() {
     assert_eq "0" "$status" "GC readiness probe passes with the site override present"
 }
 
+# --- release-pinned update (issue #632) --------------------------------------
+
+UPSTREAM_REPO=""
+RELEASE_API_DIR=""
+UPDATE_LOG=""
+
+# Value of KEY in the install's .env (last assignment wins, like compose).
+env_value() {
+    sed -n "s/^$1=//p" "$ENV_FILE" | tail -n1
+}
+
+# Starts a loopback stand-in for GitHub's releases/latest endpoint: it serves
+# ${RELEASE_API_DIR}/latest (404 when absent), and answers /ratelimited with
+# the 403 an exhausted unauthenticated rate limit gets.
+start_release_stub() {
+    RELEASE_API_DIR="${WORK_DIR}/release-api"
+    mkdir -p "$RELEASE_API_DIR"
+    cat > "${WORK_DIR}/release_stub.py" << 'EOF'
+import http.server
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[2])
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        latest = root / "latest"
+        if self.path == "/ratelimited":
+            code, body = 403, b'{"message": "API rate limit exceeded"}'
+        elif self.path == "/latest" and latest.is_file():
+            code, body = 200, latest.read_bytes()
+        else:
+            code, body = 404, b'{"message": "Not Found"}'
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+EOF
+    python3 "${WORK_DIR}/release_stub.py" "$RELEASE_STUB_PORT" "$RELEASE_API_DIR" &
+    RELEASE_STUB_PID=$!
+    local waited=0
+    while (( waited < 20 )); do
+        if [[ "$(http_status "http://127.0.0.1:${RELEASE_STUB_PORT}/latest")" == "404" ]]; then
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    abort "release API stub did not come up on 127.0.0.1:${RELEASE_STUB_PORT}"
+}
+
+# make_release <pyproject version> <tag> [broken]: commits the version bump
+# (and, with "broken", a Dockerfile.bundled step that fails the build) on
+# the stub upstream's branch, tags it, and prints the commit.
+make_release() {
+    local version="$1" tag="$2" broken="${3:-}"
+    sed -i -E "0,/^version = \"[^\"]*\"/s//version = \"${version}\"/" "${UPSTREAM_REPO}/pyproject.toml"
+    if [[ "$broken" == "broken" ]]; then
+        sed -i '/^FROM base AS deps$/a RUN echo "e2e: deliberately broken release" >&2 && exit 1' \
+            "${UPSTREAM_REPO}/Dockerfile.bundled"
+    fi
+    git -C "$UPSTREAM_REPO" -c user.name=magpie-e2e -c user.email=e2e@localhost \
+        commit -q -am "e2e: release ${tag}"
+    git -C "$UPSTREAM_REPO" -c user.name=magpie-e2e -c user.email=e2e@localhost \
+        tag -a -m "e2e ${tag}" "$tag"
+    git -C "$UPSTREAM_REPO" rev-parse HEAD
+}
+
+# run_update <api path> <args...>: runs 'update' against the stub upstream
+# and API, logging to UPDATE_LOG; returns the installer's exit status.
+run_update() {
+    local api_path="$1" status=0
+    shift
+    UPDATE_LOG="${WORK_DIR}/update-$(date +%s%N).log"
+    log "update $* (latest-release API: /${api_path})"
+    MAGPIE_DEPLOY_LATEST_RELEASE_URL="http://127.0.0.1:${RELEASE_STUB_PORT}/${api_path}" \
+        "$DEPLOY_SCRIPT" update --noninteractive --from-source --install-dir "$INSTALL_DIR" "$@" \
+        > "$UPDATE_LOG" 2>&1 || status=$?
+    return "$status"
+}
+
+# expect_update <expected exit: 0|fail> <description> <api path> <args...>
+expect_update() {
+    local expected="$1" description="$2" status=0
+    shift 2
+    run_update "$@" || status=$?
+    if [[ "$expected" == "0" && "$status" == "0" ]] || [[ "$expected" == "fail" && "$status" != "0" ]]; then
+        pass "${description} (exit ${status})"
+    else
+        fail "${description}: exit ${status}"
+        tail -n 60 "$UPDATE_LOG" >&2 || true
+    fi
+}
+
+# update_log_has <fixed string> <description>
+update_log_has() {
+    if grep -qF -- "$1" "$UPDATE_LOG"; then
+        pass "$2"
+    else
+        fail "$2: '$1' not in the update's output"
+    fi
+}
+
+# assert_release_state <label> <tag> <commit> <pyproject version>: the
+# recorded state, the checkout, 'status' and the running container agree.
+assert_release_state() {
+    local label="$1" tag="$2" commit="$3" version="$4"
+    assert_eq "$tag" "$(env_value MAGPIE_RELEASE_TAG)" "${label}: .env MAGPIE_RELEASE_TAG"
+    assert_eq "" "$(env_value MAGPIE_RELEASE_BRANCH)" "${label}: .env MAGPIE_RELEASE_BRANCH"
+    assert_eq "$commit" "$(env_value MAGPIE_RELEASE_COMMIT)" "${label}: .env MAGPIE_RELEASE_COMMIT"
+    assert_eq "magpie:local" "$(env_value MAGPIE_IMAGE)" "${label}: .env MAGPIE_IMAGE"
+    assert_eq "$commit" "$(git -C "${INSTALL_DIR}/repo" rev-parse HEAD || true)" "${label}: checkout HEAD"
+    local status_out
+    status_out="$("$DEPLOY_SCRIPT" status --install-dir "$INSTALL_DIR" 2>&1 || true)"
+    assert_eq "${tag:-<none>} ${commit} magpie:local" \
+        "$(sed -nE 's/^  Release: ([^ ]+)$/\1/p' <<< "$status_out" | head -n1 || true) $(sed -nE 's/^  Commit: +//p' <<< "$status_out" | head -n1 || true) $(sed -nE 's/^  Image: +//p' <<< "$status_out" | head -n1 || true)" \
+        "${label}: 'status' shows release, commit, image"
+    assert_eq "active" "$(systemctl is-active magpie.service || true)" "${label}: magpie.service is-active"
+    assert_container_healthy
+    local cid
+    cid="$(test_compose ps -q magpie || true)"
+    assert_eq "$version" \
+        "$(docker exec "$cid" python -c 'import magpie; print(magpie.__version__)' 2>/dev/null || true)" \
+        "${label}: running container's magpie version"
+}
+
+# Builds a throwaway upstream from the installed checkout, re-points the
+# install's origin at it, and drives 'update' through explicit, latest,
+# refused-downgrade, rate-limited, failed-and-rolled-back and forced-
+# downgrade moves, asserting the recorded release state after each.
+assert_release_updates() {
+    log_section "Release-pinned update (update --release / latest release)"
+
+    local install_commit
+    install_commit="$(git -C "${INSTALL_DIR}/repo" rev-parse HEAD)"
+    assert_eq "" "$(env_value MAGPIE_RELEASE_TAG)" "install --source-dir records no release tag"
+    assert_eq "$install_commit" "$(env_value MAGPIE_RELEASE_COMMIT)" "install records the installed commit"
+
+    UPSTREAM_REPO="${WORK_DIR}/upstream"
+    git clone -q --no-hardlinks "${INSTALL_DIR}/repo" "$UPSTREAM_REPO"
+    git -C "$UPSTREAM_REPO" checkout -q -B e2e-default "$install_commit"
+    git -C "${INSTALL_DIR}/repo" remote set-url origin "$UPSTREAM_REPO"
+    start_release_stub
+
+    local rc_commit final_commit broken_commit
+    rc_commit="$(make_release 9.0.0-rc1 v9.0.0-rc1)"
+    final_commit="$(make_release 9.0.0 v9.0.0)"
+    broken_commit="$(make_release 9.0.1 v9.0.1 broken)"
+    # The branch moves past every release: the no-flag update below must
+    # land on the published release, not on this HEAD.
+    git -C "$UPSTREAM_REPO" -c user.name=magpie-e2e -c user.email=e2e@localhost \
+        commit -q --allow-empty -m "e2e: unreleased work on the branch"
+    printf '{\n  "tag_name": "v9.0.0",\n  "prerelease": false,\n  "draft": false\n}\n' \
+        > "${RELEASE_API_DIR}/latest"
+    log "stub releases: v9.0.0-rc1 ${rc_commit}, v9.0.0 ${final_commit} (latest), v9.0.1 ${broken_commit} (broken build)"
+
+    expect_update 0 "update --release v9.0.0-rc1 (named prerelease)" missing --release v9.0.0-rc1
+    assert_release_state "--release v9.0.0-rc1" "v9.0.0-rc1" "$rc_commit" "9.0.0rc1"
+
+    # The site override from assert_site_override_applies survives update.
+    local marker
+    marker="$(sed -nE 's/.*MAGPIE_E2E_SITE_OVERRIDE=//p' "$SITE_OVERRIDE")"
+    assert_eq "$marker" \
+        "$(docker exec "$(test_compose ps -q magpie)" printenv MAGPIE_E2E_SITE_OVERRIDE 2>/dev/null || true)" \
+        "site override still applied after update"
+
+    expect_update 0 "update with no target -> latest published release" latest
+    update_log_has "Target: latest published release v9.0.0" "no-flag update resolved releases/latest"
+    assert_release_state "no-flag update" "v9.0.0" "$final_commit" "9.0.0"
+
+    expect_update fail "downgrade without --accept-downgrade is refused" missing --release v9.0.0-rc1
+    update_log_has "Refusing to downgrade from 9.0.0 to 9.0.0-rc1" "downgrade refusal names both versions"
+    assert_release_state "after refused downgrade" "v9.0.0" "$final_commit" "9.0.0"
+
+    expect_update fail "rate-limited release lookup fails the update" ratelimited
+    update_log_has "rate limit" "rate-limit failure is reported as such"
+    update_log_has "Not falling back to a branch" "rate-limit failure does not fall back to a branch"
+    assert_release_state "after failed lookup" "v9.0.0" "$final_commit" "9.0.0"
+
+    expect_update fail "update to a release whose build fails" missing --release v9.0.1
+    update_log_has "e2e: deliberately broken release" "the failure is the broken release's build"
+    assert_release_state "after rollback" "v9.0.0" "$final_commit" "9.0.0"
+
+    expect_update 0 "downgrade with --accept-downgrade" missing --release v9.0.0-rc1 --accept-downgrade
+    update_log_has "DOWNGRADING magpie from 9.0.0 to 9.0.0-rc1" "forced downgrade warns loudly"
+    assert_release_state "after forced downgrade" "v9.0.0-rc1" "$rc_commit" "9.0.0rc1"
+}
+
 # --- credentials for the assertions above -----------------------------------
 
 read_admin_token() {
@@ -754,6 +957,7 @@ main() {
     assert_gc_readiness_gate
     assert_gc_service_runs
     assert_site_override_applies
+    assert_release_updates
 
     assert_purge_leaves_nothing
 
