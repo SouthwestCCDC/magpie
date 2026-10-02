@@ -51,6 +51,12 @@ from magpie.storage.symlinks import (
     reconcile_symlinks,
     remove_symlink,
 )
+from magpie.storage.verify import (
+    VerifyIssue,
+    VerifyResult,
+    VerifyStatus,
+    run_verify,
+)
 from magpie.utils.formatting import format_size
 
 __all__ = [
@@ -96,6 +102,11 @@ __all__ = [
     "ProgressCallback",
     "run_gc",
     "get_blob_age_days",
+    # Verification (scrub)
+    "VerifyResult",
+    "VerifyIssue",
+    "VerifyStatus",
+    "run_verify",
     "format_size",
     # Exceptions
     "StorageError",

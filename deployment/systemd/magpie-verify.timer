@@ -1,0 +1,39 @@
+# Magpie Integrity Verification Timer
+# Triggers magpie-verify.service on a schedule.
+#
+# Default: Weekly on Sunday at 4:00 AM (local time), after the nightly GC run.
+#
+# Installation:
+#   cp magpie-verify.service /etc/systemd/system/
+#   cp magpie-verify.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now magpie-verify.timer
+#
+# Check timer status:
+#   systemctl list-timers magpie-verify.timer
+#
+# View next scheduled run:
+#   systemctl status magpie-verify.timer
+
+[Unit]
+Description=Magpie Integrity Verification Timer
+Documentation=https://github.com/SouthwestCCDC/magpie
+
+[Timer]
+# Run weekly on Sunday at 4:00 AM. A full scrub re-reads every byte in
+# storage, so keep it off-peak. For a daily scrub of crypto material only,
+# use the scoped ExecStart in magpie-verify.service with OnCalendar=*-*-* 04:00:00.
+OnCalendar=Sun *-*-* 04:00:00
+
+# Randomize start time within 30 minutes to reduce load spikes.
+RandomizedDelaySec=1800
+
+# Run immediately if the scheduled time was missed
+# (e.g., system was powered off at 4 AM)
+Persistent=true
+
+# Accuracy: allow systemd to batch with other timers
+AccuracySec=60
+
+[Install]
+WantedBy=timers.target
