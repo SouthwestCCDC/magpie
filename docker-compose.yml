@@ -84,7 +84,9 @@ services:
       - MAGPIE_ADMIN_TOKEN_SINK_EXEC_TIMEOUT_SECONDS=${MAGPIE_ADMIN_TOKEN_SINK_EXEC_TIMEOUT_SECONDS:-30}
       # IP allow-listing for read-only access without bearer tokens
       # (consumed by the bundled Caddy). Default: empty (disabled).
-      # Example: MAGPIE_ALLOWED_CIDRS=10.0.0.0/8,192.168.1.0/24
+      # Only a SINGLE range is supported in v0.2.0 -- a list (comma- or
+      # space-separated) makes the container exit at boot. See issue #612.
+      # Example: MAGPIE_ALLOWED_CIDRS=10.0.0.0/8
       - MAGPIE_ALLOWED_CIDRS=${MAGPIE_ALLOWED_CIDRS:-}
       # Trusted proxy IPs/CIDRs whose X-Forwarded-For header the bundled
       # Caddy honors when determining the client IP used by

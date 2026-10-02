@@ -11,19 +11,27 @@ Content-addressed artifact storage with mutable tags for distributing build arti
 
 **Authentication:**
 - Bearer tokens (required for CLI and API access)
-- Authentik SSO for browser access (optional)
+- Optional IP allow-listing lets trusted networks read without a token (see
+  [Configuration Reference](configuration.md#access-control-consumed-by-the-bundled-caddy))
 
-For Authentik setup, see [authentik-setup.md](authentik-setup.md). For Ansible, see [ansible-integration.md](ansible-integration.md).
+New to Magpie? Start with the [5-Minute Quick Start](../README.md#5-minute-quick-start), then
+[Installation](installation.md) and [Architecture](architecture.md). For Ansible, see
+[ansible-integration.md](ansible-integration.md).
 
 ## Client Setup
 
 ### Installation
 
 ```bash
-# With uv (recommended) - replace <VERSION> with the latest release tag (e.g., v0.1.3)
-# See https://github.com/SouthwestCCDC/magpie/releases
-uv pip install git+https://github.com/SouthwestCCDC/magpie.git@v<VERSION>
+# With uv (recommended) -- installs `magpie` and `magpie-ctl` into ~/.local/bin
+uv tool install git+https://github.com/SouthwestCCDC/magpie
+
+# Or pin a release tag -- see https://github.com/SouthwestCCDC/magpie/releases
+uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'   # e.g. @v0.2.0-rc3
 ```
+
+Install the CLI at the **same minor version as the server**: an older client is rejected with
+`426 Upgrade Required`. See [API Compatibility](api-compatibility.md#version-coupling).
 
 ### Configuration
 
@@ -36,54 +44,23 @@ token = "mgp_your_token_here"
 
 **Precedence:** CLI flags > environment variables > config file
 
-### Client Environment Variables
+### Environment Variables
 
-All client environment variables can be overridden by CLI flags. Server and token can also be set in `~/.magpie/config.toml`.
+Every Magpie environment variable -- client and server -- is documented in one place:
+**[Configuration Reference](configuration.md)**, which also has a "what do I actually need?"
+table. The short version for a client:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MAGPIE_SERVER` | *(none)* | Server URL (e.g., `https://magpie.example.com`) |
 | `MAGPIE_TOKEN` | *(none)* | Bearer token (e.g., `mgp_your_token_here`) |
-| `MAGPIE_TIMEOUT` | `600` | Request timeout in seconds or duration format (`30s`, `5m`, `1h`, `1h30m`). Not configurable in `config.toml` to prevent silent network behavior changes. |
-| `MAGPIE_CA_CERT` | *(none)* | Path to custom CA certificate for TLS verification |
+| `MAGPIE_TIMEOUT` | `600` | Request timeout in seconds or duration format (`30s`, `5m`, `1h30m`). Deliberately not readable from `config.toml`. |
+| `MAGPIE_CA_CERT` | *(none)* | Path to an additional CA certificate for HTTPS verification |
 
-### Server Environment Variables
-
-Server configuration uses environment variables with the `MAGPIE_` prefix. See `.env.example` for complete examples.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| **Storage** | | |
-| `MAGPIE_STORAGE_PATH` | `/data/artifacts` | Root directory for artifact storage |
-| `MAGPIE_TEMP_PATH` | `{storage}/.tmp` | Temporary files during uploads (derived from storage path) |
-| `MAGPIE_DATABASE_PATH` | `/data/magpie.db` | SQLite database path for token storage |
-| `MAGPIE_RETENTION_DAYS` | `90` | Days before untagged blobs are eligible for GC |
-| `MAGPIE_MAX_UPLOAD_SIZE` | *(none)* | Maximum upload size in bytes (leave empty for unlimited) |
-| **S3 Backup** | | |
-| `MAGPIE_S3_BUCKET` | *(none)* | S3 bucket name for artifact backup (leave empty to disable) |
-| `MAGPIE_S3_PREFIX` | *(empty)* | Optional S3 key prefix (e.g., `magpie/backups`) |
-| `AWS_ACCESS_KEY_ID` | *(none)* | AWS credentials for S3 backup (or use IAM role) |
-| `AWS_SECRET_ACCESS_KEY` | *(none)* | AWS secret key for S3 backup |
-| `AWS_SESSION_TOKEN` | *(none)* | AWS session token for temporary credentials (STS) |
-| `AWS_DEFAULT_REGION` | *(none)* | AWS region for S3 bucket |
-| **Logging & Debug** | | |
-| `MAGPIE_LOG_FORMAT` | `json` | Log format: `json` for structured logs, `console` for human-readable |
-| `MAGPIE_DEBUG` | `false` | Enable debug mode (verbose logging, detailed error responses) |
-| **Observability** | | |
-| `MAGPIE_SENTRY_DSN` | *(none)* | Sentry DSN for error tracking (leave empty to disable) |
-| `MAGPIE_OTEL_ENABLED` | `false` | Enable OpenTelemetry tracing |
-| `MAGPIE_OTEL_ENDPOINT` | *(none)* | OpenTelemetry collector endpoint (required if OTEL enabled) |
-| `MAGPIE_OTEL_SERVICE_NAME` | `magpie` | Service name for OpenTelemetry traces |
-| **Security** | | |
-| `MAGPIE_ALLOWED_CIDRS` | *(empty)* | Comma-separated CIDR ranges for read-only IP allow-listing (e.g., `10.0.0.0/8,192.168.1.0/24`). Requests from these IPs can read artifacts without bearer tokens. Write operations still require tokens. |
-| `MAGPIE_TRUSTED_PROXIES` | *(empty)* | Space-separated IPs/CIDRs whose `X-Forwarded-For` header Caddy trusts when determining the client IP used by `MAGPIE_ALLOWED_CIDRS` above. Default trusts no proxy (real connecting peer's IP is used). Only set this to the exact upstream hop(s) if Caddy sits behind another reverse proxy -- never a broad range, which would let clients on it spoof their source IP. See [installation.md](installation.md#trusted-proxies). |
-| `AUTHENTIK_HOST` | *(none)* | Authentik server hostname for SSO browser access to `/artifacts/*` (e.g., `authentik.example.com`). API access via bearer tokens continues to work. See `docs/authentik-setup.md`. |
-| **Docker Compose Only** | | |
-| `MAGPIE_DATA_DIR` | `./data` | Host directory for data storage (mounted at `/data` in containers). Only used by `docker-compose.yml`, not the application. |
-| `MAGPIE_HTTP_PORT` | `8080` | External HTTP port for Caddy. Docker Compose only. |
-| `MAGPIE_HTTPS_PORT` | `8443` | External HTTPS port for Caddy. Docker Compose only. |
-| `MAGPIE_UID` | *(auto)* | User ID for magpie process (auto-detected from volume ownership). Used by `entrypoint.sh`, not the application. |
-| `MAGPIE_GID` | *(auto)* | Group ID for magpie process (auto-detected from volume ownership). Used by `entrypoint.sh`, not the application. |
+Server-side variables (storage, retention, admin-token delivery, logging, observability, IP
+allow-listing, S3 backup) live in the [Configuration
+Reference](configuration.md#server-variables); [`.env.example`](../.env.example) is the
+commented template to copy into a real `.env`.
 
 #### Managing Configuration
 
@@ -95,7 +72,9 @@ magpie config --server URL --token TOKEN            # Set server and token
 magpie config --clear                               # Reset configuration to defaults
 ```
 
-Configuration precedence applies: config file < environment variables < CLI flags. The `--show` command displays the effective configuration after applying all sources.
+Configuration precedence applies: config file < environment variables < CLI flags. `--show`
+displays the effective value of each setting and which source it came from, whether or not a
+config file exists.
 
 ### Token Scopes
 
