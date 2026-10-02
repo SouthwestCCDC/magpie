@@ -308,9 +308,9 @@ class TestBundledImageShutdownClassification:
                         break
                     time.sleep(1)
 
-                assert (
-                    _exit_code(name) == 1
-                ), "a real crash (uvicorn killed after steady state) must still fail the container"
+                assert _exit_code(name) == 1, (
+                    "a real crash (uvicorn killed after steady state) must still fail the container"
+                )
             finally:
                 _cleanup(name)
 
