@@ -582,11 +582,12 @@ class TestMigrateCommand:
         finally:
             conn.close()
 
-    def test_wal_switch_losing_a_race_does_not_fail_a_committed_migration(
-        self, tmp_path: Path
+    def test_wal_switch_failure_is_reported_as_committed_not_rolled_back(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
-        """A reader that slips in between commit and the WAL switch only skips the switch."""
-        db_path = tmp_path / "magpie.db"
+        """A reader blocking the post-commit WAL switch fails migrate, with an accurate message."""
+        db_path = test_settings.database_path
+        db_path.parent.mkdir(parents=True, exist_ok=True)
         legacy = sqlite3.connect(db_path)
         try:
             legacy.execute("CREATE TABLE legacy (x INTEGER)")
@@ -607,19 +608,48 @@ class TestMigrateCommand:
             return real_connect(path, timeout=0, factory=ReaderAfterCommit)
 
         try:
-            with patch("magpie.ctl.commands.migrate.sqlite3.connect", connect):
-                _, version_after, _ = migrate_database(db_path)
+            with (
+                patch("magpie.ctl.get_settings", return_value=test_settings),
+                patch("magpie.ctl.commands.migrate.sqlite3.connect", connect),
+            ):
+                result = cli_runner.invoke(cli, ["migrate", "--quiet"])
             reader.rollback()
         finally:
             reader.close()
 
-        assert version_after == CURRENT_DATA_FORMAT_VERSION
+        assert result.exit_code != 0, f"Output: {result.output}"
+        assert f"committed (now v{CURRENT_DATA_FORMAT_VERSION})" in result.output
+        assert "WAL" in result.output
+        assert "rolled back" not in result.output
+        assert "Traceback" not in result.output
         conn = sqlite3.connect(db_path)
         try:
             assert get_data_format_version(conn) == CURRENT_DATA_FORMAT_VERSION
             assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         finally:
             conn.close()
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            rerun = cli_runner.invoke(cli, ["migrate", "--quiet"])
+        assert rerun.exit_code == 0, f"Output: {rerun.output}"
+        assert rerun.output == ""
+
+    def test_noop_migrate_database_does_not_write(self, tmp_path: Path) -> None:
+        """Re-migrating an already-current database appends nothing to the WAL."""
+        db_path = tmp_path / "magpie.db"
+        wal_path = tmp_path / "magpie.db-wal"
+        migrate_database(db_path)
+        # An open connection keeps the WAL file from being removed on close.
+        holder = sqlite3.connect(db_path)
+        try:
+            holder.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            assert wal_path.stat().st_size == 0
+
+            migrate_database(db_path)
+
+            assert wal_path.stat().st_size == 0
+        finally:
+            holder.close()
 
     def test_migrate_reports_failed_step_cleanly_and_leaves_database_unchanged(
         self, cli_runner: CliRunner, test_settings: MagpieSettings

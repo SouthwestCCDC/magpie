@@ -196,34 +196,13 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
     owns_transaction = not conn.in_transaction
     conn.execute("BEGIN IMMEDIATE" if owns_transaction else "SAVEPOINT magpie_migrate")
     try:
-        version_before = get_data_format_version(conn)
         if not owns_transaction:
             # Rewriting the stamp unchanged takes the write lock inside the
             # caller's transaction. SQLite refuses that (SQLITE_BUSY_SNAPSHOT)
-            # if the caller's read snapshot is stale, so the version just read
-            # is guaranteed to be the latest committed one.
-            _set_data_format_version(conn, version_before)
-        _check_not_newer_than_supported(version_before)
-        version = version_before
-        applied: list[str] = []
-
-        for step in _MIGRATIONS:
-            # Checked against `version` (the last-applied step so far this
-            # run), not the frozen `version_before` -- for a correctly
-            # ascending-ordered _MIGRATIONS tuple the two are equivalent, but
-            # checking the running value is the standard, defensive form: it
-            # can't be fooled by a future _MIGRATIONS entry added out of
-            # version order (a maintainer mistake this way just skips the
-            # misplaced step instead of silently re-deriving "already past
-            # it" from a stale baseline).
-            if step.version <= version:
-                continue
-            step.apply(conn)
-            version = step.version
-            applied.append(f"v{step.version}: {step.description}")
-
-        if applied:
-            _set_data_format_version(conn, version)
+            # if the caller's read snapshot is stale, so the version
+            # _apply_pending_steps() reads is the latest committed one.
+            _set_data_format_version(conn, get_data_format_version(conn))
+        result = _apply_pending_steps(conn)
         if owns_transaction:
             conn.commit()
         else:
@@ -236,7 +215,42 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
             conn.execute("RELEASE SAVEPOINT magpie_migrate")
         raise
 
+    return result
+
+
+def _apply_pending_steps(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
+    """Check the stamp, apply pending steps, and stamp the result.
+
+    The caller must already hold the write lock and owns commit/rollback.
+    Writes nothing when the database is already current.
+    """
+    version_before = get_data_format_version(conn)
+    _check_not_newer_than_supported(version_before)
+    version = version_before
+    applied: list[str] = []
+
+    for step in _MIGRATIONS:
+        # Checked against `version` (the last-applied step so far this
+        # run), not the frozen `version_before` -- for a correctly
+        # ascending-ordered _MIGRATIONS tuple the two are equivalent, but
+        # checking the running value is the standard, defensive form: it
+        # can't be fooled by a future _MIGRATIONS entry added out of
+        # version order (a maintainer mistake this way just skips the
+        # misplaced step instead of silently re-deriving "already past
+        # it" from a stale baseline).
+        if step.version <= version:
+            continue
+        step.apply(conn)
+        version = step.version
+        applied.append(f"v{step.version}: {step.description}")
+
+    if applied:
+        _set_data_format_version(conn, version)
     return version_before, version, applied
+
+
+class JournalModeError(Exception):
+    """The migration committed, but switching the database to WAL failed."""
 
 
 def migrate_database(db_path: Path) -> tuple[int, int, list[str]]:
@@ -246,10 +260,16 @@ def migrate_database(db_path: Path) -> tuple[int, int, list[str]]:
     tokens table, every pending step, and the stamp -- happens under one
     ``BEGIN IMMEDIATE`` write lock, taken before the version is read. A
     database a newer build stamps concurrently is therefore seen (and
-    refused) before this build changes anything. journal_mode is switched
-    to WAL (best-effort) only after the migration has committed.
+    refused) before this build changes anything. An already-current
+    database is not written to. journal_mode is switched to WAL only after
+    the migration has committed.
 
-    Returns/raises as run_migrations().
+    Returns/raises as run_migrations(), plus:
+
+    Raises:
+        JournalModeError: The migration committed but the switch to WAL
+            failed (e.g. another process held the database open past the
+            busy timeout). Re-running is safe: the migration is a no-op.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
@@ -258,18 +278,19 @@ def migrate_database(db_path: Path) -> tuple[int, int, list[str]]:
         try:
             _check_not_newer_than_supported(get_data_format_version(conn))
             create_schema(conn)
-            result = run_migrations(conn)
+            result = _apply_pending_steps(conn)
             conn.commit()
         except BaseException:
             conn.rollback()
             raise
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
-        except sqlite3.OperationalError:
-            # The migration is already committed; switching a rollback-journal
-            # database to WAL needs exclusive access and can lose a race with a
-            # reader. Not fatal: every get_connection() retries the switch.
-            pass
+        except sqlite3.OperationalError as e:
+            raise JournalModeError(
+                f"Data-format migration of {db_path} committed (now v{result[1]}), but "
+                f"switching the database to WAL mode failed: {e}. Another process may "
+                "be holding the database open; re-run once it is released."
+            ) from e
     finally:
         conn.close()
     return result
@@ -345,6 +366,8 @@ def migrate(ctx: CTLContext, check: bool, quiet: bool) -> None:
         # traceback -- only raised for the newer-than-supported-stamp
         # (likely downgrade) case; see run_migrations()'s docstring.
         output_error(ErrorCode.CONFLICT, str(e))
+    except JournalModeError as e:
+        output_error(ErrorCode.SERVER_ERROR, str(e))
     except sqlite3.Error as e:
         output_error(
             ErrorCode.SERVER_ERROR,
