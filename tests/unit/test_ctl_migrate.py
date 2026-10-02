@@ -205,6 +205,26 @@ class TestRunMigrationsTransactional:
         finally:
             conn.close()
 
+    def test_stale_read_snapshot_cannot_hide_a_newer_stamp(self, tmp_path: Path) -> None:
+        """A caller's WAL read snapshot taken before a newer stamp must not pass as current."""
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+        conn_a = get_connection(db_path)
+        conn_b = get_connection(db_path)
+        try:
+            run_migrations(conn_a)
+            conn_a.execute("BEGIN")
+            assert get_data_format_version(conn_a) == CURRENT_DATA_FORMAT_VERSION
+            conn_b.execute(f"PRAGMA user_version = {CURRENT_DATA_FORMAT_VERSION + 1}")
+            conn_b.commit()
+
+            with pytest.raises((sqlite3.OperationalError, ValueError)):
+                run_migrations(conn_a)
+            conn_a.rollback()
+        finally:
+            conn_a.close()
+            conn_b.close()
+
     def test_failing_step_inside_callers_transaction_rolls_back_only_itself(
         self, tmp_path: Path
     ) -> None:
@@ -559,6 +579,45 @@ class TestMigrateCommand:
         try:
             assert get_data_format_version(conn) == CURRENT_DATA_FORMAT_VERSION
             assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        finally:
+            conn.close()
+
+    def test_wal_switch_losing_a_race_does_not_fail_a_committed_migration(
+        self, tmp_path: Path
+    ) -> None:
+        """A reader that slips in between commit and the WAL switch only skips the switch."""
+        db_path = tmp_path / "magpie.db"
+        legacy = sqlite3.connect(db_path)
+        try:
+            legacy.execute("CREATE TABLE legacy (x INTEGER)")
+            legacy.commit()
+        finally:
+            legacy.close()
+
+        reader = sqlite3.connect(db_path)
+        real_connect = sqlite3.connect
+
+        class ReaderAfterCommit(sqlite3.Connection):
+            def commit(self) -> None:
+                super().commit()
+                reader.execute("BEGIN")
+                reader.execute("SELECT * FROM legacy").fetchall()
+
+        def connect(path: Path) -> sqlite3.Connection:
+            return real_connect(path, timeout=0, factory=ReaderAfterCommit)
+
+        try:
+            with patch("magpie.ctl.commands.migrate.sqlite3.connect", connect):
+                _, version_after, _ = migrate_database(db_path)
+            reader.rollback()
+        finally:
+            reader.close()
+
+        assert version_after == CURRENT_DATA_FORMAT_VERSION
+        conn = sqlite3.connect(db_path)
+        try:
+            assert get_data_format_version(conn) == CURRENT_DATA_FORMAT_VERSION
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         finally:
             conn.close()
 

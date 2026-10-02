@@ -173,7 +173,9 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
     against the same database serialize (the second one sees the first
     one's stamp and applies nothing), and it commits on success. If the
     caller already has a transaction open, the work runs in a savepoint
-    inside it instead and the caller remains responsible for committing.
+    inside it instead (still under the write lock, which fails if the
+    caller's read snapshot is out of date) and the caller remains
+    responsible for committing.
 
     Idempotent: running this against an already-current database applies
     nothing (version_before == version_after, applied == []).
@@ -195,6 +197,12 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
     conn.execute("BEGIN IMMEDIATE" if owns_transaction else "SAVEPOINT magpie_migrate")
     try:
         version_before = get_data_format_version(conn)
+        if not owns_transaction:
+            # Rewriting the stamp unchanged takes the write lock inside the
+            # caller's transaction. SQLite refuses that (SQLITE_BUSY_SNAPSHOT)
+            # if the caller's read snapshot is stale, so the version just read
+            # is guaranteed to be the latest committed one.
+            _set_data_format_version(conn, version_before)
         _check_not_newer_than_supported(version_before)
         version = version_before
         applied: list[str] = []
@@ -238,8 +246,8 @@ def migrate_database(db_path: Path) -> tuple[int, int, list[str]]:
     tokens table, every pending step, and the stamp -- happens under one
     ``BEGIN IMMEDIATE`` write lock, taken before the version is read. A
     database a newer build stamps concurrently is therefore seen (and
-    refused) before this build changes anything, and journal_mode is only
-    switched to WAL after the stamp is known to be supported.
+    refused) before this build changes anything. journal_mode is switched
+    to WAL (best-effort) only after the migration has committed.
 
     Returns/raises as run_migrations().
     """
@@ -255,7 +263,13 @@ def migrate_database(db_path: Path) -> tuple[int, int, list[str]]:
         except BaseException:
             conn.rollback()
             raise
-        conn.execute("PRAGMA journal_mode=WAL;")
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+        except sqlite3.OperationalError:
+            # The migration is already committed; switching a rollback-journal
+            # database to WAL needs exclusive access and can lose a race with a
+            # reader. Not fatal: every get_connection() retries the switch.
+            pass
     finally:
         conn.close()
     return result
