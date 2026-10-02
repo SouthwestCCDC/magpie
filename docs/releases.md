@@ -108,7 +108,8 @@ To deploy a release without cloning the repository:
 V=v0.2.0
 base=https://github.com/SouthwestCCDC/magpie/releases/download/$V
 curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/.env.example" -fsSLO "$base/SHA256SUMS"
-sha256sum --ignore-missing -c SHA256SUMS
+# Verify exactly the files you downloaded; a missing one fails the check.
+grep -E ' (docker-compose\.yml|\.env\.example)$' SHA256SUMS | sha256sum -c
 cp .env.example .env   # then edit
 docker compose up -d
 ```
@@ -258,4 +259,4 @@ Release candidate feedback helps ensure the final stable release is production-r
 
 ---
 
-*(AI-generated via Claude Code w/ Opus 4.6)*
+*(AI-generated via Claude Code w/ Opus 4.6; container tag and release asset sections via Devin)*
