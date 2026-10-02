@@ -32,6 +32,22 @@ e2e:
 lint:
     uv run ruff check .
 
+# Tier 1 installer checks: bash -n + shellcheck on every tracked shell
+# script (requires shellcheck on PATH)
+lint-shell:
+    ./scripts/lint_shell.sh
+
+# Tier 1 installer checks: caddy validate on every tracked Caddyfile, in
+# each shape the installer's generated .env can produce (requires Docker)
+validate-caddy:
+    ./scripts/validate_caddyfiles.sh
+
+# Tier 2 installer check: real install + assertions + uninstall --purge.
+# DESTRUCTIVE -- installs global systemd units and /opt/magpie. Run on a
+# throwaway VM only.
+test-install-e2e:
+    sudo ./scripts/test_install_e2e.sh
+
 # Run code formatting
 fmt:
     uv run ruff format .
