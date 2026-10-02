@@ -16,21 +16,19 @@ jobs:
     outputs:
       version: ${{ steps.get_version.outputs.version }}
       is_prerelease: ${{ steps.get_version.outputs.is_prerelease }}
-      major: ${{ steps.rolling.outputs.major }}
-      minor: ${{ steps.rolling.outputs.minor }}
-      move_latest: ${{ steps.rolling.outputs.move_latest }}
-      move_major: ${{ steps.rolling.outputs.move_major }}
-      move_minor: ${{ steps.rolling.outputs.move_minor }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          # All tags, so the rolling-tag guard can see every prior release.
-          fetch-depth: 0
 
       - name: Get version from tag
         id: get_version
         run: |
           TAG=${GITHUB_REF#refs/tags/v}
+          # Image tags are the raw version string, so only accept shapes
+          # that make sensible tags.
+          if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Tag v$TAG is not vX.Y.Z or vX.Y.Z-<prerelease>"
+            exit 1
+          fi
           echo "version=$TAG" >> $GITHUB_OUTPUT
 
           # Check if prerelease (contains -, e.g., v1.0.0-rc1)
@@ -53,20 +51,12 @@ jobs:
 
           echo "Version validated: $TAG_VERSION"
 
-      - name: Decide which rolling tags move
-        id: rolling
-        run: |
-          git tag -l 'v*' | scripts/release_tag_flags.sh "${GITHUB_REF#refs/tags/v}" | tee -a "$GITHUB_OUTPUT"
-
   build-and-push:
     # Publishes the bundled single-container image (Dockerfile.bundled,
     # Caddy + uvicorn under one supervisor) as THE magpie image, from
     # v0.2.0 on (#634; reverses the "Option B" record in #609):
-    #   <version>, <version>-bundled  every release, RC and final
-    #   <major>.<minor>, <major>, latest  stable only, and only when this
-    #     is the highest stable release in that scope
-    #     (scripts/release_tag_flags.sh), so a later hotfix on an older
-    #     line can't move them backwards.
+    #   <version>, <version>-bundled  every release, RC and final (here)
+    #   <major>.<minor>, <major>, latest  stable only (promote, below)
     # `-bundled` stays as an alias: the installer and rc1-rc3 compose/env
     # pins use it. The two-container image (./Dockerfile) is no longer
     # published -- nothing in 0.2.x consumes it (0.1.x -> 0.2.0 upgrades
@@ -103,16 +93,13 @@ jobs:
           # `latest` on its own.
           flavor: |
             latest=false
-          # All `type=raw` from validate's outputs, not `type=semver`
-          # patterns: metadata-action ignores `pattern` for prerelease refs
-          # and emits the bare raw tag instead, which silently dropped the
-          # `-bundled` suffix on RCs.
+          # `type=raw` from validate's output, not a `type=semver` pattern:
+          # metadata-action ignores `pattern` for prerelease refs and emits
+          # the bare raw tag instead, which silently dropped the `-bundled`
+          # suffix on RCs.
           tags: |
             type=raw,value=${{ needs.validate.outputs.version }}
             type=raw,value=${{ needs.validate.outputs.version }}-bundled
-            type=raw,value=${{ needs.validate.outputs.minor }},enable=${{ needs.validate.outputs.move_minor == 'true' }}
-            type=raw,value=${{ needs.validate.outputs.major }},enable=${{ needs.validate.outputs.move_major == 'true' }}
-            type=raw,value=latest,enable=${{ needs.validate.outputs.move_latest == 'true' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -125,6 +112,75 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  promote:
+    # Moves the mutable aliases (<major>.<minor>, <major>, latest) onto the
+    # image build-and-push just published, for stable releases only. It's a
+    # separate job so that:
+    #   - eligibility is decided AFTER the build, against releases whose
+    #     image actually exists in the registry (a tag whose build failed
+    #     doesn't block an older release from owning the alias);
+    #   - runs are serialized and each re-reads the tags, so two
+    #     overlapping releases can't leave an older image on an alias.
+    # An alias moves only if this is the highest published stable release
+    # in its scope (scripts/release_tag_flags.sh): a hotfix on an older line
+    # never pulls :latest or :<major> back. Re-running this job is safe.
+    # If GitHub cancels a queued run (a third release queued behind it),
+    # re-run it.
+    name: Move rolling tags
+    runs-on: ubuntu-latest
+    needs: [validate, build-and-push]
+    if: needs.validate.outputs.is_prerelease == 'false'
+    concurrency:
+      group: release-rolling-tags
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Move rolling tags
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          image="${REGISTRY}/${IMAGE_NAME,,}"
+          git fetch --force --tags origin
+
+          published_stable() {
+            git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | while read -r tag; do
+              if docker buildx imagetools inspect "${image}:${tag#v}" >/dev/null 2>&1; then
+                echo "$tag"
+              fi
+            done
+          }
+
+          flags="$(published_stable | scripts/release_tag_flags.sh "$VERSION")"
+          echo "$flags"
+          flag() { sed -n "s/^$1=//p" <<<"$flags"; }
+
+          targets=()
+          if [[ "$(flag move_minor)" == true ]]; then targets+=(-t "${image}:$(flag minor)"); fi
+          if [[ "$(flag move_major)" == true ]]; then targets+=(-t "${image}:$(flag major)"); fi
+          if [[ "$(flag move_latest)" == true ]]; then targets+=(-t "${image}:latest"); fi
+          if (( ${#targets[@]} == 0 )); then
+            echo "A newer stable release owns every alias; nothing to move."
+            exit 0
+          fi
+          docker buildx imagetools create "${targets[@]}" "${image}:${VERSION}"
 
   release:
     name: Create GitHub Release

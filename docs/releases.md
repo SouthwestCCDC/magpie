@@ -70,55 +70,52 @@ The GitHub Actions release workflow automatically:
 
 ## Container Image Tags
 
-### Stable Release Tags
+From v0.2.0, `ghcr.io/southwestccdc/magpie` is the bundled single-container
+image (`Dockerfile.bundled`). Releases up to 0.1.x published the
+two-container backend image under the same names.
 
-Full stable releases receive multiple container tags:
+| Git Tag | Container Tags |
+|---------|----------------|
+| `v1.0.0` | `1.0.0`, `1.0.0-bundled`, `1.0`, `1`, `latest` |
+| `v1.0.1` | `1.0.1`, `1.0.1-bundled`, `1.0`, `1`, `latest` |
+| `v2.0.0-rc1` | `2.0.0-rc1`, `2.0.0-rc1-bundled` |
+| `v1.0.2` cut after `v2.0.0` | `1.0.2`, `1.0.2-bundled`, `1.0` |
 
-| Git Tag | Container Tags | Use Case |
-|---------|----------------|----------|
-| `v1.0.0` | `1.0.0`, `1.0`, `1`, `latest` | Latest stable release |
-| `v1.0.1` | `1.0.1`, `1.0`, `1`, `latest` | Patch release (updates mutable tags) |
-| `v2.0.0` | `2.0.0`, `2.0`, `2`, `latest` | Major release (updates all tags) |
-
-### Release Candidate Tags
-
-Release candidates receive multiple container tags (but NOT `latest`):
-
-| Git Tag | Container Tags | Behavior |
-|---------|----------------|----------|
-| `v2.0.0-rc1` | `2.0.0-rc1`, `2.0`, `2` | Updates major/minor tags (does NOT update `latest`) |
-| `v2.0.0-rc2` | `2.0.0-rc2`, `2.0`, `2` | Updates major/minor tags (does NOT update `latest`) |
-
-**Key differences from stable releases:**
-- Release candidates **do not** update the `latest` tag (only stable releases do)
-- Release candidates **do** update major and minor tags (e.g., `2`, `2.0`)
-- This means pulling `ghcr.io/southwestccdc/magpie:2` may give you an RC if one exists
-- For production, always use full version tags (e.g., `1.5.0`) to avoid RCs
-- Release candidates help validate critical changes before final release
+- `<version>-bundled` is an alias of `<version>`, kept because the installer
+  and the 0.2.0 release candidates pin it.
+- Release candidates get only their exact version tags. They never move
+  `latest`, `<major>` or `<major>.<minor>`.
+- A rolling tag (`latest`, `<major>`, `<major>.<minor>`) moves only if the
+  release is the highest published stable version in that tag's scope. A
+  hotfix on an older line never pulls `latest` or `<major>` back onto it.
+  The workflow's `promote` job applies this after the image is pushed
+  (`scripts/release_tag_flags.sh`).
 
 ## Tag Mutability Policy
 
-### Immutable Tags (Full Version Only)
+### Immutable Tags
 
-These tags always point to the exact same release:
-- `1.0.1` - Never changes once created
-- `2.0.0-rc1` - Never changes once created
-- `1.5.0` - Never changes once created
+`1.0.1`, `1.0.1-bundled`, `2.0.0-rc1`: these never change once pushed.
 
-**Use for:** Production deployments where you need a guaranteed, unchanging reference.
+**Use for:** production deployments that need a guaranteed, unchanging
+reference: `docker pull ghcr.io/southwestccdc/magpie:1.0.1`
 
-**Pull command:** `docker pull ghcr.io/southwestccdc/magpie:1.0.1`
+### Mutable Tags
 
-### Mutable Tags (Major and Minor)
+- `1.0` follows the newest stable `1.0.x`.
+- `1` follows the newest stable `1.x.y`.
+- `latest` follows the newest stable release overall.
 
-These tags move to the latest release in their series (including release candidates):
-- `1.0` moves from `1.0.0` → `1.0.1` → `1.0.2` (and potentially to `1.0.3-rc1`)
-- `1` moves from `1.0.0` → `1.5.0` → `1.9.9` (stays on latest 1.x.x release; `2` tag is used for 2.x.x)
-- `latest` moves to the newest **stable** release (RCs do NOT update `latest`)
+**Use for:** development and testing where you want automatic updates.
 
-**Use for:** Development and testing where you want automatic updates.
+### Hotfixes on a pre-0.2.0 line
 
-**Warning:** Major and minor tags MAY point to release candidates. For example, releasing `v2.0.0-rc1` WILL update the `2` and `2.0` tags (but NOT `latest`). For production deployments, always use full version tags to avoid accidentally pulling an RC.
+A tag push runs the release workflow **as it exists at the tagged commit**.
+A 0.1.x hotfix tagged from an old commit therefore runs the old workflow,
+which moves `latest` and `0` unconditionally, back onto the two-container
+image. Before tagging such a hotfix, port the `promote` job and
+`scripts/release_tag_flags.sh` onto the hotfix branch, and remove the
+unconditional rolling tags from its build job.
 
 ## Upgrade Paths
 
