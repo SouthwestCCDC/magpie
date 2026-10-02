@@ -24,7 +24,7 @@ dependencies = [
     "packaging",
     "requests>=2.33.0",
     "urllib3>=2.7.0",
-    "idna>=3.15",
+    "idna>=3.19",
     "pygments>=2.20.0",
     "python-dotenv>=1.2.2",
 ]
