@@ -250,6 +250,22 @@ The data directory (`MAGPIE_DATA_DIR`) is a bind mount and is not touched
 by the container swap itself; the backup/assert/rollback envelope above
 is what makes the swap safe to run unattended.
 
+**Data-format migration happens at container start.** On every start,
+before it serves traffic, the bundled container brings `magpie.db` to the
+data format its build supports: `magpie-ctl init` on a fresh volume,
+otherwise `magpie-ctl migrate` (a quiet no-op when already current). This
+runs under the same `.magpie-init.lock` as first-boot init, so concurrent
+starts against one data directory are serialized, and each migration is
+applied in a single transaction. If migration fails, or the database is
+newer than the image supports (e.g. after rolling the image tag back),
+the container exits non-zero without serving and without modifying the
+database; run a newer image or restore a backup. Upgrading by changing
+the image tag and restarting (plain `docker compose`, Ansible) is
+therefore migrated the same way, but takes no automatic backup and has no
+automatic rollback -- [back up](backup-restore.md#backup-procedures)
+first. `update` still runs `magpie-ctl migrate` explicitly after the swap
+(by then a no-op) as part of its post-update checks.
+
 The artifact byte-identity/tag-resolution checks in step 3 reach the
 pre-update two-container install through its own `caddy` container
 (matching this project's own `--tls-mode off` real-world deployments); a

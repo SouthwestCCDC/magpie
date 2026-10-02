@@ -181,6 +181,113 @@ class TestRunMigrations:
             conn2.close()
 
 
+class TestRunMigrationsTransactional:
+    """run_migrations() is all-or-nothing and serializes concurrent callers."""
+
+    def test_failing_step_rolls_back_earlier_steps_and_stamp(self, tmp_path: Path) -> None:
+        """A step that raises leaves the database exactly as it was before the run."""
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+
+        def create_table(c: sqlite3.Connection) -> None:
+            c.execute("CREATE TABLE migrated_marker (x INTEGER)")
+            c.execute("INSERT INTO migrated_marker VALUES (1)")
+
+        def boom(c: sqlite3.Connection) -> None:
+            raise RuntimeError("step 2 failed")
+
+        fake_steps = (MigrationStep(1, "create", create_table), MigrationStep(2, "boom", boom))
+        conn = get_connection(db_path)
+        try:
+            with (
+                patch("magpie.ctl.commands.migrate._MIGRATIONS", fake_steps),
+                patch("magpie.ctl.commands.migrate.CURRENT_DATA_FORMAT_VERSION", 2),
+                pytest.raises(RuntimeError, match="step 2 failed"),
+            ):
+                run_migrations(conn)
+            assert not conn.in_transaction
+        finally:
+            conn.close()
+
+        conn2 = sqlite3.connect(db_path)
+        try:
+            assert get_data_format_version(conn2) == 0
+            tables = {
+                row[0] for row in conn2.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            assert "migrated_marker" not in tables
+        finally:
+            conn2.close()
+
+    def test_holds_write_lock_while_steps_run(self, tmp_path: Path) -> None:
+        """Steps run under BEGIN IMMEDIATE, so a concurrent writer is locked out."""
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+        observed: list[str] = []
+
+        def probe(c: sqlite3.Connection) -> None:
+            other = sqlite3.connect(db_path, timeout=0)
+            try:
+                other.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as e:
+                observed.append(str(e))
+            finally:
+                other.close()
+
+        conn = get_connection(db_path)
+        try:
+            with (
+                patch("magpie.ctl.commands.migrate._MIGRATIONS", (MigrationStep(1, "p", probe),)),
+                patch("magpie.ctl.commands.migrate.CURRENT_DATA_FORMAT_VERSION", 1),
+            ):
+                run_migrations(conn)
+        finally:
+            conn.close()
+
+        assert observed and "locked" in observed[0]
+
+    def test_second_caller_sees_first_callers_stamp(self, tmp_path: Path) -> None:
+        """Two connections migrating the same database apply each step exactly once."""
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+        conn_a = get_connection(db_path)
+        conn_b = get_connection(db_path)
+        try:
+            _, _, applied_a = run_migrations(conn_a)
+            before_b, after_b, applied_b = run_migrations(conn_b)
+        finally:
+            conn_a.close()
+            conn_b.close()
+
+        assert len(applied_a) == len(_MIGRATIONS)
+        assert applied_b == []
+        assert before_b == after_b == CURRENT_DATA_FORMAT_VERSION
+
+    def test_newer_than_supported_message_names_both_versions_and_remedy(
+        self, tmp_path: Path
+    ) -> None:
+        """The refusal says which versions are involved and what the operator should do."""
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+        newer = CURRENT_DATA_FORMAT_VERSION + 1
+        conn = get_connection(db_path)
+        try:
+            conn.execute(f"PRAGMA user_version = {newer}")
+            conn.commit()
+            with pytest.raises(ValueError) as excinfo:
+                run_migrations(conn)
+            assert not conn.in_transaction
+        finally:
+            conn.close()
+
+        message = str(excinfo.value)
+        assert f"({newer})" in message
+        assert f"current: {CURRENT_DATA_FORMAT_VERSION}" in message
+        assert "newer" in message
+        assert "restore a backup" in message
+        assert "\n" not in message
+
+
 class TestCurrentVersionMatchesMigrations:
     """Tests for the CURRENT_DATA_FORMAT_VERSION/_MIGRATIONS drift guard.
 
@@ -306,3 +413,98 @@ class TestMigrateCommand:
         assert "newer than this" in result.output
         # A clean, structured error -- not an unhandled-exception traceback.
         assert "Traceback" not in result.output
+
+    def test_migrate_quiet_suppresses_already_current_message(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """--quiet prints nothing when there is nothing to do."""
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            cli_runner.invoke(cli, ["migrate"])
+            result = cli_runner.invoke(cli, ["migrate", "--quiet"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert result.output == ""
+
+    def test_migrate_quiet_still_reports_applied_steps(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """--quiet only hides the no-op message; a real migration is still logged."""
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["migrate", "-q"])
+
+        assert result.exit_code == 0, f"Output: {result.output}"
+        assert f"v0 -> v{CURRENT_DATA_FORMAT_VERSION}" in result.output
+
+    def test_migrate_refuses_newer_database_without_touching_it(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A newer-than-supported database is refused before init_database() runs.
+
+        The database here deliberately has no tokens table: if migrate ran
+        init_database() before refusing, the table would appear.
+        """
+        db_path = test_settings.database_path
+        newer = CURRENT_DATA_FORMAT_VERSION + 1
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(f"PRAGMA user_version = {newer}")
+            conn.commit()
+        finally:
+            conn.close()
+        before = db_path.read_bytes()
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["migrate", "--quiet"])
+
+        assert result.exit_code != 0, f"Output: {result.output}"
+        assert f"({newer})" in result.output
+        assert f"current: {CURRENT_DATA_FORMAT_VERSION}" in result.output
+        assert "Traceback" not in result.output
+        assert db_path.read_bytes() == before
+        conn = sqlite3.connect(db_path)
+        try:
+            tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master")]
+        finally:
+            conn.close()
+        assert tables == []
+
+    def test_migrate_reports_failed_step_cleanly_and_leaves_database_unchanged(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A sqlite error inside a step is a clean non-zero exit with nothing applied."""
+
+        def bad_sql(c: sqlite3.Connection) -> None:
+            c.execute("ALTER TABLE does_not_exist ADD COLUMN x INTEGER")
+
+        init_database(test_settings.database_path)
+        with (
+            patch("magpie.ctl.get_settings", return_value=test_settings),
+            patch("magpie.ctl.commands.migrate._MIGRATIONS", (MigrationStep(1, "bad", bad_sql),)),
+        ):
+            result = cli_runner.invoke(cli, ["migrate"])
+
+        assert result.exit_code != 0, f"Output: {result.output}"
+        assert "rolled back" in result.output
+        assert "Traceback" not in result.output
+        conn = sqlite3.connect(test_settings.database_path)
+        try:
+            assert get_data_format_version(conn) == 0
+        finally:
+            conn.close()
+
+    def test_migrate_reports_unreadable_database_cleanly(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        """A file that isn't a SQLite database is a clean non-zero exit, left as-is."""
+        db_path = test_settings.database_path
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        garbage = b"this is not a sqlite database" * 100
+        db_path.write_bytes(garbage)
+
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["migrate"])
+
+        assert result.exit_code != 0, f"Output: {result.output}"
+        assert "Could not read the data-format version" in result.output
+        assert "Traceback" not in result.output
+        assert db_path.read_bytes() == garbage

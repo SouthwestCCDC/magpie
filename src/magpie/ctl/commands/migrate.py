@@ -1,7 +1,9 @@
 """Migrate command for the data-format version marker (issue #561).
 
-Provides the forward-only migration mechanism `magpie-deploy.sh update`
-calls after swapping in a new image, so a future release that actually
+Provides the forward-only migration mechanism the bundled image's
+wrapper.sh runs on every container start (before serving traffic, under
+the init lock) and `magpie-deploy.sh update` also calls after swapping in
+a new image, so a future release that actually
 changes the token DB schema or the on-disk /data layout has somewhere to
 register a transform. As of v0.2.0 there is nothing to transform (the
 bundled single-container image reads the same /data layout the pre-0.2.0
@@ -27,6 +29,7 @@ from magpie.ctl import CTLContext
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
 # The data-format version this build of magpie expects. Bumped whenever a
 # future release needs to transform existing data to match a schema/layout
@@ -42,9 +45,12 @@ class MigrationStep(NamedTuple):
 
     ``version`` is the data-format version this step advances the database
     TO -- it runs only when the currently-stamped version is less than
-    this. ``apply`` receives the open connection and performs whatever
-    transform is needed; it must not commit or close the connection (
-    run_migrations() does both once, after every applicable step has run).
+    this. ``apply`` receives the open connection, inside the single
+    transaction run_migrations() wraps every pending step in, and performs
+    whatever transform is needed. It must not commit, roll back, or close
+    the connection, and must not use ``executescript()`` (which issues its
+    own COMMIT first) -- either would break the all-or-nothing guarantee
+    that a failed step leaves the database exactly as it was.
     """
 
     version: int
@@ -107,6 +113,42 @@ def get_data_format_version(conn: sqlite3.Connection) -> int:
     return int(row[0]) if row is not None else 0
 
 
+def read_data_format_version(db_path: Path) -> int:
+    """Read the data-format version of the database at ``db_path``.
+
+    Unlike get_connection(), this opens a plain connection without
+    setting journal_mode or touching the schema, so it is safe to call
+    against a database this build may not understand (e.g. one stamped
+    newer than CURRENT_DATA_FORMAT_VERSION).
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        return get_data_format_version(conn)
+    finally:
+        conn.close()
+
+
+def _check_not_newer_than_supported(version: int) -> None:
+    """Raise ValueError if ``version`` is newer than this build supports.
+
+    For a forward-only marker, a newer-than-supported stamp is not
+    "nothing to do": no step in _MIGRATIONS exceeds it, so applying
+    migrations would silently no-op and report success. It almost always
+    means a downgrade (an older magpie build running against data a newer
+    build already migrated), which must fail closed rather than proceed
+    against data this build doesn't understand.
+    """
+    if version > CURRENT_DATA_FORMAT_VERSION:
+        raise ValueError(
+            f"Database data-format version ({version}) is newer than this build of "
+            f"magpie supports (current: {CURRENT_DATA_FORMAT_VERSION}). This usually "
+            "means a downgrade -- an older magpie build running against data a newer "
+            "build already migrated. Refusing to proceed; the database was not "
+            f"modified. Run a newer magpie image that supports data-format version {version} "
+            "or newer, or restore a backup taken before the upgrade."
+        )
+
+
 def _set_data_format_version(conn: sqlite3.Connection, version: int) -> None:
     """Set PRAGMA user_version.
 
@@ -119,14 +161,21 @@ def _set_data_format_version(conn: sqlite3.Connection, version: int) -> None:
 
 
 def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
-    """Apply every pending migration step, in order.
+    """Apply every pending migration step, in order, in one transaction.
+
+    The version read, every pending step, and the new version stamp all
+    run inside a single ``BEGIN IMMEDIATE`` transaction: the write lock is
+    taken before the version is read, so concurrent callers against the
+    same database serialize (the second one sees the first one's stamp and
+    applies nothing), and any exception rolls everything back -- the
+    database is never left partially migrated. PRAGMA user_version lives in
+    the database header, so the stamp commits or rolls back with the rest.
 
     Idempotent: running this against an already-current database applies
     nothing (version_before == version_after, applied == []).
 
     Args:
-        conn: Open database connection. Not committed or closed by this
-            function's caller-facing contract if no steps were applied.
+        conn: Open database connection, not already inside a transaction.
 
     Returns:
         Tuple of (version_before, version_after, list of applied step
@@ -134,45 +183,38 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
 
     Raises:
         ValueError: The database is already stamped with a data-format
-            version newer than this build supports. For a forward-only
-            marker, this is not "nothing to do" -- no step in _MIGRATIONS
-            exceeds it, so the loop below would silently no-op and report
-            success. That's the wrong failure mode: a newer-than-supported
-            stamp almost always means a downgrade (an older magpie build
-            running against data a newer build already migrated), which
-            should fail closed rather than proceed against data this
-            build doesn't actually understand.
+            version newer than this build supports (see
+            _check_not_newer_than_supported). Nothing is modified.
+        Exception: Whatever a failing step raised, after rolling back.
     """
-    version_before = get_data_format_version(conn)
-    if version_before > CURRENT_DATA_FORMAT_VERSION:
-        raise ValueError(
-            f"Database data-format version ({version_before}) is newer than this "
-            f"build of magpie supports (current: {CURRENT_DATA_FORMAT_VERSION}). This "
-            "usually means a downgrade -- an older magpie build running against data "
-            "a newer build already migrated. Refusing to proceed: install a magpie "
-            f"build that supports data-format version {version_before} or newer."
-        )
-    version = version_before
-    applied: list[str] = []
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        version_before = get_data_format_version(conn)
+        _check_not_newer_than_supported(version_before)
+        version = version_before
+        applied: list[str] = []
 
-    for step in _MIGRATIONS:
-        # Checked against `version` (the last-applied step so far this
-        # run), not the frozen `version_before` -- for a correctly
-        # ascending-ordered _MIGRATIONS tuple the two are equivalent, but
-        # checking the running value is the standard, defensive form: it
-        # can't be fooled by a future _MIGRATIONS entry added out of
-        # version order (a maintainer mistake this way just skips the
-        # misplaced step instead of silently re-deriving "already past
-        # it" from a stale baseline).
-        if step.version <= version:
-            continue
-        step.apply(conn)
-        version = step.version
-        applied.append(f"v{step.version}: {step.description}")
+        for step in _MIGRATIONS:
+            # Checked against `version` (the last-applied step so far this
+            # run), not the frozen `version_before` -- for a correctly
+            # ascending-ordered _MIGRATIONS tuple the two are equivalent, but
+            # checking the running value is the standard, defensive form: it
+            # can't be fooled by a future _MIGRATIONS entry added out of
+            # version order (a maintainer mistake this way just skips the
+            # misplaced step instead of silently re-deriving "already past
+            # it" from a stale baseline).
+            if step.version <= version:
+                continue
+            step.apply(conn)
+            version = step.version
+            applied.append(f"v{step.version}: {step.description}")
 
-    if applied:
-        _set_data_format_version(conn, version)
+        if applied:
+            _set_data_format_version(conn, version)
         conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
 
     return version_before, version, applied
 
@@ -183,8 +225,14 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
     is_flag=True,
     help="Report the current data-format version without applying migrations.",
 )
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Print nothing when the data format is already current (errors and applied steps still print).",
+)
 @click.pass_obj
-def migrate(ctx: CTLContext, check: bool) -> None:
+def migrate(ctx: CTLContext, check: bool, quiet: bool) -> None:
     """Apply pending data-format migrations.
 
     Stamps (and, for a future release that changes the schema/layout,
@@ -192,11 +240,19 @@ def migrate(ctx: CTLContext, check: bool) -> None:
     (SQLite PRAGMA user_version on magpie.db). Safe to run repeatedly -- a
     database already at the current version is left untouched.
 
-    Called automatically by `magpie-deploy.sh update` after the image
-    swap; also safe to run manually.
+    Each run applies every pending step in a single transaction: a
+    failure leaves the database exactly as it was. A database stamped
+    newer than this build supports is refused without being modified.
+
+    Run automatically by the bundled image on every container start,
+    before it serves traffic; also run by `magpie-deploy.sh update` after
+    the image swap, and safe to run manually.
 
     Use --check to report the current version without making any change --
     used by the installer's post-update assertion gate.
+
+    Use --quiet to suppress the "already current" message (used by the
+    container's startup path to keep routine restarts' logs quiet).
 
     Examples:
 
@@ -230,9 +286,22 @@ def migrate(ctx: CTLContext, check: bool) -> None:
         click.echo(f"Data-format version: {version} (current: {CURRENT_DATA_FORMAT_VERSION})")
         return
 
+    # Checked before init_database() so a database this build doesn't
+    # understand is refused without being touched at all.
+    if settings.database_path.exists():
+        try:
+            _check_not_newer_than_supported(read_data_format_version(settings.database_path))
+        except ValueError as e:
+            output_error(ErrorCode.CONFLICT, str(e))
+        except sqlite3.Error as e:
+            output_error(
+                ErrorCode.SERVER_ERROR,
+                f"Could not read the data-format version of {settings.database_path}: {e}",
+            )
+
     # init_database() is itself idempotent (CREATE TABLE IF NOT EXISTS) --
-    # safe to call unconditionally so 'migrate' works standalone even
-    # against a database that doesn't exist yet (e.g. run ahead of `init`).
+    # safe to call so 'migrate' works standalone even against a database
+    # that doesn't exist yet (e.g. run ahead of `init`).
     init_database(settings.database_path)
 
     conn = get_connection(settings.database_path)
@@ -245,6 +314,12 @@ def migrate(ctx: CTLContext, check: bool) -> None:
             # for the newer-than-supported-stamp (likely downgrade) case;
             # see its docstring.
             output_error(ErrorCode.CONFLICT, str(e))
+        except sqlite3.Error as e:
+            output_error(
+                ErrorCode.SERVER_ERROR,
+                f"Data-format migration failed and was rolled back; the database "
+                f"was left unchanged: {e}",
+            )
     finally:
         conn.close()
 
@@ -265,5 +340,5 @@ def migrate(ctx: CTLContext, check: bool) -> None:
         click.echo(f"Migrated data format: v{version_before} -> v{version_after}")
         for step in applied:
             click.echo(f"  - {step}")
-    else:
+    elif not quiet:
         click.echo(f"Data-format already current (v{version_after}); nothing to do.")
