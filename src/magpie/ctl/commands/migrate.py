@@ -18,7 +18,10 @@ started.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import sqlite3
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, NamedTuple
 
 import click
@@ -296,11 +299,80 @@ def _apply_pending_steps(conn: sqlite3.Connection) -> tuple[int, int, list[str]]
     return version_before, version, applied
 
 
+# Before a migration or revert changes the database, a copy of it is kept
+# in this directory next to it (/data/backups). That copy is the way back
+# from a step that turns out to be wrong, which `migrate --to` can't undo,
+# for deployments that don't go through the installer's own pre-update
+# backup. It is on the same volume, so it is not disaster recovery.
+SNAPSHOT_DIR_NAME = "backups"
+SNAPSHOTS_TO_KEEP = 3
+_PARTIAL_SUFFIX = ".partial"
+
+
+class SnapshotError(Exception):
+    """The pre-migration copy of the database could not be written."""
+
+
+def snapshot_database(db_path: Path, reason: str) -> Path:
+    """Copy the database at ``db_path`` into its backups directory.
+
+    Uses SQLite's online backup, so the copy is consistent even while the
+    server has the database open. The copy is named
+    ``<db name>.<UTC timestamp>.<reason>`` (sortable by time), is only
+    readable by this uid (it holds the token hashes), and only the newest
+    SNAPSHOTS_TO_KEEP are kept.
+
+    Raises:
+        SnapshotError: The copy could not be written. Nothing was changed
+            except, possibly, creating the backups directory.
+    """
+    backup_dir = db_path.parent / SNAPSHOT_DIR_NAME
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    dest = backup_dir / f"{db_path.name}.{timestamp}.{reason}"
+    partial = dest.with_name(dest.name + _PARTIAL_SUFFIX)
+    try:
+        backup_dir.mkdir(mode=0o700, exist_ok=True)
+        backup_dir.chmod(0o700)
+        os.close(os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        src = sqlite3.connect(db_path)
+        try:
+            dst = sqlite3.connect(partial)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        partial.replace(dest)
+    except (OSError, sqlite3.Error) as e:
+        with contextlib.suppress(OSError):
+            partial.unlink(missing_ok=True)
+        raise SnapshotError(
+            f"Could not save a copy of {db_path} to {backup_dir} before changing it, "
+            f"so it was not changed: {e}. Free up space on the data volume (old "
+            f"copies in {backup_dir} can be deleted) and try again."
+        ) from e
+
+    _prune_snapshots(backup_dir, db_path.name)
+    return dest
+
+
+def _prune_snapshots(backup_dir: Path, db_name: str) -> None:
+    """Keep only the newest SNAPSHOTS_TO_KEEP copies; drop leftover partials."""
+    copies = sorted(backup_dir.glob(f"{db_name}.*"))
+    complete = [c for c in copies if not c.name.endswith(_PARTIAL_SUFFIX)]
+    stale = [c for c in copies if c.name.endswith(_PARTIAL_SUFFIX)]
+    stale += complete[:-SNAPSHOTS_TO_KEEP]
+    for path in stale:
+        with contextlib.suppress(OSError):
+            path.unlink()
+
+
 class JournalModeError(Exception):
     """The migration committed, but switching the database to WAL failed."""
 
 
-def migrate_database(db_path: Path) -> tuple[int, int, list[str]]:
+def migrate_database(db_path: Path) -> tuple[int, int, list[str], Path | None]:
     """Create (if needed) and migrate the database at ``db_path``.
 
     Everything that writes -- the newer-than-supported check, creating the
@@ -311,14 +383,27 @@ def migrate_database(db_path: Path) -> tuple[int, int, list[str]]:
     database is not written to. journal_mode is switched to WAL only after
     the migration has committed.
 
-    Returns/raises as run_migrations(), plus:
+    An existing database with pending steps is first copied with
+    snapshot_database(); that copy is taken before the write lock (the
+    online backup can't run inside it), so a concurrent migrator can at
+    worst leave an unneeded copy behind.
+
+    Returns run_migrations()'s tuple plus the path of that copy (None if
+    none was taken), and raises as run_migrations(), plus:
 
     Raises:
+        SnapshotError: The copy failed; the database was not changed.
         JournalModeError: The migration committed but the switch to WAL
             failed (e.g. another process held the database open past the
             busy timeout). Re-running is safe: the migration is a no-op.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot = None
+    if db_path.is_file():
+        version = read_data_format_version(db_path)
+        _check_not_newer_than_supported(version)
+        if version < CURRENT_DATA_FORMAT_VERSION:
+            snapshot = snapshot_database(db_path, f"pre-v{CURRENT_DATA_FORMAT_VERSION}")
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -340,7 +425,7 @@ def migrate_database(db_path: Path) -> tuple[int, int, list[str]]:
             ) from e
     finally:
         conn.close()
-    return result
+    return (*result, snapshot)
 
 
 class MigrationTargetError(ValueError):
@@ -390,7 +475,7 @@ def _revert_steps(conn: sqlite3.Connection, target: int) -> tuple[int, int, list
     return version_before, target, reverted
 
 
-def revert_database(db_path: Path, target: int) -> tuple[int, int, list[str]]:
+def revert_database(db_path: Path, target: int) -> tuple[int, int, list[str], Path | None]:
     """Revert the database at ``db_path`` down to data-format version ``target``.
 
     Takes the same ``BEGIN IMMEDIATE`` write lock as migrate_database(),
@@ -398,9 +483,12 @@ def revert_database(db_path: Path, target: int) -> tuple[int, int, list[str]]:
     in that one transaction: a failure leaves the database exactly as it
     was.
 
+    An existing database above ``target`` is first copied with
+    snapshot_database(), as in migrate_database().
+
     Returns:
         Tuple of (version_before, version_after, list of reverted step
-        descriptions, newest first).
+        descriptions, newest first, path of that copy or None).
 
     Raises:
         FileNotFoundError: There is no database at ``db_path``.
@@ -408,10 +496,17 @@ def revert_database(db_path: Path, target: int) -> tuple[int, int, list[str]]:
             above the database's current version.
         ValueError: The database is newer than this build supports, or an
             irreversible step lies between it and ``target``.
+        SnapshotError: The copy failed; the database was not changed.
         sqlite3.Error / Exception: Whatever failed, after rolling back.
     """
     if not db_path.is_file():
         raise FileNotFoundError(f"No database at {db_path}; nothing to revert.")
+    snapshot = None
+    version = read_data_format_version(db_path)
+    if target < version <= CURRENT_DATA_FORMAT_VERSION and target in (
+        {0} | {step.version for step in _MIGRATIONS}
+    ):
+        snapshot = snapshot_database(db_path, f"pre-revert-to-v{target}")
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -423,7 +518,7 @@ def revert_database(db_path: Path, target: int) -> tuple[int, int, list[str]]:
             raise
     finally:
         conn.close()
-    return result
+    return (*result, snapshot)
 
 
 @click.command()
@@ -513,7 +608,9 @@ def migrate(ctx: CTLContext, check: bool, to_version: int | None, quiet: bool) -
         return
 
     try:
-        version_before, version_after, applied = migrate_database(settings.database_path)
+        version_before, version_after, applied, snapshot = migrate_database(settings.database_path)
+    except SnapshotError as e:
+        output_error(ErrorCode.SERVER_ERROR, str(e))
     except ValueError as e:
         # A clean, structured error (both output formats) rather than a raw
         # traceback -- only raised for the newer-than-supported-stamp
@@ -535,12 +632,15 @@ def migrate(ctx: CTLContext, check: bool, to_version: int | None, quiet: bool) -
                     "version_before": version_before,
                     "version_after": version_after,
                     "applied": applied,
+                    "snapshot": str(snapshot) if snapshot else None,
                 },
                 human_output="",
             )
         )
         return
 
+    if snapshot:
+        click.echo(f"Saved a copy of the database first: {snapshot}")
     if applied:
         click.echo(f"Migrated data format: v{version_before} -> v{version_after}")
         for step in applied:
@@ -552,7 +652,9 @@ def migrate(ctx: CTLContext, check: bool, to_version: int | None, quiet: bool) -
 def _revert_command(db_path: Path, target: int, quiet: bool) -> None:
     """Run `migrate --to` and report the result."""
     try:
-        version_before, version_after, reverted = revert_database(db_path, target)
+        version_before, version_after, reverted, snapshot = revert_database(db_path, target)
+    except SnapshotError as e:
+        output_error(ErrorCode.SERVER_ERROR, str(e))
     except FileNotFoundError as e:
         output_error(ErrorCode.NOT_FOUND, str(e))
     except MigrationTargetError as e:
@@ -573,12 +675,15 @@ def _revert_command(db_path: Path, target: int, quiet: bool) -> None:
                     "version_before": version_before,
                     "version_after": version_after,
                     "reverted": reverted,
+                    "snapshot": str(snapshot) if snapshot else None,
                 },
                 human_output="",
             )
         )
         return
 
+    if snapshot:
+        click.echo(f"Saved a copy of the database first: {snapshot}")
     if reverted:
         click.echo(f"Reverted data format: v{version_before} -> v{version_after}")
         for step in reverted:
