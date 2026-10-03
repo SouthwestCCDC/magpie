@@ -81,8 +81,8 @@ jobs:
             echo "::endgroup::"
           done
 
-  # Tier 2 -- real install on a real VM. Gated on paths that can actually
-  # change the installed result, plus the nightly schedule and manual runs.
+  # Tier 2 -- real install on a real VM. Runs on every PR and push, even
+  # version-only ones, so the commit that gets tagged has been installed.
   install:
     name: Tier 2 -- real install + purge
     runs-on: ubuntu-latest
