@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -25,6 +26,9 @@ from typing import Generator
 
 import httpx
 import pytest
+
+from magpie.auth.database import init_database
+from magpie.ctl.commands.migrate import CURRENT_DATA_FORMAT_VERSION
 
 # Project root directory (where Dockerfile.bundled is located)
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
@@ -306,9 +310,10 @@ class TestBundledImageShutdownClassification:
                         break
                     time.sleep(1)
 
-                assert _exit_code(name) == 1, (
+                crash_msg = (
                     "a real crash (uvicorn killed after steady state) must still fail the container"
                 )
+                assert _exit_code(name) == 1, crash_msg
             finally:
                 _cleanup(name)
 
@@ -404,9 +409,10 @@ class TestBundledImageNonRootCaddy:
                     ("uvicorn", uvicorn_user),
                     ("caddy", caddy_user),
                 ):
-                    assert user not in ("root", "0"), (
+                    root_msg = (
                         f"{proc_name} must not run as root in steady state, got user={user!r}"
                     )
+                    assert user not in ("root", "0"), root_msg
                 assert tini_user == wrapper_user == uvicorn_user == caddy_user, (
                     "tini, the supervisor, and both children must all run as the same uid "
                     f"(so caddy can read what uvicorn writes under /data, and tini's own "
@@ -574,3 +580,257 @@ class TestBundledImageNonRootCaddy:
             finally:
                 _cleanup(name)
                 _cleanup(init_name)
+
+
+def _host_db(data_dir: Path, user_version: int | None) -> Path:
+    """Create `data_dir/magpie.db` from the host, optionally stamped.
+
+    ``user_version=0`` models a 0.1.x database (same schema, never stamped).
+    """
+    db_path = data_dir / "magpie.db"
+    init_database(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO tokens (name, token_hash, scope, enabled, created_at) "
+            "VALUES ('pre-existing', 'hash-pre-existing', 'read', 1, '2026-01-01T00:00:00')"
+        )
+        if user_version is not None:
+            conn.execute(f"PRAGMA user_version = {int(user_version)}")
+        conn.commit()
+    finally:
+        conn.close()
+    return db_path
+
+
+def _host_db_version(db_path: Path) -> int:
+    conn = sqlite3.connect(db_path)
+    try:
+        return int(conn.execute("PRAGMA user_version").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def _host_token_names(db_path: Path) -> list[str]:
+    conn = sqlite3.connect(db_path)
+    try:
+        return sorted(row[0] for row in conn.execute("SELECT name FROM tokens"))
+    finally:
+        conn.close()
+
+
+def _logs(name: str) -> str:
+    result = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
+    return result.stdout + result.stderr
+
+
+def _wait_for_exit(name: str, timeout: int = 60) -> int:
+    """Wait for the container to stop on its own and return its exit code."""
+    for _ in range(timeout):
+        running = subprocess.run(
+            ["docker", "inspect", name, "--format", "{{.State.Running}}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if running == "false":
+            return _exit_code(name)
+        time.sleep(1)
+    pytest.fail(f"{name} was still running after {timeout}s; expected it to refuse to start")
+
+
+@pytest.mark.e2e
+@pytest.mark.slow
+class TestBundledImageStartupMigration:
+    """Issue #635: the container brings the database to the current data format
+    on every start (init on a fresh volume, then migrate), under the init lock,
+    before uvicorn or Caddy start -- and refuses to start otherwise.
+    """
+
+    def test_fresh_volume_is_initialized_and_stamped_current(self, bundled_image: str) -> None:
+        name = f"magpie-bundled-e2e-mig-fresh-{uuid.uuid4().hex[:8]}"
+        with tempfile.TemporaryDirectory(prefix="magpie_bundled_mig_fresh_") as tmp:
+            data_dir = Path(tmp)
+            _cleanup(name)
+            try:
+                _run_container(bundled_image, data_dir, name, extra_args=_own_uid_gid_args())
+                _wait_for_log(name, "caddy started")
+                subprocess.run(["docker", "stop", name], check=True, capture_output=True)
+                log_text = _logs(name)
+                assert "running magpie-ctl init" in log_text, log_text
+                assert f"v0 -> v{CURRENT_DATA_FORMAT_VERSION}" in log_text, log_text
+                assert _host_db_version(data_dir / "magpie.db") == CURRENT_DATA_FORMAT_VERSION
+            finally:
+                _cleanup(name)
+
+    def test_unstamped_0_1_x_database_is_migrated_on_start(self, bundled_image: str) -> None:
+        name = f"magpie-bundled-e2e-mig-legacy-{uuid.uuid4().hex[:8]}"
+        with tempfile.TemporaryDirectory(prefix="magpie_bundled_mig_legacy_") as tmp:
+            data_dir = Path(tmp)
+            db_path = _host_db(data_dir, user_version=0)
+            _cleanup(name)
+            try:
+                _run_container(bundled_image, data_dir, name, extra_args=_own_uid_gid_args())
+                _wait_for_log(name, "caddy started")
+                subprocess.run(["docker", "stop", name], check=True, capture_output=True)
+                log_text = _logs(name)
+                assert f"Migrated data format: v0 -> v{CURRENT_DATA_FORMAT_VERSION}" in log_text
+                assert "running magpie-ctl init" not in log_text, log_text
+                # Migration happens before uvicorn starts serving.
+                assert log_text.index("Migrated data format") < log_text.index("uvicorn started")
+                assert _host_db_version(db_path) == CURRENT_DATA_FORMAT_VERSION
+                assert _host_token_names(db_path) == ["pre-existing"]
+            finally:
+                _cleanup(name)
+
+    def test_restart_at_current_version_is_a_quiet_no_op(self, bundled_image: str) -> None:
+        name = f"magpie-bundled-e2e-mig-noop-{uuid.uuid4().hex[:8]}"
+        with tempfile.TemporaryDirectory(prefix="magpie_bundled_mig_noop_") as tmp:
+            data_dir = Path(tmp)
+            db_path = _host_db(data_dir, user_version=CURRENT_DATA_FORMAT_VERSION)
+            _cleanup(name)
+            try:
+                _run_container(bundled_image, data_dir, name, extra_args=_own_uid_gid_args())
+                _wait_for_log(name, "caddy started")
+                subprocess.run(["docker", "stop", name], check=True, capture_output=True)
+                assert _exit_code(name) == 0
+                log_text = _logs(name)
+                for unexpected in ("Migrated", "already current", "magpie-ctl init", "error"):
+                    assert unexpected not in log_text, f"{unexpected!r} in logs:\n{log_text}"
+                assert _host_db_version(db_path) == CURRENT_DATA_FORMAT_VERSION
+                assert _host_token_names(db_path) == ["pre-existing"]
+            finally:
+                _cleanup(name)
+
+    def test_newer_than_binary_database_refuses_to_start_untouched(
+        self, bundled_image: str
+    ) -> None:
+        name = f"magpie-bundled-e2e-mig-newer-{uuid.uuid4().hex[:8]}"
+        newer = CURRENT_DATA_FORMAT_VERSION + 1
+        with tempfile.TemporaryDirectory(prefix="magpie_bundled_mig_newer_") as tmp:
+            data_dir = Path(tmp)
+            db_path = _host_db(data_dir, user_version=newer)
+            before = db_path.read_bytes()
+            _cleanup(name)
+            try:
+                _run_container(bundled_image, data_dir, name, extra_args=_own_uid_gid_args())
+                assert _wait_for_exit(name) != 0
+                log_text = _logs(name)
+                refusal = next(
+                    (line for line in log_text.splitlines() if "is newer than this build" in line),
+                    None,
+                )
+                assert refusal is not None, log_text
+                assert f"({newer})" in refusal
+                assert f"current: {CURRENT_DATA_FORMAT_VERSION}" in refusal
+                assert "newer" in refusal and "restore a backup" in refusal
+                assert f"magpie-ctl migrate --to {CURRENT_DATA_FORMAT_VERSION}" in refusal
+                assert "refusing to start" in log_text
+                assert "uvicorn started" not in log_text
+                assert "caddy started" not in log_text
+                assert db_path.read_bytes() == before
+                assert _host_db_version(db_path) == newer
+            finally:
+                _cleanup(name)
+
+    def test_migrate_to_reverts_via_docker_exec_and_restart_migrates_forward(
+        self, bundled_image: str
+    ) -> None:
+        """Issue #646: the documented downgrade step works in a running container,
+        as the runtime user, and the next start of the same image migrates forward
+        again (startup never stays below its own format).
+        """
+        name = f"magpie-bundled-e2e-mig-revert-{uuid.uuid4().hex[:8]}"
+        with tempfile.TemporaryDirectory(prefix="magpie_bundled_mig_revert_") as tmp:
+            data_dir = Path(tmp)
+            db_path = _host_db(data_dir, user_version=0)
+            _cleanup(name)
+            try:
+                _run_container(bundled_image, data_dir, name, extra_args=_own_uid_gid_args())
+                _wait_for_log(name, "caddy started")
+                assert _host_db_version(db_path) == CURRENT_DATA_FORMAT_VERSION
+
+                revert = subprocess.run(
+                    ["docker", "exec", name, "magpie-ctl", "migrate", "--to", "0"],
+                    capture_output=True,
+                    text=True,
+                )
+                assert revert.returncode == 0, revert.stdout + revert.stderr
+                assert f"v{CURRENT_DATA_FORMAT_VERSION} -> v0" in revert.stdout
+                assert _host_db_version(db_path) == 0
+                assert _host_token_names(db_path) == ["pre-existing"]
+                # Written as the runtime user, not root (see _own_uid_gid_args()).
+                run_uid = os.getuid() or 1000
+                owners = {p.stat().st_uid for p in data_dir.iterdir()}
+                assert owners == {run_uid}, owners
+
+                subprocess.run(["docker", "stop", name], check=True, capture_output=True)
+                subprocess.run(["docker", "start", name], check=True, capture_output=True)
+                for _ in range(30):
+                    if _logs(name).count("caddy started") >= 2:
+                        break
+                    time.sleep(1)
+                log_text = _logs(name)
+                assert log_text.count("caddy started") >= 2, log_text
+                assert log_text.count("Migrated data format: v0 ->") == 2, log_text
+                assert _host_db_version(db_path) == CURRENT_DATA_FORMAT_VERSION
+            finally:
+                _cleanup(name)
+
+    def test_migration_failure_exits_before_serving(self, bundled_image: str) -> None:
+        """An unreadable database fails migrate, which fails the container."""
+        name = f"magpie-bundled-e2e-mig-fail-{uuid.uuid4().hex[:8]}"
+        with tempfile.TemporaryDirectory(prefix="magpie_bundled_mig_fail_") as tmp:
+            data_dir = Path(tmp)
+            db_path = data_dir / "magpie.db"
+            garbage = b"not a sqlite database" * 200
+            db_path.write_bytes(garbage)
+            _cleanup(name)
+            try:
+                _run_container(bundled_image, data_dir, name, extra_args=_own_uid_gid_args())
+                assert _wait_for_exit(name) != 0
+                log_text = _logs(name)
+                assert "magpie-ctl migrate failed" in log_text, log_text
+                assert "uvicorn started" not in log_text
+                assert db_path.read_bytes() == garbage
+            finally:
+                _cleanup(name)
+
+    def test_concurrent_starts_on_one_fresh_volume_serialize(self, bundled_image: str) -> None:
+        """Two containers released onto the init lock at the same moment: exactly
+        one initializes and migrates, the other finds nothing to do, both serve.
+
+        The host holds the init lock until both containers are past their root
+        prelude and blocked on it, so the race is forced rather than hoped for.
+        """
+        names = [f"magpie-bundled-e2e-mig-race{i}-{uuid.uuid4().hex[:8]}" for i in (1, 2)]
+        with tempfile.TemporaryDirectory(prefix="magpie_bundled_mig_race_") as tmp:
+            data_dir = Path(tmp)
+            artifacts_dir = data_dir / "artifacts"
+            artifacts_dir.mkdir(parents=True)
+            lock_fd = os.open(artifacts_dir / ".magpie-init.lock", os.O_CREAT | os.O_RDWR)
+            for name in names:
+                _cleanup(name)
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                for name in names:
+                    _run_container(bundled_image, data_dir, name, extra_args=_own_uid_gid_args())
+                for name in names:
+                    _wait_for_log(name, "root setup complete, dropping to", timeout=10)
+                time.sleep(1)
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+
+                for name in names:
+                    _wait_for_log(name, "caddy started")
+                logs = [_logs(name) for name in names]
+                assert sum("running magpie-ctl init" in text for text in logs) == 1, logs
+                assert sum("Migrated data format" in text for text in logs) == 1, logs
+                assert not any("error" in text for text in logs), logs
+                for name in names:
+                    subprocess.run(["docker", "stop", name], check=True, capture_output=True)
+                    assert _exit_code(name) == 0
+                assert _host_db_version(data_dir / "magpie.db") == CURRENT_DATA_FORMAT_VERSION
+            finally:
+                os.close(lock_fd)
+                for name in names:
+                    _cleanup(name)

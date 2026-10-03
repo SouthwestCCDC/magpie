@@ -1,11 +1,19 @@
 """Migrate command for the data-format version marker (issue #561).
 
-Provides the forward-only migration mechanism `magpie-deploy.sh update`
-calls after swapping in a new image, so a future release that actually
+Provides the migration mechanism the bundled image's wrapper.sh runs on
+every container start (before serving traffic, under the init lock) and
+`magpie-deploy.sh update` also calls after swapping in a new image, so a
+future release that actually
 changes the token DB schema or the on-disk /data layout has somewhere to
 register a transform. As of v0.2.0 there is nothing to transform (the
 bundled single-container image reads the same /data layout the pre-0.2.0
 two-container topology used), so this only stamps a baseline version.
+
+Startup only ever migrates forward. Going back to an older build is an
+explicit operator step (issue #646): `magpie-ctl migrate --to N`, run with
+the newer build (the only one that knows how to undo its own steps),
+reverts the database to data-format version N before the older build is
+started.
 """
 
 from __future__ import annotations
@@ -15,7 +23,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 import click
 
-from magpie.auth.database import get_connection, init_database
+from magpie.auth.database import create_schema
 from magpie.cli.formatting import (
     CommandResult,
     ErrorCode,
@@ -27,6 +35,7 @@ from magpie.ctl import CTLContext
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
 # The data-format version this build of magpie expects. Bumped whenever a
 # future release needs to transform existing data to match a schema/layout
@@ -38,18 +47,33 @@ CURRENT_DATA_FORMAT_VERSION = 1
 
 
 class MigrationStep(NamedTuple):
-    """A single forward-only migration step.
+    """A single migration step.
 
     ``version`` is the data-format version this step advances the database
     TO -- it runs only when the currently-stamped version is less than
-    this. ``apply`` receives the open connection and performs whatever
-    transform is needed; it must not commit or close the connection (
-    run_migrations() does both once, after every applicable step has run).
+    this. ``apply`` receives the open connection, inside the single
+    transaction run_migrations() wraps every pending step in, and performs
+    whatever transform is needed. ``revert`` undoes exactly what ``apply``
+    did, taking a version-``version`` database back to version
+    ``version - 1``'s schema and data; revert_database() runs it.
+
+    Every step must either define ``revert`` or set ``irreversible=True``
+    (never both): a step that can't be undone says so explicitly, and
+    `migrate --to` refuses to cross it (restoring a backup is then the way
+    back). check_migrations_reversibility() enforces this.
+
+    Neither callable may commit, roll back, or close the connection, or
+    use ``executescript()`` (which issues its own COMMIT first) -- either
+    would break the all-or-nothing guarantee that a failed run leaves the
+    database exactly as it was. Neither writes the version stamp; the
+    caller stamps once, after every step has succeeded.
     """
 
     version: int
     description: str
     apply: "Callable[[sqlite3.Connection], None]"
+    revert: "Callable[[sqlite3.Connection], None] | None" = None
+    irreversible: bool = False
 
 
 def _step_1_baseline(conn: sqlite3.Connection) -> None:
@@ -62,11 +86,38 @@ def _step_1_baseline(conn: sqlite3.Connection) -> None:
     """
 
 
+def _revert_step_1_baseline(conn: sqlite3.Connection) -> None:
+    """Undo version 1: nothing to transform; the stamp drops back to 0."""
+
+
 # Ordered oldest-to-newest; run_migrations() applies every step whose
-# version exceeds the database's current stamp, in this order.
+# version exceeds the database's current stamp, in this order, and
+# revert_database() reverts them newest-first.
 _MIGRATIONS: tuple[MigrationStep, ...] = (
-    MigrationStep(1, "baseline data-format version marker", _step_1_baseline),
+    MigrationStep(
+        1,
+        "baseline data-format version marker",
+        _step_1_baseline,
+        revert=_revert_step_1_baseline,
+    ),
 )
+
+
+def check_migrations_reversibility(migrations: tuple[MigrationStep, ...]) -> None:
+    """Raise AssertionError unless every step has exactly one of ``revert`` or ``irreversible``."""
+    problems = []
+    for step in migrations:
+        if step.revert is None and not step.irreversible:
+            problems.append(
+                f"v{step.version} ({step.description}) has no revert; "
+                "add one or mark it irreversible=True"
+            )
+        elif step.revert is not None and step.irreversible:
+            problems.append(
+                f"v{step.version} ({step.description}) has a revert but is marked irreversible"
+            )
+    if problems:
+        raise AssertionError("Invalid migration steps: " + "; ".join(problems))
 
 
 def _check_current_version_matches_migrations(
@@ -107,6 +158,44 @@ def get_data_format_version(conn: sqlite3.Connection) -> int:
     return int(row[0]) if row is not None else 0
 
 
+def read_data_format_version(db_path: Path) -> int:
+    """Read the data-format version of the database at ``db_path``.
+
+    Unlike get_connection(), this opens a plain connection without
+    setting journal_mode or touching the schema, so it is safe to call
+    against a database this build may not understand (e.g. one stamped
+    newer than CURRENT_DATA_FORMAT_VERSION).
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        return get_data_format_version(conn)
+    finally:
+        conn.close()
+
+
+def _check_not_newer_than_supported(version: int) -> None:
+    """Raise ValueError if ``version`` is newer than this build supports.
+
+    For a forward-only marker, a newer-than-supported stamp is not
+    "nothing to do": no step in _MIGRATIONS exceeds it, so applying
+    migrations would silently no-op and report success. It almost always
+    means a downgrade (an older magpie build running against data a newer
+    build already migrated), which must fail closed rather than proceed
+    against data this build doesn't understand.
+    """
+    if version > CURRENT_DATA_FORMAT_VERSION:
+        raise ValueError(
+            f"Database data-format version ({version}) is newer than this build of "
+            f"magpie supports (current: {CURRENT_DATA_FORMAT_VERSION}). This usually "
+            "means a downgrade -- an older magpie build running against data a newer "
+            "build already migrated. Refusing to proceed; the database was not "
+            f"modified. Run a newer magpie image that supports data-format version {version} "
+            "or newer. To keep using this build instead, first revert the data with that "
+            f"newer image (`magpie-ctl migrate --to {CURRENT_DATA_FORMAT_VERSION}`), or "
+            "restore a backup taken before the upgrade."
+        )
+
+
 def _set_data_format_version(conn: sqlite3.Connection, version: int) -> None:
     """Set PRAGMA user_version.
 
@@ -119,14 +208,27 @@ def _set_data_format_version(conn: sqlite3.Connection, version: int) -> None:
 
 
 def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
-    """Apply every pending migration step, in order.
+    """Apply every pending migration step, in order, atomically.
+
+    The version read, every pending step, and the new version stamp all
+    run as one unit: any exception rolls all of it back, so the database is
+    never left partially migrated. PRAGMA user_version lives in the
+    database header, so the stamp commits or rolls back with the rest.
+
+    If ``conn`` has no open transaction, this owns one: ``BEGIN IMMEDIATE``
+    takes the write lock before the version is read, so concurrent callers
+    against the same database serialize (the second one sees the first
+    one's stamp and applies nothing), and it commits on success. If the
+    caller already has a transaction open, the work runs in a savepoint
+    inside it instead (still under the write lock, which fails if the
+    caller's read snapshot is out of date) and the caller remains
+    responsible for committing.
 
     Idempotent: running this against an already-current database applies
     nothing (version_before == version_after, applied == []).
 
     Args:
-        conn: Open database connection. Not committed or closed by this
-            function's caller-facing contract if no steps were applied.
+        conn: Open database connection.
 
     Returns:
         Tuple of (version_before, version_after, list of applied step
@@ -134,24 +236,43 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
 
     Raises:
         ValueError: The database is already stamped with a data-format
-            version newer than this build supports. For a forward-only
-            marker, this is not "nothing to do" -- no step in _MIGRATIONS
-            exceeds it, so the loop below would silently no-op and report
-            success. That's the wrong failure mode: a newer-than-supported
-            stamp almost always means a downgrade (an older magpie build
-            running against data a newer build already migrated), which
-            should fail closed rather than proceed against data this
-            build doesn't actually understand.
+            version newer than this build supports (see
+            _check_not_newer_than_supported). Nothing is modified.
+        Exception: Whatever a failing step raised, after rolling back.
+    """
+    owns_transaction = not conn.in_transaction
+    conn.execute("BEGIN IMMEDIATE" if owns_transaction else "SAVEPOINT magpie_migrate")
+    try:
+        if not owns_transaction:
+            # Rewriting the stamp unchanged takes the write lock inside the
+            # caller's transaction. SQLite refuses that (SQLITE_BUSY_SNAPSHOT)
+            # if the caller's read snapshot is stale, so the version
+            # _apply_pending_steps() reads is the latest committed one.
+            _set_data_format_version(conn, get_data_format_version(conn))
+        result = _apply_pending_steps(conn)
+        if owns_transaction:
+            conn.commit()
+        else:
+            conn.execute("RELEASE SAVEPOINT magpie_migrate")
+    except BaseException:
+        if owns_transaction:
+            conn.rollback()
+        else:
+            conn.execute("ROLLBACK TO SAVEPOINT magpie_migrate")
+            conn.execute("RELEASE SAVEPOINT magpie_migrate")
+        raise
+
+    return result
+
+
+def _apply_pending_steps(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
+    """Check the stamp, apply pending steps, and stamp the result.
+
+    The caller must already hold the write lock and owns commit/rollback.
+    Writes nothing when the database is already current.
     """
     version_before = get_data_format_version(conn)
-    if version_before > CURRENT_DATA_FORMAT_VERSION:
-        raise ValueError(
-            f"Database data-format version ({version_before}) is newer than this "
-            f"build of magpie supports (current: {CURRENT_DATA_FORMAT_VERSION}). This "
-            "usually means a downgrade -- an older magpie build running against data "
-            "a newer build already migrated. Refusing to proceed: install a magpie "
-            f"build that supports data-format version {version_before} or newer."
-        )
+    _check_not_newer_than_supported(version_before)
     version = version_before
     applied: list[str] = []
 
@@ -172,9 +293,137 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
 
     if applied:
         _set_data_format_version(conn, version)
-        conn.commit()
-
     return version_before, version, applied
+
+
+class JournalModeError(Exception):
+    """The migration committed, but switching the database to WAL failed."""
+
+
+def migrate_database(db_path: Path) -> tuple[int, int, list[str]]:
+    """Create (if needed) and migrate the database at ``db_path``.
+
+    Everything that writes -- the newer-than-supported check, creating the
+    tokens table, every pending step, and the stamp -- happens under one
+    ``BEGIN IMMEDIATE`` write lock, taken before the version is read. A
+    database a newer build stamps concurrently is therefore seen (and
+    refused) before this build changes anything. An already-current
+    database is not written to. journal_mode is switched to WAL only after
+    the migration has committed.
+
+    Returns/raises as run_migrations(), plus:
+
+    Raises:
+        JournalModeError: The migration committed but the switch to WAL
+            failed (e.g. another process held the database open past the
+            busy timeout). Re-running is safe: the migration is a no-op.
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            _check_not_newer_than_supported(get_data_format_version(conn))
+            create_schema(conn)
+            result = _apply_pending_steps(conn)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+        except sqlite3.OperationalError as e:
+            raise JournalModeError(
+                f"Data-format migration of {db_path} committed (now v{result[1]}), but "
+                f"switching the database to WAL mode failed: {e}. Another process may "
+                "be holding the database open; re-run once it is released."
+            ) from e
+    finally:
+        conn.close()
+    return result
+
+
+class MigrationTargetError(ValueError):
+    """The requested `migrate --to` target version is invalid."""
+
+
+def _revert_steps(conn: sqlite3.Connection, target: int) -> tuple[int, int, list[str]]:
+    """Revert applied steps newest-first down to ``target`` and stamp it.
+
+    The caller must already hold the write lock and owns commit/rollback.
+    Every refusal is raised before any step runs. Writes nothing when the
+    database is already at ``target``.
+    """
+    version_before = get_data_format_version(conn)
+    _check_not_newer_than_supported(version_before)
+    known_versions = {0} | {step.version for step in _MIGRATIONS}
+    if target not in known_versions:
+        raise MigrationTargetError(
+            f"Data-format version {target} is not one this build of magpie knows "
+            f"(known: {', '.join(str(v) for v in sorted(known_versions))})."
+        )
+    if target > version_before:
+        raise MigrationTargetError(
+            f"Cannot migrate --to {target}: the database is at data-format version "
+            f"{version_before}, and --to only moves down. Run `magpie-ctl migrate` "
+            "to move forward."
+        )
+
+    to_revert = [step for step in reversed(_MIGRATIONS) if target < step.version <= version_before]
+    blocked = [step for step in to_revert if step.revert is None]
+    if blocked:
+        steps = ", ".join(f"v{step.version} ({step.description})" for step in blocked)
+        raise ValueError(
+            f"Cannot revert the data format from v{version_before} to v{target}: "
+            f"irreversible step(s) in the way: {steps}. The database was not "
+            "modified. Restore a backup taken before the upgrade instead."
+        )
+
+    reverted: list[str] = []
+    for step in to_revert:
+        if step.revert is not None:
+            step.revert(conn)
+            reverted.append(f"v{step.version}: {step.description}")
+
+    if reverted:
+        _set_data_format_version(conn, target)
+    return version_before, target, reverted
+
+
+def revert_database(db_path: Path, target: int) -> tuple[int, int, list[str]]:
+    """Revert the database at ``db_path`` down to data-format version ``target``.
+
+    Takes the same ``BEGIN IMMEDIATE`` write lock as migrate_database(),
+    before the version is read, and runs every revert plus the final stamp
+    in that one transaction: a failure leaves the database exactly as it
+    was.
+
+    Returns:
+        Tuple of (version_before, version_after, list of reverted step
+        descriptions, newest first).
+
+    Raises:
+        FileNotFoundError: There is no database at ``db_path``.
+        MigrationTargetError: ``target`` is not a known version, or is
+            above the database's current version.
+        ValueError: The database is newer than this build supports, or an
+            irreversible step lies between it and ``target``.
+        sqlite3.Error / Exception: Whatever failed, after rolling back.
+    """
+    if not db_path.is_file():
+        raise FileNotFoundError(f"No database at {db_path}; nothing to revert.")
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            result = _revert_steps(conn, target)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+    finally:
+        conn.close()
+    return result
 
 
 @click.command()
@@ -183,38 +432,71 @@ def run_migrations(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
     is_flag=True,
     help="Report the current data-format version without applying migrations.",
 )
+@click.option(
+    "--to",
+    "to_version",
+    type=click.IntRange(min=0),
+    default=None,
+    metavar="N",
+    help="Revert the data format down to version N (run with the newer image before switching to an older one).",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Print nothing when the data format is already current (errors and applied steps still print).",
+)
 @click.pass_obj
-def migrate(ctx: CTLContext, check: bool) -> None:
-    """Apply pending data-format migrations.
+def migrate(ctx: CTLContext, check: bool, to_version: int | None, quiet: bool) -> None:
+    """Apply pending data-format migrations, or revert them with --to.
 
     Stamps (and, for a future release that changes the schema/layout,
-    transforms) the on-disk data format via a forward-only version marker
-    (SQLite PRAGMA user_version on magpie.db). Safe to run repeatedly -- a
+    transforms) the on-disk data format via a version marker (SQLite
+    PRAGMA user_version on magpie.db). Safe to run repeatedly -- a
     database already at the current version is left untouched.
 
-    Called automatically by `magpie-deploy.sh update` after the image
-    swap; also safe to run manually.
+    Each run applies every pending step in a single transaction: a
+    failure leaves the database exactly as it was. A database stamped
+    newer than this build supports is refused without being modified.
+
+    Run automatically by the bundled image on every container start,
+    before it serves traffic; also run by `magpie-deploy.sh update` after
+    the image swap, and safe to run manually.
 
     Use --check to report the current version without making any change --
     used by the installer's post-update assertion gate.
+
+    Use --to N to downgrade: revert every applied step above version N,
+    newest first, in one transaction under the same write lock, stamping N
+    last. Run it with the NEWER image before switching to an older one
+    whose supported version is N. Refused (database unchanged) if N is
+    above the current version or unknown, or if a step in the way is
+    irreversible. Container startup never does this on its own.
+
+    Use --quiet to suppress the "already current" message (used by the
+    container's startup path to keep routine restarts' logs quiet).
 
     Examples:
 
         magpie-ctl migrate
 
         magpie-ctl migrate --check
+
+        magpie-ctl migrate --to 0
     """
     settings = ctx.settings
+
+    if check and to_version is not None:
+        raise click.UsageError("--check and --to cannot be used together.")
+    if to_version is not None:
+        _revert_command(settings.database_path, to_version, quiet)
+        return
 
     if check:
         if not settings.database_path.exists():
             version = 0
         else:
-            conn = get_connection(settings.database_path)
-            try:
-                version = get_data_format_version(conn)
-            finally:
-                conn.close()
+            version = read_data_format_version(settings.database_path)
 
         if is_json_output():
             output_result(
@@ -230,23 +512,21 @@ def migrate(ctx: CTLContext, check: bool) -> None:
         click.echo(f"Data-format version: {version} (current: {CURRENT_DATA_FORMAT_VERSION})")
         return
 
-    # init_database() is itself idempotent (CREATE TABLE IF NOT EXISTS) --
-    # safe to call unconditionally so 'migrate' works standalone even
-    # against a database that doesn't exist yet (e.g. run ahead of `init`).
-    init_database(settings.database_path)
-
-    conn = get_connection(settings.database_path)
     try:
-        try:
-            version_before, version_after, applied = run_migrations(conn)
-        except ValueError as e:
-            # A clean, structured error (both output formats) rather than
-            # a raw traceback -- run_migrations() only raises ValueError
-            # for the newer-than-supported-stamp (likely downgrade) case;
-            # see its docstring.
-            output_error(ErrorCode.CONFLICT, str(e))
-    finally:
-        conn.close()
+        version_before, version_after, applied = migrate_database(settings.database_path)
+    except ValueError as e:
+        # A clean, structured error (both output formats) rather than a raw
+        # traceback -- only raised for the newer-than-supported-stamp
+        # (likely downgrade) case; see run_migrations()'s docstring.
+        output_error(ErrorCode.CONFLICT, str(e))
+    except JournalModeError as e:
+        output_error(ErrorCode.SERVER_ERROR, str(e))
+    except sqlite3.Error as e:
+        output_error(
+            ErrorCode.SERVER_ERROR,
+            f"Data-format migration of {settings.database_path} failed and was "
+            f"rolled back; the database was left unchanged: {e}",
+        )
 
     if is_json_output():
         output_result(
@@ -265,5 +545,43 @@ def migrate(ctx: CTLContext, check: bool) -> None:
         click.echo(f"Migrated data format: v{version_before} -> v{version_after}")
         for step in applied:
             click.echo(f"  - {step}")
-    else:
+    elif not quiet:
         click.echo(f"Data-format already current (v{version_after}); nothing to do.")
+
+
+def _revert_command(db_path: Path, target: int, quiet: bool) -> None:
+    """Run `migrate --to` and report the result."""
+    try:
+        version_before, version_after, reverted = revert_database(db_path, target)
+    except FileNotFoundError as e:
+        output_error(ErrorCode.NOT_FOUND, str(e))
+    except MigrationTargetError as e:
+        output_error(ErrorCode.VALIDATION_ERROR, str(e))
+    except ValueError as e:
+        output_error(ErrorCode.CONFLICT, str(e))
+    except sqlite3.Error as e:
+        output_error(
+            ErrorCode.SERVER_ERROR,
+            f"Data-format revert of {db_path} failed and was rolled back; the "
+            f"database was left unchanged: {e}",
+        )
+
+    if is_json_output():
+        output_result(
+            CommandResult(
+                data={
+                    "version_before": version_before,
+                    "version_after": version_after,
+                    "reverted": reverted,
+                },
+                human_output="",
+            )
+        )
+        return
+
+    if reverted:
+        click.echo(f"Reverted data format: v{version_before} -> v{version_after}")
+        for step in reverted:
+            click.echo(f"  - {step}")
+    elif not quiet:
+        click.echo(f"Data format already at v{version_after}; nothing to revert.")

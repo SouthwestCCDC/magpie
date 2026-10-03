@@ -1,0 +1,153 @@
+# Installer validation (issue #572)
+#
+# Tier 1 (every PR, ~1 minute): static checks on the installer and every
+# other shell script in the repo -- `bash -n`, `shellcheck -x` -- plus
+# `caddy validate` on the Caddyfiles the installed stack actually runs, in
+# each shape the installer's generated .env can put them in (issue #430).
+#
+# Tier 2 (installer-touching paths + nightly, ~10 minutes): a REAL install
+# on a full VM with real systemd and Docker -- `magpie-deploy.sh install
+# --from-source` -- then assertions on the resulting installation, then
+# `uninstall --purge` and a leftover check (issues #354, #433). This is
+# deliberately not on every PR: it is destructive, VM-bound and slow, and
+# nothing outside the installer/entrypoint/Caddy/compose surface can change
+# its outcome.
+#
+# Tier 3 (post-release smoke test of the PUBLISHED installer and image, the
+# --release path) is issue #571 and is not implemented here.
+
+name: Installer
+
+on:
+  pull_request:
+  push:
+    branches: [main, default]
+  schedule:
+    # Nightly, 04:30 UTC -- catches drift that no PR touched (base image
+    # updates, Docker/Caddy releases, upstream package changes).
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Tier 1 -- static, cheap, every PR.
+  static:
+    name: Tier 1 -- static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      # No apt: `apt-get update` against the runner's Azure mirrors hung for
+      # 10 minutes and burned the whole job timeout on the first run of this
+      # workflow. GitHub's ubuntu images ship shellcheck already, so use that,
+      # and fall back to the upstream static binary (a single tarball, no
+      # package manager) if a future image drops it.
+      - name: Install shellcheck
+        env:
+          SHELLCHECK_VERSION: v0.10.0
+        run: |
+          set -euo pipefail
+          if ! command -v shellcheck >/dev/null; then
+            url="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+            curl -fsSL --retry 3 "$url" | tar -xJ -C /tmp
+            sudo install -m 0755 "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          fi
+          shellcheck --version
+
+      - name: bash -n + shellcheck (all tracked shell scripts)
+        run: ./scripts/lint_shell.sh
+
+      # Runs caddy in the same image version Dockerfile.bundled pins, so
+      # this validates against the binary the install actually serves with.
+      - name: caddy validate (all Caddyfiles, all env shapes)
+        run: ./scripts/validate_caddyfiles.sh
+
+  # Tier 2 -- real install on a real VM. Gated on paths that can actually
+  # change the installed result, plus the nightly schedule and manual runs.
+  install:
+    name: Tier 2 -- real install + purge
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The installer installs THIS checkout's committed HEAD via
+          # `--source-dir` (a local `git clone`), so it needs real history,
+          # not just a detached tree.
+          fetch-depth: 0
+
+      # Path gating in a step, not `on.<event>.paths`: a path-filtered
+      # trigger reports no status at all on the PRs it skips, which can
+      # never satisfy a required check. The job therefore always runs and
+      # reports; only the expensive step is conditional. Done with plain git
+      # rather than a paths-filter action to avoid a new third-party action
+      # in a security-relevant workflow.
+      - name: Decide whether the installer surface changed
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          paths=(
+            scripts/magpie-deploy.sh
+            scripts/test_install_e2e.sh
+            scripts/lint_shell.sh
+            scripts/validate_caddyfiles.sh
+            entrypoint.sh
+            magpie-ctl-wrapper.sh
+            docker/bundled
+            Caddyfile
+            docker-compose.yml
+            Dockerfile
+            Dockerfile.bundled
+            .github/workflows/installer.yml
+          )
+          case "$EVENT_NAME" in
+            pull_request) base="$PR_BASE_SHA" ;;
+            push) base="$PUSH_BEFORE_SHA" ;;
+            *) base="" ;;
+          esac
+          # No usable base (first push to a branch, force push, a shallow
+          # fetch): run Tier 2 rather than silently skipping it.
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "no usable base commit ('${base}') -- running Tier 2"
+            echo "installer=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only "$base" HEAD -- "${paths[@]}" 'scripts/test_installer*.sh')"
+          if [[ -n "$changed" ]]; then
+            echo "installer surface changed:"
+            echo "$changed"
+            echo "installer=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "installer=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Real install, assertions, uninstall --purge
+        # Always on a schedule/manual run; on push and PR only when the
+        # installer surface changed.
+        if: >-
+          github.event_name == 'schedule' ||
+          github.event_name == 'workflow_dispatch' ||
+          steps.filter.outputs.installer == 'true'
+        # MAGPIE_E2E_FORCE is not set: a hosted runner has no pre-existing
+        # magpie installation, so the harness's refusal-to-clobber
+        # preflight should pass on its own. If it ever trips, that is worth
+        # seeing rather than overriding.
+        run: sudo ./scripts/test_install_e2e.sh
+
+      - name: Report skip
+        if: >-
+          github.event_name != 'schedule' &&
+          github.event_name != 'workflow_dispatch' &&
+          steps.filter.outputs.installer != 'true'
+        run: echo "No installer-surface changes -- Tier 2 skipped (it still runs nightly)."

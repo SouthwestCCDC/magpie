@@ -168,6 +168,35 @@ Key environment variables (see [.env.example](../.env.example) for all):
 - `MAGPIE_ALLOWED_CIDRS` - CIDR ranges allowed to bypass auth for read-only access (default: none)
 - `MAGPIE_TRUSTED_PROXIES` - IPs/CIDRs whose `X-Forwarded-For` the bundled Caddy trusts (default: none; see [Trusted Proxies](#trusted-proxies) below)
 
+### Site-specific compose settings
+
+On an install made by `magpie-deploy.sh`, put site-specific compose
+settings (service uid/gid, `cap_drop`/`cap_add`, extra environment) in
+`<install>/docker-compose.override.yml`. Every compose command the
+installer and its systemd units run uses `docker-compose.yml` plus that
+file when it exists, so creating or editing it only needs
+`systemctl restart magpie.service`. `update` never touches it. For manual
+compose commands, use `<install>/bin/magpie-compose <subcommand>`, which
+applies the same file set. A copy of the repository's development override
+is refused, not merged. The compose project name stays pinned to the
+install directory's name, so a top-level `name:` in the override is ignored.
+
+### Choosing what `update` installs
+
+`magpie-deploy.sh update` with no target moves to the latest published,
+non-prerelease GitHub release (`releases/latest`), never the default
+branch's HEAD. `update --release <tag>` moves to exactly that tag
+(prereleases too, e.g. `--release v0.2.0-rc4`). `update --branch <name>`
+tracks a branch's HEAD and is meant only for development. If the release
+lookup fails (e.g. GitHub's unauthenticated API rate limit), `update`
+stops with an error instead of falling back. To move to an older version,
+pass `--accept-downgrade`; `magpie-ctl migrate` still refuses data in a
+newer format than the target supports (see
+[Downgrading the data format](#downgrading-the-data-format) to revert it
+first). The installed release tag, commit and image are recorded in
+`<install>/etc/.env` (`MAGPIE_RELEASE_*`, `MAGPIE_IMAGE`) and shown by
+`magpie-deploy.sh status`.
+
 ## Trusted Proxies
 
 The bundled Caddy determines the client IP used by `MAGPIE_ALLOWED_CIDRS`
@@ -250,6 +279,22 @@ The data directory (`MAGPIE_DATA_DIR`) is a bind mount and is not touched
 by the container swap itself; the backup/assert/rollback envelope above
 is what makes the swap safe to run unattended.
 
+**Data-format migration happens at container start.** On every start,
+before it serves traffic, the bundled container brings `magpie.db` to the
+data format its build supports: `magpie-ctl init` on a fresh volume,
+otherwise `magpie-ctl migrate` (a quiet no-op when already current). This
+runs under the same `.magpie-init.lock` as first-boot init, so concurrent
+starts against one data directory are serialized, and each migration is
+applied in a single transaction. If migration fails, or the database is
+newer than the image supports (e.g. after rolling the image tag back),
+the container exits non-zero without serving and without modifying the
+database; run a newer image or restore a backup. Upgrading by changing
+the image tag and restarting (plain `docker compose`, Ansible) is
+therefore migrated the same way, but takes no automatic backup and has no
+automatic rollback -- [back up](backup-restore.md#backup-procedures)
+first. `update` still runs `magpie-ctl migrate` explicitly after the swap
+(by then a no-op) as part of its post-update checks.
+
 The artifact byte-identity/tag-resolution checks in step 3 reach the
 pre-update two-container install through its own `caddy` container
 (matching this project's own `--tls-mode off` real-world deployments); a
@@ -286,6 +331,42 @@ otherwise boot-loop.
 See [Trusted Proxies](#trusted-proxies) above for the (unrelated, still
 current) `MAGPIE_TRUSTED_PROXIES`/`MAGPIE_ALLOWED_CIDRS` gate that `update`
 also checks.
+
+### Downgrading the data format
+
+Container startup only ever migrates forward. To go back to an older
+image whose data format is lower, revert the data with the *newer* image
+first -- only it knows how to undo its own migration steps:
+
+The commands below use `docker compose -f docker-compose.yml` (never the
+bare form, which merges the development override). On an installer-managed
+host, run `<install>/bin/magpie-compose` in its place, and `MAGPIE_IMAGE`
+lives in `<install>/etc/.env`.
+
+1. [Back up](backup-restore.md#backup-procedures) the data directory.
+2. Find the older image's data-format version N: set `MAGPIE_IMAGE` to the
+   older image and run `docker compose -f docker-compose.yml up -d`. It
+   refuses to start against the newer data, exits without modifying
+   anything, and logs `current: N`
+   (`docker compose -f docker-compose.yml logs magpie`). Then set
+   `MAGPIE_IMAGE` back to the newer image and run `up -d` again.
+3. With the newer image running, revert to N, then immediately switch the
+   image and restart (a restart of the newer image would migrate forward
+   again):
+
+   ```bash
+   docker compose -f docker-compose.yml exec magpie magpie-ctl migrate --to N
+   # set MAGPIE_IMAGE to the older image, then:
+   docker compose -f docker-compose.yml up -d
+   ```
+
+`migrate --to N` reverts every step above N, newest first, in a single
+transaction under the same write lock as forward migration, and writes the
+new version stamp last. It changes nothing and exits non-zero if N is above
+the current version or not a version that image knows, or if a step in the
+way is marked irreversible -- in that case,
+[restore a backup](backup-restore.md#restore-procedures) taken before the
+upgrade instead. `magpie-deploy.sh update` does not do this for you.
 
 Next: [Production Checklist](production-checklist.md) → [User Guide](user-guide.md) → [Backup & Restore](backup-restore.md)
 

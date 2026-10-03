@@ -33,6 +33,11 @@ REQUESTED_RELEASE_ENV="${MAGPIE_VERSION:-${GITHUB_REF:-}}"
 
 SCRIPT_NAME="$(basename "$0")"
 GITHUB_REPO="SouthwestCCDC/magpie"
+# Where a no-flag 'update' looks up the latest published release. GitHub's
+# releases/latest endpoint only ever returns a published, non-draft,
+# non-prerelease release. Overridable for tests and for hosts that reach
+# the API through a mirror.
+LATEST_RELEASE_URL="${MAGPIE_DEPLOY_LATEST_RELEASE_URL:-https://api.github.com/repos/${GITHUB_REPO}/releases/latest}"
 DEFAULT_GITHUB_BRANCH="default"
 GITHUB_BRANCH="$DEFAULT_GITHUB_BRANCH"
 GHCR_IMAGE="ghcr.io/southwestccdc/magpie"
@@ -106,6 +111,37 @@ FOLLOW="false"
 LINES="100"
 FROM_SOURCE="false"
 REQUESTED_RELEASE=""  # from --release; empty means "use the default branch"
+# Whether REQUESTED_RELEASE came from the --release flag rather than the
+# MAGPIE_VERSION/GITHUB_REF env override, which resolve_and_validate_release()
+# also writes into REQUESTED_RELEASE. Anything that must reason about what the
+# CALLER asked for has to consult this, not REQUESTED_RELEASE alone.
+RELEASE_FROM_CLI="false"
+# update: --branch NAME tracks a branch's HEAD instead of a release tag
+# (explicit opt-in only), and --accept-downgrade allows moving to an older
+# version. Set by resolve_update_target(): the ref 'update' moves to.
+UPDATE_BRANCH=""
+ACCEPT_DOWNGRADE="false"
+UPDATE_TARGET_KIND=""    # tag | branch
+UPDATE_TARGET_REF=""
+UPDATE_TARGET_COMMIT=""
+# --source-dir: install from an existing local git checkout instead of
+# cloning ${GITHUB_REPO} from github.com. Empty means "clone from GitHub"
+# (the operator path). This exists so the installer CI (issue #354) can
+# install the code under test -- a PR's own tree, including changes to
+# Dockerfile.bundled, entrypoint.sh, and docker/bundled/Caddyfile -- which
+# a GitHub clone of the default branch would never see. Requires
+# --from-source: a local tree implies building the image from it rather
+# than pulling a published one. See clone_repo().
+SOURCE_DIR=""
+# --allow-unsupported-os: downgrade check_os()'s hard failure to a warning.
+# The supported platform is unchanged (Debian 12/13 -- see check_os()); this
+# only exists so the installer can be exercised on a Debian-derived CI
+# runner. GitHub-hosted `ubuntu-latest` runners are the only environment
+# offering a full VM with real systemd + Docker for the installer E2E
+# (issue #354), and every other prerequisite the installer relies on (apt,
+# systemd units, docker compose v2) holds there. Never document this for
+# operators.
+ALLOW_UNSUPPORTED_OS="false"
 # --accept-empty-trusted-proxies: acknowledges that an empty
 # MAGPIE_TRUSTED_PROXIES is intentional (magpie is directly exposed), so
 # the issue #579 gate proceeds instead of prompting/dying. See
@@ -127,6 +163,10 @@ BACKUP_ARTIFACTS="link"  # link|copy|skip -- see backup_data()
 # reads as the safe, hands-off choice: rollback on a failed update is ON
 # unless explicitly disabled.
 NO_ROLLBACK="false"
+# Set by resolve_compose_file_args().
+COMPOSE_FILE_ARGS=()
+COMPOSE_PROJECT=""
+
 # Populated by compute_backup_dir()/capture_prior_state()/backup_data() and
 # consumed by rollback_to_prior()/prune_old_backups(). Declared here (not
 # just implicitly created by first assignment) so every function that
@@ -281,12 +321,21 @@ check_os() {
     # shellcheck source=/dev/null
     source /etc/os-release
 
+    # One helper for both checks so --allow-unsupported-os cannot
+    # accidentally apply to only one of them.
+    local os_error=""
     if [[ "${ID:-}" != "debian" ]]; then
-        die "This script requires Debian (found: ${ID:-unknown})"
+        os_error="This script requires Debian (found: ${ID:-unknown})"
+    elif [[ ! "${VERSION_ID:-}" =~ ^(12|13)$ ]]; then
+        os_error="This script requires Debian 12 or 13 (found: ${VERSION_ID:-unknown})"
     fi
 
-    if [[ ! "${VERSION_ID:-}" =~ ^(12|13)$ ]]; then
-        die "This script requires Debian 12 or 13 (found: ${VERSION_ID:-unknown})"
+    if [[ -n "$os_error" ]]; then
+        if [[ "$ALLOW_UNSUPPORTED_OS" != "true" ]]; then
+            die "$os_error"
+        fi
+        log_warn "${os_error} -- continuing anyway because --allow-unsupported-os was given. This configuration is not supported."
+        return 0
     fi
 
     log "Detected Debian ${VERSION_ID}"
@@ -543,6 +592,35 @@ validate_config() {
     fi
     if [[ -d "$parent_dir" ]] && [[ ! -w "$parent_dir" ]]; then
         errors+=("Data directory path is not writable: $parent_dir")
+    fi
+
+    # --source-dir must name an existing local git checkout, and only makes
+    # sense together with --from-source (see SOURCE_DIR's declaration).
+    if [[ -n "$SOURCE_DIR" ]]; then
+        if [[ ! "$SOURCE_DIR" =~ ^/ ]]; then
+            errors+=("Source directory must be an absolute path: $SOURCE_DIR")
+        else
+            validate_path_value "$SOURCE_DIR" "Source directory"
+        fi
+        # Ask git rather than testing for a .git DIRECTORY: in a linked worktree
+        # (or a 'clone --separate-git-dir') .git is a file pointing elsewhere,
+        # and the 'git clone --no-hardlinks' in clone_repo() handles those fine.
+        if ! git -C "$SOURCE_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+            errors+=("Source directory is not a git checkout: $SOURCE_DIR")
+        fi
+        if [[ ! -f "$SOURCE_DIR/pyproject.toml" ]] || [[ ! -f "$SOURCE_DIR/docker-compose.yml" ]]; then
+            errors+=("Source directory does not look like a magpie checkout (missing pyproject.toml or docker-compose.yml): $SOURCE_DIR")
+        fi
+        if [[ "$FROM_SOURCE" != "true" ]]; then
+            errors+=("--source-dir requires --from-source")
+        fi
+        # RELEASE_FROM_CLI, not REQUESTED_RELEASE: the latter also holds the
+        # MAGPIE_VERSION/GITHUB_REF env override by this point (validate_config
+        # runs after resolve_and_validate_release), and blaming a flag the
+        # caller never passed for an inherited env var would be a lie.
+        if [[ "$RELEASE_FROM_CLI" == "true" ]]; then
+            errors+=("--source-dir cannot be combined with --release (the local checkout's HEAD is the release)")
+        fi
     fi
 
     if [[ ${#errors[@]} -gt 0 ]]; then
@@ -845,6 +923,90 @@ MAGPIE_TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
 EOF
 }
 
+# Sets COMPOSE_FILE_ARGS to the compose file set every docker compose
+# invocation for this install uses -- the installer's own calls (via
+# magpie_compose()) and the generated units (via the
+# ${INSTALL_DIR}/bin/magpie-compose wrapper, which embeds this exact
+# function; see generate_compose_wrapper()):
+#
+#   -f ${INSTALL_DIR}/docker-compose.yml                 (canonical, always)
+#   -f ${INSTALL_DIR}/docker-compose.override.yml        (site override, if present)
+#   --env-file ${INSTALL_DIR}/etc/.env
+#
+# The site override is the supported extension point for site-specific
+# compose settings (uid/gid, capabilities, extra env); it is resolved on
+# every call, so one created after install applies on the next restart.
+# The canonical file stays explicitly pinned (no bare auto-discovery), so
+# nothing else in INSTALL_DIR -- e.g. a compose.yaml, which compose's
+# auto-discovery would prefer -- is ever picked up. The repository
+# checkout's own docker-compose.override.yml (${INSTALL_DIR}/repo/..., the
+# dev-only from-source overlay) is never copied here; as defense in depth,
+# a site override that is byte-identical to it is refused rather than
+# merged. A dangling symlink is passed through so compose fails loudly
+# instead of the override being silently skipped.
+#
+# The project name is pinned with -p to what compose derives from the
+# canonical file alone (INSTALL_DIR's basename, normalized the way compose
+# normalizes it), so a top-level `name:` in a site override can never move
+# the stack to a different project between a unit's start and stop, and
+# installs whose containers predate this pinning keep their project.
+resolve_compose_file_args() {
+    local site_override="${INSTALL_DIR}/docker-compose.override.yml"
+    local dev_override="${INSTALL_DIR}/repo/docker-compose.override.yml"
+    local project="${INSTALL_DIR%/}"
+    project="${project##*/}"
+    project="${project,,}"
+    project="${project//[^a-z0-9_-]/}"
+    project="${project#"${project%%[!_-]*}"}"
+    COMPOSE_PROJECT="$project"
+    COMPOSE_FILE_ARGS=(-p "$project" -f "${INSTALL_DIR}/docker-compose.yml")
+    if [[ -e "$site_override" || -L "$site_override" ]]; then
+        if [[ -f "$dev_override" ]] && cmp -s "$site_override" "$dev_override"; then
+            echo "magpie: refusing to merge ${site_override}: it is a copy of the repository's development-only override (${dev_override}), which must never run in a real deployment. Remove it, or replace it with your site-specific settings." >&2
+            return 1
+        fi
+        COMPOSE_FILE_ARGS+=(-f "$site_override")
+    fi
+    COMPOSE_FILE_ARGS+=(--env-file "${INSTALL_DIR}/etc/.env")
+}
+
+# docker compose against this install's file set (see
+# resolve_compose_file_args()). Returns non-zero, without running compose,
+# if the file set is refused.
+magpie_compose() {
+    resolve_compose_file_args || return 1
+    docker compose "${COMPOSE_FILE_ARGS[@]}" "$@"
+}
+
+# Writes ${INSTALL_DIR}/bin/magpie-compose: a standalone wrapper that
+# resolves the file set at run time with the same
+# resolve_compose_file_args() the installer uses (embedded via declare -f,
+# so the two cannot drift) and execs docker compose. The generated units
+# call it, which is what makes a site override created after install take
+# effect on the next restart without regenerating anything. Operators can
+# use it for manual compose commands too. Written to a temp file and
+# renamed so a running unit never sees a half-written script.
+generate_compose_wrapper() {
+    local wrapper="${INSTALL_DIR}/bin/magpie-compose"
+    log "Generating compose wrapper (${wrapper})..."
+    mkdir -p "${INSTALL_DIR}/bin"
+    {
+        echo '#!/bin/bash'
+        echo "# Generated by magpie-deploy.sh v${MAGPIE_VERSION}; regenerated by install/update -- do not edit."
+        echo "# Runs docker compose against this install's file set: the canonical"
+        echo "# docker-compose.yml, plus docker-compose.override.yml (site-specific"
+        echo "# settings) when it exists, with --env-file etc/.env."
+        echo "# Usage: $wrapper <compose subcommand> [args...]"
+        echo 'set -euo pipefail'
+        printf 'INSTALL_DIR=%q\n' "$INSTALL_DIR"
+        declare -f resolve_compose_file_args
+        echo 'resolve_compose_file_args || exit 1'
+        echo 'exec /usr/bin/docker compose "${COMPOSE_FILE_ARGS[@]}" "$@"'
+    } > "${wrapper}.tmp"
+    chmod 0755 "${wrapper}.tmp"
+    mv -f "${wrapper}.tmp" "$wrapper"
+}
+
 generate_systemd_service() {
     log "Generating systemd service unit..."
 
@@ -864,16 +1026,19 @@ Type=simple
 WorkingDirectory=${INSTALL_DIR}
 EnvironmentFile=${INSTALL_DIR}/etc/.env
 
-# -f pins the canonical operator file explicitly -- docker-compose.override.yml
-# (the dev-only from-source build overlay) is never copied into INSTALL_DIR
-# by clone_repo()/cmd_update(), but pinning here is belt-and-suspenders
-# against a bare `docker compose` auto-merging one if it ever showed up.
-ExecStart=/usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env up --no-build
+# magpie-compose runs docker compose with the canonical docker-compose.yml
+# pinned, plus ${INSTALL_DIR}/docker-compose.override.yml (the site-specific
+# extension point) when it exists at the time this starts -- so an override
+# written after install applies on the next restart. The repository's
+# dev-only override is never merged. See resolve_compose_file_args() in
+# magpie-deploy.sh. (Quoted, not backticked: this heredoc is UNQUOTED, so
+# backticks in it are command substitutions -- even inside a comment.)
+ExecStart=${INSTALL_DIR}/bin/magpie-compose up --no-build
 # --remove-orphans: on a 2->1 topology swap (a v0.1.x install's leftover
 # 'caddy' container), the old sidecar has no matching service in the
 # current docker-compose.yml and would otherwise be left running,
 # orphaned, after this stops the 'magpie' service. See issue #232.
-ExecStop=/usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env down --remove-orphans
+ExecStop=${INSTALL_DIR}/bin/magpie-compose down --remove-orphans
 
 Restart=always
 RestartSec=10
@@ -897,7 +1062,7 @@ generate_gc_units() {
 [Unit]
 Description=Magpie Garbage Collection
 Documentation=https://github.com/${GITHUB_REPO}
-After=network.target docker.service
+After=network.target docker.service magpie.service
 Requires=docker.service
 
 [Service]
@@ -907,7 +1072,48 @@ WorkingDirectory=${INSTALL_DIR}
 # Use flock to prevent concurrent runs. If GC is already running, flock exits
 # immediately. Unlike ConditionPathExists, flock automatically handles stale
 # lock files from crashed processes.
-ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env run --rm -T magpie magpie-ctl gc --quiet
+#
+# 'exec -T', not 'run --rm -T' (quoted, not backticked: this heredoc is
+# UNQUOTED, so backticks in it are command substitutions -- even inside a
+# comment): the bundled image's ENTRYPOINT (docker/bundled/wrapper.sh) is
+# a process supervisor that ignores its arguments and always starts
+# uvicorn+caddy, so 'run magpie magpie-ctl gc' would boot a SECOND
+# server that never exits -- GC would never run and
+# this oneshot would block until TimeoutStartSec. Running it inside the
+# live container is also the documented ctl path for this image (see
+# magpie-ctl-wrapper.sh, which resolves the runtime uid from
+# /run/magpie-user) and the same thing compose_exec() does elsewhere in
+# this script. It requires magpie.service to be up, hence the After=
+# above; if it is not, this unit fails loudly instead of silently doing
+# nothing.
+#
+# After= only orders unit START, and magpie.service is Type=simple running
+# 'docker compose up', so it counts as started long before the container is
+# serving. With the timer's Persistent=true, a missed run is replayed at
+# boot, where the exec below would otherwise race the container coming up.
+# So wait (bounded) for the container to report healthy first -- the image's
+# HEALTHCHECK covers uvicorn answering /health, which implies the DB init in
+# the entrypoint finished. 5 minutes, then fail loudly rather than hang
+# until TimeoutStartSec; the next scheduled run recovers on its own since GC
+# is retention-based, not incremental.
+#
+# 'docker inspect' rather than 'compose ps --format <go-template>': the
+# template form of 'ps' needs a recent Compose v2 (check_prerequisites only
+# asserts that 'docker compose version' works), and an image with no
+# HEALTHCHECK reports an empty .State.Health, which is distinguishable here
+# but not through 'ps'. So that case exits nonzero at once with a real
+# message rather than burning the whole 300s bound waiting for a status that
+# can never arrive. No container yet (empty 'ps -q') keeps waiting:
+# magpie.service may still be creating it.
+#
+# The is-active check up front is what separates "coming up" from
+# "deliberately stopped": during planned downtime the container never
+# appears, and without it every timer firing would sit here for the full
+# 300s and then report a bare exit 124. Ordering means magpie.service has
+# already been started when this runs, so 'not active' is a real answer, not
+# a race.
+ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'if ! /usr/bin/systemctl is-active --quiet magpie.service; then echo "magpie.service is not active; not running GC (start it to resume scheduled GC)" >&2; exit 1; fi; while :; do if ! cid=\$(${INSTALL_DIR}/bin/magpie-compose ps -q magpie); then echo "magpie-compose ps failed (see above); not running GC" >&2; exit 1; fi; if [ -n "\$cid" ]; then state=\$(/usr/bin/docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}" "\$cid" 2>/dev/null); case "\$state" in healthy) exit 0 ;; nohealthcheck) echo "magpie container has no HEALTHCHECK; cannot confirm readiness before GC" >&2; exit 1 ;; esac; fi; sleep 5; done'
+ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock ${INSTALL_DIR}/bin/magpie-compose exec -T magpie magpie-ctl gc --quiet
 
 StandardOutput=journal
 StandardError=journal
@@ -1083,8 +1289,20 @@ resolve_and_validate_release() {
     # / GITHUB_REF env override (captured at script start, before the
     # Constants section repurposed the MAGPIE_VERSION name) > the default
     # branch. See issue #559.
-    local from_cli="true"
+    local from_cli="$RELEASE_FROM_CLI"
     if [[ -z "$REQUESTED_RELEASE" ]]; then
+        # --source-dir already names the tree to install, so an inherited
+        # MAGPIE_VERSION/GITHUB_REF (routinely set in CI shells) must not
+        # silently become a release request -- it would fail the
+        # --source-dir/--release conflict check and pay for a remote
+        # ls-remote verification of a ref that is never cloned. An explicit
+        # --release with --source-dir is still rejected by validate_config().
+        if [[ -n "$SOURCE_DIR" ]]; then
+            if [[ -n "$REQUESTED_RELEASE_ENV" ]]; then
+                log_warn "Ignoring release env override '${REQUESTED_RELEASE_ENV}' (MAGPIE_VERSION/GITHUB_REF): --source-dir installs the local checkout's HEAD"
+            fi
+            return 0
+        fi
         REQUESTED_RELEASE="$REQUESTED_RELEASE_ENV"
         from_cli="false"
     fi
@@ -1165,9 +1383,221 @@ resolve_and_validate_release() {
     check_requested_image_exists
 }
 
-update_repo_to_latest() {
-    # Update repository to latest code from remote branch
-    # Expects repo to already exist at ${INSTALL_DIR}/repo
+# Prints the tag of the latest published non-prerelease release
+# (LATEST_RELEASE_URL). Any failure -- unreachable API, rate limit, no
+# release, a prerelease/draft answer, an unparsable tag -- is fatal with a
+# message saying how to pick a target explicitly; there is deliberately no
+# fallback to a branch. Run in a command substitution: die() only exits
+# that subshell, so callers must propagate the failure.
+resolve_latest_release_tag() {
+    local response http_code body tag curl_rc=0
+    response="$(curl -sS -L --max-time 30 \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'X-GitHub-Api-Version: 2022-11-28' \
+        -w '\n%{http_code}' "$LATEST_RELEASE_URL" 2>/dev/null)" || curl_rc=$?
+    http_code="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    local how="Not falling back to a branch. Re-run with '--release <tag>' to pick a release explicitly (or '--branch <name>' to deliberately track a branch's HEAD)."
+    case "$http_code" in
+        200)
+            if (( curl_rc != 0 )); then
+                die "Could not resolve the latest magpie release: the response from ${LATEST_RELEASE_URL} was incomplete (curl exit ${curl_rc}). ${how}"
+            fi
+            ;;
+        403|429)
+            die "Could not resolve the latest magpie release: ${LATEST_RELEASE_URL} returned HTTP ${http_code} -- most likely GitHub's API rate limit for unauthenticated requests (60/hour per IP). ${how}" ;;
+        404)
+            die "Could not resolve the latest magpie release: ${LATEST_RELEASE_URL} returned HTTP 404 (no published release). ${how}" ;;
+        000|"")
+            die "Could not resolve the latest magpie release: ${LATEST_RELEASE_URL} was unreachable (curl exit ${curl_rc}). ${how}" ;;
+        *)
+            die "Could not resolve the latest magpie release: ${LATEST_RELEASE_URL} returned HTTP ${http_code}. ${how}" ;;
+    esac
+    if grep -qE '"(prerelease|draft)"[[:space:]]*:[[:space:]]*true' <<< "$body"; then
+        die "Could not resolve the latest magpie release: ${LATEST_RELEASE_URL} answered with a prerelease or draft. ${how}"
+    fi
+    tag="$(sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' <<< "$body" | head -n1)"
+    if [[ -z "$tag" ]] || ! is_valid_git_ref "$tag"; then
+        die "Could not resolve the latest magpie release: no usable tag_name in the response from ${LATEST_RELEASE_URL}. ${how}"
+    fi
+    printf '%s\n' "$tag"
+}
+
+# Prints a version as five sortable integers (major minor patch pre-rank
+# pre-number) for compare_versions(). Accepts what pyproject.toml/tags use:
+# 0.2.0, v0.2.0, 0.2.0-rc3, 0.2.0rc3, 0.2.0.dev1, 0.2.0b1. Returns 1 for
+# anything else.
+version_sort_key() {
+    local v="${1#v}" pre rank num
+    [[ "$v" =~ ^([0-9]+)(\.([0-9]+))?(\.([0-9]+))?[-._]?(.*)$ ]] || return 1
+    local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[3]:-0}" patch="${BASH_REMATCH[5]:-0}"
+    pre="${BASH_REMATCH[6],,}"
+    if [[ -z "$pre" ]]; then
+        rank=9; num=0
+    elif [[ "$pre" =~ ^(dev|a|alpha|b|beta|c|rc|pre|preview)[-._]?([0-9]*)$ ]]; then
+        case "${BASH_REMATCH[1]}" in
+            dev) rank=0 ;;
+            a|alpha) rank=1 ;;
+            b|beta) rank=2 ;;
+            *) rank=3 ;;
+        esac
+        num="${BASH_REMATCH[2]:-0}"
+    else
+        return 1
+    fi
+    echo "$((10#$major)) $((10#$minor)) $((10#$patch)) ${rank} $((10#$num))"
+}
+
+# Prints -1, 0 or 1 as version A is older than, equal to or newer than B.
+# Returns 1 (printing nothing) if either can't be parsed.
+compare_versions() {
+    local key_a key_b i
+    key_a="$(version_sort_key "$1")" || return 1
+    key_b="$(version_sort_key "$2")" || return 1
+    local -a a b
+    read -r -a a <<< "$key_a"
+    read -r -a b <<< "$key_b"
+    for i in 0 1 2 3 4; do
+        if (( a[i] < b[i] )); then echo "-1"; return 0; fi
+        if (( a[i] > b[i] )); then echo "1"; return 0; fi
+    done
+    echo "0"
+}
+
+# Decides what 'update' moves to, fetches it into ${INSTALL_DIR}/repo
+# without touching the checkout, and sets UPDATE_TARGET_KIND/REF/COMMIT:
+#   --branch NAME   -> that branch's current HEAD (explicit opt-in only)
+#   --release TAG   -> exactly that tag (prereleases allowed)
+#   (neither)       -> the latest published non-prerelease release
+# The env override install honors (MAGPIE_VERSION/GITHUB_REF) is ignored
+# here: an inherited CI variable must not silently pick the target.
+resolve_update_target() {
+    local repo="${INSTALL_DIR}/repo"
+    if [[ -n "$UPDATE_BRANCH" ]]; then
+        if ! is_valid_git_ref "$UPDATE_BRANCH"; then
+            die "Invalid --branch value '${UPDATE_BRANCH}'"
+        fi
+        GITHUB_BRANCH="$UPDATE_BRANCH"
+        log_warn "Tracking branch '${UPDATE_BRANCH}' (--branch): this deploys whatever its HEAD is right now, including unreleased commits."
+        fetch_branch_head
+        UPDATE_TARGET_KIND="branch"
+        UPDATE_TARGET_REF="$UPDATE_BRANCH"
+        UPDATE_TARGET_COMMIT="$(git -C "$repo" rev-parse --verify "refs/remotes/origin/${UPDATE_BRANCH}^{commit}")" \
+            || die "Failed to resolve origin/${UPDATE_BRANCH} after fetching it"
+        return 0
+    fi
+
+    local tag
+    if [[ -n "$REQUESTED_RELEASE" ]]; then
+        tag="${REQUESTED_RELEASE#refs/tags/}"
+        if [[ "$tag" == refs/* ]]; then
+            die "--release takes a release tag such as v0.2.0 (got '${REQUESTED_RELEASE}'); use --branch <name> to track a branch"
+        fi
+        if ! is_valid_git_ref "$tag"; then
+            die "Invalid --release value '${REQUESTED_RELEASE}'"
+        fi
+        log "Target: release ${tag} (--release)"
+    else
+        log "Resolving the latest published magpie release (${LATEST_RELEASE_URL})..."
+        tag="$(resolve_latest_release_tag)" || exit 1
+        log "Target: latest published release ${tag}"
+    fi
+
+    local ls_err ls_rc=0
+    ls_err="$(git -C "$repo" ls-remote --exit-code --tags origin "refs/tags/${tag}" 2>&1 >/dev/null)" || ls_rc=$?
+    if (( ls_rc == 2 )); then
+        die "Release tag '${tag}' does not exist in $(git -C "$repo" remote get-url origin 2>/dev/null || echo origin)"
+    elif (( ls_rc != 0 )); then
+        die "Could not look up release tag '${tag}' in the repository's origin: ${ls_err}"
+    fi
+    # Explicit refspec: a tag-only shallow clone (install --release) scopes
+    # remote.origin.fetch to its own tag, which this does not depend on.
+    if ! git -C "$repo" fetch --depth 1 --no-tags origin "+refs/tags/${tag}:refs/tags/${tag}"; then
+        die "Failed to fetch release tag ${tag}"
+    fi
+    UPDATE_TARGET_KIND="tag"
+    UPDATE_TARGET_REF="$tag"
+    UPDATE_TARGET_COMMIT="$(git -C "$repo" rev-parse --verify "refs/tags/${tag}^{commit}")" \
+        || die "Failed to resolve release tag ${tag} to a commit"
+}
+
+# Reads the target's version (MAGPIE_VERSION), refuses a downgrade from the
+# running version unless --accept-downgrade, and -- for a registry install
+# -- refuses a target whose bundled image is confirmed missing, all before
+# the update stops anything. magpie-ctl migrate's data-format check still
+# runs after the swap (and fails the update into a rollback) whatever is
+# decided here; this check is about versions, that one about data.
+check_update_target() {
+    local repo="${INSTALL_DIR}/repo" installed_version=""
+    if [[ -n "$PRIOR_GIT_REF" ]]; then
+        installed_version="$(git -C "$repo" show "${PRIOR_GIT_REF}:pyproject.toml" 2>/dev/null | extract_pyproject_version || true)"
+    fi
+    MAGPIE_VERSION="$(git -C "$repo" show "${UPDATE_TARGET_COMMIT}:pyproject.toml" | extract_pyproject_version)" || MAGPIE_VERSION=""
+    if [[ -z "$MAGPIE_VERSION" ]]; then
+        die "Failed to read the version from pyproject.toml at ${UPDATE_TARGET_KIND} ${UPDATE_TARGET_REF} (${UPDATE_TARGET_COMMIT})"
+    fi
+    log "Target version: ${MAGPIE_VERSION} (${UPDATE_TARGET_KIND} ${UPDATE_TARGET_REF}, commit ${UPDATE_TARGET_COMMIT})"
+    if [[ "$UPDATE_TARGET_KIND" == "tag" && "${UPDATE_TARGET_REF#v}" != "$MAGPIE_VERSION" ]]; then
+        log_warn "Release tag ${UPDATE_TARGET_REF} carries version ${MAGPIE_VERSION} in pyproject.toml; the image is chosen by that version."
+    fi
+
+    local cmp=""
+    if [[ -z "$installed_version" ]]; then
+        log_warn "Could not determine the installed version; skipping the downgrade check."
+    elif ! cmp="$(compare_versions "$MAGPIE_VERSION" "$installed_version")"; then
+        log_warn "Cannot compare versions '${installed_version}' and '${MAGPIE_VERSION}'; skipping the downgrade check."
+    elif [[ "$cmp" == "-1" ]]; then
+        if [[ "$ACCEPT_DOWNGRADE" != "true" ]]; then
+            die "Refusing to downgrade from ${installed_version} to ${MAGPIE_VERSION} (${UPDATE_TARGET_KIND} ${UPDATE_TARGET_REF}). Re-run with --accept-downgrade to do it anyway; magpie-ctl migrate still refuses to run against data in a newer format than the target supports, and the update then rolls back."
+        fi
+        log_warn "=================================================================="
+        log_warn "DOWNGRADING magpie from ${installed_version} to ${MAGPIE_VERSION} (--accept-downgrade)."
+        log_warn "=================================================================="
+    fi
+
+    if [[ "$FROM_SOURCE" != "true" ]]; then
+        local image_tag="${GHCR_IMAGE}:${MAGPIE_VERSION}-bundled" rc=0
+        ghcr_image_exists "$image_tag" || rc=$?
+        if (( rc == 1 )); then
+            die "No published image for version ${MAGPIE_VERSION}: ${image_tag} does not exist on ghcr.io (confirmed absent). Refusing to update."
+        elif (( rc != 0 )); then
+            log_warn "Could not confirm image ${image_tag} exists (registry check was inconclusive); 'docker pull' will fail the update into a rollback if it's missing."
+        fi
+    fi
+}
+
+# Records what this install runs in its .env: MAGPIE_RELEASE_TAG (the
+# release tag, empty when not installed from one), MAGPIE_RELEASE_BRANCH
+# (the tracked branch, empty unless installed from a branch) and
+# MAGPIE_RELEASE_COMMIT. MAGPIE_IMAGE, the third part of that state, is
+# written alongside by the callers. Lives in .env so update's rollback,
+# which restores .env, restores it with everything else.
+record_release_state() {
+    local env_file="$1" tag="$2" branch="$3" commit="$4"
+    upsert_env_key "$env_file" "MAGPIE_RELEASE_TAG" "$tag"
+    upsert_env_key "$env_file" "MAGPIE_RELEASE_BRANCH" "$branch"
+    upsert_env_key "$env_file" "MAGPIE_RELEASE_COMMIT" "$commit"
+}
+
+# install's half of record_release_state(): a --source-dir checkout is
+# neither a release nor a branch of the repo; otherwise GITHUB_BRANCH is
+# whatever was cloned, a tag (--release) or a branch.
+record_install_release_state() {
+    local repo="${INSTALL_DIR}/repo" commit tag="" branch=""
+    commit="$(git -C "$repo" rev-parse HEAD)" || die "Failed to read the installed commit"
+    if [[ -z "$SOURCE_DIR" ]]; then
+        if git -C "$repo" show-ref --verify --quiet "refs/tags/${GITHUB_BRANCH}"; then
+            tag="$GITHUB_BRANCH"
+        else
+            branch="$GITHUB_BRANCH"
+        fi
+    fi
+    record_release_state "${INSTALL_DIR}/etc/.env" "$tag" "$branch" "$commit"
+}
+
+# Fetches origin/$GITHUB_BRANCH's HEAD into ${INSTALL_DIR}/repo without
+# moving the checkout.
+fetch_branch_head() {
 
     # `install --release <tag>` clones with `--depth 1 --branch <tag>`. When
     # <tag> is an actual tag (not a branch), git's implied --single-branch
@@ -1185,23 +1615,44 @@ update_repo_to_latest() {
     if ! git -C "${INSTALL_DIR}/repo" fetch --depth 1 origin "$GITHUB_BRANCH"; then
         die "Failed to fetch latest repository code"
     fi
+}
+
+update_repo_to_latest() {
+    # Update repository to latest code from remote branch
+    # Expects repo to already exist at ${INSTALL_DIR}/repo
+    fetch_branch_head
     if ! git -C "${INSTALL_DIR}/repo" reset --hard "origin/$GITHUB_BRANCH"; then
         die "Failed to reset repository to latest code"
     fi
 }
 
 clone_repo() {
-    log "Cloning magpie repository..."
-
-    local repo_url="https://github.com/${GITHUB_REPO}.git"
     local repo_dir="${INSTALL_DIR}/repo"
 
     # Remove existing repo if present
     rm -rf "$repo_dir"
 
-    # Shallow clone for speed
-    if ! git clone --depth 1 --branch "$GITHUB_BRANCH" "$repo_url" "$repo_dir"; then
-        die "Failed to clone repository from $repo_url"
+    if [[ -n "$SOURCE_DIR" ]]; then
+        # --source-dir: clone the local checkout's HEAD instead of fetching
+        # from github.com, so what gets installed is exactly the tree under
+        # test. Still a `git clone` (not a `cp -a`) so INSTALL_DIR/repo
+        # remains a real repository -- detect_version(), cmd_update()'s
+        # PRIOR_GIT_REF capture, and the rollback path all run git against
+        # it. --no-hardlinks keeps the installed copy independent of the
+        # source checkout's object store. Note this installs *committed*
+        # HEAD; uncommitted working-tree edits are not included.
+        log "Cloning magpie repository from local checkout: ${SOURCE_DIR}"
+        if ! git clone --no-hardlinks "$SOURCE_DIR" "$repo_dir"; then
+            die "Failed to clone repository from local checkout $SOURCE_DIR"
+        fi
+    else
+        log "Cloning magpie repository..."
+        local repo_url="https://github.com/${GITHUB_REPO}.git"
+
+        # Shallow clone for speed
+        if ! git clone --depth 1 --branch "$GITHUB_BRANCH" "$repo_url" "$repo_dir"; then
+            die "Failed to clone repository from $repo_url"
+        fi
     fi
 
     # Copy only the canonical operator compose file. docker-compose.override.yml
@@ -1368,7 +1819,7 @@ pull_or_build_image() {
 
 pull_images() {
     log "Pulling Docker images..."
-    docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" pull
+    magpie_compose pull
 }
 
 start_services() {
@@ -1472,7 +1923,7 @@ run_init() {
         # printing to this interactive install session, not the automatic
         # first-boot init that runs as the container's PID 1 (which is the
         # actual leak vector #387 addresses; see docs/installation.md).
-        if output=$(docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" exec -T -e MAGPIE_ADMIN_TOKEN_SINK=stdout magpie magpie-ctl init 2>&1); then
+        if output=$(magpie_compose exec -T -e MAGPIE_ADMIN_TOKEN_SINK=stdout magpie magpie-ctl init 2>&1); then
             init_success=true
             break
         fi
@@ -1531,7 +1982,7 @@ run_init() {
         log "Database already initialized; admin token was delivered on first boot."
         log "Default sink is 'file': sudo cat ${DATA_DIR}/admin-token"
         log "To mint an additional admin-scope token instead:"
-        log "  docker compose -f ${INSTALL_DIR}/docker-compose.yml --env-file ${INSTALL_DIR}/etc/.env exec magpie magpie-ctl token create --name ops-admin --scope admin"
+        log "  ${INSTALL_DIR}/bin/magpie-compose exec magpie magpie-ctl token create --name ops-admin --scope admin"
     fi
 }
 
@@ -1562,7 +2013,7 @@ run_init() {
 # config the operator chose. Extra arguments (e.g. `-e KEY=value`) are
 # inserted between `exec -T` and the service name.
 compose_exec() {
-    docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" exec -T "$@"
+    magpie_compose exec -T "$@"
 }
 
 # Resolves MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH (an in-container path, always
@@ -1603,7 +2054,7 @@ resolve_admin_token_host_path() {
 # truth to decide how to actually reach the app) so the one docker-compose
 # invocation and service-name assumption can't drift between the two.
 has_running_caddy_sidecar() {
-    docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps --services 2>/dev/null | grep -qx 'caddy'
+    magpie_compose ps --services 2>/dev/null | grep -qx 'caddy'
 }
 
 # Sets IS_CROSS_020: whether this update is crossing the pre-0.2.0
@@ -1908,6 +2359,11 @@ capture_prior_state() {
             die "Failed to snapshot the ${unit} systemd unit for rollback -- refusing to proceed with 'update' without it."
         fi
     done
+    # The units call this wrapper (see generate_compose_wrapper()); restored
+    # alongside them so a rolled-back unit runs the wrapper it shipped with.
+    if [[ -f "${INSTALL_DIR}/bin/magpie-compose" ]] && ! cp -p "${INSTALL_DIR}/bin/magpie-compose" "${BACKUP_DIR}/rollback/magpie-compose"; then
+        die "Failed to snapshot ${INSTALL_DIR}/bin/magpie-compose for rollback -- refusing to proceed with 'update' without it."
+    fi
 
     local -A prior_env=()
     read_env_file "${INSTALL_DIR}/etc/.env" prior_env
@@ -2139,6 +2595,7 @@ backup_data() {
 source_image=${PRIOR_MAGPIE_IMAGE}
 source_git_ref=${PRIOR_GIT_REF}
 target_version=${MAGPIE_VERSION}
+target_ref=${UPDATE_TARGET_KIND}:${UPDATE_TARGET_REF}@${UPDATE_TARGET_COMMIT}
 cross_020_upgrade=${IS_CROSS_020}
 backup_artifacts_mode=${artifacts_mode}
 db_sha256=${db_sha256}
@@ -2366,6 +2823,10 @@ rollback_to_prior() {
         fi
     done
 
+    if [[ -z "$restore_failure" && -f "${BACKUP_DIR}/rollback/magpie-compose" ]]; then
+        cp -p "${BACKUP_DIR}/rollback/magpie-compose" "${INSTALL_DIR}/bin/magpie-compose" \
+            || restore_failure="restoring bin/magpie-compose"
+    fi
     if [[ -z "$restore_failure" && -f "${BACKUP_DIR}/rollback/docker-compose.yml" ]]; then
         cp "${BACKUP_DIR}/rollback/docker-compose.yml" "${INSTALL_DIR}/docker-compose.yml" \
             || restore_failure="restoring docker-compose.yml"
@@ -2642,6 +3103,8 @@ cmd_install() {
 
     # Generate configuration files
     generate_env_file
+    record_install_release_state
+    generate_compose_wrapper
     generate_systemd_service
     generate_gc_units
 
@@ -2881,23 +3344,19 @@ cmd_update() {
         die "Repository directory not found at ${INSTALL_DIR}/repo\nThe installation may be corrupted. Try reinstalling with 'install --force'."
     fi
 
-    # Captured before update_repo_to_latest() below moves the repo
+    # Captured before anything below moves the repo
     # checkout's HEAD -- rollback_to_prior() needs the ref this install was
     # actually running from, not wherever the failed update's fetch left
     # the working tree.
     PRIOR_GIT_REF="$(git -C "${INSTALL_DIR}/repo" rev-parse HEAD 2>/dev/null || echo "")"
 
-    # Pull latest repo code to detect current version
-    log "Pulling latest repository code to detect version..."
-    update_repo_to_latest
-
-    # Detect version from updated repo
-    detect_version
+    resolve_update_target
+    check_update_target
 
     # Update safety envelope (issue #561): capture everything needed to
     # roll back, then back up the data directory, BEFORE any of the swap
-    # below runs. compute_backup_dir() needs MAGPIE_VERSION (just detected
-    # above); capture_prior_state() reads the CURRENT (still pre-swap)
+    # below runs. compute_backup_dir() needs MAGPIE_VERSION (just read from
+    # the target above); capture_prior_state() reads the CURRENT (still pre-swap)
     # .env/docker-compose.yml/systemd units and probes the still-running
     # prior container. backup_data() then stops that stack (checkpointing
     # its WAL) and snapshots the data directory -- the prior install is
@@ -2930,28 +3389,11 @@ cmd_update() {
     # pre-#561 version of this code -- only the catch-and-rollback wrapper
     # around them is new.
     if ! (
-        # Ensure repository is not shallow so tags can be fetched reliably
-        if git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository >/dev/null 2>&1; then
-            if [[ "$(git -C "${INSTALL_DIR}/repo" rev-parse --is-shallow-repository)" == "true" ]]; then
-                log "Repository is shallow; fetching full history to access tags..."
-                if ! git -C "${INSTALL_DIR}/repo" fetch --unshallow --tags; then
-                    die "Failed to unshallow repository to fetch tags"
-                fi
-            fi
-        fi
-
-        # Checkout the version tag for consistency when it exists.
-        # If no corresponding tag is found (e.g. development version), stay on the branch HEAD.
-        if git -C "${INSTALL_DIR}/repo" ls-remote --tags origin "v${MAGPIE_VERSION}" | grep -q .; then
-            log "Checking out version tag v${MAGPIE_VERSION}..."
-            if ! git -C "${INSTALL_DIR}/repo" fetch origin "refs/tags/v${MAGPIE_VERSION}:refs/tags/v${MAGPIE_VERSION}"; then
-                die "Failed to fetch version tag v${MAGPIE_VERSION}"
-            fi
-            if ! git -C "${INSTALL_DIR}/repo" checkout "v${MAGPIE_VERSION}"; then
-                die "Failed to checkout version tag v${MAGPIE_VERSION}"
-            fi
-        else
-            log_warn "No git tag v${MAGPIE_VERSION} found for detected version; continuing on branch ${GITHUB_BRANCH}"
+        # Exactly the commit resolve_update_target() fetched -- a release
+        # tag's, or (--branch only) the branch HEAD's.
+        log "Checking out ${UPDATE_TARGET_KIND} ${UPDATE_TARGET_REF} (${UPDATE_TARGET_COMMIT})..."
+        if ! git -C "${INSTALL_DIR}/repo" checkout -q -f --detach "$UPDATE_TARGET_COMMIT"; then
+            die "Failed to check out ${UPDATE_TARGET_KIND} ${UPDATE_TARGET_REF} (${UPDATE_TARGET_COMMIT})"
         fi
 
         # Update the canonical compose file from the repo. This is the only
@@ -2986,6 +3428,11 @@ cmd_update() {
             # MAGPIE_IMAGE always reflects the version just resolved above.
             upsert_env_key "$env_file" "MAGPIE_IMAGE" "$image_tag"
         fi
+        if [[ "$UPDATE_TARGET_KIND" == "tag" ]]; then
+            record_release_state "$env_file" "$UPDATE_TARGET_REF" "" "$UPDATE_TARGET_COMMIT"
+        else
+            record_release_state "$env_file" "" "$UPDATE_TARGET_REF" "$UPDATE_TARGET_COMMIT"
+        fi
 
         # generate_systemd_service()/generate_gc_units() are also called by
         # cmd_install, but `update` never re-derives the unit files any other
@@ -2998,6 +3445,7 @@ cmd_update() {
         # would silently not happen on a real upgrade. Idempotent -- writing
         # the same content again on an install whose units already match is a
         # no-op in effect.
+        generate_compose_wrapper
         generate_systemd_service
         generate_gc_units
         if ! systemctl daemon-reload; then
@@ -3158,7 +3606,21 @@ cmd_uninstall() {
     # this doesn't depend on INSTALL_DIR still being a valid working
     # directory -- it's about to be rm -rf'd below. See issue #161.
     log "Removing containers and volumes..."
-    docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" down --volumes 2>/dev/null || true
+    # If the file set can't be loaded (a refused or broken site override),
+    # tear the pinned project down by name instead: compose finds its
+    # containers, including any an override added, by project label. Run
+    # from / without COMPOSE_FILE so no compose file -- in particular the
+    # broken override, if the caller's cwd is INSTALL_DIR -- is
+    # auto-discovered and parsed.
+    if ! magpie_compose down --volumes --remove-orphans; then
+        log_warn "Could not run 'down' with this install's compose file set; removing compose project '${COMPOSE_PROJECT}' by name instead"
+        (cd / && env -u COMPOSE_FILE docker compose -p "$COMPOSE_PROJECT" down --volumes --remove-orphans) || true
+    fi
+    local leftover
+    leftover="$(docker ps -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" 2>/dev/null || true)"
+    if [[ -n "$leftover" ]]; then
+        die "Containers of compose project '${COMPOSE_PROJECT}' are still present after teardown (${leftover//$'\n'/ }); not removing ${INSTALL_DIR}. Remove them (docker rm -f ...) and re-run uninstall."
+    fi
 
     log "Removing systemd units..."
     rm -f /etc/systemd/system/magpie.service
@@ -3195,6 +3657,23 @@ cmd_status() {
     echo "=== Magpie Status ==="
     echo ""
 
+    echo "--- Release ---"
+    local -A release_env=()
+    read_env_file "${INSTALL_DIR}/etc/.env" release_env
+    local release_tag="${release_env[MAGPIE_RELEASE_TAG]:-}"
+    local release_branch="${release_env[MAGPIE_RELEASE_BRANCH]:-}"
+    if [[ -n "$release_tag" ]]; then
+        echo "  Release: ${release_tag}"
+    elif [[ -n "$release_branch" ]]; then
+        echo "  Release: none (tracking branch ${release_branch})"
+    else
+        echo "  Release: none recorded (local --source-dir checkout, or installed by an older installer)"
+    fi
+    echo "  Version: $(extract_pyproject_version < "${INSTALL_DIR}/repo/pyproject.toml" 2>/dev/null || echo unknown)"
+    echo "  Commit:  ${release_env[MAGPIE_RELEASE_COMMIT]:-$(git -C "${INSTALL_DIR}/repo" rev-parse HEAD 2>/dev/null || echo unknown)}"
+    echo "  Image:   ${release_env[MAGPIE_IMAGE]:-unknown}"
+    echo ""
+
     echo "--- Systemd Service ---"
     systemctl status magpie.service --no-pager 2>/dev/null || echo "  Service not running"
     echo ""
@@ -3203,7 +3682,7 @@ cmd_status() {
     # Absolute -f, not `cd "$INSTALL_DIR"`: a partially-removed or
     # inaccessible INSTALL_DIR would otherwise fail the cd itself before
     # reaching the "No containers" fallback below. See issue #161.
-    docker compose -f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" ps 2>/dev/null || echo "  No containers"
+    magpie_compose ps 2>/dev/null || echo "  No containers"
     echo ""
 
     echo "--- Health Check ---"
@@ -3236,7 +3715,8 @@ cmd_logs() {
     # Build the docker-compose argument list as a quoted array rather than
     # interpolating into an unquoted command line. See issue #448. Absolute
     # -f rather than `cd "$INSTALL_DIR"` first -- see issue #161.
-    local compose_args=(-f "${INSTALL_DIR}/docker-compose.yml" --env-file "${INSTALL_DIR}/etc/.env" logs)
+    resolve_compose_file_args || die "Refusing to run docker compose for ${INSTALL_DIR} (see above)"
+    local compose_args=("${COMPOSE_FILE_ARGS[@]}" logs)
     [[ "$FOLLOW" == "true" ]] && compose_args+=(-f)
     compose_args+=(--tail="$LINES")
     compose_args+=("$@")
@@ -3256,7 +3736,7 @@ Usage: $SCRIPT_NAME <command> [options]
 
 Commands:
   install     Install magpie (fresh installation)
-  update      Update to latest version
+  update      Update to the latest published release (or --release TAG)
   uninstall   Remove magpie
   status      Show service status
   logs        View container logs
@@ -3293,8 +3773,37 @@ Install options (only used with 'install' command):
   --noninteractive        Skip interactive prompts (use defaults for all config)
   --force                 Overwrite existing installation
   --from-source           Build image from source instead of pulling from ghcr.io
+  --source-dir PATH       Install from an existing local git checkout at PATH
+                          instead of cloning from github.com. Requires
+                          --from-source, and cannot be combined with
+                          --release. Installs the checkout's committed HEAD
+                          (working-tree edits are not included). Intended
+                          for CI and development -- operators should omit it.
+  --allow-unsupported-os  Continue (with a warning) on a non-Debian-12/13
+                          host instead of refusing to install. Only the
+                          Debian versions above are supported; this exists
+                          so CI can exercise the installer on a
+                          Debian-derived runner. Not for operators.
 
 Update options:
+  (no target flag)                 Update to the latest published,
+                                    non-prerelease release (GitHub's
+                                    releases/latest). If that lookup fails
+                                    (e.g. API rate limit), update stops --
+                                    it never falls back to a branch.
+                                    Env override of the lookup URL:
+                                    MAGPIE_DEPLOY_LATEST_RELEASE_URL.
+  --release TAG                    Update to exactly this release tag;
+                                    prereleases are fine when named
+                                    (e.g. --release v0.2.0-rc4).
+  --branch NAME                    Track branch NAME's current HEAD
+                                    instead of a release (explicit opt-in;
+                                    deploys unreleased commits).
+  --accept-downgrade               Allow moving to an older version than
+                                    the one installed (refused otherwise).
+                                    magpie-ctl migrate still refuses data
+                                    in a newer format than the target
+                                    supports.
   --from-source                    Rebuild image from source instead of
                                     pulling from ghcr.io
   --trusted-proxies CIDR           See Install options above -- also
@@ -3380,8 +3889,9 @@ Examples:
   # Install a specific tagged release instead of the default branch
   sudo $SCRIPT_NAME install --release v0.1.3
 
-  # Update existing installation
+  # Update to the latest published release, or to an exact one
   sudo $SCRIPT_NAME update
+  sudo $SCRIPT_NAME update --release v0.2.0
 
   # View logs
   sudo $SCRIPT_NAME logs -f
@@ -3522,6 +4032,22 @@ parse_args() {
                 FROM_SOURCE="true"
                 shift
                 ;;
+            --allow-unsupported-os)
+                ALLOW_UNSUPPORTED_OS="true"
+                shift
+                ;;
+            --source-dir)
+                # Missing/empty value dies rather than falling through:
+                # an empty SOURCE_DIR is indistinguishable from "not
+                # requested" in validate_config()/clone_repo(), which
+                # would silently clone from GitHub instead of the local
+                # tree the caller asked for.
+                if [[ $# -lt 2 ]] || [[ "${2:-}" == -* ]] || [[ -z "${2:-}" ]]; then
+                    die "--source-dir requires a path argument"
+                fi
+                SOURCE_DIR="$2"
+                shift 2
+                ;;
             --purge)
                 PURGE="true"
                 shift
@@ -3565,7 +4091,19 @@ parse_args() {
                     die "--release requires a value, e.g. --release v0.1.4"
                 fi
                 REQUESTED_RELEASE="$2"
+                RELEASE_FROM_CLI="true"
                 shift 2
+                ;;
+            --branch)
+                if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+                    die "--branch requires a branch name, e.g. --branch default"
+                fi
+                UPDATE_BRANCH="$2"
+                shift 2
+                ;;
+            --accept-downgrade)
+                ACCEPT_DOWNGRADE="true"
+                shift
                 ;;
             -*)
                 die "Unknown option: $1\nUse --help for usage information."
@@ -3582,13 +4120,31 @@ parse_args() {
         exit 1
     fi
 
-    # --release selects a release to install and is only meaningful for
-    # 'install' -- the env-var override (MAGPIE_VERSION/GITHUB_REF) is
-    # deliberately not checked here, since it may be set in an operator's
-    # environment for unrelated reasons and shouldn't break other commands.
-    # See issue #559.
-    if [[ -n "$REQUESTED_RELEASE" ]] && [[ "$command" != "install" ]]; then
-        die "--release is only supported by the 'install' command (got: $command)"
+    # --release selects the release to install or update to -- the env-var
+    # override (MAGPIE_VERSION/GITHUB_REF) is deliberately not checked here,
+    # since it may be set in an operator's environment for unrelated reasons
+    # and shouldn't break other commands. See issues #559 and #632.
+    if [[ -n "$REQUESTED_RELEASE" ]] && [[ "$command" != "install" && "$command" != "update" ]]; then
+        die "--release is only supported by the 'install' and 'update' commands (got: $command)"
+    fi
+    if [[ -n "$UPDATE_BRANCH" ]] && [[ "$command" != "update" ]]; then
+        die "--branch is only supported by the 'update' command (got: $command); 'install --release <branch>' installs a branch"
+    fi
+    if [[ "$ACCEPT_DOWNGRADE" == "true" ]] && [[ "$command" != "update" ]]; then
+        die "--accept-downgrade is only supported by the 'update' command (got: $command)"
+    fi
+    if [[ -n "$UPDATE_BRANCH" && -n "$REQUESTED_RELEASE" ]]; then
+        die "--branch and --release are mutually exclusive"
+    fi
+
+    # Same for --source-dir: only clone_repo() (install) consults SOURCE_DIR,
+    # while 'update' refreshes INSTALL_DIR/repo from origin/$GITHUB_BRANCH. An
+    # accepted-but-ignored flag there would deploy GitHub's code while the
+    # caller believes it deployed their local tree, so refuse instead. Unlike
+    # --release this has no env-var form, so a set value is always an explicit
+    # request.
+    if [[ -n "$SOURCE_DIR" ]] && [[ "$command" != "install" ]]; then
+        die "--source-dir is only supported by the 'install' command (got: $command)"
     fi
 
     # Execute command

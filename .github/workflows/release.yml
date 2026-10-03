@@ -23,6 +23,12 @@ jobs:
         id: get_version
         run: |
           TAG=${GITHUB_REF#refs/tags/v}
+          # Image tags are the raw version string, so only accept shapes
+          # that make sensible tags.
+          if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Tag v$TAG is not vX.Y.Z or vX.Y.Z-<prerelease>"
+            exit 1
+          fi
           echo "version=$TAG" >> $GITHUB_OUTPUT
 
           # Check if prerelease (contains -, e.g., v1.0.0-rc1)
@@ -46,19 +52,21 @@ jobs:
           echo "Version validated: $TAG_VERSION"
 
   build-and-push:
-    # Publishes the two-container image (./Dockerfile, FastAPI service
-    # only, paired with a separate Caddy container -- see
-    # docker-compose.prod.yml) as the primary `magpie` image. This stays
-    # the installer-compatible image (scripts/magpie-deploy.sh's default
-    # `FROM_SOURCE=false` path pulls this tag and expects a bare FastAPI
-    # backend on :8000, not the bundled image's Caddy front door) until a
-    # later PR flips the primary tag over to the bundled image and
-    # retires this build -- see build-and-push-bundled below for that
-    # image, published only under a transitional `-bundled` tag in the
-    # meantime.
+    # Publishes the bundled single-container image (Dockerfile.bundled,
+    # Caddy + uvicorn under one supervisor) as THE magpie image, from
+    # v0.2.0 on (#634; reverses the "Option B" record in #609):
+    #   <version>, <version>-bundled  every release, RC and final (here)
+    #   <major>.<minor>, <major>, latest  stable only (promote, below)
+    # `-bundled` stays as an alias: the installer and rc1-rc3 compose/env
+    # pins use it. The two-container image (./Dockerfile) is no longer
+    # published -- nothing in 0.2.x consumes it (0.1.x -> 0.2.0 upgrades
+    # run the 0.2.0 installer, which pulls -bundled). Removing the
+    # Dockerfile itself is 0.3.0 work.
     name: Build and push container
     runs-on: ubuntu-latest
     needs: validate
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -83,75 +91,20 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Every tag is spelled out below; never let metadata-action add
+          # `latest` on its own.
+          flavor: |
+            latest=false
+          # `type=raw` from validate's output, not a `type=semver` pattern:
+          # metadata-action ignores `pattern` for prerelease refs and emits
+          # the bare raw tag instead, which silently dropped the `-bundled`
+          # suffix on RCs.
           tags: |
-            # Tag with version (v1.0.0 -> 1.0.0)
-            type=semver,pattern={{version}}
-            # Tag with major.minor (v1.0.0 -> 1.0) - stable releases only
-            type=semver,pattern={{major}}.{{minor}},enable=${{ needs.validate.outputs.is_prerelease == 'false' }}
-            # Tag with major (v1.0.0 -> 1) - stable releases only
-            type=semver,pattern={{major}},enable=${{ needs.validate.outputs.is_prerelease == 'false' }}
-            # Tag latest only for stable releases (not prereleases)
-            type=raw,value=latest,enable=${{ needs.validate.outputs.is_prerelease == 'false' }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  build-and-push-bundled:
-    # Publishes the bundled single-container image (Dockerfile.bundled,
-    # Caddy + uvicorn under one supervisor -- see #586/#589/#591) under a
-    # transitional `<version>-bundled` tag only -- never the primary
-    # `<version>`/`latest`/major/minor tags, and never `latest-bundled`.
-    # It's not yet the installer-compatible topology (see the comment on
-    # build-and-push above), so it must not collide with the primary tag
-    # until a later PR migrates the installer/compose topology and flips
-    # the primary tag over.
-    name: Build and push bundled container
-    runs-on: ubuntu-latest
-    needs: validate
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            # Transitional alias -- exact version only, RC and final both
-            # get `<version>-bundled`, no `latest-bundled`. Built from the
-            # already-validated version output (not a `type=semver`
-            # pattern suffix): metadata-action ignores `pattern` for
-            # prerelease refs and always emits the bare raw tag instead,
-            # so a `{{version}}-bundled` pattern silently loses the
-            # `-bundled` suffix on RCs. This form is correct for both RC
-            # and final.
+            type=raw,value=${{ needs.validate.outputs.version }}
             type=raw,value=${{ needs.validate.outputs.version }}-bundled
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -163,10 +116,53 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  promote:
+    # Points the mutable aliases (<major>.<minor>, <major>, latest) at the
+    # highest published stable release in each scope. It runs after the
+    # build and reconciles EVERY alias from scratch
+    # (scripts/release_promote.sh), so:
+    #   - a hotfix on an older line only moves its own <major>.<minor>;
+    #   - overlapping, out-of-order or re-run releases converge, and a run
+    #     GitHub cancels while queued (concurrency keeps one pending run) is
+    #     repaired by whichever run comes after it;
+    #   - "published" means the <version> image exists in the registry, so a
+    #     tag whose build failed doesn't count. Any inspect error other than
+    #     "not found" aborts, so a registry hiccup can't make a newer release
+    #     look absent and move aliases backwards. Re-running is safe.
+    name: Move rolling tags
+    runs-on: ubuntu-latest
+    needs: [validate, build-and-push]
+    if: needs.validate.outputs.is_prerelease == 'false'
+    concurrency:
+      group: release-rolling-tags
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Move rolling tags
+        run: |
+          git fetch --force --tags origin
+          scripts/release_promote.sh "${REGISTRY}/${IMAGE_NAME,,}"
+
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [validate, build-and-push, build-and-push-bundled]
+    needs: [validate, build-and-push]
     permissions:
       contents: write
     steps:
@@ -184,6 +180,15 @@ jobs:
           fi
 
           echo "Updated HARDCODED_VERSION to $VERSION"
+
+      # docker-compose.yml and .env.example pinned to this release's image
+      # by digest, plus the installer and SHA256SUMS, so a deployer can
+      # run a release without cloning the repo (#633).
+      - name: Render release assets
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          DIGEST: ${{ needs.build-and-push.outputs.digest }}
+        run: IMAGE_REPO="${REGISTRY}/${IMAGE_NAME,,}" scripts/render_release_assets.sh "$VERSION" "$DIGEST" dist
 
       - name: Assemble release body
         run: |
@@ -209,4 +214,7 @@ jobs:
           body_path: release-body.md
           generate_release_notes: true
           files: |
-            scripts/magpie-deploy.sh
+            dist/docker-compose.yml
+            dist/.env.example
+            dist/magpie-deploy.sh
+            dist/SHA256SUMS
