@@ -15,6 +15,7 @@ Server runs at `http://localhost:8080` (change via `MAGPIE_HTTP_PORT`).
 ```bash
 export MAGPIE_DATA_DIR=/srv/magpie/data
 export MAGPIE_ADMIN_TOKEN_SINK=file   # required -- see Admin Token Delivery below
+export MAGPIE_UID=10001 MAGPIE_GID=10001   # see Runtime user below
 export MAGPIE_IMAGE=ghcr.io/southwestccdc/magpie:X.Y.Z-bundled   # see note below
 docker compose -f docker-compose.yml up -d
 ```
@@ -65,7 +66,8 @@ deployment. See [.env.example](../.env.example) for the full list of
 
 Choose one:
 
-- **`file`** -- writes a root-only (0600) file at
+- **`file`** -- writes an owner-only (0600) file, owned by the uid the
+  container runs as (see [Runtime user](#runtime-user)), at
   `MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH` (default: `/data/admin-token`, set by
   `docker-compose.yml`):
   ```bash
@@ -167,6 +169,7 @@ Key environment variables (see [.env.example](../.env.example) for all):
 - `MAGPIE_ADMIN_TOKEN_SINK` - Admin bootstrap token delivery: `file`/`exec`/`discard`/`stdout` (required, no default; see [Admin Token Delivery](#admin-token-delivery) above)
 - `MAGPIE_ALLOWED_CIDRS` - CIDR ranges allowed to bypass auth for read-only access (default: none)
 - `MAGPIE_TRUSTED_PROXIES` - IPs/CIDRs whose `X-Forwarded-For` the bundled Caddy trusts (default: none; see [Trusted Proxies](#trusted-proxies) below)
+- `MAGPIE_UID` / `MAGPIE_GID` - uid/gid the container runs as (`10001` in `.env.example`; empty = the data directory's owner; see [Runtime user](#runtime-user) below)
 
 ### Site-specific compose settings
 
@@ -180,6 +183,39 @@ compose commands, use `<install>/bin/magpie-compose <subcommand>`, which
 applies the same file set. A copy of the repository's development override
 is refused, not merged. The compose project name stays pinned to the
 install directory's name, so a top-level `name:` in the override is ignored.
+
+### Runtime user
+
+Every process in the container runs as `MAGPIE_UID`:`MAGPIE_GID`. On
+start, the container chowns the data directory itself (not its contents)
+to that uid, so a fresh data directory needs no preparation. With both
+empty, the container runs as the data directory's current owner, which is
+root for a directory Docker created.
+
+- **Release assets / plain compose:** `env.example` sets both to `10001`.
+- **`magpie-deploy.sh install`:** a fresh install creates a `magpie` system
+  account, or reuses an existing one (e.g. one config management pinned to
+  a fixed uid), writes its uid/gid to `<install>/etc/.env`, and chowns the
+  new data directory to it. Installing onto a data directory that already
+  holds data keeps that directory's owner. A plain `uninstall` keeps the
+  data and its account; `uninstall --purge` removes the account only if the
+  installer created it (recorded in `/var/lib/magpie-deploy/created-accounts`).
+- **Existing deployments** keep running as the uid they used before.
+  `update` never changes it, and warns when it is root.
+
+To move an existing root-owned deployment to a dedicated account:
+
+```bash
+systemctl stop magpie                    # plain compose: docker compose down
+id magpie || useradd --system --no-create-home --shell /usr/sbin/nologin magpie
+chown -R magpie:magpie /path/to/data     # MAGPIE_DATA_DIR
+# Set MAGPIE_UID / MAGPIE_GID to `id -u magpie` / `id -g magpie` in
+# <install>/etc/.env (plain compose: your .env).
+systemctl start magpie                   # plain compose: docker compose up -d
+```
+
+Don't set a new uid without the `chown`: the container can't write the
+existing root-owned `magpie.db` and artifacts.
 
 ### Choosing what `update` installs
 

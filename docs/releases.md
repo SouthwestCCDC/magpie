@@ -111,6 +111,8 @@ curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/env.example" -fsSLO "$base/
 # Verify exactly the files you downloaded; a missing one fails the check.
 grep -E ' (docker-compose\.yml|env\.example)$' SHA256SUMS | sha256sum -c
 cp env.example .env
+# env.example runs magpie as uid 10001 (MAGPIE_UID/MAGPIE_GID); see
+# installation.md "Runtime user" before reusing data written as another uid.
 # Required: choose how the first-boot admin token is delivered (file, exec,
 # discard or stdout). The container refuses to start without it.
 echo 'MAGPIE_ADMIN_TOKEN_SINK=file' >> .env   # then edit the rest of .env

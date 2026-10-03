@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import socket
 import sqlite3
 import subprocess
 import tempfile
@@ -834,3 +835,133 @@ class TestBundledImageStartupMigration:
                 os.close(lock_fd)
                 for name in names:
                     _cleanup(name)
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _set_env_keys(text: str, values: dict[str, str]) -> str:
+    """Replace (or append) KEY=value lines in a .env body."""
+    kept = [
+        line
+        for line in text.splitlines()
+        if line.split("=", 1)[0] not in values or line.lstrip().startswith("#")
+    ]
+    return "\n".join([*kept, *(f"{k}={v}" for k, v in values.items())]) + "\n"
+
+
+@pytest.mark.e2e
+@pytest.mark.slow
+class TestReleaseAssetsPlainCompose:
+    """The documented no-installer deploy (docs/releases.md "Release Assets").
+
+    Rendered release assets plus `cp env.example .env` on a data directory
+    Docker itself creates (root-owned) must not run anything as root.
+    """
+
+    def test_fresh_deploy_runs_as_env_example_uid(self, bundled_image: str, tmp_path: Path):
+        assets = tmp_path / "assets"
+        assets.mkdir()
+        subprocess.run(  # noqa: S603
+            [
+                "bash",
+                str(PROJECT_ROOT / "scripts" / "render_release_assets.sh"),
+                "0.0.0",
+                "sha256:" + "0" * 64,
+                str(assets),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        env_example = (assets / "env.example").read_text()
+        ids = dict(
+            line.split("=", 1)
+            for line in env_example.splitlines()
+            if line.startswith(("MAGPIE_UID=", "MAGPIE_GID="))
+        )
+        uid, gid = int(ids["MAGPIE_UID"]), int(ids["MAGPIE_GID"])
+        assert uid != 0 and gid != 0, ids
+
+        data_dir = tmp_path / "data"  # absent: Docker creates it, as root
+        port = _free_port()
+        (assets / ".env").write_text(
+            _set_env_keys(
+                env_example,
+                {
+                    "MAGPIE_ADMIN_TOKEN_SINK": "discard",
+                    "MAGPIE_IMAGE": bundled_image,
+                    "MAGPIE_DATA_DIR": str(data_dir),
+                    "MAGPIE_HTTP_PORT": str(port),
+                    "MAGPIE_BIND_IP": "127.0.0.1",
+                },
+            )
+        )
+        compose = [
+            "docker",
+            "compose",
+            "-p",
+            f"magpie-assets-e2e-{uuid.uuid4().hex[:8]}",
+            "-f",
+            str(assets / "docker-compose.yml"),
+            "--env-file",
+            str(assets / ".env"),
+        ]
+        try:
+            subprocess.run([*compose, "up", "-d"], check=True, capture_output=True)  # noqa: S603
+            deadline = time.monotonic() + 90
+            while True:
+                try:
+                    if httpx.get(f"http://127.0.0.1:{port}/health", timeout=2).status_code == 200:
+                        break
+                except httpx.HTTPError:
+                    pass
+                if time.monotonic() > deadline:
+                    logs = subprocess.run(  # noqa: S603
+                        [*compose, "logs"], capture_output=True, text=True
+                    )
+                    pytest.fail(f"stack never became healthy:\n{logs.stdout}{logs.stderr}")
+                time.sleep(2)
+
+            cid = subprocess.run(  # noqa: S603
+                [*compose, "ps", "-q", "magpie"], check=True, capture_output=True, text=True
+            ).stdout.strip()
+            top = subprocess.run(  # noqa: S603
+                ["docker", "top", cid, "-o", "pid,uid,comm"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            rows = [line.split(None, 2) for line in top.strip().splitlines()[1:]]
+            assert rows, top
+            assert all(int(row[1]) == uid for row in rows), top
+
+            owners = subprocess.run(  # noqa: S603
+                ["docker", "exec", cid, "stat", "-c", "%u:%g %n", "/data", "/data/magpie.db"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.split("\n")
+            for line in filter(None, owners):
+                assert line.split()[0] == f"{uid}:{gid}", owners
+        finally:
+            subprocess.run([*compose, "down", "-v"], capture_output=True)  # noqa: S603
+            # Hand the tree back so pytest's tmp_path cleanup can remove it.
+            subprocess.run(  # noqa: S603
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--entrypoint",
+                    "chown",
+                    "-v",
+                    f"{tmp_path}:/t",
+                    bundled_image,
+                    "-R",
+                    f"{os.getuid()}:{os.getgid()}",
+                    "/t",
+                ],
+                capture_output=True,
+            )

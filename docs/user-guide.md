@@ -82,8 +82,8 @@ Server configuration uses environment variables with the `MAGPIE_` prefix. See `
 | `MAGPIE_DATA_DIR` | `./data` | Host directory for data storage (mounted at `/data` in containers). Only used by `docker-compose.yml`, not the application. |
 | `MAGPIE_HTTP_PORT` | `8080` | External HTTP port for Caddy. Docker Compose only. |
 | `MAGPIE_HTTPS_PORT` | `8443` | External HTTPS port for Caddy. Docker Compose only. |
-| `MAGPIE_UID` | *(auto)* | User ID for magpie process (auto-detected from volume ownership). Used by `entrypoint.sh`, not the application. |
-| `MAGPIE_GID` | *(auto)* | Group ID for magpie process (auto-detected from volume ownership). Used by `entrypoint.sh`, not the application. |
+| `MAGPIE_UID` | `10001` in `.env.example`; else *(auto)* | uid the container runs as (empty: the data directory's owner). Read by the container entrypoint, not the application. See [Runtime user](installation.md#runtime-user). |
+| `MAGPIE_GID` | `10001` in `.env.example`; else *(auto)* | gid the container runs as (empty: the data directory's group). Read by the container entrypoint, not the application. |
 
 #### Managing Configuration
 
