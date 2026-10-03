@@ -90,9 +90,10 @@ assert_artifact() {
     log "artifact ${path} round-trips intact"
 }
 
+# One fixed path per check, overwritten on each run, so repeated local runs
+# don't pile up files; each check removes its own when it passes.
 random_file() {
-    local f
-    f="$(mktemp)"
+    local f="${TMPDIR:-/tmp}/${PROJECT}-$1.bin"
     head -c 1048576 /dev/urandom >"$f"
     echo "$f"
 }
@@ -169,9 +170,10 @@ cmd_compose() {
     token="$(sudo cat "${dir}/data/admin-token")"
     assert_auth "$token"
     sudo ls "${dir}/data/backups" | grep -qE '\.pre-v[0-9]+$' || die "no pre-migration copy in data/backups"
-    blob="$(random_file)"
+    blob="$(random_file compose)"
     push_artifact "$token" release-verify/compose "$blob"
     assert_artifact "$token" release-verify/compose "$blob"
+    rm -f "$blob"
 }
 
 cmd_compose_upgrade() {
@@ -184,22 +186,35 @@ cmd_compose_upgrade() {
     trap 'compose_cleanup "'"$dir"'" $?' EXIT
     compose_up "$dir" "$PREV_VERSION"
     token="$(sudo cat "${dir}/data/admin-token")"
-    blob="$(random_file)"
+    blob="$(random_file upgrade)"
     push_artifact "$token" release-verify/upgrade "$blob"
     # What an operator does: replace the compose file, keep .env and data.
     cp "${DIST}/docker-compose.yml" "${dir}/docker-compose.yml"
     compose_up "$dir" "$VERSION"
     assert_auth "$token"
     assert_artifact "$token" release-verify/upgrade "$blob"
+    rm -f "$blob"
     log "plain compose upgraded ${PREV_VERSION} -> ${VERSION}"
 }
 
 INSTALL_DATA=/opt/magpie/data
 
+# Best effort, from the EXIT trap, after a failed check.
 installer_cleanup() {
     local deploy="$1" rc="$2"
     ((rc == 0)) || sudo journalctl -u magpie.service --no-pager -n 50 || true
     sudo bash "$deploy" uninstall --purge --yes || true
+}
+
+# On success: the purge is part of the check, so it must work.
+installer_purge() {
+    local deploy="$1"
+    trap - EXIT
+    sudo bash "$deploy" uninstall --purge --yes || die "uninstall --purge failed"
+    [[ ! -e /opt/magpie ]] || die "/opt/magpie left behind by uninstall --purge"
+    ! id magpie >/dev/null 2>&1 || die "magpie account left behind by uninstall --purge"
+    ! sudo docker ps -a --format '{{.Names}}' | grep -q magpie ||
+        die "magpie containers left behind by uninstall --purge"
 }
 
 installer_install() {
@@ -225,15 +240,13 @@ cmd_installer() {
     assert_uid "$cid" "$(id -u magpie)"
     token="$(sudo cat "${INSTALL_DATA}/admin-token")"
     assert_auth "$token"
-    blob="$(random_file)"
+    blob="$(random_file installer)"
     push_artifact "$token" release-verify/installer "$blob"
     assert_artifact "$token" release-verify/installer "$blob"
     sudo systemctl start magpie-gc.service || die "magpie-gc.service failed"
     log "gc run succeeded"
-    trap - EXIT
-    sudo bash "$deploy" uninstall --purge --yes
-    [[ ! -e /opt/magpie ]] || die "/opt/magpie left behind by uninstall --purge"
-    ! id magpie >/dev/null 2>&1 || die "magpie account left behind by uninstall --purge"
+    installer_purge "$deploy"
+    rm -f "$blob"
     log "installer lifecycle passed"
 }
 
@@ -246,12 +259,14 @@ cmd_installer_upgrade() {
     trap 'installer_cleanup "'"$deploy"'" $?' EXIT
     installer_install "${PREV_DIST}/magpie-deploy.sh" "$PREV_VERSION"
     token="$(sudo cat "${INSTALL_DATA}/admin-token")"
-    blob="$(random_file)"
+    blob="$(random_file installer-upgrade)"
     push_artifact "$token" release-verify/installer-upgrade "$blob"
     sudo bash "$deploy" update --release "v${VERSION}" --noninteractive
     wait_healthy "$VERSION"
     assert_auth "$token"
     assert_artifact "$token" release-verify/installer-upgrade "$blob"
+    installer_purge "$deploy"
+    rm -f "$blob"
     log "installer upgraded ${PREV_VERSION} -> ${VERSION}"
 }
 

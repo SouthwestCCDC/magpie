@@ -137,10 +137,12 @@ jobs:
     #   - overlapping, out-of-order or re-run releases converge, and a run
     #     GitHub cancels while queued (concurrency keeps one pending run) is
     #     repaired by whichever run comes after it;
-    #   - "published" means the <version> image exists in the registry, so a
-    #     tag whose build failed doesn't count. Any inspect error other than
-    #     "not found" aborts, so a registry hiccup can't make a newer release
-    #     look absent and move aliases backwards. Re-running is safe.
+    #   - "published" means the <version> image exists in the registry and
+    #     the tag has a published GitHub Release (or is the tag this run
+    #     verified), so a tag whose build or verification failed doesn't
+    #     count. Any inspect or API error other than "not found" aborts, so
+    #     a hiccup can't make a newer release look absent and move aliases
+    #     backwards. Re-running is safe.
     name: Move rolling tags
     runs-on: ubuntu-latest
     needs: [validate, build-and-push, verify, verify-arm64]
@@ -167,9 +169,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Move rolling tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           git fetch --force --tags origin
-          scripts/release_promote.sh "${REGISTRY}/${IMAGE_NAME,,}"
+          scripts/release_promote.sh "${REGISTRY}/${IMAGE_NAME,,}" "$VERSION"
 
   assets:
     # Rendered once and passed to verify and release as an artifact, so the
@@ -313,9 +318,19 @@ jobs:
           scripts/release_verify.sh smoke
 
   release:
+    # A stable release waits for its rolling tags, so it is never published
+    # while `latest` still points elsewhere. Prereleases skip promote.
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [validate, assets, verify, verify-arm64]
+    needs: [validate, assets, verify, verify-arm64, promote]
+    if: >-
+      !cancelled()
+      && needs.assets.result == 'success'
+      && needs.verify.result == 'success'
+      && needs.verify-arm64.result == 'success'
+      && (needs.promote.result == 'success'
+          || (needs.promote.result == 'skipped'
+              && needs.validate.outputs.is_prerelease == 'true'))
     permissions:
       contents: write
     steps:

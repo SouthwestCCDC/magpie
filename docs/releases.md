@@ -79,12 +79,14 @@ The GitHub Actions release workflow automatically:
      `uninstall --purge`;
    - an upgrade from the previous release, with plain compose and with the
      installer.
-6. Only then moves the rolling tags (stable releases only) and creates the
-   GitHub Release with the assets and an auto-generated changelog
+6. Only then moves the rolling tags (stable releases only) and, after
+   that, creates the GitHub Release with the assets and an auto-generated
+   changelog
 
 If verification fails, the `<version>` image tags exist but nothing points
-users at them: `latest` doesn't move and there is no GitHub Release. Fix
-forward with the next version.
+users at them: `latest` doesn't move and there is no GitHub Release. A
+later release's promotion skips it too, because it only counts tags with a
+published GitHub Release. Fix forward with the next version.
 
 ## Container Image Tags
 
