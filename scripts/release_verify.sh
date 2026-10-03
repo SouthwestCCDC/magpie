@@ -76,21 +76,25 @@ assert_auth() {
 # regenerated from a random seed, so no scratch file is ever written and
 # none is left behind by a failed check.
 new_seed() { od -An -N16 -tx1 /dev/urandom | tr -d ' \n'; }
-blob() { head -c 1048576 < <(openssl enc -aes-256-ctr -pbkdf2 -nosalt -pass "pass:$1" </dev/zero 2>/dev/null); }
+# The input is bounded (CTR output is as long as its input), so openssl exits
+# on its own and a failure surfaces through pipefail.
+blob() { head -c 1048576 /dev/zero | openssl enc -aes-256-ctr -pbkdf2 -nosalt -pass "pass:$1"; }
 
 push_artifact() {
     local token="$1" path="$2" seed="$3" code
     code="$(blob "$seed" | http_status -X POST -H "Authorization: Bearer ${token}" \
         -F "file=@-;filename=blob.bin;type=application/octet-stream" \
-        "${BASE_URL}/api/v1/upload/${path}")"
+        "${BASE_URL}/api/v1/upload/${path}")" ||
+        die "upload of ${path} failed (test artifact generation or curl)"
     [[ "$code" == 200 || "$code" == 201 ]] || die "upload of ${path} returned ${code}"
 }
 
 assert_artifact() {
-    local token="$1" path="$2" seed="$3" got
+    local token="$1" path="$2" seed="$3" got want
+    want="$(blob "$seed" | sha256sum)" || die "could not generate the test artifact"
     got="$(curl -fsS -H "Authorization: Bearer ${token}" "${BASE_URL}/artifacts/${path}/latest" | sha256sum)" ||
         die "download of ${path} failed"
-    [[ "$got" == "$(blob "$seed" | sha256sum)" ]] || die "${path} came back different from what was uploaded"
+    [[ "$got" == "$want" ]] || die "${path} came back different from what was uploaded"
     log "artifact ${path} round-trips intact"
 }
 
