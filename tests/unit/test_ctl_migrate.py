@@ -17,14 +17,20 @@ from magpie.ctl import cli
 from magpie.ctl.commands.migrate import (
     _MIGRATIONS,
     CURRENT_DATA_FORMAT_VERSION,
+    SNAPSHOT_DIR_NAME,
+    SNAPSHOTS_TO_KEEP,
     MigrationStep,
     MigrationTargetError,
+    SnapshotError,
     _check_current_version_matches_migrations,
+    _db_state,
     check_migrations_reversibility,
     get_data_format_version,
     migrate_database,
+    prune_snapshots,
     revert_database,
     run_migrations,
+    snapshot_database,
 )
 
 
@@ -784,7 +790,7 @@ class TestRevertDatabase:
         db_path = tmp_path / "magpie.db"
         migrate_database(db_path)
 
-        version_before, version_after, reverted = revert_database(db_path, 0)
+        version_before, version_after, reverted, _ = revert_database(db_path, 0)
 
         assert (version_before, version_after) == (CURRENT_DATA_FORMAT_VERSION, 0)
         assert len(reverted) == len(_MIGRATIONS)
@@ -795,7 +801,7 @@ class TestRevertDatabase:
         migrate_database(db_path)
         revert_database(db_path, 0)
 
-        _, version_after, applied = migrate_database(db_path)
+        _, version_after, applied, _ = migrate_database(db_path)
 
         assert version_after == CURRENT_DATA_FORMAT_VERSION
         assert len(applied) == len(_MIGRATIONS)
@@ -816,7 +822,7 @@ class TestRevertDatabase:
             patch("magpie.ctl.commands.migrate._MIGRATIONS", steps),
             patch("magpie.ctl.commands.migrate.CURRENT_DATA_FORMAT_VERSION", 3),
         ):
-            _, version_after, reverted = revert_database(db_path, 1)
+            _, version_after, reverted, _ = revert_database(db_path, 1)
 
         assert seen == [(3, 3), (2, 3)]
         assert reverted == ["v3: s3", "v2: s2"]
@@ -888,7 +894,7 @@ class TestRevertDatabase:
             patch("magpie.ctl.commands.migrate._MIGRATIONS", steps),
             patch("magpie.ctl.commands.migrate.CURRENT_DATA_FORMAT_VERSION", 2),
         ):
-            _, version_after, reverted = revert_database(db_path, 1)
+            _, version_after, reverted, _ = revert_database(db_path, 1)
 
         assert version_after == 1
         assert reverted == ["v2: reversible"]
@@ -946,7 +952,7 @@ class TestRevertDatabase:
         try:
             holder.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
-            _, _, reverted = revert_database(db_path, CURRENT_DATA_FORMAT_VERSION)
+            _, _, reverted, _ = revert_database(db_path, CURRENT_DATA_FORMAT_VERSION)
 
             assert reverted == []
             assert wal_path.stat().st_size == 0
@@ -1112,3 +1118,148 @@ class TestMigrateToCommand:
             cli_runner.invoke(cli, ["migrate", "--quiet"])
 
         assert _version(test_settings.database_path) == CURRENT_DATA_FORMAT_VERSION + 1
+
+
+class TestPreMigrationSnapshot:
+    """A copy of the database is kept before migrate/revert change it."""
+
+    @staticmethod
+    def _copies(db_path: Path) -> list[Path]:
+        return sorted((db_path.parent / SNAPSHOT_DIR_NAME).glob(f"{db_path.name}.*"))
+
+    def test_pending_migration_keeps_a_private_copy_of_the_old_database(
+        self, tmp_path: Path
+    ) -> None:
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+
+        *_, snapshot = migrate_database(db_path)
+
+        assert snapshot is not None
+        assert self._copies(db_path) == [snapshot]
+        assert snapshot.name.endswith(f".pre-v{CURRENT_DATA_FORMAT_VERSION}")
+        assert _version(snapshot) == 0
+        assert _version(db_path) == CURRENT_DATA_FORMAT_VERSION
+        assert snapshot.stat().st_mode & 0o777 == 0o600
+        assert snapshot.parent.stat().st_mode & 0o777 == 0o700
+
+    def test_no_copy_when_already_current_or_no_database(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "magpie.db"
+        *_, snapshot = migrate_database(db_path)
+        assert snapshot is None
+        *_, snapshot = migrate_database(db_path)
+        assert snapshot is None
+        assert self._copies(db_path) == []
+
+    def test_copy_failure_leaves_database_unmigrated(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+        (tmp_path / SNAPSHOT_DIR_NAME).write_text("not a directory")
+
+        with pytest.raises(SnapshotError, match="was not changed"):
+            migrate_database(db_path)
+
+        assert _version(db_path) == 0
+
+    def test_keeps_only_the_newest_copies_and_leaves_other_files(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+        snapshots = [snapshot_database(db_path, "pre-v1") for _ in range(SNAPSHOTS_TO_KEEP + 2)]
+        leftover = snapshots[0].with_name(snapshots[0].name + ".partial")
+        leftover.write_text("")
+        manual = db_path.parent / SNAPSHOT_DIR_NAME / "magpie.db.manual"
+        manual.write_text("operator's own copy")
+
+        prune_snapshots(db_path)
+
+        assert self._copies(db_path) == sorted([*snapshots[-SNAPSHOTS_TO_KEEP:], manual])
+        assert not leftover.exists()
+
+    def test_failed_migration_discards_its_copy_and_prunes_nothing(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+        older = [snapshot_database(db_path, "pre-v1") for _ in range(SNAPSHOTS_TO_KEEP)]
+
+        with (
+            patch(
+                "magpie.ctl.commands.migrate._apply_pending_steps",
+                side_effect=RuntimeError("step failed"),
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            migrate_database(db_path)
+
+        assert self._copies(db_path) == older
+        assert _version(db_path) == 0
+
+    @staticmethod
+    def _stale_precheck(stale_every_time: bool):
+        """Make the pre-lock read see a current database, as if a concurrent
+        migrate had run, while the database under the lock is still v0."""
+        real = _db_state
+        calls = {"n": 0}
+
+        def fake(conn: sqlite3.Connection) -> tuple[int, bool]:
+            calls["n"] += 1
+            is_precheck = calls["n"] % 2 == 1
+            if is_precheck and (stale_every_time or calls["n"] == 1):
+                return CURRENT_DATA_FORMAT_VERSION, True
+            return real(conn)
+
+        return patch("magpie.ctl.commands.migrate._db_state", side_effect=fake)
+
+    def test_version_changed_before_the_lock_retakes_the_copy(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+
+        with self._stale_precheck(stale_every_time=False):
+            *_, snapshot = migrate_database(db_path)
+
+        assert snapshot is not None
+        assert self._copies(db_path) == [snapshot]
+        assert _version(snapshot) == 0
+        assert _version(db_path) == CURRENT_DATA_FORMAT_VERSION
+
+    def test_database_that_keeps_changing_is_left_alone(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+
+        with (
+            self._stale_precheck(stale_every_time=True),
+            pytest.raises(SnapshotError, match="kept changing"),
+        ):
+            migrate_database(db_path)
+
+        assert _version(db_path) == 0
+        assert self._copies(db_path) == []
+
+    def test_revert_keeps_a_copy_of_the_newer_database(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "magpie.db"
+        migrate_database(db_path)
+
+        *_, snapshot = revert_database(db_path, 0)
+
+        assert snapshot is not None
+        assert snapshot.name.endswith(".pre-revert-to-v0")
+        assert _version(snapshot) == CURRENT_DATA_FORMAT_VERSION
+        assert _version(db_path) == 0
+
+    def test_cli_reports_the_copy(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        init_database(test_settings.database_path)
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["migrate", "--quiet"])
+        assert result.exit_code == 0, result.output
+        assert "Saved a copy of the database first:" in result.output
+
+    def test_cli_refuses_when_the_copy_fails(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        init_database(test_settings.database_path)
+        (test_settings.database_path.parent / SNAPSHOT_DIR_NAME).write_text("x")
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            result = cli_runner.invoke(cli, ["migrate"])
+        assert result.exit_code != 0
+        assert "was not changed" in result.output
+        assert _version(test_settings.database_path) == 0

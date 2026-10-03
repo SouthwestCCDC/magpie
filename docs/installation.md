@@ -217,6 +217,25 @@ systemctl start magpie                   # plain compose: docker compose up -d
 Don't set a new uid without the `chown`: the container can't write the
 existing root-owned `magpie.db` and artifacts.
 
+#### Starting without root (e.g. Kubernetes)
+
+The container can also be started directly as its runtime uid
+(`docker run --user 10001:10001`, or Kubernetes `runAsUser` with
+`runAsNonRoot: true`), skipping the root step entirely. All capabilities
+can then be dropped. In that mode:
+
+- `MAGPIE_UID` / `MAGPIE_GID` are not used, and nothing can chown, so the
+  data directory must already be writable by that uid. On Kubernetes, set
+  `fsGroup` to the gid.
+- With a read-only root filesystem, mount a writable `/tmp` (Kubernetes:
+  an `emptyDir`). Caddy keeps its state there, and `magpie-ctl sync` needs
+  it.
+- `docker exec` / `kubectl exec` already run as that uid, so `magpie-ctl`
+  works without any privilege drop.
+
+Run one replica only: the database and artifacts live on one volume
+(`ReadWriteOnce`), and two containers must never serve the same data.
+
 ### Choosing what `update` installs
 
 `magpie-deploy.sh update` with no target moves to the latest published,
@@ -321,14 +340,17 @@ data format its build supports: `magpie-ctl init` on a fresh volume,
 otherwise `magpie-ctl migrate` (a quiet no-op when already current). This
 runs under the same `.magpie-init.lock` as first-boot init, so concurrent
 starts against one data directory are serialized, and each migration is
-applied in a single transaction. If migration fails, or the database is
+applied in a single transaction. Before a migration changes anything, a
+copy of `magpie.db` is saved to `<data>/backups/` (the newest 3 are kept);
+if that copy can't be written, the container refuses to migrate. If
+migration fails, or the database is
 newer than the image supports (e.g. after rolling the image tag back),
 the container exits non-zero without serving and without modifying the
 database; run a newer image or restore a backup. Upgrading by changing
 the image tag and restarting (plain `docker compose`, Ansible) is
-therefore migrated the same way, but takes no automatic backup and has no
-automatic rollback -- [back up](backup-restore.md#backup-procedures)
-first. `update` still runs `magpie-ctl migrate` explicitly after the swap
+therefore migrated the same way, with that copy of the database but no
+automatic rollback; the copy is on the same volume, so
+[back up](backup-restore.md#backup-procedures) the data directory too. `update` still runs `magpie-ctl migrate` explicitly after the swap
 (by then a no-op) as part of its post-update checks.
 
 The artifact byte-identity/tag-resolution checks in step 3 reach the
@@ -398,7 +420,8 @@ lives in `<install>/etc/.env`.
 
 `migrate --to N` reverts every step above N, newest first, in a single
 transaction under the same write lock as forward migration, and writes the
-new version stamp last. It changes nothing and exits non-zero if N is above
+new version stamp last. Like forward migration, it first saves a copy of
+`magpie.db` to `<data>/backups/`. It changes nothing and exits non-zero if N is above
 the current version or not a version that image knows, or if a step in the
 way is marked irreversible -- in that case,
 [restore a backup](backup-restore.md#restore-procedures) taken before the
