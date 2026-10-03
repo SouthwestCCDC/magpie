@@ -156,8 +156,18 @@ test_runtime_uid_written_and_never_reconciled() {
     log "  ✓ existing data, and an empty pre-created non-root data dir, keep their owner; no account created"
 
     local norm
-    norm="$(normalize_path /opt/magpie/./x/../)"
-    [[ "$norm" == "/opt/magpie" ]] || fail "normalize_path /opt/magpie/./x/../ gave ${norm}"
+    norm="$(normalize_path /opt//magpie/./data/)"
+    [[ "$norm" == "/opt/magpie/data" ]] || fail "normalize_path /opt//magpie/./data/ gave ${norm}"
+    [[ "$(normalize_path /opt/magpie/x/../)" == "/opt/magpie/x/../" ]] \
+        || fail "normalize_path must leave '..' paths for validate_config to reject"
+    [[ -z "$(normalize_path "")" ]] || fail "normalize_path of an empty path must stay empty"
+    [[ "$(normalize_path rel/x/)" == "rel/x/" ]] \
+        || fail "normalize_path must leave relative paths for validate_config to reject"
+    # No --install-dir: main runs before any command fills in the default.
+    local no_dir_out
+    no_dir_out="$(bash "$DEPLOY_SCRIPT" status 2>&1 || true)"
+    [[ "$no_dir_out" != *"realpath:"* ]] \
+        || fail "magpie-deploy.sh with no --install-dir failed in normalize_path: ${no_dir_out}"
     local kept="${TEST_DIR}/kept_install"
     mkdir -p "${kept}/data"
     ( INSTALL_DIR="$kept" DATA_DIR="${kept}/data"; install_dir_holds_only_kept_data ) \

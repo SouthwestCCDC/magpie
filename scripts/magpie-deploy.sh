@@ -542,7 +542,14 @@ validate_network_config() {
     fi
 }
 
+# Empty, relative and '..'-containing values pass through unchanged so
+# validate_config still rejects them; realpath would make them absolute and
+# resolve the '..' away.
 normalize_path() {
+    if [[ "$1" != /* || "/$1/" == */../* ]]; then
+        printf '%s\n' "$1"
+        return 0
+    fi
     realpath -m -s -- "$1"
 }
 
@@ -558,6 +565,10 @@ validate_config() {
     # later flow into the generated .env, so they must be validated here,
     # before any file is generated. See issue #448.
     validate_network_config
+
+    # Again here: gather_config's prompts run after main normalized the flags.
+    INSTALL_DIR="$(normalize_path "$INSTALL_DIR")"
+    DATA_DIR="$(normalize_path "$DATA_DIR")"
 
     # Directory validation
     if [[ -z "$INSTALL_DIR" ]]; then
