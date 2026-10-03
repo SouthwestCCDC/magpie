@@ -66,7 +66,8 @@ deployment. See [.env.example](../.env.example) for the full list of
 
 Choose one:
 
-- **`file`** -- writes a root-only (0600) file at
+- **`file`** -- writes an owner-only (0600) file, owned by the uid the
+  container runs as (see [Runtime user](#runtime-user)), at
   `MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH` (default: `/data/admin-token`, set by
   `docker-compose.yml`):
   ```bash

@@ -142,7 +142,18 @@ test_runtime_uid_written_and_never_reconciled() {
     )"
     [[ "$out" == "uid=$(id -u) gid=$(id -g) fresh=false" ]] \
         || fail "resolve_runtime_ids on existing data: expected its owner and no account creation, got: ${out}"
-    log "  ✓ existing data keeps its owner; no account created"
+    rm -f "${data_dir}/magpie.db"
+    # shellcheck disable=SC2034,SC2329  # read/called by resolve_runtime_ids
+    out="$(
+        DATA_DIR="$data_dir" SERVICE_ACCOUNT="magpie-test-must-not-be-created"
+        useradd() { echo "useradd called"; }
+        groupadd() { echo "groupadd called"; }
+        resolve_runtime_ids >/dev/null 2>&1
+        echo "uid=${RUNTIME_UID} gid=${RUNTIME_GID} fresh=${DATA_DIR_FRESH}"
+    )"
+    [[ "$out" == "uid=$(id -u) gid=$(id -g) fresh=false" ]] \
+        || fail "resolve_runtime_ids on an empty non-root-owned data dir: expected its owner, no chown/account, got: ${out}"
+    log "  ✓ existing data, and an empty pre-created non-root data dir, keep their owner; no account created"
 
     local env_file="${TEST_DIR}/uid_reconcile.env"
     printf 'MAGPIE_DATA_DIR=/srv/magpie\nMAGPIE_TRUSTED_PROXIES=\n' > "$env_file"

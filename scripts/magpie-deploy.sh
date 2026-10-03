@@ -574,6 +574,15 @@ validate_config() {
     fi
 
     # Warn about /home with ProtectHome=true
+    # clone_repo/backups/config writes replace these, so data inside them
+    # would not survive a reinstall or update.
+    local reserved
+    for reserved in repo etc backups; do
+        if [[ "${DATA_DIR}/" == "${INSTALL_DIR}/${reserved}/"* ]]; then
+            errors+=("Data directory must not be inside ${INSTALL_DIR}/${reserved}, which the installer manages: $DATA_DIR")
+        fi
+    done
+
     if [[ "$DATA_DIR" =~ ^/home(/|$) ]]; then
         log_warn "Data directory is under /home: $DATA_DIR"
         log_warn "The GC service uses ProtectHome=true for security hardening."
@@ -642,6 +651,7 @@ install_dir_holds_only_kept_data() {
     local rel="${DATA_DIR#"${INSTALL_DIR}"/}"
     [[ "$rel" != "$DATA_DIR" ]] || return 1
     local keep="${rel%%/*}" entry
+    [[ -n "$(ls -A "${INSTALL_DIR}/${keep}" 2>/dev/null)" ]] || return 1
     for entry in "$INSTALL_DIR"/* "$INSTALL_DIR"/.[!.]*; do
         [[ -e "$entry" ]] || continue
         [[ "$(basename "$entry")" == "$keep" ]] || return 1
@@ -992,18 +1002,22 @@ ensure_service_account() {
 # magpie.db or artifact tree. Root-owned existing data keeps running as
 # root, with a warning.
 resolve_runtime_ids() {
-    if [[ -d "$DATA_DIR" && -n "$(ls -A "$DATA_DIR" 2>/dev/null)" ]]; then
+    if [[ -d "$DATA_DIR" ]]; then
         local owner_uid owner_gid
         owner_uid="$(stat -c %u "$DATA_DIR")"
         owner_gid="$(stat -c %g "$DATA_DIR")"
-        if [[ "$owner_uid" == "0" ]]; then
-            warn_root_owned_data "$DATA_DIR"
-        else
+        # A non-root owner was chosen on purpose (e.g. an NFS export
+        # pre-created for a fixed uid), even while still empty.
+        if [[ "$owner_uid" != "0" ]]; then
             RUNTIME_UID="$owner_uid"
             RUNTIME_GID="$owner_gid"
-            log "Existing data in ${DATA_DIR} is owned by ${RUNTIME_UID}:${RUNTIME_GID}; magpie will run as that uid/gid"
+            log "${DATA_DIR} is owned by ${RUNTIME_UID}:${RUNTIME_GID}; magpie will run as that uid/gid"
+            return 0
         fi
-        return 0
+        if [[ -n "$(ls -A "$DATA_DIR" 2>/dev/null)" ]]; then
+            warn_root_owned_data "$DATA_DIR"
+            return 0
+        fi
     fi
     DATA_DIR_FRESH="true"
     ensure_service_account
@@ -3768,8 +3782,12 @@ cmd_uninstall() {
         rm -rf "${DATA_DIR}"
         # Only accounts this installer created; one config management made
         # (or that predates the install) is left alone.
+        # The record sits in the data directory, which the container uid can
+        # write, so it can only ever name SERVICE_ACCOUNT -- never an
+        # arbitrary account for root to delete.
         local kind name
         while read -r kind name; do
+            [[ "$name" == "$SERVICE_ACCOUNT" ]] || continue
             case "$kind" in
                 user)
                     log "Removing system account: ${name}"
