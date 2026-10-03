@@ -48,7 +48,8 @@ updates:
       - "SouthwestCCDC/blackteam"
     rebase-strategy: "auto"
 
-  # Base images in Dockerfile.bundled / Dockerfile, pinned by digest
+  # Base images in Dockerfile.bundled / Dockerfile / Dockerfile.test-runner,
+  # pinned by digest
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
