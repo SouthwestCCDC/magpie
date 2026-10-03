@@ -583,6 +583,133 @@ class TestBundledImageNonRootCaddy:
                 _cleanup(init_name)
 
 
+def _runtime_ids() -> tuple[int, int]:
+    """Non-root uid/gid to start containers as directly (`--user`)."""
+    uid, gid = os.getuid(), os.getgid()
+    return (1000, 1000) if uid == 0 else (uid, gid)
+
+
+def _wait_healthy(name: str, timeout: int = 90) -> str:
+    """Wait for Caddy's /health on the published port; return the port."""
+    _wait_for_log(name, "caddy started", timeout=timeout)
+    port = _published_port(name)
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            if httpx.get(f"http://127.0.0.1:{port}/health", timeout=2).status_code == 200:
+                return port
+        except httpx.HTTPError:
+            pass
+        if time.monotonic() > deadline:
+            pytest.fail(f"{name} never answered /health:\n{_logs(name)}")
+        time.sleep(1)
+
+
+def _process_uids(name: str) -> set[int]:
+    top = subprocess.run(
+        ["docker", "top", name, "-o", "pid,uid,comm"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return {int(line.split(None, 2)[1]) for line in top.strip().splitlines()[1:]}
+
+
+@pytest.mark.e2e
+@pytest.mark.slow
+class TestBundledImageStartedNonRoot:
+    """Started directly as the runtime uid (Kubernetes runAsNonRoot,
+    `docker run --user`), with no root prelude: Caddy's state falls back
+    to TMPDIR, and the restricted Kubernetes profile (no capabilities,
+    no-new-privileges, read-only root filesystem with only /tmp writable)
+    must serve authenticated traffic.
+    """
+
+    def _start(self, image: str, data_dir: Path, name: str, extra: list[str]) -> str:
+        uid, gid = _runtime_ids()
+        if os.getuid() == 0:
+            os.chown(data_dir, uid, gid)
+        _run_container(
+            image,
+            data_dir,
+            name,
+            extra_args=["-p", "0:8080", "--user", f"{uid}:{gid}", *extra],
+        )
+        return _wait_healthy(name)
+
+    def test_user_flag_starts_and_runs_as_that_uid(self, bundled_image: str) -> None:
+        name = f"magpie-bundled-e2e-user-{uuid.uuid4().hex[:8]}"
+        with tempfile.TemporaryDirectory(prefix="magpie_bundled_user_") as tmp:
+            _cleanup(name)
+            try:
+                self._start(bundled_image, Path(tmp), name, [])
+                assert _process_uids(name) == {_runtime_ids()[0]}
+                assert "keeping Caddy's state in" in _logs(name)
+            finally:
+                _cleanup(name)
+
+    def test_restricted_kubernetes_profile_serves(self, bundled_image: str) -> None:
+        name = f"magpie-bundled-e2e-restricted-{uuid.uuid4().hex[:8]}"
+        with tempfile.TemporaryDirectory(prefix="magpie_bundled_restricted_") as tmp:
+            data_dir = Path(tmp)
+            _cleanup(name)
+            try:
+                port = self._start(
+                    bundled_image,
+                    data_dir,
+                    name,
+                    [
+                        "--read-only",
+                        "--tmpfs",
+                        "/tmp",
+                        "--cap-drop",
+                        "ALL",
+                        "--security-opt",
+                        "no-new-privileges",
+                        "-e",
+                        "MAGPIE_ADMIN_TOKEN_SINK=file",
+                    ],
+                )
+                token = (data_dir / "admin-token").read_text().strip()
+                base = f"http://127.0.0.1:{port}"
+                assert httpx.get(f"{base}/api/v1/status").status_code == 401
+                status = httpx.get(
+                    f"{base}/api/v1/status", headers={"Authorization": f"Bearer {token}"}
+                )
+                assert status.status_code == 200, status.text
+                assert _process_uids(name) == {_runtime_ids()[0]}
+            finally:
+                _cleanup(name)
+
+    def test_root_start_on_read_only_rootfs_without_caddy_tmpfs(self, bundled_image: str) -> None:
+        """Root prelude can't provision /var/lib/caddy on a read-only root
+        filesystem; it must warn and fall back rather than fail."""
+        name = f"magpie-bundled-e2e-rootro-{uuid.uuid4().hex[:8]}"
+        with tempfile.TemporaryDirectory(prefix="magpie_bundled_rootro_") as tmp:
+            _cleanup(name)
+            try:
+                _run_container(
+                    bundled_image,
+                    Path(tmp),
+                    name,
+                    extra_args=[
+                        "-p",
+                        "0:8080",
+                        "--read-only",
+                        "--tmpfs",
+                        "/run",
+                        "--tmpfs",
+                        "/tmp",
+                        *_own_uid_gid_args(),
+                    ],
+                )
+                _wait_healthy(name)
+                assert "could not provision /var/lib/caddy" in _logs(name)
+                assert 0 not in _process_uids(name)
+            finally:
+                _cleanup(name)
+
+
 def _host_db(data_dir: Path, user_version: int | None) -> Path:
     """Create `data_dir/magpie.db` from the host, optionally stamped.
 

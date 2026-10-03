@@ -31,9 +31,11 @@
 #      -> root prelude runs, then `exec tini -- "$0" "$@"` (no gosu:
 #      dropping root to root is a no-op, and root forwarding a signal to
 #      its own root child needs no capability either).
-#   3. Started non-root directly (`docker run --user <uid>`): no root
-#      prelude possible (nothing to chown with) -> straight to `exec
-#      tini -- "$0" "$@"` at the already-current uid.
+#   3. Started non-root directly (`docker run --user <uid>`, Kubernetes
+#      runAsNonRoot): no root prelude possible (nothing to chown with) ->
+#      straight to `exec tini -- "$0" "$@"` at the already-current uid.
+#      The data directory must already be writable by that uid, and
+#      Caddy keeps its state under TMPDIR (see below).
 #
 # The root prelude intentionally duplicates a small amount of
 # entrypoint.sh's setup logic (uid resolution, /data ownership fixups)
@@ -144,13 +146,11 @@ magpie_fixup_ownership() {
 	# explicitly so that safety property doesn't silently depend on an
 	# implicit default (see #590's discussion for why this matters and
 	# why it's already safe).
-	if ! mkdir -p /var/lib/caddy/data /var/lib/caddy/config; then
-		log "error: failed to create /var/lib/caddy/{data,config}"
-		exit 1
-	fi
-	if ! chown -RP "$RUN_UID:$RUN_GID" /var/lib/caddy; then
-		log "error: failed to chown /var/lib/caddy to $RUN_UID:$RUN_GID"
-		exit 1
+	# Best effort: on a read-only root filesystem with no tmpfs here, the
+	# post-drop phase falls back to a directory under TMPDIR.
+	if ! { mkdir -p /var/lib/caddy/data /var/lib/caddy/config 2>/dev/null &&
+		chown -RP "$RUN_UID:$RUN_GID" /var/lib/caddy; }; then
+		log "warning: could not provision /var/lib/caddy for $RUN_UID:$RUN_GID; Caddy will keep its state under ${TMPDIR:-/tmp}"
 	fi
 }
 
@@ -219,7 +219,7 @@ if [ "$$" = 1 ]; then
 		exit 1
 	fi
 	if ! echo "$RUN_UID:$RUN_GID" >/run/magpie-user; then
-		log "error: failed to write /run/magpie-user"
+		log "error: failed to write /run/magpie-user -- on a read-only root filesystem, mount a tmpfs at /run (compose tmpfs, Kubernetes emptyDir), or start the container as its runtime uid instead"
 		exit 1
 	fi
 	if ! chmod 644 /run/magpie-user; then
@@ -465,23 +465,28 @@ until wget -q -O /dev/null --timeout=3 --tries=1 http://127.0.0.1:8000/health 2>
 done
 log "uvicorn ready after ${attempts} attempts (${SECONDS}s elapsed)"
 
-# /var/lib/caddy is baked into the image root-owned; the root prelude
-# above is what normally chowns it to this uid. If that prelude was
-# skipped (container started non-root directly, e.g. `docker run --user
-# <uid>`), this directory is still root-owned and Caddy can't write its
-# autosave config into it -- checked explicitly here, with an actionable
-# message, rather than letting Caddy itself fail deep inside its own
-# startup with a less clear error.
-if ! mkdir -p /var/lib/caddy/data /var/lib/caddy/config 2>/dev/null ||
-	! [ -w /var/lib/caddy/data ] || ! [ -w /var/lib/caddy/config ]; then
-	log "error: /var/lib/caddy is not writable by uid $(id -u) -- if this container was started non-root directly (skipping the root prelude), either start it as root once so the prelude can provision /var/lib/caddy, or pre-create and chown /var/lib/caddy to this uid before starting"
-	kill -TERM "$UVICORN_PID" 2>/dev/null
-	wait "$UVICORN_PID" 2>/dev/null
-	exit 1
+# Caddy writes an autosave config on every load even with `admin off`
+# (#589); none of it needs to persist. /var/lib/caddy is what the root
+# prelude provisions. Started non-root directly, or on a read-only root
+# filesystem with no tmpfs there, nothing could provision it, so use a
+# private directory under TMPDIR instead.
+caddy_state_dir_ok() {
+	mkdir -p "$1/data" "$1/config" 2>/dev/null && [ -w "$1/data" ] && [ -w "$1/config" ]
+}
+CADDY_HOME=/var/lib/caddy
+if ! caddy_state_dir_ok "$CADDY_HOME"; then
+	CADDY_HOME="${TMPDIR:-/tmp}/caddy-$(id -u)"
+	if ! (umask 077 && caddy_state_dir_ok "$CADDY_HOME"); then
+		log "error: neither /var/lib/caddy nor $CADDY_HOME is writable by uid $(id -u) -- on a read-only root filesystem, mount a writable /tmp (compose tmpfs, Kubernetes emptyDir)"
+		kill -TERM "$UVICORN_PID" 2>/dev/null
+		wait "$UVICORN_PID" 2>/dev/null
+		exit 1
+	fi
+	log "/var/lib/caddy is not writable by uid $(id -u); keeping Caddy's state in $CADDY_HOME"
 fi
 
-export XDG_DATA_HOME=/var/lib/caddy/data
-export XDG_CONFIG_HOME=/var/lib/caddy/config
+export XDG_DATA_HOME="$CADDY_HOME/data"
+export XDG_CONFIG_HOME="$CADDY_HOME/config"
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 CADDY_PID=$!
 # Same race as uvicorn's above: catch up on a signal that arrived before
