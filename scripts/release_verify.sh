@@ -72,10 +72,11 @@ assert_auth() {
     log "anonymous request refused, admin token accepted"
 }
 
-# Test artifacts are 1 MiB streams regenerated from a random seed, so no
-# scratch file is ever written (and none is left behind by a failed check).
+# Test artifacts are 1 MiB incompressible streams (an AES-CTR keystream)
+# regenerated from a random seed, so no scratch file is ever written and
+# none is left behind by a failed check.
 new_seed() { od -An -N16 -tx1 /dev/urandom | tr -d ' \n'; }
-blob() { head -c 1048576 < <(yes "$1"); }
+blob() { head -c 1048576 < <(openssl enc -aes-256-ctr -pbkdf2 -nosalt -pass "pass:$1" </dev/zero 2>/dev/null); }
 
 push_artifact() {
     local token="$1" path="$2" seed="$3" code
