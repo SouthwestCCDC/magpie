@@ -155,6 +155,19 @@ test_runtime_uid_written_and_never_reconciled() {
         || fail "resolve_runtime_ids on an empty non-root-owned data dir: expected its owner, no chown/account, got: ${out}"
     log "  ✓ existing data, and an empty pre-created non-root data dir, keep their owner; no account created"
 
+    local norm
+    norm="$(normalize_path /opt/magpie/./x/../)"
+    [[ "$norm" == "/opt/magpie" ]] || fail "normalize_path /opt/magpie/./x/../ gave ${norm}"
+    local kept="${TEST_DIR}/kept_install"
+    mkdir -p "${kept}/data"
+    ( INSTALL_DIR="$kept" DATA_DIR="${kept}/data"; install_dir_holds_only_kept_data ) \
+        || fail "install_dir_holds_only_kept_data rejected an install dir holding only an empty kept data dir"
+    rmdir "${kept}/data"
+    if ( INSTALL_DIR="$kept" DATA_DIR="${kept}/data"; install_dir_holds_only_kept_data ); then
+        fail "install_dir_holds_only_kept_data accepted an empty install dir with no kept data"
+    fi
+    log "  ✓ normalize_path; kept-data reinstall needs the kept dir, not its contents"
+
     local env_file="${TEST_DIR}/uid_reconcile.env"
     printf 'MAGPIE_DATA_DIR=/srv/magpie\nMAGPIE_TRUSTED_PROXIES=\n' > "$env_file"
     (

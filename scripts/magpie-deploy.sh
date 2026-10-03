@@ -542,6 +542,10 @@ validate_network_config() {
     fi
 }
 
+normalize_path() {
+    realpath -m -s -- "$1"
+}
+
 validate_config() {
     local errors=()
 
@@ -651,7 +655,7 @@ install_dir_holds_only_kept_data() {
     local rel="${DATA_DIR#"${INSTALL_DIR}"/}"
     [[ "$rel" != "$DATA_DIR" ]] || return 1
     local keep="${rel%%/*}" entry
-    [[ -n "$(ls -A "${INSTALL_DIR}/${keep}" 2>/dev/null)" ]] || return 1
+    [[ -d "${INSTALL_DIR}/${keep}" ]] || return 1
     for entry in "$INSTALL_DIR"/* "$INSTALL_DIR"/.[!.]*; do
         [[ -e "$entry" ]] || continue
         [[ "$(basename "$entry")" == "$keep" ]] || return 1
@@ -966,10 +970,11 @@ RUNTIME_UID=""
 RUNTIME_GID=""
 DATA_DIR_FRESH="false"
 CREATED_ACCOUNTS=()
-# Accounts this installer created, so purge removes only those. Kept with the
-# data rather than in etc/: a plain uninstall keeps the data and the account
-# that owns it, and a reinstall onto that data must still know to purge it.
-CREATED_ACCOUNTS_FILE=".magpie-created-accounts"
+# Accounts this installer created, so purge removes only those. Outside both
+# etc/ (a plain uninstall removes it but keeps the data and the account that
+# owns it, and a reinstall onto that data must still know to purge it) and the
+# data directory (the container uid can write there, and root acts on this).
+CREATED_ACCOUNTS_FILE="/var/lib/magpie-deploy/created-accounts"
 
 warn_root_owned_data() {
     local dir="$1"
@@ -1030,8 +1035,12 @@ resolve_runtime_ids() {
 # created so 'uninstall --purge' removes exactly those.
 apply_runtime_ownership() {
     local kind
+    if (( ${#CREATED_ACCOUNTS[@]} > 0 )); then
+        install -d -m 0755 "$(dirname "$CREATED_ACCOUNTS_FILE")" \
+            || die "Failed to create $(dirname "$CREATED_ACCOUNTS_FILE")"
+    fi
     for kind in "${CREATED_ACCOUNTS[@]}"; do
-        echo "${kind} ${SERVICE_ACCOUNT}" >> "${DATA_DIR}/${CREATED_ACCOUNTS_FILE}"
+        echo "${kind} ${SERVICE_ACCOUNT}" >> "$CREATED_ACCOUNTS_FILE"
     done
     if [[ "$DATA_DIR_FRESH" == "true" ]]; then
         chown -R "${RUNTIME_UID}:${RUNTIME_GID}" "$DATA_DIR" \
@@ -3773,18 +3782,17 @@ cmd_uninstall() {
     rm -f /etc/systemd/system/magpie-gc.timer
     systemctl daemon-reload
 
+    DATA_DIR="$(normalize_path "$DATA_DIR")"
     local created_accounts=""
-    if [[ -f "${DATA_DIR}/${CREATED_ACCOUNTS_FILE}" ]]; then
-        created_accounts="$(cat "${DATA_DIR}/${CREATED_ACCOUNTS_FILE}")"
+    if [[ -f "$CREATED_ACCOUNTS_FILE" ]]; then
+        created_accounts="$(cat "$CREATED_ACCOUNTS_FILE")"
     fi
     if [[ "$PURGE" == "true" ]]; then
         log "Removing data directory: ${DATA_DIR}"
         rm -rf "${DATA_DIR}"
         # Only accounts this installer created; one config management made
         # (or that predates the install) is left alone.
-        # The record sits in the data directory, which the container uid can
-        # write, so it can only ever name SERVICE_ACCOUNT -- never an
-        # arbitrary account for root to delete.
+        # Belt and braces: only ever SERVICE_ACCOUNT, whatever the record says.
         local kind name
         while read -r kind name; do
             [[ "$name" == "$SERVICE_ACCOUNT" ]] || continue
@@ -3800,6 +3808,8 @@ cmd_uninstall() {
                     ;;
             esac
         done < <(sort -r <<< "$created_accounts")
+        rm -f "$CREATED_ACCOUNTS_FILE"
+        rmdir "$(dirname "$CREATED_ACCOUNTS_FILE")" 2>/dev/null || true
     fi
 
     # The default data directory (${INSTALL_DIR}/data) lives inside the
@@ -4329,6 +4339,15 @@ parse_args() {
     # request.
     if [[ -n "$SOURCE_DIR" ]] && [[ "$command" != "install" ]]; then
         die "--source-dir is only supported by the 'install' command (got: $command)"
+    fi
+
+    # Lexically (no symlink resolution, so the paths written to .env and the
+    # units are the ones given): drops trailing slashes and ./.. segments, which
+    # the INSTALL_DIR-relative DATA_DIR checks in validate_config and
+    # cmd_uninstall compare as strings.
+    INSTALL_DIR="$(normalize_path "$INSTALL_DIR")"
+    if [[ -n "$DATA_DIR" ]]; then
+        DATA_DIR="$(normalize_path "$DATA_DIR")"
     fi
 
     # Execute command

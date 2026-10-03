@@ -199,8 +199,7 @@ root for a directory Docker created.
   new data directory to it. Installing onto a data directory that already
   holds data keeps that directory's owner. A plain `uninstall` keeps the
   data and its account; `uninstall --purge` removes the account only if the
-  installer created it (recorded in `.magpie-created-accounts` in the data
-  directory).
+  installer created it (recorded in `/var/lib/magpie-deploy/created-accounts`).
 - **Existing deployments** keep running as the uid they used before.
   `update` never changes it, and warns when it is root.
 
