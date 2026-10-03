@@ -181,7 +181,7 @@ jobs:
 
           echo "Updated HARDCODED_VERSION to $VERSION"
 
-      # docker-compose.yml and .env.example pinned to this release's image
+      # docker-compose.yml and env.example pinned to this release's image
       # by digest, plus the installer and SHA256SUMS, so a deployer can
       # run a release without cloning the repo (#633).
       - name: Render release assets
@@ -215,6 +215,6 @@ jobs:
           generate_release_notes: true
           files: |
             dist/docker-compose.yml
-            dist/.env.example
+            dist/env.example
             dist/magpie-deploy.sh
             dist/SHA256SUMS
