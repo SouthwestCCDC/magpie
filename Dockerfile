@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1
-FROM python:3.13-slim AS base
+FROM ghcr.io/astral-sh/uv:0.12.23@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e608e11c93ad4f5bba55b21 AS uv
+
+FROM python:3.13-slim@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81 AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -7,7 +9,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # Install uv for fast dependency management
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=uv /uv /usr/local/bin/uv
 
 # Install dependencies (cached layer)
 FROM base AS deps
@@ -60,6 +62,7 @@ RUN uv sync --frozen --no-dev
 # wrong uid. Every documented `docker exec ... magpie-ctl` usage (see
 # docs/, deployment/README.md, scripts/magpie-deploy.sh) depends on the
 # wrapper actually being what bare `magpie-ctl` resolves to.
+# hadolint ignore=DL3059
 RUN rm /app/.venv/bin/magpie-ctl
 
 # Entrypoint handles dropping privileges to the correct user
