@@ -63,10 +63,28 @@ git push origin HEAD vX.Y.Z
 The GitHub Actions release workflow automatically:
 
 1. Validates the tag matches `pyproject.toml`
-2. Builds multi-architecture container images (amd64, arm64)
-3. Pushes images to `ghcr.io/southwestccdc/magpie`
-4. Creates a GitHub Release with auto-generated changelog
-5. Attaches release assets (e.g., `scripts/magpie-deploy.sh`)
+2. Waits for CI on the tagged commit and stops unless every required check
+   passed (`scripts/release_require_ci.sh`). Those checks run on pushes to
+   `default`, so tag a commit that is on `default`.
+3. Builds multi-architecture container images (amd64, arm64) and pushes the
+   `<version>` and `<version>-bundled` tags to `ghcr.io/southwestccdc/magpie`
+4. Renders the release assets (see [Release Assets](#release-assets))
+5. Verifies the pushed digest from those exact files
+   (`scripts/release_verify.sh`; each check is a subcommand you can run
+   locally):
+   - the assets match `SHA256SUMS` and pin the pushed digest;
+   - restricted start (non-root, read-only root filesystem, no
+     capabilities) on amd64 and arm64;
+   - plain compose on fresh data, and the installer's install, checks and
+     `uninstall --purge`;
+   - an upgrade from the previous release, with plain compose and with the
+     installer.
+6. Only then moves the rolling tags (stable releases only) and creates the
+   GitHub Release with the assets and an auto-generated changelog
+
+If verification fails, the `<version>` image tags exist but nothing points
+users at them: `latest` doesn't move and there is no GitHub Release. Fix
+forward with the next version.
 
 ## Container Image Tags
 

@@ -13,8 +13,8 @@
 # nothing outside the installer/entrypoint/Caddy/compose surface can change
 # its outcome.
 #
-# Tier 3 (post-release smoke test of the PUBLISHED installer and image, the
-# --release path) is issue #571 and is not implemented here.
+# Tier 3 (the PUBLISHED installer and image, the --release path) runs in
+# release.yml's verify job, before the release is published (#571).
 
 name: Installer
 
