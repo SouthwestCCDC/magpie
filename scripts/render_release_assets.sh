@@ -1,6 +1,6 @@
 #!/bin/bash
 # Render the files attached to a GitHub release (#633): docker-compose.yml
-# and .env.example with the image pinned to this release by digest, the
+# and env.example with the image pinned to this release by digest, the
 # installer, and SHA256SUMS over all of them. Used by
 # .github/workflows/release.yml; runnable locally for testing.
 #
@@ -46,11 +46,13 @@ rm "${outdir}/docker-compose.yml.tmp"
 
 render "${repo_root}/.env.example" "${outdir}/.env.example.tmp" \
     "# Default: ${template_repo}:latest" "# Default: ${pinned}"
-render "${outdir}/.env.example.tmp" "${outdir}/.env.example" \
+render "${outdir}/.env.example.tmp" "${outdir}/env.example" \
     "# MAGPIE_IMAGE=${template_repo}:latest" "# MAGPIE_IMAGE=${pinned}"
 rm "${outdir}/.env.example.tmp"
 
 cp "${repo_root}/scripts/magpie-deploy.sh" "${outdir}/magpie-deploy.sh"
 
-(cd "$outdir" && sha256sum docker-compose.yml .env.example magpie-deploy.sh >SHA256SUMS)
+# GitHub renames release assets with a leading dot (".env.example" is
+# published as "default.env.example"), so the template ships without one.
+(cd "$outdir" && sha256sum docker-compose.yml env.example magpie-deploy.sh >SHA256SUMS)
 echo "Rendered release assets for ${pinned} in ${outdir}"
