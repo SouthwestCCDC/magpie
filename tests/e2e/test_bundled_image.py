@@ -808,6 +808,11 @@ class TestBundledImageStartupMigration:
                 assert log_text.index("Migrated data format") < log_text.index("uvicorn started")
                 assert _host_db_version(db_path) == CURRENT_DATA_FORMAT_VERSION
                 assert _host_token_names(db_path) == ["pre-existing"]
+                # The pre-migration copy is the old database, unmigrated.
+                assert "Saved a copy of the database first" in log_text, log_text
+                (copy,) = (data_dir / "backups").glob("magpie.db.*.pre-v*")
+                assert _host_db_version(copy) == 0
+                assert _host_token_names(copy) == ["pre-existing"]
             finally:
                 _cleanup(name)
 

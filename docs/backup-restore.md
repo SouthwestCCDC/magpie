@@ -25,8 +25,9 @@ assert -> rollback flow ([issue
 
 Upgrading without the installer -- changing the image tag and restarting
 the container -- migrates the database automatically at startup (see
-[Upgrading to v0.2.0](installation.md#upgrading-to-v020)) but takes no
-backup, so take a [manual backup](#backup-procedures) first. A container
+[Upgrading to v0.2.0](installation.md#upgrading-to-v020)). It only keeps
+the [pre-migration copy of the database](#pre-migration-database-copies),
+on the same volume, so take a [manual backup](#backup-procedures) first. A container
 whose database is newer than its image supports refuses to start and
 leaves the database untouched; run a newer image, revert the data with
 the newer image's `magpie-ctl migrate --to N` (see [Downgrading the data
@@ -71,6 +72,40 @@ it.
 On a failed update, the installer prints the backup path and (for a
 failed rollback restore itself) the `MANIFEST` location -- start there
 for manual recovery.
+
+## Pre-Migration Database Copies
+
+Whenever `magpie-ctl migrate` is about to change the database -- at
+container start when the data format is behind the image, or with
+`migrate --to N` -- it first saves a copy of `magpie.db` with SQLite's
+online backup:
+
+```
+<data>/backups/magpie.db.<UTC timestamp>.pre-v<N>            # before migrating to N
+<data>/backups/magpie.db.<UTC timestamp>.pre-revert-to-v<N>  # before migrate --to N
+```
+
+The directory is `0700` and each copy `0600` (it holds token hashes). The
+newest 3 are kept, pruned only after a migration succeeds; a failed
+attempt removes its own copy, so retrying can't evict older ones. Other
+files you put in the directory are never pruned. If the copy can't be
+written (e.g. the volume is full), nothing is migrated and the container
+doesn't start; delete old copies or free space. A fresh install takes one copy too, since `init` creates a
+version-0 database that is then migrated.
+
+These protect against a bad migration, not against losing the volume, and
+don't include artifacts (migrations don't change them). To go back to one,
+stop magpie and put it in place. `cp -p` keeps the copy's owner, which is
+the uid magpie runs as (run it as root, or as that uid):
+
+```bash
+cp -p <data>/backups/magpie.db.<timestamp>.pre-v<N> <data>/magpie.db
+rm -f <data>/magpie.db-wal <data>/magpie.db-shm
+```
+
+Then start the image you want: the older one the copy was taken from, or
+a fixed newer one, which migrates it forward again. Tokens created after
+the copy was taken are lost.
 
 ## Backup Procedures
 
