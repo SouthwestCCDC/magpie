@@ -28,7 +28,9 @@ the container -- migrates the database automatically at startup (see
 [Upgrading to v0.2.0](installation.md#upgrading-to-v020)) but takes no
 backup, so take a [manual backup](#backup-procedures) first. A container
 whose database is newer than its image supports refuses to start and
-leaves the database untouched; run a newer image or
+leaves the database untouched; run a newer image, revert the data with
+the newer image's `magpie-ctl migrate --to N` (see [Downgrading the data
+format](installation.md#downgrading-the-data-format)), or
 [restore](#restore-procedures) a backup.
 
 **Layout:** `<install-dir>/backups/<version>-<UTC-timestamp>/`, e.g.
