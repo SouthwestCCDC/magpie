@@ -951,6 +951,54 @@ setup_tokens() {
 
 # --- uninstall --------------------------------------------------------------
 
+# A plain uninstall must keep the data -- by default ${INSTALL_DIR}/data,
+# inside the directory it removes -- and a reinstall must pick it up again.
+assert_uninstall_keeps_data() {
+    log_section "uninstall (keep data), then reinstall onto it"
+
+    local status=0
+    "$DEPLOY_SCRIPT" uninstall --yes --noninteractive --install-dir "$INSTALL_DIR" || status=$?
+    assert_eq "0" "$status" "uninstall exit status"
+    if [[ -f "${DATA_DIR}/magpie.db" ]]; then
+        pass "uninstall kept ${DATA_DIR}/magpie.db"
+    else
+        fail "uninstall removed the data in ${DATA_DIR}"
+        return 0
+    fi
+    if [[ -e "${INSTALL_DIR}/etc" ]]; then
+        fail "uninstall left ${INSTALL_DIR}/etc behind"
+    else
+        pass "uninstall removed ${INSTALL_DIR}/etc"
+    fi
+    if [[ -n "$(systemctl list-unit-files 'magpie*' --no-legend --no-pager 2>/dev/null || true)" ]]; then
+        fail "uninstall left magpie units installed"
+    else
+        pass "uninstall removed the magpie units"
+    fi
+    if [[ -n "$(docker ps -a --filter 'name=magpie' -q || true)" ]]; then
+        fail "uninstall left a magpie container"
+    else
+        pass "uninstall removed the magpie container"
+    fi
+
+    run_install
+    assert_container_healthy
+    assert_runs_as_service_account
+
+    status=0
+    curl -sS --max-time 60 -f \
+        -H "Authorization: Bearer ${WRITE_TOKEN}" \
+        -o "${WORK_DIR}/after-reinstall.bin" \
+        "${BASE_URL}/artifacts/installer-e2e/round-trip/latest" || status=$?
+    if (( status != 0 )); then
+        fail "after reinstall: download of the pre-uninstall artifact failed (curl exit ${status})"
+    elif cmp -s "${WORK_DIR}/artifact.bin" "${WORK_DIR}/after-reinstall.bin"; then
+        pass "after reinstall: the pre-uninstall artifact and token still work"
+    else
+        fail "after reinstall: the pre-uninstall artifact differs"
+    fi
+}
+
 assert_purge_leaves_nothing() {
     log_section "uninstall --purge"
 
@@ -1029,6 +1077,7 @@ main() {
     assert_release_updates
     assert_runs_as_service_account
 
+    assert_uninstall_keeps_data
     assert_purge_leaves_nothing
 
     log_section "Summary"

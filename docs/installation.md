@@ -196,8 +196,10 @@ root for a directory Docker created.
   account, or reuses an existing one (e.g. one config management pinned to
   a fixed uid), writes its uid/gid to `<install>/etc/.env`, and chowns the
   new data directory to it. Installing onto a data directory that already
-  holds data keeps that directory's owner. `uninstall --purge` removes the
-  account only if the installer created it.
+  holds data keeps that directory's owner. A plain `uninstall` keeps the
+  data and its account; `uninstall --purge` removes the account only if the
+  installer created it (recorded in `.magpie-created-accounts` in the data
+  directory).
 - **Existing deployments** keep running as the uid they used before.
   `update` never changes it, and warns when it is root.
 

@@ -636,7 +636,23 @@ validate_config() {
 # Installation state checks
 # =============================================================================
 
+# True when INSTALL_DIR holds nothing but the data directory a plain
+# `uninstall` kept there (the default ${INSTALL_DIR}/data layout).
+install_dir_holds_only_kept_data() {
+    local rel="${DATA_DIR#"${INSTALL_DIR}"/}"
+    [[ "$rel" != "$DATA_DIR" ]] || return 1
+    local keep="${rel%%/*}" entry
+    for entry in "$INSTALL_DIR"/* "$INSTALL_DIR"/.[!.]*; do
+        [[ -e "$entry" ]] || continue
+        [[ "$(basename "$entry")" == "$keep" ]] || return 1
+    done
+}
+
 check_existing_installation() {
+    if [[ -d "$INSTALL_DIR" ]] && install_dir_holds_only_kept_data; then
+        log "Reinstalling onto the data a previous uninstall kept in ${DATA_DIR}"
+        return 0
+    fi
     if [[ -d "$INSTALL_DIR" ]]; then
         if [[ "$FORCE" != "true" ]]; then
             die "Installation directory already exists: $INSTALL_DIR\nUse --force to overwrite, or 'update' to update existing installation."
@@ -940,6 +956,10 @@ RUNTIME_UID=""
 RUNTIME_GID=""
 DATA_DIR_FRESH="false"
 CREATED_ACCOUNTS=()
+# Accounts this installer created, so purge removes only those. Kept with the
+# data rather than in etc/: a plain uninstall keeps the data and the account
+# that owns it, and a reinstall onto that data must still know to purge it.
+CREATED_ACCOUNTS_FILE=".magpie-created-accounts"
 
 warn_root_owned_data() {
     local dir="$1"
@@ -995,14 +1015,14 @@ resolve_runtime_ids() {
 # Called after the data directory is created. Records the accounts this run
 # created so 'uninstall --purge' removes exactly those.
 apply_runtime_ownership() {
+    local kind
+    for kind in "${CREATED_ACCOUNTS[@]}"; do
+        echo "${kind} ${SERVICE_ACCOUNT}" >> "${DATA_DIR}/${CREATED_ACCOUNTS_FILE}"
+    done
     if [[ "$DATA_DIR_FRESH" == "true" ]]; then
         chown -R "${RUNTIME_UID}:${RUNTIME_GID}" "$DATA_DIR" \
             || die "Failed to chown ${DATA_DIR} to ${SERVICE_ACCOUNT} (${RUNTIME_UID}:${RUNTIME_GID}). On a network mount that squashes root, pre-create it owned by the uid magpie should run as."
     fi
-    local kind
-    for kind in "${CREATED_ACCOUNTS[@]}"; do
-        echo "${kind} ${SERVICE_ACCOUNT}" >> "${INSTALL_DIR}/etc/created-accounts"
-    done
 }
 
 # Sets COMPOSE_FILE_ARGS to the compose file set every docker compose
@@ -3740,8 +3760,8 @@ cmd_uninstall() {
     systemctl daemon-reload
 
     local created_accounts=""
-    if [[ -f "${INSTALL_DIR}/etc/created-accounts" ]]; then
-        created_accounts="$(cat "${INSTALL_DIR}/etc/created-accounts")"
+    if [[ -f "${DATA_DIR}/${CREATED_ACCOUNTS_FILE}" ]]; then
+        created_accounts="$(cat "${DATA_DIR}/${CREATED_ACCOUNTS_FILE}")"
     fi
     if [[ "$PURGE" == "true" ]]; then
         log "Removing data directory: ${DATA_DIR}"
@@ -3764,8 +3784,19 @@ cmd_uninstall() {
         done < <(sort -r <<< "$created_accounts")
     fi
 
-    log "Removing installation directory: ${INSTALL_DIR}"
-    rm -rf "${INSTALL_DIR}"
+    # The default data directory (${INSTALL_DIR}/data) lives inside the
+    # install directory, so without --purge it has to survive this removal.
+    local data_in_install="${DATA_DIR#"${INSTALL_DIR}"/}"
+    if [[ "$PURGE" != "true" && "$data_in_install" != "$DATA_DIR" ]]; then
+        local keep="${data_in_install%%/*}"
+        log "Removing installation directory: ${INSTALL_DIR} (keeping ${INSTALL_DIR}/${keep}, which holds the data directory)"
+        find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 ! -name "$keep" -exec rm -rf {} +
+    elif [[ "$PURGE" != "true" && "$DATA_DIR" == "$INSTALL_DIR" ]]; then
+        log_warn "The data directory is the installation directory (${INSTALL_DIR}); leaving it in place"
+    else
+        log "Removing installation directory: ${INSTALL_DIR}"
+        rm -rf "${INSTALL_DIR}"
+    fi
 
     log "Uninstall complete!"
     if [[ "$PURGE" != "true" ]]; then
