@@ -473,11 +473,17 @@ log "uvicorn ready after ${attempts} attempts (${SECONDS}s elapsed)"
 caddy_state_dir_ok() {
 	mkdir -p "$1/data" "$1/config" 2>/dev/null && [ -w "$1/data" ] && [ -w "$1/config" ]
 }
+# The fallback path is predictable, so a pre-existing one is only reused
+# if it is a real directory this uid owns, and is made private again.
+private_caddy_state_dir_ok() {
+	(umask 077 && mkdir -p "$1") 2>/dev/null &&
+		[ ! -L "$1" ] && [ -O "$1" ] && chmod 700 "$1" && caddy_state_dir_ok "$1"
+}
 CADDY_HOME=/var/lib/caddy
 if ! caddy_state_dir_ok "$CADDY_HOME"; then
 	CADDY_HOME="${TMPDIR:-/tmp}/caddy-$(id -u)"
-	if ! (umask 077 && caddy_state_dir_ok "$CADDY_HOME"); then
-		log "error: neither /var/lib/caddy nor $CADDY_HOME is writable by uid $(id -u) -- on a read-only root filesystem, mount a writable /tmp (compose tmpfs, Kubernetes emptyDir)"
+	if ! private_caddy_state_dir_ok "$CADDY_HOME"; then
+		log "error: neither /var/lib/caddy nor $CADDY_HOME (which must be a directory owned by uid $(id -u), not a symlink) is writable by uid $(id -u) -- on a read-only root filesystem, mount a writable /tmp (compose tmpfs, Kubernetes emptyDir)"
 		kill -TERM "$UVICORN_PID" 2>/dev/null
 		wait "$UVICORN_PID" 2>/dev/null
 		exit 1
