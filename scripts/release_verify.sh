@@ -72,30 +72,25 @@ assert_auth() {
     log "anonymous request refused, admin token accepted"
 }
 
+# Test artifacts are 1 MiB streams regenerated from a random seed, so no
+# scratch file is ever written (and none is left behind by a failed check).
+new_seed() { od -An -N16 -tx1 /dev/urandom | tr -d ' \n'; }
+blob() { head -c 1048576 < <(yes "$1"); }
+
 push_artifact() {
-    local token="$1" path="$2" file="$3" code
-    code="$(http_status -X POST -H "Authorization: Bearer ${token}" \
-        -F "file=@${file};type=application/octet-stream" \
+    local token="$1" path="$2" seed="$3" code
+    code="$(blob "$seed" | http_status -X POST -H "Authorization: Bearer ${token}" \
+        -F "file=@-;filename=blob.bin;type=application/octet-stream" \
         "${BASE_URL}/api/v1/upload/${path}")"
     [[ "$code" == 200 || "$code" == 201 ]] || die "upload of ${path} returned ${code}"
 }
 
 assert_artifact() {
-    local token="$1" path="$2" file="$3" got
-    got="$(mktemp)"
-    curl -fsS -H "Authorization: Bearer ${token}" -o "$got" "${BASE_URL}/artifacts/${path}/latest" ||
+    local token="$1" path="$2" seed="$3" got
+    got="$(curl -fsS -H "Authorization: Bearer ${token}" "${BASE_URL}/artifacts/${path}/latest" | sha256sum)" ||
         die "download of ${path} failed"
-    cmp -s "$got" "$file" || die "${path} came back different from what was uploaded"
-    rm -f "$got"
+    [[ "$got" == "$(blob "$seed" | sha256sum)" ]] || die "${path} came back different from what was uploaded"
     log "artifact ${path} round-trips intact"
-}
-
-# One fixed path per check, overwritten on each run, so repeated local runs
-# don't pile up files; each check removes its own when it passes.
-random_file() {
-    local f="${TMPDIR:-/tmp}/${PROJECT}-$1.bin"
-    head -c 1048576 /dev/urandom >"$f"
-    echo "$f"
 }
 
 cmd_assets() {
@@ -161,7 +156,7 @@ compose_cleanup() {
 cmd_compose() {
     need VERSION
     need DIST
-    local dir token cid blob
+    local dir token cid seed
     dir="$(compose_workdir "$DIST")"
     trap 'compose_cleanup "'"$dir"'" $?' EXIT
     compose_up "$dir" "$VERSION"
@@ -170,10 +165,9 @@ cmd_compose() {
     token="$(sudo cat "${dir}/data/admin-token")"
     assert_auth "$token"
     sudo ls "${dir}/data/backups" | grep -qE '\.pre-v[0-9]+$' || die "no pre-migration copy in data/backups"
-    blob="$(random_file compose)"
-    push_artifact "$token" release-verify/compose "$blob"
-    assert_artifact "$token" release-verify/compose "$blob"
-    rm -f "$blob"
+    seed="$(new_seed)"
+    push_artifact "$token" release-verify/compose "$seed"
+    assert_artifact "$token" release-verify/compose "$seed"
 }
 
 cmd_compose_upgrade() {
@@ -181,19 +175,18 @@ cmd_compose_upgrade() {
     need DIST
     need PREV_DIST
     need PREV_VERSION
-    local dir token blob
+    local dir token seed
     dir="$(compose_workdir "$PREV_DIST")"
     trap 'compose_cleanup "'"$dir"'" $?' EXIT
     compose_up "$dir" "$PREV_VERSION"
     token="$(sudo cat "${dir}/data/admin-token")"
-    blob="$(random_file upgrade)"
-    push_artifact "$token" release-verify/upgrade "$blob"
+    seed="$(new_seed)"
+    push_artifact "$token" release-verify/upgrade "$seed"
     # What an operator does: replace the compose file, keep .env and data.
     cp "${DIST}/docker-compose.yml" "${dir}/docker-compose.yml"
     compose_up "$dir" "$VERSION"
     assert_auth "$token"
-    assert_artifact "$token" release-verify/upgrade "$blob"
-    rm -f "$blob"
+    assert_artifact "$token" release-verify/upgrade "$seed"
     log "plain compose upgraded ${PREV_VERSION} -> ${VERSION}"
 }
 
@@ -231,7 +224,7 @@ installer_container() {
 cmd_installer() {
     need VERSION
     need DIST
-    local deploy="${DIST}/magpie-deploy.sh" token blob cid
+    local deploy="${DIST}/magpie-deploy.sh" token seed cid
     trap 'installer_cleanup "'"$deploy"'" $?' EXIT
     installer_install "$deploy" "$VERSION"
     systemctl is-active --quiet magpie.service || die "magpie.service is not active"
@@ -240,13 +233,12 @@ cmd_installer() {
     assert_uid "$cid" "$(id -u magpie)"
     token="$(sudo cat "${INSTALL_DATA}/admin-token")"
     assert_auth "$token"
-    blob="$(random_file installer)"
-    push_artifact "$token" release-verify/installer "$blob"
-    assert_artifact "$token" release-verify/installer "$blob"
+    seed="$(new_seed)"
+    push_artifact "$token" release-verify/installer "$seed"
+    assert_artifact "$token" release-verify/installer "$seed"
     sudo systemctl start magpie-gc.service || die "magpie-gc.service failed"
     log "gc run succeeded"
     installer_purge "$deploy"
-    rm -f "$blob"
     log "installer lifecycle passed"
 }
 
@@ -255,18 +247,17 @@ cmd_installer_upgrade() {
     need DIST
     need PREV_DIST
     need PREV_VERSION
-    local deploy="${DIST}/magpie-deploy.sh" token blob
+    local deploy="${DIST}/magpie-deploy.sh" token seed
     trap 'installer_cleanup "'"$deploy"'" $?' EXIT
     installer_install "${PREV_DIST}/magpie-deploy.sh" "$PREV_VERSION"
     token="$(sudo cat "${INSTALL_DATA}/admin-token")"
-    blob="$(random_file installer-upgrade)"
-    push_artifact "$token" release-verify/installer-upgrade "$blob"
+    seed="$(new_seed)"
+    push_artifact "$token" release-verify/installer-upgrade "$seed"
     sudo bash "$deploy" update --release "v${VERSION}" --noninteractive
     wait_healthy "$VERSION"
     assert_auth "$token"
-    assert_artifact "$token" release-verify/installer-upgrade "$blob"
+    assert_artifact "$token" release-verify/installer-upgrade "$seed"
     installer_purge "$deploy"
-    rm -f "$blob"
     log "installer upgraded ${PREV_VERSION} -> ${VERSION}"
 }
 
