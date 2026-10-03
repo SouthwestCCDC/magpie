@@ -217,6 +217,25 @@ systemctl start magpie                   # plain compose: docker compose up -d
 Don't set a new uid without the `chown`: the container can't write the
 existing root-owned `magpie.db` and artifacts.
 
+#### Starting without root (e.g. Kubernetes)
+
+The container can also be started directly as its runtime uid
+(`docker run --user 10001:10001`, or Kubernetes `runAsUser` with
+`runAsNonRoot: true`), skipping the root step entirely. All capabilities
+can then be dropped. In that mode:
+
+- `MAGPIE_UID` / `MAGPIE_GID` are not used, and nothing can chown, so the
+  data directory must already be writable by that uid. On Kubernetes, set
+  `fsGroup` to the gid.
+- With a read-only root filesystem, mount a writable `/tmp` (Kubernetes:
+  an `emptyDir`). Caddy keeps its state there, and `magpie-ctl sync` needs
+  it.
+- `docker exec` / `kubectl exec` already run as that uid, so `magpie-ctl`
+  works without any privilege drop.
+
+Run one replica only: the database and artifacts live on one volume
+(`ReadWriteOnce`), and two containers must never serve the same data.
+
 ### Choosing what `update` installs
 
 `magpie-deploy.sh update` with no target moves to the latest published,
