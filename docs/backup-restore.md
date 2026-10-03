@@ -86,17 +86,20 @@ online backup:
 ```
 
 The directory is `0700` and each copy `0600` (it holds token hashes). The
-newest 3 are kept. If the copy can't be written (e.g. the volume is full),
-nothing is migrated and the container doesn't start; delete old copies or
-free space. A fresh install takes one copy too, since `init` creates a
+newest 3 are kept, pruned only after a migration succeeds; a failed
+attempt removes its own copy, so retrying can't evict older ones. Other
+files you put in the directory are never pruned. If the copy can't be
+written (e.g. the volume is full), nothing is migrated and the container
+doesn't start; delete old copies or free space. A fresh install takes one copy too, since `init` creates a
 version-0 database that is then migrated.
 
 These protect against a bad migration, not against losing the volume, and
 don't include artifacts (migrations don't change them). To go back to one,
-stop magpie and put it in place:
+stop magpie and put it in place. `cp -p` keeps the copy's owner, which is
+the uid magpie runs as (run it as root, or as that uid):
 
 ```bash
-cp <data>/backups/magpie.db.<timestamp>.pre-v<N> <data>/magpie.db
+cp -p <data>/backups/magpie.db.<timestamp>.pre-v<N> <data>/magpie.db
 rm -f <data>/magpie.db-wal <data>/magpie.db-shm
 ```
 

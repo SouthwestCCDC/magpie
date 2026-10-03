@@ -23,9 +23,11 @@ from magpie.ctl.commands.migrate import (
     MigrationTargetError,
     SnapshotError,
     _check_current_version_matches_migrations,
+    _db_state,
     check_migrations_reversibility,
     get_data_format_version,
     migrate_database,
+    prune_snapshots,
     revert_database,
     run_migrations,
     snapshot_database,
@@ -1159,19 +1161,77 @@ class TestPreMigrationSnapshot:
 
         assert _version(db_path) == 0
 
-    def test_keeps_only_the_newest_copies(self, tmp_path: Path) -> None:
+    def test_keeps_only_the_newest_copies_and_leaves_other_files(self, tmp_path: Path) -> None:
         db_path = tmp_path / "magpie.db"
         init_database(db_path)
-        snapshots = [snapshot_database(db_path, f"test{i}") for i in range(SNAPSHOTS_TO_KEEP + 2)]
+        snapshots = [snapshot_database(db_path, "pre-v1") for _ in range(SNAPSHOTS_TO_KEEP + 2)]
         leftover = snapshots[0].with_name(snapshots[0].name + ".partial")
         leftover.write_text("")
+        manual = db_path.parent / SNAPSHOT_DIR_NAME / "magpie.db.manual"
+        manual.write_text("operator's own copy")
 
-        snapshot_database(db_path, "last")
+        prune_snapshots(db_path)
 
-        copies = self._copies(db_path)
-        assert len(copies) == SNAPSHOTS_TO_KEEP
-        assert copies[-1].name.endswith(".last")
+        assert self._copies(db_path) == sorted([*snapshots[-SNAPSHOTS_TO_KEEP:], manual])
         assert not leftover.exists()
+
+    def test_failed_migration_discards_its_copy_and_prunes_nothing(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+        older = [snapshot_database(db_path, "pre-v1") for _ in range(SNAPSHOTS_TO_KEEP)]
+
+        with (
+            patch(
+                "magpie.ctl.commands.migrate._apply_pending_steps",
+                side_effect=RuntimeError("step failed"),
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            migrate_database(db_path)
+
+        assert self._copies(db_path) == older
+        assert _version(db_path) == 0
+
+    @staticmethod
+    def _stale_precheck(stale_every_time: bool):
+        """Make the pre-lock read see a current database, as if a concurrent
+        migrate had run, while the database under the lock is still v0."""
+        real = _db_state
+        calls = {"n": 0}
+
+        def fake(conn: sqlite3.Connection) -> tuple[int, bool]:
+            calls["n"] += 1
+            is_precheck = calls["n"] % 2 == 1
+            if is_precheck and (stale_every_time or calls["n"] == 1):
+                return CURRENT_DATA_FORMAT_VERSION, True
+            return real(conn)
+
+        return patch("magpie.ctl.commands.migrate._db_state", side_effect=fake)
+
+    def test_version_changed_before_the_lock_retakes_the_copy(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+
+        with self._stale_precheck(stale_every_time=False):
+            *_, snapshot = migrate_database(db_path)
+
+        assert snapshot is not None
+        assert self._copies(db_path) == [snapshot]
+        assert _version(snapshot) == 0
+        assert _version(db_path) == CURRENT_DATA_FORMAT_VERSION
+
+    def test_database_that_keeps_changing_is_left_alone(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+
+        with (
+            self._stale_precheck(stale_every_time=True),
+            pytest.raises(SnapshotError, match="kept changing"),
+        ):
+            migrate_database(db_path)
+
+        assert _version(db_path) == 0
+        assert self._copies(db_path) == []
 
     def test_revert_keeps_a_copy_of_the_newer_database(self, tmp_path: Path) -> None:
         db_path = tmp_path / "magpie.db"

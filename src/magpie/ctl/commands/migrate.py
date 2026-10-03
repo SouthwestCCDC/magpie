@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import sqlite3
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, TypeVar
 
 import click
 
@@ -307,6 +308,15 @@ def _apply_pending_steps(conn: sqlite3.Connection) -> tuple[int, int, list[str]]
 SNAPSHOT_DIR_NAME = "backups"
 SNAPSHOTS_TO_KEEP = 3
 _PARTIAL_SUFFIX = ".partial"
+# Only names snapshot_database() writes are counted and pruned; anything an
+# operator puts in the directory (e.g. magpie.db.manual) is left alone.
+_SNAPSHOT_NAME_TAIL = re.compile(r"\.\d{8}T\d{12}Z\.pre-(?:revert-to-)?v\d+(?:\.partial)?")
+# A concurrent migrate/revert can change the version between the copy and
+# the write lock; the copy is then retaken. Bounded so a database that keeps
+# changing fails instead of looping.
+_SNAPSHOT_ATTEMPTS = 3
+
+_T = TypeVar("_T")
 
 
 class SnapshotError(Exception):
@@ -319,8 +329,8 @@ def snapshot_database(db_path: Path, reason: str) -> Path:
     Uses SQLite's online backup, so the copy is consistent even while the
     server has the database open. The copy is named
     ``<db name>.<UTC timestamp>.<reason>`` (sortable by time), is only
-    readable by this uid (it holds the token hashes), and only the newest
-    SNAPSHOTS_TO_KEEP are kept.
+    readable by this uid (it holds the token hashes). Old copies are only
+    pruned (prune_snapshots()) once the change it guards has committed.
 
     Raises:
         SnapshotError: The copy could not be written. Nothing was changed
@@ -352,20 +362,108 @@ def snapshot_database(db_path: Path, reason: str) -> Path:
             f"so it was not changed: {e}. Free up space on the data volume (old "
             f"copies in {backup_dir} can be deleted) and try again."
         ) from e
-
-    _prune_snapshots(backup_dir, db_path.name)
     return dest
 
 
-def _prune_snapshots(backup_dir: Path, db_name: str) -> None:
-    """Keep only the newest SNAPSHOTS_TO_KEEP copies; drop leftover partials."""
-    copies = sorted(backup_dir.glob(f"{db_name}.*"))
+def prune_snapshots(db_path: Path) -> None:
+    """Keep only the newest SNAPSHOTS_TO_KEEP copies; drop leftover partials.
+
+    Best-effort: the change the copies guard has already committed, so a
+    failure here must not turn it into an error.
+    """
+    backup_dir = db_path.parent / SNAPSHOT_DIR_NAME
+    prefix = re.escape(db_path.name)
+    try:
+        copies = sorted(
+            c
+            for c in backup_dir.iterdir()
+            if re.fullmatch(prefix + _SNAPSHOT_NAME_TAIL.pattern, c.name)
+        )
+    except OSError:
+        return
     complete = [c for c in copies if not c.name.endswith(_PARTIAL_SUFFIX)]
     stale = [c for c in copies if c.name.endswith(_PARTIAL_SUFFIX)]
     stale += complete[:-SNAPSHOTS_TO_KEEP]
     for path in stale:
         with contextlib.suppress(OSError):
             path.unlink()
+
+
+def _discard_snapshot(snapshot: Path | None) -> None:
+    if snapshot is not None:
+        with contextlib.suppress(OSError):
+            snapshot.unlink()
+
+
+def _db_state(conn: sqlite3.Connection) -> tuple[int, bool]:
+    """(data-format version, whether the database has any tables)."""
+    has_tables = conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone() is not None
+    return get_data_format_version(conn), has_tables
+
+
+def _change_with_snapshot(
+    db_path: Path,
+    snapshot_reason: Callable[[int], str | None],
+    change: Callable[[sqlite3.Connection], _T],
+    after_commit: Callable[[sqlite3.Connection, _T], None] | None = None,
+) -> tuple[_T, Path | None]:
+    """Run ``change`` in one BEGIN IMMEDIATE transaction, copying the DB first.
+
+    ``snapshot_reason(version)`` names the copy to take before a database at
+    ``version`` is changed, or returns None if it won't be. The online backup
+    can't run while this connection holds the write lock, so the copy is
+    taken first and the decision is re-checked under the lock: if another
+    migrate/revert changed the version in between, the copy (which no
+    longer matches) is discarded and the whole thing retried. An empty
+    database (fresh volume) is never copied.
+
+    If ``change`` fails, its copy is discarded too (the database is
+    unchanged, so it is redundant) and nothing is pruned, so retries can't
+    evict older copies. After a commit, old copies are pruned, then
+    ``after_commit(conn, result)`` runs.
+
+    Raises:
+        SnapshotError: The copy failed, or the database kept changing under
+            us; the database was not changed.
+    """
+    for _ in range(_SNAPSHOT_ATTEMPTS):
+        snapshot = copied_version = None
+        if db_path.is_file():
+            conn = sqlite3.connect(db_path)
+            try:
+                copied_version, has_tables = _db_state(conn)
+            finally:
+                conn.close()
+            reason = snapshot_reason(copied_version) if has_tables else None
+            if reason:
+                snapshot = snapshot_database(db_path, reason)
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                version, has_tables = _db_state(conn)
+                needs_copy = has_tables and snapshot_reason(version) is not None
+                if needs_copy and (snapshot is None or version != copied_version):
+                    conn.rollback()
+                    _discard_snapshot(snapshot)
+                    continue
+                result = change(conn)
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                _discard_snapshot(snapshot)
+                raise
+            if snapshot is not None:
+                prune_snapshots(db_path)
+            if after_commit is not None:
+                after_commit(conn, result)
+            return result, snapshot
+        finally:
+            conn.close()
+    raise SnapshotError(
+        f"{db_path} kept changing while a copy of it was being saved (another "
+        "migrate or migrate --to running?), so it was not changed. Try again."
+    )
 
 
 class JournalModeError(Exception):
@@ -398,23 +496,18 @@ def migrate_database(db_path: Path) -> tuple[int, int, list[str], Path | None]:
             busy timeout). Re-running is safe: the migration is a no-op.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    snapshot = None
-    if db_path.is_file():
-        version = read_data_format_version(db_path)
-        _check_not_newer_than_supported(version)
+
+    def snapshot_reason(version: int) -> str | None:
         if version < CURRENT_DATA_FORMAT_VERSION:
-            snapshot = snapshot_database(db_path, f"pre-v{CURRENT_DATA_FORMAT_VERSION}")
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            _check_not_newer_than_supported(get_data_format_version(conn))
-            create_schema(conn)
-            result = _apply_pending_steps(conn)
-            conn.commit()
-        except BaseException:
-            conn.rollback()
-            raise
+            return f"pre-v{CURRENT_DATA_FORMAT_VERSION}"
+        return None
+
+    def change(conn: sqlite3.Connection) -> tuple[int, int, list[str]]:
+        _check_not_newer_than_supported(get_data_format_version(conn))
+        create_schema(conn)
+        return _apply_pending_steps(conn)
+
+    def switch_to_wal(conn: sqlite3.Connection, result: tuple[int, int, list[str]]) -> None:
         try:
             conn.execute("PRAGMA journal_mode=WAL;")
         except sqlite3.OperationalError as e:
@@ -423,8 +516,8 @@ def migrate_database(db_path: Path) -> tuple[int, int, list[str], Path | None]:
                 f"switching the database to WAL mode failed: {e}. Another process may "
                 "be holding the database open; re-run once it is released."
             ) from e
-    finally:
-        conn.close()
+
+    result, snapshot = _change_with_snapshot(db_path, snapshot_reason, change, switch_to_wal)
     return (*result, snapshot)
 
 
@@ -501,23 +594,16 @@ def revert_database(db_path: Path, target: int) -> tuple[int, int, list[str], Pa
     """
     if not db_path.is_file():
         raise FileNotFoundError(f"No database at {db_path}; nothing to revert.")
-    snapshot = None
-    version = read_data_format_version(db_path)
-    if target < version <= CURRENT_DATA_FORMAT_VERSION and target in (
-        {0} | {step.version for step in _MIGRATIONS}
-    ):
-        snapshot = snapshot_database(db_path, f"pre-revert-to-v{target}")
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            result = _revert_steps(conn, target)
-            conn.commit()
-        except BaseException:
-            conn.rollback()
-            raise
-    finally:
-        conn.close()
+    known_targets = {0} | {step.version for step in _MIGRATIONS}
+
+    def snapshot_reason(version: int) -> str | None:
+        if target < version <= CURRENT_DATA_FORMAT_VERSION and target in known_targets:
+            return f"pre-revert-to-v{target}"
+        return None
+
+    result, snapshot = _change_with_snapshot(
+        db_path, snapshot_reason, lambda conn: _revert_steps(conn, target)
+    )
     return (*result, snapshot)
 
 
