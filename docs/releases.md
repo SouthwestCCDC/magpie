@@ -98,7 +98,7 @@ Every GitHub release (RC and final) attaches:
 | File | What |
 |------|------|
 | `docker-compose.yml` | The canonical compose file, with the image default pinned to this release by digest (`magpie:<version>@sha256:...`) |
-| `.env.example` | The configuration template, naming the same pinned image |
+| `env.example` | The configuration template (`.env.example` in the repo; GitHub drops leading dots from asset names), naming the same pinned image |
 | `magpie-deploy.sh` | The installer, with `HARDCODED_VERSION` set to this release |
 | `SHA256SUMS` | Checksums of the three files above |
 
@@ -107,10 +107,10 @@ To deploy a release without cloning the repository:
 ```bash
 V=v0.2.0
 base=https://github.com/SouthwestCCDC/magpie/releases/download/$V
-curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/.env.example" -fsSLO "$base/SHA256SUMS"
+curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/env.example" -fsSLO "$base/SHA256SUMS"
 # Verify exactly the files you downloaded; a missing one fails the check.
-grep -E ' (docker-compose\.yml|\.env\.example)$' SHA256SUMS | sha256sum -c
-cp .env.example .env
+grep -E ' (docker-compose\.yml|env\.example)$' SHA256SUMS | sha256sum -c
+cp env.example .env
 # Required: choose how the first-boot admin token is delivered (file, exec,
 # discard or stdout). The container refuses to start without it.
 echo 'MAGPIE_ADMIN_TOKEN_SINK=file' >> .env   # then edit the rest of .env

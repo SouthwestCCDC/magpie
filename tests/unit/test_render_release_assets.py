@@ -46,7 +46,7 @@ def test_compose_otherwise_unchanged(assets: Path):
 
 
 def test_env_example_names_pinned_image(assets: Path):
-    env = (assets / ".env.example").read_text()
+    env = (assets / "env.example").read_text()
     assert f"# MAGPIE_IMAGE={PINNED}" in env
     assert "magpie:latest" not in env
 
@@ -56,7 +56,7 @@ def test_sha256sums_cover_every_asset(assets: Path):
     for line in (assets / "SHA256SUMS").read_text().splitlines():
         digest, name = line.split(maxsplit=1)
         sums[name] = digest
-    assert set(sums) == {"docker-compose.yml", ".env.example", "magpie-deploy.sh"}
+    assert set(sums) == {"docker-compose.yml", "env.example", "magpie-deploy.sh"}
     for name, digest in sums.items():
         assert hashlib.sha256((assets / name).read_bytes()).hexdigest() == digest
 
@@ -72,4 +72,12 @@ def test_fork_image_repo_pins_fork_image(tmp_path: Path):
     assert result.returncode == 0, result.stderr
     fork_pinned = f"ghcr.io/alice/magpie:0.2.0@{DIGEST}"
     assert f"${{MAGPIE_IMAGE:-{fork_pinned}}}" in (tmp_path / "docker-compose.yml").read_text()
-    assert f"# MAGPIE_IMAGE={fork_pinned}" in (tmp_path / ".env.example").read_text()
+    assert f"# MAGPIE_IMAGE={fork_pinned}" in (tmp_path / "env.example").read_text()
+
+
+def test_no_asset_name_starts_with_a_dot(assets: Path):
+    # GitHub renames uploaded assets with a leading dot (".env.example"
+    # becomes "default.env.example"), which breaks SHA256SUMS and the
+    # documented download URLs.
+    names = {p.name for p in assets.iterdir()}
+    assert not [n for n in names if n.startswith(".")], names
