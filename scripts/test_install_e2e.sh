@@ -50,6 +50,9 @@ INSTALL_DIR="${MAGPIE_E2E_INSTALL_DIR:-/opt/magpie}"
 DATA_DIR="${INSTALL_DIR}/data"
 HTTP_PORT="${MAGPIE_E2E_HTTP_PORT:-8080}"
 BASE_URL="http://127.0.0.1:${HTTP_PORT}"
+# The account a fresh install runs the container as.
+SERVICE_ACCOUNT="magpie"
+SERVICE_ACCOUNT_PREEXISTED="false"
 ENV_FILE="${INSTALL_DIR}/etc/.env"
 COMPOSE_FILE="${INSTALL_DIR}/docker-compose.yml"
 SITE_OVERRIDE="${INSTALL_DIR}/docker-compose.override.yml"
@@ -152,6 +155,11 @@ preflight() {
         fi
     fi
 
+    if id -u "$SERVICE_ACCOUNT" >/dev/null 2>&1; then
+        SERVICE_ACCOUNT_PREEXISTED="true"
+        log "note: account ${SERVICE_ACCOUNT} already exists; the install should reuse it and purge should keep it"
+    fi
+
     WORK_DIR="$(mktemp -d)"
     log "install dir: ${INSTALL_DIR}  data dir: ${DATA_DIR}  url: ${BASE_URL}"
     log "source checkout: ${REPO_ROOT} (HEAD $(git -C "$REPO_ROOT" rev-parse --short HEAD))"
@@ -189,6 +197,10 @@ cleanup() {
               /etc/systemd/system/magpie-gc.service \
               /etc/systemd/system/magpie-gc.timer
         systemctl daemon-reload 2>/dev/null || true
+        if [[ "$SERVICE_ACCOUNT_PREEXISTED" != "true" ]] && id -u "$SERVICE_ACCOUNT" >/dev/null 2>&1; then
+            userdel "$SERVICE_ACCOUNT" 2>/dev/null || true
+            groupdel "$SERVICE_ACCOUNT" 2>/dev/null || true
+        fi
         rm -rf "$INSTALL_DIR"
     fi
     exit "$exit_code"
@@ -323,13 +335,58 @@ assert_admin_token_file() {
         fail "admin token file not found at ${token_file}"
         return 0
     fi
-    assert_eq "root" "$(stat -c '%U' "$token_file")" "admin-token owner"
+    assert_eq "$SERVICE_ACCOUNT" "$(stat -c '%U' "$token_file")" "admin-token owner"
     assert_eq "600" "$(stat -c '%a' "$token_file")" "admin-token mode"
     # The data dir's own mode is REPORTED, not asserted: the installer
     # creates it 0755 today, and issue #572's checklist covers the token
     # file (the bearer credential), not the directory. Tightening the
     # directory would be a product decision, not a test one.
     log "note: data dir ${DATA_DIR} is mode $(stat -c '%a' "$DATA_DIR"), owner $(stat -c '%U' "$DATA_DIR")"
+}
+
+# Without an explicit uid the container runs as the data directory's owner,
+# which is root for a directory the installer creates -- so this is what
+# keeps a default install from running everything as root.
+assert_runs_as_service_account() {
+    log_section "Runtime user"
+    local uid gid
+    if ! uid="$(id -u "$SERVICE_ACCOUNT" 2>/dev/null)"; then
+        fail "no ${SERVICE_ACCOUNT} account after install"
+        return 0
+    fi
+    gid="$(id -g "$SERVICE_ACCOUNT")"
+    if [[ "$uid" == "0" ]]; then
+        fail "${SERVICE_ACCOUNT} is uid 0"
+        return 0
+    fi
+    assert_eq "$uid" "$(sed -n 's/^MAGPIE_UID=//p' "$ENV_FILE" | tail -n 1)" ".env MAGPIE_UID is ${SERVICE_ACCOUNT}'s uid"
+    assert_eq "$gid" "$(sed -n 's/^MAGPIE_GID=//p' "$ENV_FILE" | tail -n 1)" ".env MAGPIE_GID is ${SERVICE_ACCOUNT}'s gid"
+
+    local foreign
+    foreign="$(find "$DATA_DIR" \( ! -uid "$uid" -o ! -gid "$gid" \) -printf '%p (%u:%g)\n' 2>/dev/null | head -n 5 || true)"
+    if [[ -z "$foreign" ]]; then
+        pass "everything under ${DATA_DIR} is owned by ${SERVICE_ACCOUNT}"
+    else
+        fail "not owned by ${SERVICE_ACCOUNT}: ${foreign//$'\n'/; }"
+    fi
+
+    local cid procs others
+    cid="$(test_compose ps -q magpie || true)"
+    if [[ -z "$cid" ]]; then
+        fail "no running magpie container"
+        return 0
+    fi
+    procs="$(docker top "$cid" -o pid,uid,comm 2>/dev/null | tail -n +2 || true)"
+    if [[ -z "$procs" ]]; then
+        fail "docker top listed no processes for ${cid}"
+        return 0
+    fi
+    others="$(awk -v u="$uid" '$2 != u' <<< "$procs")"
+    if [[ -z "$others" ]]; then
+        pass "all $(wc -l <<< "$procs") container processes run as uid ${uid}"
+    else
+        fail "container processes not running as uid ${uid}: ${others//$'\n'/; }"
+    fi
 }
 
 assert_health_endpoint() {
@@ -926,9 +983,20 @@ assert_purge_leaves_nothing() {
     volumes="$(docker volume ls --filter 'name=magpie' --format '{{.Name}}' || true)"
     if [[ -n "$volumes" ]]; then leftovers+=("volumes: ${volumes//$'\n'/; }"); fi
 
+    if [[ "$SERVICE_ACCOUNT_PREEXISTED" == "true" ]]; then
+        if id -u "$SERVICE_ACCOUNT" >/dev/null 2>&1; then
+            pass "purge kept the pre-existing ${SERVICE_ACCOUNT} account"
+        else
+            fail "purge removed the pre-existing ${SERVICE_ACCOUNT} account"
+        fi
+    else
+        if id -u "$SERVICE_ACCOUNT" >/dev/null 2>&1; then leftovers+=("account ${SERVICE_ACCOUNT}"); fi
+        if getent group "$SERVICE_ACCOUNT" >/dev/null; then leftovers+=("group ${SERVICE_ACCOUNT}"); fi
+    fi
+
     if (( ${#leftovers[@]} == 0 )); then
         PURGE_VERIFIED="true"
-        pass "purge left nothing behind (install dir, data dir, units, containers, volumes)"
+        pass "purge left nothing behind (install dir, data dir, units, containers, volumes, created account)"
     else
         for leftover in "${leftovers[@]}"; do
             fail "purge leftover: ${leftover}"
@@ -946,6 +1014,7 @@ main() {
     assert_generated_units_wellformed
     assert_container_healthy
     assert_admin_token_file
+    assert_runs_as_service_account
     assert_health_endpoint
 
     read_admin_token
@@ -958,6 +1027,7 @@ main() {
     assert_gc_service_runs
     assert_site_override_applies
     assert_release_updates
+    assert_runs_as_service_account
 
     assert_purge_leaves_nothing
 

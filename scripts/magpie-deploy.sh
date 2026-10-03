@@ -920,7 +920,89 @@ MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH=${DEFAULT_ADMIN_TOKEN_SINK_FILE_PATH}
 # Only set this to the exact upstream hop(s) -- never a broad range. See
 # issue #575.
 MAGPIE_TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
+
+# uid/gid every process in the container runs as (see
+# resolve_runtime_ids()). Empty = the image's own fallback: the data
+# directory's owner.
+MAGPIE_UID=${RUNTIME_UID:-}
+MAGPIE_GID=${RUNTIME_GID:-}
 EOF
+}
+
+# The container runs as MAGPIE_UID/MAGPIE_GID, or, when those are empty,
+# as the data directory's owner. For a directory this script creates that
+# owner is root, so before this every process in the container ran as
+# root. A fresh install therefore runs as a dedicated system account
+# instead, created here if absent. An existing account of that name (e.g.
+# one config management pinned to a fixed uid for NFS) is reused as-is.
+SERVICE_ACCOUNT="magpie"
+RUNTIME_UID=""
+RUNTIME_GID=""
+DATA_DIR_FRESH="false"
+CREATED_ACCOUNTS=()
+
+warn_root_owned_data() {
+    local dir="$1"
+    log_warn "${dir} is owned by root and MAGPIE_UID is not set, so every process in the magpie container runs as root."
+    log_warn "To run it as a dedicated account instead, see docs/installation.md \"Runtime user\" (stop magpie, chown -R the data directory, set MAGPIE_UID/MAGPIE_GID in ${INSTALL_DIR}/etc/.env, start magpie)."
+}
+
+ensure_service_account() {
+    if id -u "$SERVICE_ACCOUNT" >/dev/null 2>&1; then
+        log "Using existing account ${SERVICE_ACCOUNT}"
+        return 0
+    fi
+    log "Creating system account ${SERVICE_ACCOUNT}..."
+    if ! getent group "$SERVICE_ACCOUNT" >/dev/null; then
+        groupadd --system "$SERVICE_ACCOUNT" || die "Failed to create system group ${SERVICE_ACCOUNT}"
+        CREATED_ACCOUNTS+=("group")
+    fi
+    useradd --system --gid "$SERVICE_ACCOUNT" --no-create-home --home-dir /nonexistent \
+        --shell /usr/sbin/nologin --comment "magpie artifact server" "$SERVICE_ACCOUNT" \
+        || die "Failed to create system account ${SERVICE_ACCOUNT}"
+    CREATED_ACCOUNTS+=("user")
+}
+
+# Decides RUNTIME_UID/RUNTIME_GID. Must run before the data directory is
+# created: whether it already held data decides the branch.
+#
+# Existing data (a reinstall over a preserved data directory) keeps its
+# current owner and is never chowned here: the image's startup fix-up only
+# chowns the directory itself, so a new uid could not write the existing
+# magpie.db or artifact tree. Root-owned existing data keeps running as
+# root, with a warning.
+resolve_runtime_ids() {
+    if [[ -d "$DATA_DIR" && -n "$(ls -A "$DATA_DIR" 2>/dev/null)" ]]; then
+        local owner_uid owner_gid
+        owner_uid="$(stat -c %u "$DATA_DIR")"
+        owner_gid="$(stat -c %g "$DATA_DIR")"
+        if [[ "$owner_uid" == "0" ]]; then
+            warn_root_owned_data "$DATA_DIR"
+        else
+            RUNTIME_UID="$owner_uid"
+            RUNTIME_GID="$owner_gid"
+            log "Existing data in ${DATA_DIR} is owned by ${RUNTIME_UID}:${RUNTIME_GID}; magpie will run as that uid/gid"
+        fi
+        return 0
+    fi
+    DATA_DIR_FRESH="true"
+    ensure_service_account
+    RUNTIME_UID="$(id -u "$SERVICE_ACCOUNT")"
+    RUNTIME_GID="$(id -g "$SERVICE_ACCOUNT")"
+    log "magpie will run as ${SERVICE_ACCOUNT} (${RUNTIME_UID}:${RUNTIME_GID})"
+}
+
+# Called after the data directory is created. Records the accounts this run
+# created so 'uninstall --purge' removes exactly those.
+apply_runtime_ownership() {
+    if [[ "$DATA_DIR_FRESH" == "true" ]]; then
+        chown -R "${RUNTIME_UID}:${RUNTIME_GID}" "$DATA_DIR" \
+            || die "Failed to chown ${DATA_DIR} to ${SERVICE_ACCOUNT} (${RUNTIME_UID}:${RUNTIME_GID}). On a network mount that squashes root, pre-create it owned by the uid magpie should run as."
+    fi
+    local kind
+    for kind in "${CREATED_ACCOUNTS[@]}"; do
+        echo "${kind} ${SERVICE_ACCOUNT}" >> "${INSTALL_DIR}/etc/created-accounts"
+    done
 }
 
 # Sets COMPOSE_FILE_ARGS to the compose file set every docker compose
@@ -2768,6 +2850,19 @@ assert_post_update() {
 # scope, section 3.2. Always exits the script via die() (either reporting
 # a clean rollback or a failed one) -- callers never fall through past a
 # call to this.
+# Files the rollback restores are created by root; under a non-root runtime
+# uid (the data directory's owner) they must go back to that owner or the
+# container can no longer write them.
+match_data_dir_owner() {
+    [[ "$(stat -c %u "$DATA_DIR")" == "0" ]] && return 0
+    local f
+    for f in "$@"; do
+        if [[ -e "$f" ]]; then
+            chown -h --reference="$DATA_DIR" "$f" || return 1
+        fi
+    done
+}
+
 rollback_to_prior() {
     log_error "Rolling back to the prior install (backup: ${BACKUP_DIR})..."
 
@@ -2862,6 +2957,10 @@ rollback_to_prior() {
             cp "${BACKUP_DIR}/data/magpie.db-shm" "${DATA_DIR}/magpie.db-shm" \
                 || restore_failure="restoring magpie.db-shm"
         fi
+        if [[ -z "$restore_failure" ]]; then
+            match_data_dir_owner "${DATA_DIR}/magpie.db" "${DATA_DIR}/magpie.db-wal" "${DATA_DIR}/magpie.db-shm" \
+                || restore_failure="restoring magpie.db ownership"
+        fi
 
         if [[ -z "$restore_failure" && -f "${BACKUP_DIR}/data/admin-token" ]]; then
             local -A restored_env=()
@@ -2888,6 +2987,8 @@ rollback_to_prior() {
                 # permissions workaround.
                 elif ! cp --remove-destination "${BACKUP_DIR}/data/admin-token" "$host_token_file"; then
                     restore_failure="restoring admin-token"
+                elif ! match_data_dir_owner "$host_token_file"; then
+                    restore_failure="restoring admin-token ownership"
                 fi
             fi
             # An invalid token_file is already logged by
@@ -3092,10 +3193,13 @@ cmd_install() {
     fi
     warn_or_gate_trusted_proxies_for_cidr_allow "install"
 
+    resolve_runtime_ids
+
     # Create directory structure
     log "Creating directory structure..."
     mkdir -p "${INSTALL_DIR}/etc"
     mkdir -p "${DATA_DIR}/artifacts"
+    apply_runtime_ownership
 
     # Clone repo first (needed for Dockerfile.bundled on --from-source)
     clone_repo
@@ -3309,6 +3413,13 @@ cmd_update() {
     warn_or_gate_trusted_proxies_for_cidr_allow "update"
 
     local env_file="${INSTALL_DIR}/etc/.env"
+
+    # Existing installs keep their runtime uid; changing it needs a
+    # recursive chown, which is left to the operator.
+    if ! env_key_has_value "$env_file" "MAGPIE_UID" \
+        && [[ -d "$DATA_DIR" && "$(stat -c %u "$DATA_DIR")" == "0" ]]; then
+        warn_root_owned_data "$DATA_DIR"
+    fi
 
     # Re-validate TRUSTED_PROXIES/BIND_IP loaded from .env before they're
     # written back below -- guards against a hand-edited or stale .env
@@ -3628,9 +3739,29 @@ cmd_uninstall() {
     rm -f /etc/systemd/system/magpie-gc.timer
     systemctl daemon-reload
 
+    local created_accounts=""
+    if [[ -f "${INSTALL_DIR}/etc/created-accounts" ]]; then
+        created_accounts="$(cat "${INSTALL_DIR}/etc/created-accounts")"
+    fi
     if [[ "$PURGE" == "true" ]]; then
         log "Removing data directory: ${DATA_DIR}"
         rm -rf "${DATA_DIR}"
+        # Only accounts this installer created; one config management made
+        # (or that predates the install) is left alone.
+        local kind name
+        while read -r kind name; do
+            case "$kind" in
+                user)
+                    log "Removing system account: ${name}"
+                    userdel "$name" || log_warn "Failed to remove system account ${name}"
+                    ;;
+                group)
+                    if getent group "$name" >/dev/null; then
+                        groupdel "$name" || log_warn "Failed to remove system group ${name}"
+                    fi
+                    ;;
+            esac
+        done < <(sort -r <<< "$created_accounts")
     fi
 
     log "Removing installation directory: ${INSTALL_DIR}"
@@ -3640,6 +3771,10 @@ cmd_uninstall() {
     if [[ "$PURGE" != "true" ]]; then
         echo "  Data directory preserved at: ${DATA_DIR}"
         echo "  Use --purge to remove data as well."
+        if [[ -n "$created_accounts" ]]; then
+            echo "  The ${SERVICE_ACCOUNT} system account was kept: it owns the preserved data,"
+            echo "  and a reinstall onto that data reuses it."
+        fi
         echo ""
         echo "  NOTE: If you reinstall with different settings (e.g., different UID/GID"
         echo "  in container configuration), you may encounter permission issues with"

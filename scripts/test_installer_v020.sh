@@ -102,6 +102,60 @@ test_generate_env_file_v020_keys() {
     log "  ✓ no dead TLS keys (MAGPIE_DOMAIN/MAGPIE_HTTPS_PORT/TLS_MODE/ACME_SERVER) written"
 }
 
+# Runtime uid/gid: generate_env_file() writes RUNTIME_UID/RUNTIME_GID (empty
+# when unset, i.e. the image's own data-dir-owner fallback);
+# resolve_runtime_ids() keeps an existing data dir's non-root owner without
+# creating an account; reconcile_env_file_for_update() never adds the keys
+# to an existing install (that would need a recursive chown first).
+test_runtime_uid_written_and_never_reconciled() {
+    log "Test: runtime uid/gid in .env -- written on install, never added by update"
+
+    local install_dir="${TEST_DIR}/uid_install"
+    mkdir -p "${install_dir}/etc"
+    (
+        INSTALL_DIR="$install_dir" DATA_DIR="${install_dir}/data" \
+        HTTP_PORT=8080 TRUSTED_PROXIES="" BIND_IP="" MAGPIE_VERSION="0.2.0" \
+        RUNTIME_UID=997 RUNTIME_GID=996 \
+        generate_env_file
+    ) >/dev/null 2>&1
+    grep -q '^MAGPIE_UID=997$' "${install_dir}/etc/.env" || fail "generate_env_file did not write MAGPIE_UID=997"
+    grep -q '^MAGPIE_GID=996$' "${install_dir}/etc/.env" || fail "generate_env_file did not write MAGPIE_GID=996"
+    (
+        INSTALL_DIR="$install_dir" DATA_DIR="${install_dir}/data" \
+        HTTP_PORT=8080 TRUSTED_PROXIES="" BIND_IP="" MAGPIE_VERSION="0.2.0" \
+        RUNTIME_UID="" RUNTIME_GID="" \
+        generate_env_file
+    ) >/dev/null 2>&1
+    grep -q '^MAGPIE_UID=$' "${install_dir}/etc/.env" || fail "generate_env_file wrote a uid with RUNTIME_UID empty: $(grep MAGPIE_UID "${install_dir}/etc/.env")"
+    log "  ✓ MAGPIE_UID/MAGPIE_GID written from RUNTIME_UID/RUNTIME_GID (empty stays empty)"
+
+    local data_dir="${TEST_DIR}/uid_existing_data"
+    mkdir -p "$data_dir" && touch "${data_dir}/magpie.db"
+    local out
+    # shellcheck disable=SC2034,SC2329  # read/called by resolve_runtime_ids
+    out="$(
+        DATA_DIR="$data_dir" SERVICE_ACCOUNT="magpie-test-must-not-be-created"
+        useradd() { echo "useradd called"; }
+        groupadd() { echo "groupadd called"; }
+        resolve_runtime_ids >/dev/null 2>&1
+        echo "uid=${RUNTIME_UID} gid=${RUNTIME_GID} fresh=${DATA_DIR_FRESH}"
+    )"
+    [[ "$out" == "uid=$(id -u) gid=$(id -g) fresh=false" ]] \
+        || fail "resolve_runtime_ids on existing data: expected its owner and no account creation, got: ${out}"
+    log "  ✓ existing data keeps its owner; no account created"
+
+    local env_file="${TEST_DIR}/uid_reconcile.env"
+    printf 'MAGPIE_DATA_DIR=/srv/magpie\nMAGPIE_TRUSTED_PROXIES=\n' > "$env_file"
+    (
+        TRUSTED_PROXIES="" BIND_IP="" TRUSTED_PROXIES_FROM_CLI="false"
+        reconcile_env_file_for_update "$env_file"
+    ) >/dev/null 2>&1
+    if grep -qE '^MAGPIE_(UID|GID)=' "$env_file"; then
+        fail "reconcile_env_file_for_update added a runtime uid/gid to an existing install"
+    fi
+    log "  ✓ update's reconcile leaves MAGPIE_UID/MAGPIE_GID alone"
+}
+
 # Test 2: Tier-1 deprecation -- parse_args accepts and warns on each of the
 # six deprecated flags without dying. Uses the 'status' command (cheapest
 # no-op path once past parsing) against a non-existent install dir so it
@@ -761,6 +815,7 @@ log "Running tests for the v0.2.0 installer rewrite (PR-3)"
 log ""
 
 test_generate_env_file_v020_keys
+test_runtime_uid_written_and_never_reconciled
 test_tier1_deprecated_flags_accepted_and_warn
 test_reconcile_env_file_strips_and_adds
 test_reconcile_env_file_migrates_legacy_bind_ip
