@@ -542,7 +542,14 @@ validate_network_config() {
     fi
 }
 
+# Empty, relative and '..'-containing values pass through unchanged so
+# validate_config still rejects them; realpath would make them absolute and
+# resolve the '..' away.
 normalize_path() {
+    if [[ "$1" != /* || "/$1/" == */../* ]]; then
+        printf '%s\n' "$1"
+        return 0
+    fi
     realpath -m -s -- "$1"
 }
 
@@ -558,6 +565,10 @@ validate_config() {
     # later flow into the generated .env, so they must be validated here,
     # before any file is generated. See issue #448.
     validate_network_config
+
+    # Again here: gather_config's prompts run after main normalized the flags.
+    INSTALL_DIR="$(normalize_path "$INSTALL_DIR")"
+    DATA_DIR="$(normalize_path "$DATA_DIR")"
 
     # Directory validation
     if [[ -z "$INSTALL_DIR" ]]; then
@@ -3815,7 +3826,11 @@ cmd_uninstall() {
     # The default data directory (${INSTALL_DIR}/data) lives inside the
     # install directory, so without --purge it has to survive this removal.
     local data_in_install="${DATA_DIR#"${INSTALL_DIR}"/}"
-    if [[ "$PURGE" != "true" && "$data_in_install" != "$DATA_DIR" ]]; then
+    if [[ "$PURGE" != "true" && "/${DATA_DIR}/" == */../* ]]; then
+        # install rejects '..', so only a hand-edited .env gets here; which
+        # entry of INSTALL_DIR holds the data is not knowable from the string.
+        log_warn "MAGPIE_DATA_DIR (${DATA_DIR}) contains '..'; leaving ${INSTALL_DIR} in place so the data is not removed"
+    elif [[ "$PURGE" != "true" && "$data_in_install" != "$DATA_DIR" ]]; then
         local keep="${data_in_install%%/*}"
         log "Removing installation directory: ${INSTALL_DIR} (keeping ${INSTALL_DIR}/${keep}, which holds the data directory)"
         find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 ! -name "$keep" -exec rm -rf {} +
