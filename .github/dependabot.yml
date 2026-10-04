@@ -47,3 +47,23 @@ updates:
     reviewers:
       - "SouthwestCCDC/blackteam"
     rebase-strategy: "auto"
+
+  # Base images in Dockerfile.bundled / Dockerfile / Dockerfile.test-runner,
+  # pinned by digest
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Phoenix"
+    groups:
+      docker-base-images:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    reviewers:
+      - "SouthwestCCDC/blackteam"
+    rebase-strategy: "auto"

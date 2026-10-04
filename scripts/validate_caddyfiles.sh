@@ -40,15 +40,15 @@ log() {
 
 cd "$REPO_ROOT"
 
-# Validate against the same Caddy version the bundled image builds with,
-# read from Dockerfile.bundled rather than duplicated here -- a Caddy
-# upgrade there must not silently leave this check on an older adapter.
-CADDY_VERSION="$(sed -nE 's/^ARG CADDY_VERSION=(.+)$/\1/p' Dockerfile.bundled | head -n1)"
-if [[ -z "$CADDY_VERSION" ]]; then
-    echo "[caddy-validate] ERROR: could not read ARG CADDY_VERSION from Dockerfile.bundled" >&2
+# Validate against the same Caddy image (tag and digest) the bundled image
+# builds with, read from Dockerfile.bundled rather than duplicated here -- a
+# Caddy upgrade there must not silently leave this check on an older adapter.
+BUNDLED_CADDY_IMAGE="$(sed -nE 's/^FROM (caddy:[^ ]+) AS caddy-src$/\1/p' Dockerfile.bundled | head -n1)"
+if [[ -z "$BUNDLED_CADDY_IMAGE" ]]; then
+    echo "[caddy-validate] ERROR: could not read the caddy-src FROM line from Dockerfile.bundled" >&2
     exit 1
 fi
-CADDY_IMAGE="${MAGPIE_CADDY_IMAGE:-caddy:${CADDY_VERSION}-alpine}"
+CADDY_IMAGE="${MAGPIE_CADDY_IMAGE:-${BUNDLED_CADDY_IMAGE}}"
 
 if ! command -v docker >/dev/null 2>&1; then
     echo "[caddy-validate] ERROR: docker is required (used to run ${CADDY_IMAGE})" >&2
