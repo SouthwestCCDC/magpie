@@ -54,10 +54,33 @@ wait_healthy() {
 
 http_status() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
+# The container's own processes as "pid uid comm": its main process and
+# everything descended from it. `docker exec`s, including Docker's
+# HEALTHCHECK runs (root, as the image's user, for up to the probe
+# timeout), aren't descendants of it and are left out.
+service_procs() {
+    local cid="$1" root
+    root="$(docker inspect -f '{{.State.Pid}}' "$cid")" || return 1
+    docker top "$cid" -eo pid,ppid,uid,comm | awk -v root="$root" '
+        NR > 1 { pid[NR] = $1; ppid[NR] = $2; out[NR] = $1 " " $3 " " $4 }
+        END {
+            keep[root] = 1
+            do {
+                changed = 0
+                for (i in pid)
+                    if (!(pid[i] in keep) && (ppid[i] in keep)) {
+                        keep[pid[i]] = 1
+                        changed = 1
+                    }
+            } while (changed)
+            for (i in pid) if (pid[i] in keep) print out[i]
+        }'
+}
+
 # Every process in the container runs as the given uid.
 assert_uid() {
     local cid="$1" want="$2" uids
-    uids="$(docker top "$cid" -eo pid,uid | awk 'NR > 1 {print $2}' | sort -u | paste -sd' ')"
+    uids="$(service_procs "$cid" | awk '{print $2}' | sort -u | paste -sd' ')"
     [[ "$uids" == "$want" ]] || die "container processes run as uid(s) '${uids}', expected ${want}"
     log "every process runs as uid ${want}"
 }
