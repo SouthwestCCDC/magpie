@@ -376,12 +376,19 @@ assert_runs_as_service_account() {
         fail "no running magpie container"
         return 0
     fi
-    procs="$(docker top "$cid" -o pid,uid,comm 2>/dev/null | tail -n +2 || true)"
-    if [[ -z "$procs" ]]; then
-        fail "docker top listed no processes for ${cid}"
-        return 0
-    fi
-    others="$(awk -v u="$uid" '$2 != u' <<< "$procs")"
+    # Docker runs HEALTHCHECK commands as the image's user (root), so one
+    # sample can catch healthcheck.sh's curl mid-run. Only a wrong-uid
+    # process that shows up in every sample is a failure.
+    for _ in 1 2 3; do
+        procs="$(docker top "$cid" -o pid,uid,comm 2>/dev/null | tail -n +2 || true)"
+        if [[ -z "$procs" ]]; then
+            fail "docker top listed no processes for ${cid}"
+            return 0
+        fi
+        others="$(awk -v u="$uid" '$2 != u' <<< "$procs")"
+        [[ -z "$others" ]] && break
+        sleep 1
+    done
     if [[ -z "$others" ]]; then
         pass "all $(wc -l <<< "$procs") container processes run as uid ${uid}"
     else

@@ -54,10 +54,16 @@ wait_healthy() {
 
 http_status() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
-# Every process in the container runs as the given uid.
+# Every process in the container runs as the given uid. Docker runs
+# HEALTHCHECK commands as the image's user (root), so one sample can catch
+# healthcheck.sh mid-run; only a mismatch seen in every sample fails.
 assert_uid() {
     local cid="$1" want="$2" uids
-    uids="$(docker top "$cid" -eo pid,uid | awk 'NR > 1 {print $2}' | sort -u | paste -sd' ')"
+    for _ in 1 2 3; do
+        uids="$(docker top "$cid" -eo pid,uid | awk 'NR > 1 {print $2}' | sort -u | paste -sd' ')"
+        [[ "$uids" == "$want" ]] && break
+        sleep 1
+    done
     [[ "$uids" == "$want" ]] || die "container processes run as uid(s) '${uids}', expected ${want}"
     log "every process runs as uid ${want}"
 }
