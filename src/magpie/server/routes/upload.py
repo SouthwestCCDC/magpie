@@ -13,6 +13,7 @@ from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from python_multipart.exceptions import ParseError
 from python_multipart.multipart import MultipartParser
@@ -523,7 +524,11 @@ async def upload_artifact(
     start_time = time.perf_counter()
 
     try:
-        info, is_duplicate = storage_service.store_artifact_from_temp(
+        # store_artifact_from_temp() does blocking filesystem IO (nesting check,
+        # blob move, metadata/manifest writes, symlink reconcile), so it runs in
+        # the threadpool to keep the event loop free for concurrent requests.
+        info, is_duplicate = await run_in_threadpool(
+            storage_service.store_artifact_from_temp,
             artifact_path=path,
             temp_file_path=temp_file_path,
             full_hash=full_hash,
