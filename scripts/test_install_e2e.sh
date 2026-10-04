@@ -347,6 +347,29 @@ assert_admin_token_file() {
 # Without an explicit uid the container runs as the data directory's owner,
 # which is root for a directory the installer creates -- so this is what
 # keeps a default install from running everything as root.
+# The container's own processes as "pid uid comm": its main process and
+# everything descended from it. `docker exec`s, including Docker's
+# HEALTHCHECK runs (root, as the image's user, for up to the probe
+# timeout), aren't descendants of it and are left out.
+service_procs() {
+    local cid="$1" root
+    root="$(docker inspect -f '{{.State.Pid}}' "$cid")" || return 1
+    docker top "$cid" -eo pid,ppid,uid,comm | awk -v root="$root" '
+        NR > 1 { pid[NR] = $1; ppid[NR] = $2; out[NR] = $1 " " $3 " " $4 }
+        END {
+            keep[root] = 1
+            do {
+                changed = 0
+                for (i in pid)
+                    if (!(pid[i] in keep) && (ppid[i] in keep)) {
+                        keep[pid[i]] = 1
+                        changed = 1
+                    }
+            } while (changed)
+            for (i in pid) if (pid[i] in keep) print out[i]
+        }'
+}
+
 assert_runs_as_service_account() {
     log_section "Runtime user"
     local uid gid
@@ -376,19 +399,12 @@ assert_runs_as_service_account() {
         fail "no running magpie container"
         return 0
     fi
-    # Docker runs HEALTHCHECK commands as the image's user (root), so one
-    # sample can catch healthcheck.sh's curl mid-run. Only a wrong-uid
-    # process that shows up in every sample is a failure.
-    for _ in 1 2 3; do
-        procs="$(docker top "$cid" -o pid,uid,comm 2>/dev/null | tail -n +2 || true)"
-        if [[ -z "$procs" ]]; then
-            fail "docker top listed no processes for ${cid}"
-            return 0
-        fi
-        others="$(awk -v u="$uid" '$2 != u' <<< "$procs")"
-        [[ -z "$others" ]] && break
-        sleep 1
-    done
+    procs="$(service_procs "$cid" 2>/dev/null || true)"
+    if [[ -z "$procs" ]]; then
+        fail "docker top listed no processes for ${cid}"
+        return 0
+    fi
+    others="$(awk -v u="$uid" '$2 != u' <<< "$procs")"
     if [[ -z "$others" ]]; then
         pass "all $(wc -l <<< "$procs") container processes run as uid ${uid}"
     else
