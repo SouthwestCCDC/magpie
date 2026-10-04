@@ -13,6 +13,12 @@ jobs:
   validate:
     name: Validate version
     runs-on: ubuntu-latest
+    # CI on the tagged commit can still be running when the tag is pushed;
+    # release_require_ci.sh waits up to an hour for it.
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      checks: read
     outputs:
       version: ${{ steps.get_version.outputs.version }}
       is_prerelease: ${{ steps.get_version.outputs.is_prerelease }}
@@ -22,20 +28,20 @@ jobs:
       - name: Get version from tag
         id: get_version
         run: |
-          TAG=${GITHUB_REF#refs/tags/v}
+          TAG="${GITHUB_REF#refs/tags/v}"
           # Image tags are the raw version string, so only accept shapes
           # that make sensible tags.
           if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
             echo "::error::Tag v$TAG is not vX.Y.Z or vX.Y.Z-<prerelease>"
             exit 1
           fi
-          echo "version=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
 
           # Check if prerelease (contains -, e.g., v1.0.0-rc1)
           if [[ "$TAG" == *-* ]]; then
-            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
           else
-            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Validate pyproject.toml version matches tag
@@ -50,6 +56,12 @@ jobs:
           fi
 
           echo "Version validated: $TAG_VERSION"
+
+      # Nothing is pushed or published unless the commit passed CI.
+      - name: Require CI to have passed on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release_require_ci.sh "$GITHUB_SHA"
 
   build-and-push:
     # Publishes the bundled single-container image (Dockerfile.bundled,
@@ -125,13 +137,15 @@ jobs:
     #   - overlapping, out-of-order or re-run releases converge, and a run
     #     GitHub cancels while queued (concurrency keeps one pending run) is
     #     repaired by whichever run comes after it;
-    #   - "published" means the <version> image exists in the registry, so a
-    #     tag whose build failed doesn't count. Any inspect error other than
-    #     "not found" aborts, so a registry hiccup can't make a newer release
-    #     look absent and move aliases backwards. Re-running is safe.
+    #   - "published" means the <version> image exists in the registry and
+    #     the tag has a published GitHub Release (or is the tag this run
+    #     verified), so a tag whose build or verification failed doesn't
+    #     count. Any inspect or API error other than "not found" aborts, so
+    #     a hiccup can't make a newer release look absent and move aliases
+    #     backwards. Re-running is safe.
     name: Move rolling tags
     runs-on: ubuntu-latest
-    needs: [validate, build-and-push]
+    needs: [validate, build-and-push, verify, verify-arm64]
     if: needs.validate.outputs.is_prerelease == 'false'
     concurrency:
       group: release-rolling-tags
@@ -155,22 +169,28 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Move rolling tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           git fetch --force --tags origin
-          scripts/release_promote.sh "${REGISTRY}/${IMAGE_NAME,,}"
+          scripts/release_promote.sh "${REGISTRY}/${IMAGE_NAME,,}" "$VERSION"
 
-  release:
-    name: Create GitHub Release
+  assets:
+    # Rendered once and passed to verify and release as an artifact, so the
+    # files that are tested are byte-for-byte the files that are published.
+    name: Render release assets
     runs-on: ubuntu-latest
     needs: [validate, build-and-push]
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v6
 
       - name: Update installer HARDCODED_VERSION
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          VERSION="${{ needs.validate.outputs.version }}"
           sed -i "s|^HARDCODED_VERSION=.*|HARDCODED_VERSION=\"$VERSION\"|" scripts/magpie-deploy.sh
 
           # Verify the update succeeded
@@ -189,6 +209,135 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
           DIGEST: ${{ needs.build-and-push.outputs.digest }}
         run: IMAGE_REPO="${REGISTRY}/${IMAGE_NAME,,}" scripts/render_release_assets.sh "$VERSION" "$DIGEST" dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/
+          if-no-files-found: error
+
+  verify:
+    # Deploys the pushed digest from the rendered files, the way operators
+    # do, before anything moves `latest` or publishes the release (#571).
+    # Each step is a scripts/release_verify.sh subcommand, runnable locally.
+    name: Verify image and assets
+    runs-on: ubuntu-latest
+    needs: [validate, build-and-push, assets]
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      DIGEST: ${{ needs.build-and-push.outputs.digest }}
+      DIST: dist
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image repository
+        run: echo "IMAGE_REPO=${REGISTRY}/${IMAGE_NAME,,}" >> "$GITHUB_ENV"
+
+      - name: Assets match the pushed image
+        run: scripts/release_verify.sh assets
+
+      - name: Restricted start (non-root, read-only root fs)
+        run: scripts/release_verify.sh smoke
+
+      - name: Plain compose, fresh data
+        run: scripts/release_verify.sh compose
+
+      - name: Installer install, checks, uninstall --purge
+        run: scripts/release_verify.sh installer
+
+      - name: Find the previous release
+        id: prev
+        run: |
+          prev="$(scripts/release_verify.sh previous)"
+          echo "version=$prev" >> "$GITHUB_OUTPUT"
+          if [[ -z "$prev" ]]; then
+            echo "::warning::No earlier release with release assets; skipping the upgrade checks"
+          else
+            gh release download "v$prev" --dir prev-dist \
+              --pattern docker-compose.yml --pattern env.example \
+              --pattern magpie-deploy.sh --pattern SHA256SUMS
+            (cd prev-dist && sha256sum -c SHA256SUMS)
+            echo "Upgrading from v$prev"
+          fi
+
+      - name: Plain compose upgrade from the previous release
+        if: steps.prev.outputs.version != ''
+        env:
+          PREV_DIST: prev-dist
+          PREV_VERSION: ${{ steps.prev.outputs.version }}
+        run: scripts/release_verify.sh compose-upgrade
+
+      - name: Installer upgrade from the previous release
+        if: steps.prev.outputs.version != ''
+        env:
+          PREV_DIST: prev-dist
+          PREV_VERSION: ${{ steps.prev.outputs.version }}
+        run: scripts/release_verify.sh installer-upgrade
+
+  verify-arm64:
+    name: Verify image (arm64)
+    runs-on: ubuntu-24.04-arm
+    needs: [validate, build-and-push]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      DIGEST: ${{ needs.build-and-push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restricted start (non-root, read-only root fs)
+        run: |
+          export IMAGE_REPO="${REGISTRY}/${IMAGE_NAME,,}"
+          scripts/release_verify.sh smoke
+
+  release:
+    # A stable release waits for its rolling tags, so it is never published
+    # while `latest` still points elsewhere. Prereleases skip promote.
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [validate, assets, verify, verify-arm64, promote]
+    if: >-
+      !cancelled()
+      && needs.assets.result == 'success'
+      && needs.verify.result == 'success'
+      && needs.verify-arm64.result == 'success'
+      && (needs.promote.result == 'success'
+          || (needs.promote.result == 'skipped'
+              && needs.validate.outputs.is_prerelease == 'true'))
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
