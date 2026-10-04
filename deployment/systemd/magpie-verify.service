@@ -1,0 +1,94 @@
+# Magpie Integrity Verification (Scrub) Service
+# This oneshot service runs magpie-ctl verify to re-read stored blobs and
+# compare them against the SHA-256 recorded at upload time, detecting bit-rot
+# or tampering of artifacts (e.g., OpenVPN CA/cert/key material).
+# Triggered by magpie-verify.timer (recommended) or can be run manually.
+#
+# Installation:
+#   cp magpie-verify.service /etc/systemd/system/
+#   cp magpie-verify.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now magpie-verify.timer
+#
+# Manual run:
+#   systemctl start magpie-verify.service
+#
+# View logs (including any integrity findings):
+#   journalctl -u magpie-verify.service
+#
+# Exit codes: 0 clean, 1 operational error, 3 missing blob/metadata,
+# 5 content mismatch, 75 the run was skipped because a lock was held. A failed
+# unit state means the scrub found something, except for 75: that run never
+# started, so storage was not checked at all. Alert on a repeated 75 (the
+# schedule is never getting a turn), not on a single one.
+# See docs/monitoring.md for alerting guidance.
+
+[Unit]
+Description=Magpie Integrity Verification
+Documentation=https://github.com/SouthwestCCDC/magpie
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+
+# Run verification via Docker Compose with flock-based locking.
+# Uses a dedicated lock file so a scrub never overlaps with another scrub, and
+# the GC lock is also taken because GC unlinks a blob before its metadata
+# sidecar: a scrub racing GC can otherwise report a collected blob as missing.
+# The GC lock uses a bounded wait (-w 3600) so an overrunning collection delays
+# the scrub instead of cancelling it, and both locks use `-E 75` so a run that
+# never started is distinguishable from a scrub that failed on broken storage.
+# Uses `docker compose run` so verification works even if the main `magpie`
+# container is stopped. Adjust path to match your installation.
+WorkingDirectory=/opt/magpie
+ExecStart=/usr/bin/flock -n -E 75 /var/run/magpie-verify.lock /usr/bin/flock -w 3600 -E 75 /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl verify --quiet
+
+# Alternative: scope the scrub to competition-critical crypto material only,
+# which is cheap enough to run daily even on a large store.
+# ExecStart=/usr/bin/flock -n -E 75 /var/run/magpie-verify.lock /usr/bin/flock -w 3600 -E 75 /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl verify --path openvpn --quiet
+
+# Alternative: bound the work of each run. NOTE: the walk always starts at the
+# beginning of the store and keeps no cursor, so a bounded run repeatedly covers
+# the same head of the store rather than rolling forward. Prefer --path scoping
+# to cover the whole store in pieces.
+# ExecStart=/usr/bin/flock -n -E 75 /var/run/magpie-verify.lock /usr/bin/flock -w 3600 -E 75 /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl verify --max-bytes 10737418240 --quiet
+
+# Alternative: Direct execution (if not using Docker)
+# ExecStart=/usr/bin/flock -n -E 75 /var/run/magpie-verify.lock /usr/bin/flock -w 3600 -E 75 /var/run/magpie-gc.lock /usr/local/bin/magpie-ctl verify --quiet
+
+# User configuration (optional)
+# By default, this service runs as root. To run as a different user, uncomment
+# and set User= to a user with Docker socket access (typically in 'docker' group).
+# User=magpie
+
+# Environment overrides (optional)
+# NOTE: For Docker deployments using `docker compose run`, these environment
+# variables are NOT passed to the container. Configure settings in the
+# container's .env file or docker-compose.yml, or use CLI flags instead.
+# Environment=MAGPIE_STORAGE_PATH=/data/artifacts
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=magpie-verify
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+# Allow write access to lock file directory (/var/run is typically a symlink to /run)
+ReadWritePaths=/var/run
+# If using direct execution, also add read access to the storage path:
+# ReadWritePaths=/data/artifacts
+#
+# NOTE: ProtectHome=true and ProtectSystem=strict may prevent access to
+# MAGPIE_DATA_DIR if configured to paths in /home or other protected locations.
+
+# Timeouts
+# A full scrub re-reads every byte in storage; raise this or bound the run with
+# --path/--limit/--max-bytes for large stores. The budget must also cover the
+# GC-lock wait above (-w 3600), which is spent before the scrub starts.
+TimeoutStartSec=21600

@@ -1,0 +1,80 @@
+# Magpie Integrity Verification (Scrub) - Cron Configuration
+# Alternative to the systemd timer for systems without systemd.
+#
+# `magpie-ctl verify` re-reads stored blobs and compares them against the
+# SHA-256 recorded at upload time, detecting bit-rot or tampering of artifacts
+# (e.g., OpenVPN CA/cert/key material). Nothing else in Magpie re-checks stored
+# bytes, so this schedule is the only detection for silent corruption.
+#
+# Installation options:
+#
+# 1. Copy to /etc/cron.d/ (recommended):
+#    cp magpie-verify /etc/cron.d/
+#    chmod 644 /etc/cron.d/magpie-verify
+#
+# 2. Add to root's crontab:
+#    crontab -e
+#    # Then paste the command portion only, removing the 'root' user field.
+#
+# Exit codes: 0 clean, 1 operational error, 3 missing blob/metadata,
+# 5 content mismatch, 75 the run was skipped because a lock was held (see
+# SKIP_CODE below) - the scrub never started, so storage was NOT checked and
+# nothing was found wrong. Cron mails the output to the crontab owner and
+# records the exit status, so the entries below deliberately do NOT pipe into
+# `logger`: in a pipeline the job's status becomes the status of the last
+# command and the scrub result is lost. Where syslog delivery is wanted, wrap
+# the pipeline in `bash -o pipefail -c` (see the alternative at the bottom of
+# this file) so the scrub's status survives. See docs/monitoring.md for alerting.
+
+# Environment variables (adjust paths as needed)
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+MAGPIE_DIR=/opt/magpie
+
+# Host-side lock files used by flock. VERIFY_LOCK prevents overlapping scrubs;
+# GC_LOCK keeps a scrub from running while GC deletes blobs. Take both: GC
+# unlinks a blob before its metadata sidecar, so a scrub racing GC can report a
+# blob as missing that was in fact collected.
+#
+# The GC lock is taken with a bounded wait (GC_WAIT seconds) rather than
+# --nonblock, so an overrunning nightly collection delays the scrub instead of
+# cancelling it. Both locks use `-E $SKIP_CODE` so a run that never started is
+# reported as 75 and not as exit 1, which the exit-code table reserves for
+# "storage is broken". Alert on 75 only when it repeats: one skipped run means
+# GC (or a previous scrub) was still working, while a run of them means the
+# schedule never gets to verify anything.
+VERIFY_LOCK=/var/run/magpie-verify.lock
+GC_LOCK=/var/run/magpie-gc.lock
+GC_WAIT=3600
+SKIP_CODE=75
+
+# Weekly full scrub, Sunday at 4:00 AM (after the nightly GC run).
+# A full scrub re-reads every byte in storage, so keep it off-peak.
+# Format: minute hour day month weekday user command
+0 4 * * 0 root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --quiet
+
+# Daily scrub of competition-critical crypto material only. Scoped with --path,
+# so it is cheap enough to run every day even on a large store.
+0 3 * * * root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --path openvpn --quiet
+
+# Alternative: bound each run with --max-bytes. NOTE: the walk always starts at
+# the beginning of the store and keeps no cursor, so a bounded run repeatedly
+# verifies the same head of the store and never advances. Use it only to cap the
+# cost of a smoke check; to cover everything, scope separate entries with --path
+# or schedule an unbounded full scrub off-peak.
+# 0 4 * * * root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --max-bytes 10737418240 --quiet
+
+# Alternative: Use `exec` into the running magpie container (requires container to be running)
+# 0 4 * * 0 root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl verify --quiet
+
+# Alternative: Direct execution (if not using Docker)
+# 0 4 * * 0 root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK /usr/local/bin/magpie-ctl verify --quiet
+
+# Alternative: also log to syslog. `bash -o pipefail -c` keeps the job's exit
+# status equal to the scrub's, which a plain `... | logger` would discard.
+# 0 4 * * 0 root bash -o pipefail -c 'flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK /usr/local/bin/magpie-ctl verify --quiet 2>&1 | logger -t magpie-verify'
+
+# Alternative: machine-readable output for a monitoring scraper.
+# 0 4 * * 0 root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK /usr/local/bin/magpie-ctl --format json verify > /var/lib/magpie/verify.json
+# NOTE: a skipped run (75) writes no JSON, so a scraper reading this file must
+# treat a stale mtime as "not verified recently" rather than as a clean result.
