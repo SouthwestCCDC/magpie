@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, field_validator
 
 from magpie.server.deps import get_storage_service, require_read_scope, require_write_scope
@@ -146,7 +147,9 @@ async def get_artifact_info(
             Automatically converted to HTTP 404 by error handlers.
     """
     path = _normalize_path(path)
-    info = storage_service.get_artifact_info(path, ref)
+    # Storage calls do blocking filesystem IO; run them in the threadpool so a
+    # large artifact tree can't stall the event loop for other requests.
+    info = await run_in_threadpool(storage_service.get_artifact_info, path, ref)
 
     return ArtifactInfoResponse(
         hash=info.hash,
@@ -277,6 +280,9 @@ async def amend_metadata(
     """
     path = _normalize_path(path)
 
+    # Tag and metadata mutations deliberately stay on the event loop: unlike the
+    # manifest, metadata sidecars are updated with a non-atomic read-modify-write
+    # (update_metadata()), so letting them overlap would surface partial reads.
     # Resolve ref (tag name or hash ref) to get the hash_ref
     existing_info = storage_service.get_artifact_info(path, ref)
 
@@ -332,7 +338,9 @@ async def list_artifact_paths(
         except InvalidArtifactPathError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-    paths = storage_service.list_artifact_paths(prefix, recursive=recursive)
+    paths = await run_in_threadpool(
+        storage_service.list_artifact_paths, prefix, recursive=recursive
+    )
     return ArtifactPathsResponse(paths=paths)
 
 
@@ -361,7 +369,7 @@ async def list_artifacts(
         HTTPException 401: If X-Magpie-Scope header is missing (unauthenticated).
     """
     path = _normalize_path(path)
-    artifact_infos = storage_service.list_artifacts(path)
+    artifact_infos = await run_in_threadpool(storage_service.list_artifacts, path)
 
     versions = [
         VersionInfo(
