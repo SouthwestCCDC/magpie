@@ -76,7 +76,15 @@ def version() -> None:
 
 
 # Register subcommands
-from magpie.ctl.commands import flush_tag, gc, init, migrate, sync, token  # noqa: E402
+from magpie.ctl.commands import (  # noqa: E402
+    flush_tag,
+    gc,
+    init,
+    migrate,
+    sync,
+    token,
+    verify,
+)
 
 cli.add_command(init)
 cli.add_command(gc)
@@ -84,6 +92,7 @@ cli.add_command(flush_tag)
 cli.add_command(sync)
 cli.add_command(token)
 cli.add_command(migrate)
+cli.add_command(verify)
 
 
 # Alias for entry point compatibility
