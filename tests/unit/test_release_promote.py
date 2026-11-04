@@ -1,4 +1,4 @@
-"""release_promote.sh against stubbed git and docker (#634)."""
+"""release_promote.sh against stubbed git, gh and docker (#634)."""
 
 import os
 import subprocess
@@ -11,6 +11,12 @@ IMAGE = "ghcr.io/southwestccdc/magpie"
 
 STUB_GIT = """#!/bin/bash
 printf '%s\\n' $FAKE_TAGS
+"""
+
+# gh release list: tags with a published GitHub Release.
+STUB_GH = """#!/bin/bash
+[[ -n "$FAKE_GH_FAIL" ]] && { echo "HTTP 502" >&2; exit 1; }
+printf '%s\\n' $FAKE_RELEASES
 """
 
 # inspect: FAKE_MISSING tags report "not found", FAKE_BROKEN tags fail
@@ -27,10 +33,10 @@ echo "$*" >>"$FAKE_LOG"
 """
 
 
-def _run(tmp_path, tags, missing="", broken=""):
+def _run(tmp_path, tags, missing="", broken="", released=None, verified="0.2.1", gh_fail=""):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name, body in (("git", STUB_GIT), ("docker", STUB_DOCKER)):
+    for name, body in (("git", STUB_GIT), ("gh", STUB_GH), ("docker", STUB_DOCKER)):
         (bin_dir / name).write_text(body)
         (bin_dir / name).chmod(0o755)
     log = tmp_path / "creates.log"
@@ -42,9 +48,12 @@ def _run(tmp_path, tags, missing="", broken=""):
         "FAKE_MISSING": missing,
         "FAKE_BROKEN": broken,
         "FAKE_LOG": str(log),
+        "FAKE_RELEASES": " ".join(tags if released is None else released),
+        "FAKE_GH_FAIL": gh_fail,
+        "GITHUB_REPOSITORY": "SouthwestCCDC/magpie",
     }
     result = subprocess.run(  # noqa: S603
-        ["bash", str(SCRIPT), IMAGE], env=env, capture_output=True, text=True, check=False
+        ["bash", str(SCRIPT), IMAGE, verified], env=env, capture_output=True, text=True, check=False
     )
     creates = {}
     for line in log.read_text().splitlines():
@@ -81,4 +90,27 @@ def test_registry_error_moves_nothing(tmp_path, broken):
 def test_no_published_release_moves_nothing(tmp_path):
     result, creates = _run(tmp_path, ["v0.2.0-rc1"])
     assert result.returncode == 0, result.stdout + result.stderr
+    assert creates == {}
+
+
+def test_failed_release_never_gets_an_alias(tmp_path):
+    # 0.2.1's image was pushed but verification failed, so it has no
+    # GitHub Release; a later 0.1.7 hotfix must not move latest onto it.
+    released = ["v0.1.6", "v0.2.0-rc3", "v0.2.0"]
+    result, creates = _run(tmp_path, TAGS, released=released, verified="0.1.7")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Skipping 0.2.1: no published GitHub Release" in result.stdout
+    assert creates == {"latest": "0.2.0", "0": "0.2.0", "0.1": "0.1.7", "0.2": "0.2.0"}
+
+
+def test_verified_version_counts_before_its_release_exists(tmp_path):
+    released = ["v0.1.6", "v0.1.7", "v0.2.0"]
+    result, creates = _run(tmp_path, TAGS, released=released, verified="0.2.1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert creates == {"latest": "0.2.1", "0": "0.2.1", "0.1": "0.1.7", "0.2": "0.2.1"}
+
+
+def test_release_api_error_moves_nothing(tmp_path):
+    result, creates = _run(tmp_path, TAGS, gh_fail="1")
+    assert result.returncode != 0
     assert creates == {}
