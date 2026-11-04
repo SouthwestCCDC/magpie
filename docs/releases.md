@@ -44,6 +44,17 @@ version = "X.Y.Z-rcN"  # No 'v' prefix, hyphen required before 'rc'
 
 **Note:** The version in `pyproject.toml` does NOT include the `v` prefix. The git tag will have the `v` prefix (e.g., git tag `v1.0.0` corresponds to `version = "1.0.0"` in `pyproject.toml`).
 
+### Step 1b: Write release notes (stable releases)
+
+For a stable release, add `docs/release-notes/vX.Y.Z.md` in the same PR as the
+version bump. The release workflow uses that file as the GitHub Release body and
+GitHub appends the auto-generated commit changelog after it. If the file is
+absent the release body is the auto-generated changelog only -- which is the
+intended behavior for release candidates, so RCs normally skip this step.
+
+Cover anything an operator cannot infer from the commit list: deprecations,
+required pre-upgrade actions, deployment-model changes, and migration behavior.
+
 ### Step 2: Commit and Tag
 
 ```bash
