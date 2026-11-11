@@ -26,7 +26,6 @@
 #     used by MAGPIE_ALLOWED_CIDRS above. Default: empty (trust no proxy).
 #     Must be scoped to the exact upstream hop(s) in front of this
 #     container -- never a broad range. See issue #575.
-
 {
 	log {
 		output stdout

@@ -83,6 +83,8 @@ log "caddy image: ${CADDY_IMAGE}"
 log "validating ${#caddyfiles[@]} Caddyfile(s) against ${#cases[@]} env case(s)"
 
 declare -a failures=()
+format_tmp="$(mktemp)"
+trap 'rm -f "$format_tmp"' EXIT
 
 for caddyfile in "${caddyfiles[@]}"; do
     # Bind mounts need an absolute source, and docker silently CREATES an empty
@@ -98,6 +100,15 @@ for caddyfile in "${caddyfiles[@]}"; do
     if [[ ! -f "$caddyfile_src" ]]; then
         echo "[caddy-validate] ERROR: not a file: ${caddyfile_src}" >&2
         exit 1
+    fi
+
+    if ! docker run --rm -i "$CADDY_IMAGE" caddy fmt - < "$caddyfile_src" > "$format_tmp"; then
+        log "FAIL: ${caddyfile} is not caddy-fmt formatted"
+        failures+=("${caddyfile} [format]")
+    elif ! format_diff="$(diff -u "$caddyfile_src" "$format_tmp")"; then
+        log "FAIL: ${caddyfile} is not caddy-fmt formatted"
+        printf '%s\n' "$format_diff" >&2
+        failures+=("${caddyfile} [format]")
     fi
 
     for spec in "${cases[@]}"; do
