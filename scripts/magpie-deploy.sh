@@ -1137,6 +1137,7 @@ generate_compose_wrapper() {
         printf 'INSTALL_DIR=%q\n' "$INSTALL_DIR"
         declare -f resolve_compose_file_args
         echo 'resolve_compose_file_args || exit 1'
+        # shellcheck disable=SC2016  # wrapper command is emitted literally for later execution
         echo 'exec /usr/bin/docker compose "${COMPOSE_FILE_ARGS[@]}" "$@"'
     } > "${wrapper}.tmp"
     chmod 0755 "${wrapper}.tmp"

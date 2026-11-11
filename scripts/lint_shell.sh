@@ -11,9 +11,8 @@
 # Docker, no systemd, and no install (see .github/workflows/installer.yml
 # for the tiering).
 #
-# The enabled ruleset (and the three deliberately-disabled checks) lives
-# in .shellcheckrc at the repo root, so this script, the pre-commit hook,
-# and CI all report the same findings.
+# The enabled ruleset lives in .shellcheckrc at the repo root, so this
+# script, the pre-commit hook, and CI all report the same findings.
 #
 # Usage: scripts/lint_shell.sh [file ...]   (default: all tracked *.sh)
 
