@@ -29,6 +29,8 @@
 # #561-B, needs a published prior-version image) and the full
 # config x version-chain matrix (companion issue).
 
+# shellcheck disable=SC2329  # test doubles (systemctl, docker, compose_exec, ...) shadow commands called by the sourced magpie-deploy.sh
+
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
