@@ -287,6 +287,7 @@ SHUTTING_DOWN=0
 # shutdown so the final exit code is 0 rather than the fail-fast non-zero
 # code.
 # shellcheck disable=SC2317  # only reachable via the trap below
+# shellcheck disable=SC2329  # invoked via trap
 term_handler() {
 	if [ "$SHUTTING_DOWN" -eq 0 ]; then
 		SHUTTING_DOWN=1

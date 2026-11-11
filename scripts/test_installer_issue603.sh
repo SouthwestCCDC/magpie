@@ -13,6 +13,8 @@
 # magpie-deploy.sh functions, shadow `docker`/`compose_exec` as needed, no
 # Docker/systemd/root required.
 
+# shellcheck disable=SC2329  # test doubles (systemctl, docker, compose_exec, ...) shadow commands called by the sourced magpie-deploy.sh
+
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -7,7 +7,7 @@
 # harnesses source scripts/magpie-deploy.sh).
 external-sources=true
 
-# The checks below are DELIBERATELY scoped out; everything else,
+# The two checks below are DELIBERATELY scoped out; everything else,
 # including SC2006 and the whole info-level tier (SC2086 unquoted
 # expansion and friends), stays on.
 #
@@ -25,6 +25,4 @@ external-sources=true
 #   SC2317 (command appears unreachable): false positive for functions
 #     invoked indirectly -- trap handlers, and the harnesses' test_*
 #     functions dispatched by name.
-#   SC2329 (function is never invoked): the same false positive; shellcheck
-#     0.11 moved it out of SC2317 (the ubuntu-26.04 runner ships 0.11).
-disable=SC2016,SC2317,SC2329
+disable=SC2016,SC2317

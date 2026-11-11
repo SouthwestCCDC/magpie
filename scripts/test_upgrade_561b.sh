@@ -251,6 +251,7 @@ teardown_host() {
     return $still_dirty
 }
 
+# shellcheck disable=SC2329  # invoked via trap
 full_teardown() {
     # $? here is the exit status the script is about to use (whatever was
     # passed to `exit`, or the last command's status if the script fell
