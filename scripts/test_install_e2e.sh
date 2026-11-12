@@ -232,21 +232,37 @@ run_install() {
     # comment in magpie-deploy.sh.
     # --tls-mode off: no ACME/Let's Encrypt in CI (the flag is accepted for
     # compatibility and ignored -- the bundled image is HTTP-only).
-    local status=0
+    local assert_fresh_token_delivery="${1:-false}"
+    local status=0 output
     INSTALL_PERFORMED="true"
-    "$DEPLOY_SCRIPT" install \
+    output="$("$DEPLOY_SCRIPT" install \
         --from-source \
         --source-dir "$REPO_ROOT" \
         --tls-mode off \
         --noninteractive \
         --install-dir "$INSTALL_DIR" \
         --http-port "$HTTP_PORT" \
-        --allow-unsupported-os || status=$?
+        --allow-unsupported-os 2>&1)" || status=$?
+    printf '%s\n' "$output"
 
     assert_eq "0" "$status" "installer exit status"
     if (( status != 0 )); then
         dump_diagnostics
         abort "installer failed (exit ${status}); no point asserting on the result"
+    fi
+
+    if [[ "$assert_fresh_token_delivery" == "true" ]]; then
+        if [[ "$output" == *"already initialized"* ]]; then
+            fail "fresh install output incorrectly says the database was already initialized"
+        else
+            pass "fresh install output does not say the database was already initialized"
+        fi
+        if [[ "$output" == *"Admin token was generated on first boot and delivered via the 'file' sink."* \
+            && "$output" == *"sudo cat ${DATA_DIR}/admin-token"* ]]; then
+            pass "fresh install output explains the admin-token file location"
+        else
+            fail "fresh install output does not explain the admin-token file location"
+        fi
     fi
 }
 
@@ -1079,7 +1095,7 @@ assert_purge_leaves_nothing() {
 
 main() {
     preflight
-    run_install
+    run_install true
 
     assert_units_active
     assert_generated_units_wellformed

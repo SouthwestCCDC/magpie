@@ -980,12 +980,20 @@ SERVICE_ACCOUNT="magpie"
 RUNTIME_UID=""
 RUNTIME_GID=""
 DATA_DIR_FRESH="false"
+DATA_DIR_DB_PREEXISTED="false"
 CREATED_ACCOUNTS=()
 # Accounts this installer created, so purge removes only those. Outside both
 # etc/ (a plain uninstall removes it but keeps the data and the account that
 # owns it, and a reinstall onto that data must still know to purge it) and the
 # data directory (the container uid can write there, and root acts on this).
 CREATED_ACCOUNTS_FILE="/var/lib/magpie-deploy/created-accounts"
+
+record_database_preexisting_state() {
+    DATA_DIR_DB_PREEXISTED="false"
+    if [[ -f "${DATA_DIR}/magpie.db" ]]; then
+        DATA_DIR_DB_PREEXISTED="true"
+    fi
+}
 
 warn_root_owned_data() {
     local dir="$1"
@@ -2040,6 +2048,27 @@ wait_for_healthy() {
     return 1
 }
 
+report_init_token_status() {
+    local -A env_vars=()
+    local sink="file"
+    local env_file="${INSTALL_DIR}/etc/.env"
+    if [[ -f "$env_file" ]]; then
+        read_env_file "$env_file" env_vars
+        sink="${env_vars[MAGPIE_ADMIN_TOKEN_SINK]:-file}"
+    fi
+
+    if [[ "$DATA_DIR_DB_PREEXISTED" == "true" ]]; then
+        log "Database already initialized"
+    else
+        log "Admin token was generated on first boot and delivered via the '${sink}' sink."
+        if [[ "$sink" == "file" ]]; then
+            log "  sudo cat ${DATA_DIR}/admin-token"
+        fi
+    fi
+    log "To mint an additional admin-scope token instead:"
+    log "  ${INSTALL_DIR}/bin/magpie-compose exec magpie magpie-ctl token create --name ops-admin --scope admin"
+}
+
 run_init() {
     log "Initializing database..."
 
@@ -2067,8 +2096,7 @@ run_init() {
 
         # Check if it's a "container not running" type error vs actual init failure
         if echo "$output" | grep -qiE "(already initialized|admin token already exists)"; then
-            # Not an error - database was already initialized
-            log "Database already initialized"
+            report_init_token_status
             return 0
         fi
 
@@ -2111,15 +2139,7 @@ run_init() {
         echo "=============================================="
         echo ""
     else
-        # No token in this exec's output -- almost always because the
-        # container's own first-boot init (wrapper.sh's root prelude,
-        # running before this script's health check returns) already
-        # generated and delivered it via MAGPIE_ADMIN_TOKEN_SINK (default:
-        # file, at ${DATA_DIR}/admin-token) before this exec ever ran.
-        log "Database already initialized; admin token was delivered on first boot."
-        log "Default sink is 'file': sudo cat ${DATA_DIR}/admin-token"
-        log "To mint an additional admin-scope token instead:"
-        log "  ${INSTALL_DIR}/bin/magpie-compose exec magpie magpie-ctl token create --name ops-admin --scope admin"
+        report_init_token_status
     fi
 }
 
@@ -3271,6 +3291,7 @@ cmd_install() {
     pull_or_build_image
 
     # Start everything
+    record_database_preexisting_state
     start_services
     # A hard failure here (see wait_for_healthy()'s docstring) means the
     # freshly-installed container never came up at all -- there is nothing
