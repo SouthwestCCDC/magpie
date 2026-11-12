@@ -76,7 +76,8 @@ Lost it, or used a different sink? See [Admin token retrieval](#admin-token-retr
 ### 3. Install the client
 
 ```bash
-uv tool install git+https://github.com/SouthwestCCDC/magpie
+# Use the server's release tag; client and server minor versions must match.
+uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'
 ```
 
 That installs the `magpie` (client) and `magpie-ctl` (server admin) commands into
@@ -184,7 +185,8 @@ comparison.
 sudo ./scripts/magpie-deploy.sh install --noninteractive
 
 # Client: standalone CLI install (brings its own Python 3.13)
-uv tool install git+https://github.com/SouthwestCCDC/magpie
+# Use the server's release tag; client and server minor versions must match.
+uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'
 ```
 
 Use the release's digest-pinned `docker-compose.yml` for production. See the [Installation
@@ -214,4 +216,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow.
 
 ---
 *Documentation improved with AI assistance (Claude Code w/ Sonnet 4.5; first-user-experience
-overhaul via Devin; refreshed for v0.2.0 final via Devin).*
+overhaul via Devin; refreshed for v0.2.0 final via Devin; release tag guidance updated via Devin).*

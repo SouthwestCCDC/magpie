@@ -12,8 +12,7 @@ its own for the CLI.
 ## 1. Deploy Server
 
 ```bash
-V=v0.2.0
-base=https://github.com/SouthwestCCDC/magpie/releases/download/$V
+base=https://github.com/SouthwestCCDC/magpie/releases/latest/download
 curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/env.example" -fsSLO "$base/SHA256SUMS"
 grep -E ' (docker-compose\.yml|env\.example)$' SHA256SUMS | sha256sum -c
 cp env.example .env
@@ -43,8 +42,8 @@ clone the repository and run `sudo ./scripts/magpie-deploy.sh install --noninter
 ## 2. Install Client
 
 ```bash
-# Installs `magpie` and `magpie-ctl` into ~/.local/bin, isolated, with their own Python
-uv tool install 'git+https://github.com/SouthwestCCDC/magpie@v0.2.0'
+# Use the server's release tag; client and server minor versions must match.
+uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'
 export MAGPIE_SERVER=http://localhost:8080
 export MAGPIE_TOKEN=mgp_ADMIN_...  # Token from step 1
 magpie status  # Verify connection
@@ -87,9 +86,14 @@ magpie info builds/app:latest
 
 ## Troubleshooting
 
-- **Connection refused:** `sudo ./scripts/magpie-deploy.sh status`
+- **Connection refused:** run `docker compose ps`, then inspect `docker compose logs magpie`.
+  If the service is stopped, run `docker compose up -d`.
 - **Auth errors:** `magpie status`
-- **Port conflict:** Reinstall with `--http-port 8888`
+- **Port conflict:** set `MAGPIE_HTTP_PORT=8888` in `.env` (and adjust `MAGPIE_BIND_IP` if
+  needed), then run `docker compose up -d`.
+
+For installer-managed hosts, `sudo ./scripts/magpie-deploy.sh status` provides the equivalent
+status check; configure `--http-port`/`--bind-ip` through the installer.
 
 ## Next Steps
 
@@ -101,4 +105,4 @@ magpie info builds/app:latest
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; latest-release URLs and Compose troubleshooting updated via Devin)*

@@ -31,8 +31,7 @@ is defined once, in the [Configuration Reference](configuration.md).
 ### Option A: release assets with plain Compose (recommended)
 
 ```bash
-V=v0.2.0
-base=https://github.com/SouthwestCCDC/magpie/releases/download/$V
+base=https://github.com/SouthwestCCDC/magpie/releases/latest/download
 curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/env.example" -fsSLO "$base/SHA256SUMS"
 grep -E ' (docker-compose\.yml|env\.example)$' SHA256SUMS | sha256sum -c
 cp env.example .env
@@ -81,16 +80,12 @@ Never use this path in production: it builds an unpinned image from your working
 ## Client installation
 
 ```bash
-uv tool install git+https://github.com/SouthwestCCDC/magpie
+uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'   # use the server's release tag
 ```
 
 That puts `magpie` and `magpie-ctl` in `~/.local/bin` in their own isolated environment, with
-uv fetching Python 3.13 if the host doesn't have it. To pin a release instead of tracking the
-`default` branch:
-
-```bash
-uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'   # e.g. @v0.2.0
-```
+uv fetching Python 3.13 if the host doesn't have it. Use the release tag the server runs; the
+client and server minor versions must match.
 
 **Match the client's minor version to the server's.** The server reads the CLI's `User-Agent`
 and refuses an older client with `426 Upgrade Required`:
@@ -100,7 +95,8 @@ Error: Upload failed (426): magpie-cli 0.1.6 is not compatible with server 0.2.0
 Minimum required client version: 0.2.0.
 ```
 
-Upgrade with `uv tool install --force git+https://github.com/SouthwestCCDC/magpie`. See
+Upgrade with `uv tool install --force 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'`,
+using the release tag that matches the server. See
 [API Compatibility](api-compatibility.md#version-coupling).
 
 ## First-time configuration
@@ -530,4 +526,4 @@ upgrade instead. `magpie-deploy.sh update` does not do this for you.
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin; refreshed for v0.2.0 final via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin; refreshed for v0.2.0 final via Devin; latest-release URLs and client version guidance updated via Devin)*

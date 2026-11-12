@@ -39,8 +39,7 @@ Before deploying to production:
 
 ## Deploy
 ```bash
-V=v0.2.0
-base=https://github.com/SouthwestCCDC/magpie/releases/download/$V
+base=https://github.com/SouthwestCCDC/magpie/releases/latest/download
 curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/env.example" -fsSLO "$base/SHA256SUMS"
 grep -E ' (docker-compose\.yml|env\.example)$' SHA256SUMS | sha256sum -c
 cp env.example .env
@@ -88,4 +87,4 @@ docker compose -f docker-compose.yml exec magpie \
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; refreshed for v0.2.0 final via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; refreshed for v0.2.0 final via Devin; latest-release URLs updated via Devin)*
