@@ -44,7 +44,7 @@ clone the repository and run `sudo ./scripts/magpie-deploy.sh install --noninter
 ```bash
 MAGPIE_SERVER=${MAGPIE_SERVER:-http://localhost:8080}
 # Client and server minor versions must match.
-V="$(curl -fsS "${MAGPIE_SERVER}/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
+V="$(curl -fsS "${MAGPIE_SERVER}/health" | sed -E 's/.*"version" *: *"([^"]+)".*/\1/; s/^([0-9]+\.[0-9]+\.[0-9]+)(a|b|rc)([0-9]+)$/\1-\2\3/')"
 uv tool install "git+https://github.com/SouthwestCCDC/magpie@v${V}"
 export MAGPIE_SERVER
 export MAGPIE_TOKEN=mgp_ADMIN_...  # Token from step 1
@@ -109,4 +109,4 @@ status check; configure `--http-port`/`--bind-ip` through the installer.
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; latest-release URLs, Compose troubleshooting, and health-derived client install updated via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; latest-release URLs, Compose troubleshooting, and health-derived client install updated via Devin; prerelease tag mapping updated via Devin)*

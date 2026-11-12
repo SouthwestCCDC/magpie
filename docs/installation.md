@@ -82,7 +82,7 @@ Never use this path in production: it builds an unpinned image from your working
 ```bash
 MAGPIE_SERVER=${MAGPIE_SERVER:-http://localhost:8080}
 # Client and server minor versions must match.
-V="$(curl -fsS "${MAGPIE_SERVER}/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
+V="$(curl -fsS "${MAGPIE_SERVER}/health" | sed -E 's/.*"version" *: *"([^"]+)".*/\1/; s/^([0-9]+\.[0-9]+\.[0-9]+)(a|b|rc)([0-9]+)$/\1-\2\3/')"
 uv tool install "git+https://github.com/SouthwestCCDC/magpie@v${V}"
 ```
 
@@ -528,4 +528,4 @@ upgrade instead. `magpie-deploy.sh update` does not do this for you.
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin; refreshed for v0.2.0 final via Devin; latest-release URLs, client version guidance, and health-derived install updated via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin; refreshed for v0.2.0 final via Devin; latest-release URLs, client version guidance, and health-derived install updated via Devin; prerelease tag mapping updated via Devin)*
