@@ -203,4 +203,4 @@ Requires `MAGPIE_S3_BUCKET` and AWS credentials.
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; multi-CIDR separators clarified for #612 via Devin)*

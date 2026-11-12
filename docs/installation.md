@@ -431,4 +431,4 @@ Next: [Production Checklist](production-checklist.md) → [User Guide](user-guid
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; multi-CIDR separators clarified for #612 via Devin)*
