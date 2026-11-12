@@ -185,4 +185,4 @@ Requires `MAGPIE_S3_BUCKET` and AWS credentials.
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; multi-CIDR separators clarified for #612 via Devin)*

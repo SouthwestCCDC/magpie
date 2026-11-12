@@ -174,6 +174,24 @@ class TestMagpieSettingsCIDRValidation:
         settings = MagpieSettings(allowed_cidrs="10.0.0.0/8, 192.168.1.0/24")
         assert settings.allowed_cidrs == "10.0.0.0/8, 192.168.1.0/24"
 
+    def test_valid_whitespace_separated_cidrs(self) -> None:
+        """Whitespace-separated CIDRs should be accepted unchanged."""
+        cidrs = "10.0.0.0/8 192.168.1.0/24"
+        settings = MagpieSettings(allowed_cidrs=cidrs)
+        assert settings.allowed_cidrs == cidrs
+
+    def test_valid_mixed_comma_and_whitespace_separators(self) -> None:
+        """Mixed comma and whitespace separators should be accepted unchanged."""
+        cidrs = "10.0.0.0/8, 192.168.1.0/24 2001:db8::/32"
+        settings = MagpieSettings(allowed_cidrs=cidrs)
+        assert settings.allowed_cidrs == cidrs
+
+    def test_empty_cidr_segments_are_ignored(self) -> None:
+        """Empty segments between separators should be ignored."""
+        cidrs = " , 10.0.0.0/8 ,, "
+        settings = MagpieSettings(allowed_cidrs=cidrs)
+        assert settings.allowed_cidrs == cidrs
+
     def test_valid_ipv6_cidr(self) -> None:
         """IPv6 CIDRs should be accepted."""
         settings = MagpieSettings(allowed_cidrs="2001:db8::/32")
@@ -188,6 +206,11 @@ class TestMagpieSettingsCIDRValidation:
         """Invalid CIDR notation should raise ValidationError."""
         with pytest.raises(ValidationError, match="Invalid CIDR notation"):
             MagpieSettings(allowed_cidrs="10.0.0.0/99")
+
+    def test_invalid_cidr_in_list_raises(self) -> None:
+        """An invalid CIDR in a list should raise ValidationError."""
+        with pytest.raises(ValidationError, match="Invalid CIDR notation"):
+            MagpieSettings(allowed_cidrs="10.0.0.0/8, not-a-cidr")
 
     def test_invalid_ip_address_raises(self) -> None:
         """Invalid IP address should raise ValidationError."""

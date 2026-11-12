@@ -528,4 +528,4 @@ upgrade instead. `magpie-deploy.sh update` does not do this for you.
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin; refreshed for v0.2.0 final via Devin; latest-release URLs, client version guidance, and health-derived install updated via Devin; prerelease tag mapping updated via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin; refreshed for v0.2.0 final via Devin; latest-release URLs, client version guidance, and health-derived install updated via Devin; prerelease tag mapping updated via Devin; multi-CIDR separators clarified for #612 via Devin)*

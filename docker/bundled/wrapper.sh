@@ -492,6 +492,18 @@ if ! caddy_state_dir_ok "$CADDY_HOME"; then
 	log "/var/lib/caddy is not writable by uid $(id -u); keeping Caddy's state in $CADDY_HOME"
 fi
 
+# Caddy expects whitespace-separated CIDRs; translate the documented comma form (#612).
+if [ -n "${MAGPIE_ALLOWED_CIDRS:-}" ]; then
+	caddy_allowed_cidrs="${MAGPIE_ALLOWED_CIDRS//,/ }"
+	caddy_allowed_ranges=()
+	IFS=$' \t\n' read -r -d '' -a caddy_allowed_ranges <<< "$caddy_allowed_cidrs" || true
+	if (( ${#caddy_allowed_ranges[@]} > 0 )); then
+		export MAGPIE_ALLOWED_CIDRS="${caddy_allowed_ranges[*]}"
+	else
+		unset MAGPIE_ALLOWED_CIDRS
+	fi
+fi
+
 export XDG_DATA_HOME="$CADDY_HOME/data"
 export XDG_CONFIG_HOME="$CADDY_HOME/config"
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
