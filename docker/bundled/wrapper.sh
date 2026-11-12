@@ -496,7 +496,7 @@ fi
 if [ -n "${MAGPIE_ALLOWED_CIDRS:-}" ]; then
 	caddy_allowed_cidrs="${MAGPIE_ALLOWED_CIDRS//,/ }"
 	caddy_allowed_ranges=()
-	IFS=$' \t\n' read -r -a caddy_allowed_ranges <<< "$caddy_allowed_cidrs"
+	IFS=$' \t\n' read -r -d '' -a caddy_allowed_ranges <<< "$caddy_allowed_cidrs" || true
 	if (( ${#caddy_allowed_ranges[@]} > 0 )); then
 		export MAGPIE_ALLOWED_CIDRS="${caddy_allowed_ranges[*]}"
 	else
