@@ -27,7 +27,7 @@ New to Magpie? Start with the [5-Minute Quick Start](../README.md#5-minute-quick
 uv tool install git+https://github.com/SouthwestCCDC/magpie
 
 # Or pin a release tag -- see https://github.com/SouthwestCCDC/magpie/releases
-uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'   # e.g. @v0.2.0-rc3
+uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'   # e.g. @v0.2.0
 ```
 
 Install the CLI at the **same minor version as the server**: an older client is rejected with
@@ -61,6 +61,9 @@ Server-side variables (storage, retention, admin-token delivery, logging, observ
 allow-listing, S3 backup) live in the [Configuration
 Reference](configuration.md#server-variables); [`.env.example`](../.env.example) is the
 commented template to copy into a real `.env`.
+
+Comma-separated CIDR ranges are the documented form; whitespace or mixed separators are also
+accepted (e.g., `10.0.0.0/8,192.168.1.0/24`).
 
 #### Managing Configuration
 
@@ -182,4 +185,4 @@ Requires `MAGPIE_S3_BUCKET` and AWS credentials.
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin)*

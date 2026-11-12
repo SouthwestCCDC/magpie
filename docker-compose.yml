@@ -24,6 +24,7 @@
 #
 # Configuration (see .env.example for the full list):
 # - MAGPIE_DATA_DIR: host path for the data directory (default: ./data)
+# - MAGPIE_UID / MAGPIE_GID: runtime uid/gid (default: owner of the data dir, else 1000)
 # - MAGPIE_IMAGE: image ref to run (default: ghcr.io/southwestccdc/magpie:latest)
 # - MAGPIE_HTTP_PORT: host port published for the container's :8080 (default: 8080)
 # - MAGPIE_BIND_IP: host IP the published port binds to (default: 0.0.0.0,
@@ -50,6 +51,12 @@ services:
     environment:
       - MAGPIE_STORAGE_PATH=/data/artifacts
       - MAGPIE_DATABASE_PATH=${MAGPIE_DATABASE_PATH:-/data/magpie.db}
+      # Runtime uid/gid the wrapper drops to. Empty = auto-detect from /data's
+      # ownership, else 1000. Pin these when the uid is itself a credential
+      # (e.g. an NFS export with sec=sys), so a chown can't change who
+      # magpie writes as.
+      - MAGPIE_UID=${MAGPIE_UID:-}
+      - MAGPIE_GID=${MAGPIE_GID:-}
       # IMPORTANT: debug mode is hardcoded off -- unconditionally, not just
       # a default. Enabling it exposes detailed error messages and stack
       # traces that could leak sensitive info.

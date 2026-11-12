@@ -13,6 +13,12 @@ jobs:
   validate:
     name: Validate version
     runs-on: ubuntu-latest
+    # CI on the tagged commit can still be running when the tag is pushed;
+    # release_require_ci.sh waits up to an hour for it.
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      checks: read
     outputs:
       version: ${{ steps.get_version.outputs.version }}
       is_prerelease: ${{ steps.get_version.outputs.is_prerelease }}
@@ -22,14 +28,20 @@ jobs:
       - name: Get version from tag
         id: get_version
         run: |
-          TAG=${GITHUB_REF#refs/tags/v}
-          echo "version=$TAG" >> $GITHUB_OUTPUT
+          TAG="${GITHUB_REF#refs/tags/v}"
+          # Image tags are the raw version string, so only accept shapes
+          # that make sensible tags.
+          if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Tag v$TAG is not vX.Y.Z or vX.Y.Z-<prerelease>"
+            exit 1
+          fi
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
 
           # Check if prerelease (contains -, e.g., v1.0.0-rc1)
           if [[ "$TAG" == *-* ]]; then
-            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
           else
-            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Validate pyproject.toml version matches tag
@@ -45,20 +57,28 @@ jobs:
 
           echo "Version validated: $TAG_VERSION"
 
+      # Nothing is pushed or published unless the commit passed CI.
+      - name: Require CI to have passed on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release_require_ci.sh "$GITHUB_SHA"
+
   build-and-push:
-    # Publishes the two-container image (./Dockerfile, FastAPI service
-    # only, paired with a separate Caddy container -- see
-    # docker-compose.prod.yml) as the primary `magpie` image. This stays
-    # the installer-compatible image (scripts/magpie-deploy.sh's default
-    # `FROM_SOURCE=false` path pulls this tag and expects a bare FastAPI
-    # backend on :8000, not the bundled image's Caddy front door) until a
-    # later PR flips the primary tag over to the bundled image and
-    # retires this build -- see build-and-push-bundled below for that
-    # image, published only under a transitional `-bundled` tag in the
-    # meantime.
+    # Publishes the bundled single-container image (Dockerfile.bundled,
+    # Caddy + uvicorn under one supervisor) as THE magpie image, from
+    # v0.2.0 on (#634; reverses the "Option B" record in #609):
+    #   <version>, <version>-bundled  every release, RC and final (here)
+    #   <major>.<minor>, <major>, latest  stable only (promote, below)
+    # `-bundled` stays as an alias: the installer and rc1-rc3 compose/env
+    # pins use it. The two-container image (./Dockerfile) is no longer
+    # published -- nothing in 0.2.x consumes it (0.1.x -> 0.2.0 upgrades
+    # run the 0.2.0 installer, which pulls -bundled). Removing the
+    # Dockerfile itself is 0.3.0 work.
     name: Build and push container
     runs-on: ubuntu-latest
     needs: validate
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -83,75 +103,20 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Every tag is spelled out below; never let metadata-action add
+          # `latest` on its own.
+          flavor: |
+            latest=false
+          # `type=raw` from validate's output, not a `type=semver` pattern:
+          # metadata-action ignores `pattern` for prerelease refs and emits
+          # the bare raw tag instead, which silently dropped the `-bundled`
+          # suffix on RCs.
           tags: |
-            # Tag with version (v1.0.0 -> 1.0.0)
-            type=semver,pattern={{version}}
-            # Tag with major.minor (v1.0.0 -> 1.0) - stable releases only
-            type=semver,pattern={{major}}.{{minor}},enable=${{ needs.validate.outputs.is_prerelease == 'false' }}
-            # Tag with major (v1.0.0 -> 1) - stable releases only
-            type=semver,pattern={{major}},enable=${{ needs.validate.outputs.is_prerelease == 'false' }}
-            # Tag latest only for stable releases (not prereleases)
-            type=raw,value=latest,enable=${{ needs.validate.outputs.is_prerelease == 'false' }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  build-and-push-bundled:
-    # Publishes the bundled single-container image (Dockerfile.bundled,
-    # Caddy + uvicorn under one supervisor -- see #586/#589/#591) under a
-    # transitional `<version>-bundled` tag only -- never the primary
-    # `<version>`/`latest`/major/minor tags, and never `latest-bundled`.
-    # It's not yet the installer-compatible topology (see the comment on
-    # build-and-push above), so it must not collide with the primary tag
-    # until a later PR migrates the installer/compose topology and flips
-    # the primary tag over.
-    name: Build and push bundled container
-    runs-on: ubuntu-latest
-    needs: validate
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            # Transitional alias -- exact version only, RC and final both
-            # get `<version>-bundled`, no `latest-bundled`. Built from the
-            # already-validated version output (not a `type=semver`
-            # pattern suffix): metadata-action ignores `pattern` for
-            # prerelease refs and always emits the bare raw tag instead,
-            # so a `{{version}}-bundled` pattern silently loses the
-            # `-bundled` suffix on RCs. This form is correct for both RC
-            # and final.
+            type=raw,value=${{ needs.validate.outputs.version }}
             type=raw,value=${{ needs.validate.outputs.version }}-bundled
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -163,18 +128,69 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  release:
-    name: Create GitHub Release
+  promote:
+    # Points the mutable aliases (<major>.<minor>, <major>, latest) at the
+    # highest published stable release in each scope. It runs after the
+    # build and reconciles EVERY alias from scratch
+    # (scripts/release_promote.sh), so:
+    #   - a hotfix on an older line only moves its own <major>.<minor>;
+    #   - overlapping, out-of-order or re-run releases converge, and a run
+    #     GitHub cancels while queued (concurrency keeps one pending run) is
+    #     repaired by whichever run comes after it;
+    #   - "published" means the <version> image exists in the registry and
+    #     the tag has a published GitHub Release (or is the tag this run
+    #     verified), so a tag whose build or verification failed doesn't
+    #     count. Any inspect or API error other than "not found" aborts, so
+    #     a hiccup can't make a newer release look absent and move aliases
+    #     backwards. Re-running is safe.
+    name: Move rolling tags
     runs-on: ubuntu-latest
-    needs: [validate, build-and-push, build-and-push-bundled]
+    needs: [validate, build-and-push, verify, verify-arm64]
+    if: needs.validate.outputs.is_prerelease == 'false'
+    concurrency:
+      group: release-rolling-tags
+      cancel-in-progress: false
     permissions:
-      contents: write
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Move rolling tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          git fetch --force --tags origin
+          scripts/release_promote.sh "${REGISTRY}/${IMAGE_NAME,,}" "$VERSION"
+
+  assets:
+    # Rendered once and passed to verify and release as an artifact, so the
+    # files that are tested are byte-for-byte the files that are published.
+    name: Render release assets
+    runs-on: ubuntu-latest
+    needs: [validate, build-and-push]
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
 
       - name: Update installer HARDCODED_VERSION
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          VERSION="${{ needs.validate.outputs.version }}"
           sed -i "s|^HARDCODED_VERSION=.*|HARDCODED_VERSION=\"$VERSION\"|" scripts/magpie-deploy.sh
 
           # Verify the update succeeded
@@ -185,12 +201,171 @@ jobs:
 
           echo "Updated HARDCODED_VERSION to $VERSION"
 
+      # docker-compose.yml and env.example pinned to this release's image
+      # by digest, plus the installer and SHA256SUMS, so a deployer can
+      # run a release without cloning the repo (#633).
+      - name: Render release assets
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          DIGEST: ${{ needs.build-and-push.outputs.digest }}
+        run: IMAGE_REPO="${REGISTRY}/${IMAGE_NAME,,}" scripts/render_release_assets.sh "$VERSION" "$DIGEST" dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/
+          if-no-files-found: error
+
+  verify:
+    # Deploys the pushed digest from the rendered files, the way operators
+    # do, before anything moves `latest` or publishes the release (#571).
+    # Each step is a scripts/release_verify.sh subcommand, runnable locally.
+    name: Verify image and assets
+    runs-on: ubuntu-latest
+    needs: [validate, build-and-push, assets]
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      DIGEST: ${{ needs.build-and-push.outputs.digest }}
+      DIST: dist
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image repository
+        run: echo "IMAGE_REPO=${REGISTRY}/${IMAGE_NAME,,}" >> "$GITHUB_ENV"
+
+      - name: Assets match the pushed image
+        run: scripts/release_verify.sh assets
+
+      - name: Restricted start (non-root, read-only root fs)
+        run: scripts/release_verify.sh smoke
+
+      - name: Plain compose, fresh data
+        run: scripts/release_verify.sh compose
+
+      - name: Installer install, checks, uninstall --purge
+        run: scripts/release_verify.sh installer
+
+      - name: Find the previous release
+        id: prev
+        run: |
+          prev="$(scripts/release_verify.sh previous)"
+          echo "version=$prev" >> "$GITHUB_OUTPUT"
+          if [[ -z "$prev" ]]; then
+            echo "::warning::No earlier release with release assets; skipping the upgrade checks"
+          else
+            gh release download "v$prev" --dir prev-dist \
+              --pattern docker-compose.yml --pattern env.example \
+              --pattern magpie-deploy.sh --pattern SHA256SUMS
+            (cd prev-dist && sha256sum -c SHA256SUMS)
+            echo "Upgrading from v$prev"
+          fi
+
+      - name: Plain compose upgrade from the previous release
+        if: steps.prev.outputs.version != ''
+        env:
+          PREV_DIST: prev-dist
+          PREV_VERSION: ${{ steps.prev.outputs.version }}
+        run: scripts/release_verify.sh compose-upgrade
+
+      - name: Installer upgrade from the previous release
+        if: steps.prev.outputs.version != ''
+        env:
+          PREV_DIST: prev-dist
+          PREV_VERSION: ${{ steps.prev.outputs.version }}
+        run: scripts/release_verify.sh installer-upgrade
+
+  verify-arm64:
+    name: Verify image (arm64)
+    runs-on: ubuntu-24.04-arm
+    needs: [validate, build-and-push]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      DIGEST: ${{ needs.build-and-push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restricted start (non-root, read-only root fs)
+        run: |
+          export IMAGE_REPO="${REGISTRY}/${IMAGE_NAME,,}"
+          scripts/release_verify.sh smoke
+
+  release:
+    # A stable release waits for its rolling tags, so it is never published
+    # while `latest` still points elsewhere. Prereleases skip promote.
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [validate, assets, verify, verify-arm64, promote]
+    if: >-
+      !cancelled()
+      && needs.assets.result == 'success'
+      && needs.verify.result == 'success'
+      && needs.verify-arm64.result == 'success'
+      && (needs.promote.result == 'success'
+          || (needs.promote.result == 'skipped'
+              && needs.validate.outputs.is_prerelease == 'true'))
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Assemble release body
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          NOTES="docs/release-notes/v${VERSION}.md"
+
+          # body_path must always exist; an empty body leaves the release
+          # with only the auto-generated changelog (the RC behavior).
+          if [ -f "$NOTES" ]; then
+            cp "$NOTES" release-body.md
+            echo "Using hand-written release notes from $NOTES"
+          else
+            : > release-body.md
+            echo "No $NOTES -- release body is the auto-generated changelog only"
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: v${{ needs.validate.outputs.version }}
           draft: false
           prerelease: ${{ needs.validate.outputs.is_prerelease == 'true' }}
+          body_path: release-body.md
           generate_release_notes: true
           files: |
-            scripts/magpie-deploy.sh
+            dist/docker-compose.yml
+            dist/env.example
+            dist/magpie-deploy.sh
+            dist/SHA256SUMS

@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS tokens (
 """
 
 
+def create_schema(conn: sqlite3.Connection) -> None:
+    """Create the tokens table on ``conn`` if it doesn't exist (no commit)."""
+    conn.execute(_SCHEMA)
+
+
 def init_database(db_path: Path) -> None:
     """Initialize the SQLite database with tokens table and WAL mode.
 
@@ -37,8 +42,7 @@ def init_database(db_path: Path) -> None:
         # Enable WAL mode for better concurrent read/write performance
         conn.execute("PRAGMA journal_mode=WAL;")
 
-        # Create tokens table
-        conn.execute(_SCHEMA)
+        create_schema(conn)
         conn.commit()
     finally:
         conn.close()

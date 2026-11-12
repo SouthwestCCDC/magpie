@@ -9,7 +9,7 @@ the CLI installed on the host itself -- `magpie-ctl` runs inside the container.
 |---|---|---|
 | What | Bundled container (Caddy + FastAPI) | `magpie` CLI (and `magpie-ctl`, unused on a client) |
 | Installed on | One Linux host, behind your reverse proxy | Laptops, CI runners, deploy hosts |
-| How | [`scripts/magpie-deploy.sh`](../scripts/magpie-deploy.sh), or Docker Compose | `uv tool install` |
+| How | Release assets with digest-pinned Docker Compose (primary); installer optional | `uv tool install` |
 | Needs | Docker + Compose v2, root | `uv` (it brings its own Python 3.13) |
 | Jump to | [Server installation](#server-installation) | [Client installation](#client-installation) |
 
@@ -28,56 +28,39 @@ is defined once, in the [Configuration Reference](configuration.md).
 
 ## Server installation
 
-### Option A: the installer (recommended)
+### Option A: release assets with plain Compose (recommended)
+
+```bash
+V=v0.2.0
+base=https://github.com/SouthwestCCDC/magpie/releases/download/$V
+curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/env.example" -fsSLO "$base/SHA256SUMS"
+grep -E ' (docker-compose\.yml|env\.example)$' SHA256SUMS | sha256sum -c
+cp env.example .env
+echo 'MAGPIE_ADMIN_TOKEN_SINK=file' >> .env
+# Edit .env for your data directory, runtime uid/gid, and trusted proxy.
+docker compose up -d
+```
+
+Each release's `docker-compose.yml` pins that release's bundled image by digest; the matching
+`env.example` is verified against `SHA256SUMS`. Keep the files together and do not replace the
+pinned image with a mutable tag. See [Release Assets](releases.md#release-assets) and the
+[Quick Start Guide](quickstart.md) for the full walkthrough. Magpie serves plain HTTP on
+`:8080`; put an external reverse proxy in front of it for TLS.
+
+### Option B: optional installer
+
+The installer is a convenience for bare-metal or VM hosts where you want systemd units and
+account management:
 
 ```bash
 git clone https://github.com/SouthwestCCDC/magpie
 cd magpie
-sudo ./scripts/magpie-deploy.sh install
+sudo ./scripts/magpie-deploy.sh install --noninteractive
 ```
 
-This resolves and pins the correct `<version>-bundled` image, writes `<install dir>/etc/.env`,
-installs systemd units, and defaults `MAGPIE_ADMIN_TOKEN_SINK=file`. Add `--noninteractive` for
-unattended runs; it prompts for `--trusted-proxies` interactively otherwise. See the
-[Quick Start Guide](quickstart.md) for the full walkthrough.
-
-### Option B: Docker Compose by hand
-
-For advanced or non-systemd deployments:
-
-```bash
-export MAGPIE_DATA_DIR=/srv/magpie/data
-export MAGPIE_ADMIN_TOKEN_SINK=file   # required -- see Admin Token Delivery below
-export MAGPIE_IMAGE=ghcr.io/southwestccdc/magpie:X.Y.Z-bundled   # e.g. 0.2.0-rc3-bundled; see note below
-docker compose -f docker-compose.yml up -d
-```
-
-`MAGPIE_IMAGE` must be set explicitly to a published `<version>-bundled`
-tag (check [the release list](https://github.com/SouthwestCCDC/magpie/releases)
-for the latest) -- without it, `docker-compose.yml` falls back to
-`ghcr.io/southwestccdc/magpie:latest`, which currently still points at a
-different, incompatible image (built from the plain `Dockerfile`, serving
-on container port 8000, not this compose file's 8080). This manual path
-is for advanced/non-systemd deployments only; **use
-[`scripts/magpie-deploy.sh`](../scripts/magpie-deploy.sh)** (see the
-[Quick Start Guide](quickstart.md)) for a normal bare-metal/VM install --
-it resolves and pins the correct `-bundled` tag automatically.
-
-`-f docker-compose.yml` pins the canonical operator file explicitly -- a
-bare `docker compose up` from a repo checkout auto-merges
-`docker-compose.override.yml` (the local-development overlay: builds from
-source, defaults the admin-token sink, exposes the test-endpoint toggle), which is
-correct for a [local development stack](#option-c-local-development-stack)
-but must never run in production. Every `docker compose` command on this
-page pins it the same way.
-
-Magpie serves plain HTTP only on `MAGPIE_HTTP_PORT` (default 8080) -- it
-does not terminate TLS itself. Put a reverse proxy (nginx, another Caddy, a
-cloud load balancer, infra-deployment's outer Caddy, etc.) in front of it
-for HTTPS. This is also what
-[`scripts/magpie-deploy.sh`](../scripts/magpie-deploy.sh) (the recommended
-installer for a bare-metal/VM host) deploys -- see the
-[Quick Start Guide](quickstart.md).
+It clones the repository, pins a released bundled image, writes configuration under
+`<install dir>/etc/.env`, and installs systemd units. It defaults
+`MAGPIE_ADMIN_TOKEN_SINK=file`; see the [Quick Start Guide](quickstart.md).
 
 ### Option C: local development stack
 
@@ -106,7 +89,7 @@ uv fetching Python 3.13 if the host doesn't have it. To pin a release instead of
 `default` branch:
 
 ```bash
-uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'   # e.g. @v0.2.0-rc3
+uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'   # e.g. @v0.2.0
 ```
 
 **Match the client's minor version to the server's.** The server reads the CLI's `User-Agent`
@@ -192,8 +175,9 @@ every Magpie environment variable, including a "what do I actually need?" table.
 [`.env.example`](../.env.example) is the commented template to copy into a real `.env`.
 
 The short answer for a server: `MAGPIE_ADMIN_TOKEN_SINK` (required),
-`MAGPIE_IMAGE` (pin a `-bundled` release), `MAGPIE_DATA_DIR`, and `MAGPIE_HTTP_PORT` /
-`MAGPIE_BIND_IP`. For a client: `MAGPIE_SERVER` and `MAGPIE_TOKEN`.
+`MAGPIE_IMAGE` (the release asset pins it by digest), `MAGPIE_DATA_DIR`, and `MAGPIE_HTTP_PORT` /
+`MAGPIE_BIND_IP`. For `MAGPIE_ALLOWED_CIDRS`, comma-separated is the documented form; whitespace
+or mixed separators are also accepted. For a client: `MAGPIE_SERVER` and `MAGPIE_TOKEN`.
 
 ## Admin Token Delivery
 
@@ -214,7 +198,8 @@ deployment. See [.env.example](../.env.example) for the full list of
 
 Choose one:
 
-- **`file`** -- writes a root-only (0600) file at
+- **`file`** -- writes an owner-only (0600) file, owned by the uid the
+  container runs as (see [Runtime user](#runtime-user)), at
   `MAGPIE_ADMIN_TOKEN_SINK_FILE_PATH` (default: `/data/admin-token`, set by
   `docker-compose.yml`):
   ```bash
@@ -275,6 +260,94 @@ A native `vault` sink (writing directly to a Vault path, optionally with
 response-wrapping) is planned for a future release; `exec` already covers
 Vault via `vault kv put` in the meantime.
 
+### Site-specific compose settings
+
+On an install made by `magpie-deploy.sh`, put site-specific compose
+settings (service uid/gid, `cap_drop`/`cap_add`, extra environment) in
+`<install>/docker-compose.override.yml`. Every compose command the
+installer and its systemd units run uses `docker-compose.yml` plus that
+file when it exists, so creating or editing it only needs
+`systemctl restart magpie.service`. `update` never touches it. For manual
+compose commands, use `<install>/bin/magpie-compose <subcommand>`, which
+applies the same file set. A copy of the repository's development override
+is refused, not merged. The compose project name stays pinned to the
+install directory's name, so a top-level `name:` in the override is ignored.
+
+### Runtime user
+
+After a brief root prelude for ownership fixups, the supervised processes
+run as `MAGPIE_UID`:`MAGPIE_GID`. On start, the container chowns the data
+directory itself (not its contents) to that uid, so a fresh data directory
+needs no preparation. With both empty, the container runs as the data
+directory's current owner, which is root for a directory Docker created.
+
+The canonical Compose file drops all capabilities, then adds only
+`SETUID`/`SETGID` for the privilege drop and `CHOWN`/`DAC_OVERRIDE` for
+first-start ownership setup. It also uses a read-only root filesystem with
+writable tmpfs mounts at `/run`, `/tmp`, and `/var/lib/caddy`. Starting
+directly as a non-root user skips the root prelude; all capabilities can
+then be dropped, provided the mounted data directory is already writable.
+
+- **Release assets / plain compose:** `env.example` sets both to `10001`.
+- **`magpie-deploy.sh install`:** a fresh install creates a `magpie` system
+  account, or reuses an existing one (e.g. one config management pinned to
+  a fixed uid), writes its uid/gid to `<install>/etc/.env`, and chowns the
+  new data directory to it. Installing onto a data directory that already
+  holds data keeps that directory's owner. A plain `uninstall` keeps the
+  data and its account; `uninstall --purge` removes the account only if the
+  installer created it (recorded in `/var/lib/magpie-deploy/created-accounts`).
+- **Existing deployments** keep running as the uid they used before.
+  `update` never changes it, and warns when it is root.
+
+To move an existing root-owned deployment to a dedicated account:
+
+```bash
+systemctl stop magpie                    # plain compose: docker compose down
+id magpie || useradd --system --no-create-home --shell /usr/sbin/nologin magpie
+chown -R magpie:magpie /path/to/data     # MAGPIE_DATA_DIR
+# Set MAGPIE_UID / MAGPIE_GID to `id -u magpie` / `id -g magpie` in
+# <install>/etc/.env (plain compose: your .env).
+systemctl start magpie                   # plain compose: docker compose up -d
+```
+
+Don't set a new uid without the `chown`: the container can't write the
+existing root-owned `magpie.db` and artifacts.
+
+#### Starting without root (e.g. Kubernetes)
+
+The container can also be started directly as its runtime uid
+(`docker run --user 10001:10001`, or Kubernetes `runAsUser` with
+`runAsNonRoot: true`), skipping the root step entirely. All capabilities
+can then be dropped. In that mode:
+
+- `MAGPIE_UID` / `MAGPIE_GID` are not used, and nothing can chown, so the
+  data directory must already be writable by that uid. On Kubernetes, set
+  `fsGroup` to the gid.
+- With a read-only root filesystem, mount a writable `/tmp` (Kubernetes:
+  an `emptyDir`). Caddy keeps its state there, and `magpie-ctl sync` needs
+  it.
+- `docker exec` / `kubectl exec` already run as that uid, so `magpie-ctl`
+  works without any privilege drop.
+
+Run one replica only: the database and artifacts live on one volume
+(`ReadWriteOnce`), and two containers must never serve the same data.
+
+### Choosing what `update` installs
+
+`magpie-deploy.sh update` with no target moves to the latest published,
+non-prerelease GitHub release (`releases/latest`), never the default
+branch's HEAD. `update --release <tag>` moves to exactly that tag, including prereleases.
+`update --branch <name>`
+tracks a branch's HEAD and is meant only for development. If the release
+lookup fails (e.g. GitHub's unauthenticated API rate limit), `update`
+stops with an error instead of falling back. To move to an older version,
+pass `--accept-downgrade`; `magpie-ctl migrate` still refuses data in a
+newer format than the target supports (see
+[Downgrading the data format](#downgrading-the-data-format) to revert it
+first). The installed release tag, commit and image are recorded in
+`<install>/etc/.env` (`MAGPIE_RELEASE_*`, `MAGPIE_IMAGE`) and shown by
+`magpie-deploy.sh status`.
+
 ## Trusted Proxies
 
 The bundled Caddy determines the client IP used by `MAGPIE_ALLOWED_CIDRS`
@@ -317,6 +390,8 @@ v0.3.0**:
 
 - `--tls-mode`, `--domain`, `--tls-cert`, `--tls-key`, `--https-port`, `--acme-server`
 
+In particular, `--tls-mode off` is accepted and ignored; it was already the HTTP-only mode.
+
 Remove them from any Ansible playbooks or wrapper scripts that still pass
 them, and front magpie with your own reverse proxy for TLS instead (see
 [Server installation](#server-installation) above).
@@ -357,6 +432,25 @@ The data directory (`MAGPIE_DATA_DIR`) is a bind mount and is not touched
 by the container swap itself; the backup/assert/rollback envelope above
 is what makes the swap safe to run unattended.
 
+**Data-format migration happens at container start.** On every start,
+before it serves traffic, the bundled container brings `magpie.db` to the
+data format its build supports: `magpie-ctl init` on a fresh volume,
+otherwise `magpie-ctl migrate` (a quiet no-op when already current). This
+runs under the same `.magpie-init.lock` as first-boot init, so concurrent
+starts against one data directory are serialized, and each migration is
+applied in a single transaction. Before a migration changes anything, a
+copy of `magpie.db` is saved to `<data>/backups/` (the newest 3 are kept);
+if that copy can't be written, the container refuses to migrate. If
+migration fails, or the database is
+newer than the image supports (e.g. after rolling the image tag back),
+the container exits non-zero without serving and without modifying the
+database; run a newer image or restore a backup. Upgrading by changing
+the image tag and restarting (plain `docker compose`, Ansible) is
+therefore migrated the same way, with that copy of the database but no
+automatic rollback; the copy is on the same volume, so
+[back up](backup-restore.md#backup-procedures) the data directory too. `update` still runs `magpie-ctl migrate` explicitly after the swap
+(by then a no-op) as part of its post-update checks.
+
 The artifact byte-identity/tag-resolution checks in step 3 reach the
 pre-update two-container install through its own `caddy` container
 (matching this project's own `--tls-mode off` real-world deployments); a
@@ -396,6 +490,44 @@ also checks.
 
 Next: [Production Checklist](production-checklist.md) → [Configuration Reference](configuration.md) → [User Guide](user-guide.md) → [Backup & Restore](backup-restore.md)
 
+### Downgrading the data format
+
+Container startup only ever migrates forward. To go back to an older
+image whose data format is lower, revert the data with the *newer* image
+first -- only it knows how to undo its own migration steps:
+
+The commands below use `docker compose -f docker-compose.yml` (never the
+bare form, which merges the development override). On an installer-managed
+host, run `<install>/bin/magpie-compose` in its place, and `MAGPIE_IMAGE`
+lives in `<install>/etc/.env`.
+
+1. [Back up](backup-restore.md#backup-procedures) the data directory.
+2. Find the older image's data-format version N: set `MAGPIE_IMAGE` to the
+   older image and run `docker compose -f docker-compose.yml up -d`. It
+   refuses to start against the newer data, exits without modifying
+   anything, and logs `current: N`
+   (`docker compose -f docker-compose.yml logs magpie`). Then set
+   `MAGPIE_IMAGE` back to the newer image and run `up -d` again.
+3. With the newer image running, revert to N, then immediately switch the
+   image and restart (a restart of the newer image would migrate forward
+   again):
+
+   ```bash
+   docker compose -f docker-compose.yml exec magpie magpie-ctl migrate --to N
+   # set MAGPIE_IMAGE to the older image, then:
+   docker compose -f docker-compose.yml up -d
+   ```
+
+`migrate --to N` reverts every step above N, newest first, in a single
+transaction under the same write lock as forward migration, and writes the
+new version stamp last. Like forward migration, it first saves a copy of
+`magpie.db` to `<data>/backups/`. It changes nothing and exits non-zero if N is above
+the current version or not a version that image knows, or if a step in the
+way is marked irreversible -- in that case,
+[restore a backup](backup-restore.md#restore-procedures) taken before the
+upgrade instead. `magpie-deploy.sh update` does not do this for you.
+
+
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin; refreshed for v0.2.0 final via Devin)*
