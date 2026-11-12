@@ -80,12 +80,15 @@ Never use this path in production: it builds an unpinned image from your working
 ## Client installation
 
 ```bash
-uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'   # use the server's release tag
+MAGPIE_SERVER=${MAGPIE_SERVER:-http://localhost:8080}
+# Client and server minor versions must match.
+V="$(curl -fsS "${MAGPIE_SERVER}/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
+uv tool install "git+https://github.com/SouthwestCCDC/magpie@v${V}"
 ```
 
 That puts `magpie` and `magpie-ctl` in `~/.local/bin` in their own isolated environment, with
-uv fetching Python 3.13 if the host doesn't have it. Use the release tag the server runs; the
-client and server minor versions must match.
+uv fetching Python 3.13 if the host doesn't have it. Set `MAGPIE_SERVER` to the running server
+URL before this command if it is not at `http://localhost:8080`.
 
 **Match the client's minor version to the server's.** The server reads the CLI's `User-Agent`
 and refuses an older client with `426 Upgrade Required`:
@@ -95,8 +98,7 @@ Error: Upload failed (426): magpie-cli 0.1.6 is not compatible with server 0.2.0
 Minimum required client version: 0.2.0.
 ```
 
-Upgrade with `uv tool install --force 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'`,
-using the release tag that matches the server. See
+To upgrade later, re-run the health-derived install command above with `--force`. See
 [API Compatibility](api-compatibility.md#version-coupling).
 
 ## First-time configuration
@@ -526,4 +528,4 @@ upgrade instead. `magpie-deploy.sh update` does not do this for you.
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin; refreshed for v0.2.0 final via Devin; latest-release URLs and client version guidance updated via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin; refreshed for v0.2.0 final via Devin; latest-release URLs, client version guidance, and health-derived install updated via Devin)*

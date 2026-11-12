@@ -76,8 +76,8 @@ Lost it, or used a different sink? See [Admin token retrieval](#admin-token-retr
 ### 3. Install the client
 
 ```bash
-# Use the server's release tag; client and server minor versions must match.
-uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'
+# From the repo root, install the client from the same checkout as this local server.
+uv tool install .
 ```
 
 That installs the `magpie` (client) and `magpie-ctl` (server admin) commands into
@@ -185,8 +185,11 @@ comparison.
 sudo ./scripts/magpie-deploy.sh install --noninteractive
 
 # Client: standalone CLI install (brings its own Python 3.13)
-# Use the server's release tag; client and server minor versions must match.
-uv tool install 'git+https://github.com/SouthwestCCDC/magpie@vX.Y.Z'
+MAGPIE_SERVER=${MAGPIE_SERVER:-http://localhost:8080}
+# Client and server minor versions must match.
+V="$(curl -fsS "${MAGPIE_SERVER}/health" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
+uv tool install "git+https://github.com/SouthwestCCDC/magpie@v${V}"
+export MAGPIE_SERVER
 ```
 
 Use the release's digest-pinned `docker-compose.yml` for production. See the [Installation
@@ -216,4 +219,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow.
 
 ---
 *Documentation improved with AI assistance (Claude Code w/ Sonnet 4.5; first-user-experience
-overhaul via Devin; refreshed for v0.2.0 final via Devin; release tag guidance updated via Devin).*
+overhaul via Devin; refreshed for v0.2.0 final via Devin; release tag guidance and local install updated via Devin).*
