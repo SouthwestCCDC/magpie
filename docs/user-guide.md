@@ -75,7 +75,7 @@ Server configuration uses environment variables with the `MAGPIE_` prefix. See `
 | `MAGPIE_OTEL_ENDPOINT` | *(none)* | OpenTelemetry collector endpoint (required if OTEL enabled) |
 | `MAGPIE_OTEL_SERVICE_NAME` | `magpie` | Service name for OpenTelemetry traces |
 | **Security** | | |
-| `MAGPIE_ALLOWED_CIDRS` | *(empty)* | Comma-separated CIDR ranges for read-only IP allow-listing (e.g., `10.0.0.0/8,192.168.1.0/24`). Requests from these IPs can read artifacts without bearer tokens. Write operations still require tokens. |
+| `MAGPIE_ALLOWED_CIDRS` | *(empty)* | Comma-separated CIDR ranges are the documented form; whitespace or mixed separators are also accepted (e.g., `10.0.0.0/8,192.168.1.0/24`). Requests from these IPs can read artifacts without bearer tokens. Write operations still require tokens. |
 | `MAGPIE_TRUSTED_PROXIES` | *(empty)* | Space-separated IPs/CIDRs whose `X-Forwarded-For` header Caddy trusts when determining the client IP used by `MAGPIE_ALLOWED_CIDRS` above. Default trusts no proxy (real connecting peer's IP is used). Only set this to the exact upstream hop(s) if Caddy sits behind another reverse proxy -- never a broad range, which would let clients on it spoof their source IP. See [installation.md](installation.md#trusted-proxies). |
 | `AUTHENTIK_HOST` | *(none)* | Authentik server hostname for SSO browser access to `/artifacts/*` (e.g., `authentik.example.com`). API access via bearer tokens continues to work. See `docs/authentik-setup.md`. |
 | **Docker Compose Only** | | |
