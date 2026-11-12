@@ -6,7 +6,7 @@ New to Magpie? Read in this order:
 
 1. [Why Magpie? / 5-Minute Quick Start](../README.md) - is this the right tool, and a throwaway local stack
 2. [Architecture](architecture.md) - one container, Caddy + FastAPI, and why TLS is external
-3. [Quick Start](quickstart.md) - deploy a real server with the installer
+3. [Quick Start](quickstart.md) - deploy a real server from digest-pinned release assets
 4. [Installation Guide](installation.md) - server vs client installation, admin tokens, upgrades
 5. [Configuration Reference](configuration.md) - every environment variable, and which ones you actually need
 6. [User Guide](user-guide.md) - full CLI reference
@@ -33,4 +33,4 @@ New to Magpie? Read in this order:
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin)*

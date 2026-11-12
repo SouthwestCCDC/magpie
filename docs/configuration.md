@@ -17,7 +17,7 @@ and vice versa.
 | Variable | Needed? | Why |
 |----------|---------|-----|
 | `MAGPIE_ADMIN_TOKEN_SINK` | **Required** | How the first-boot admin token is delivered. No default, by design: without it the container exits non-zero on first-boot init and, under `restart: unless-stopped`, boot-loops (`docker compose ps` shows `Restarting (1)`). Use `file` unless you have a secret store. See [Admin Token Delivery](installation.md#admin-token-delivery). |
-| `MAGPIE_IMAGE` | **Required in production** | Pin a released bundled image (`ghcr.io/southwestccdc/magpie:X.Y.Z-bundled`; check [releases](https://github.com/SouthwestCCDC/magpie/releases) for what is actually published -- while v0.2.0 is being cut that is `0.2.0-rc3-bundled`). The compose default (`:latest`) is *not* a bundled image and will not work with this topology. The installer sets this for you. |
+| `MAGPIE_IMAGE` | **Required in production** | Use the release's `docker-compose.yml`, whose default pins the bundled image by digest. For a manual override, use a published `X.Y.Z-bundled` tag. The repository compose default (`:latest`) is mutable; see [Release Assets](releases.md#release-assets). |
 | `MAGPIE_DATA_DIR` | Recommended | Host directory holding artifacts, the token database, and the admin-token file. Defaults to `./data` next to `docker-compose.yml`; set an absolute path for a real deployment. |
 | `MAGPIE_HTTP_PORT` / `MAGPIE_BIND_IP` | Recommended | Where the container's plain-HTTP `:8080` is published. Bind to a loopback/internal address if your reverse proxy is on the same host. |
 | `MAGPIE_TRUSTED_PROXIES` | Only with `MAGPIE_ALLOWED_CIDRS` | The exact address(es) of the proxy in front of Magpie, so client IPs are read from `X-Forwarded-For`. See [Trusted Proxies](installation.md#trusted-proxies). |
@@ -62,7 +62,7 @@ Read by the `magpie` CLI. All can be overridden by CLI flags
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MAGPIE_IMAGE` | `ghcr.io/southwestccdc/magpie:latest` | Image to run. Set to a `X.Y.Z-bundled` tag for any real deployment; the default tag is the pre-v0.2.0 non-bundled image and is incompatible with this compose file. |
+| `MAGPIE_IMAGE` | `ghcr.io/southwestccdc/magpie:latest` | Image to run. The repository default is mutable; use the digest-pinned `docker-compose.yml` attached to a release for production. |
 | `MAGPIE_DATA_DIR` | `./data` | Host path bind-mounted at `/data` (artifacts, `magpie.db`, `admin-token`) |
 | `MAGPIE_HTTP_PORT` | `8080` | Host port published for the container's plain-HTTP `:8080` |
 | `MAGPIE_BIND_IP` | `0.0.0.0` | Host IP the published port binds to |
@@ -108,15 +108,8 @@ Read by the `magpie` CLI. All can be overridden by CLI flags
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MAGPIE_ALLOWED_CIDRS` | *(empty -- disabled)* | **One** CIDR range whose clients may read artifacts without a bearer token (writes and admin operations still require one). See the limitation below. |
+| `MAGPIE_ALLOWED_CIDRS` | *(empty -- disabled)* | Comma-separated CIDR ranges whose clients may read artifacts without a bearer token (e.g., `10.0.0.0/8,192.168.1.0/24`). Comma-separated is the documented form; whitespace or mixed separators are also accepted. Writes and admin operations still require a token. |
 | `MAGPIE_TRUSTED_PROXIES` | *(empty -- trust no proxy)* | Space-separated IPs/CIDRs whose `X-Forwarded-For` header Caddy honors when deciding the client IP used by `MAGPIE_ALLOWED_CIDRS`. Scope this to the exact upstream hop(s), never a broad range. See [Trusted Proxies](installation.md#trusted-proxies). |
-
-> **Limitation (v0.2.0):** `MAGPIE_ALLOWED_CIDRS` accepts only a *single* range in the bundled
-> image. A comma-separated list fails Caddy's config load, and a space-separated list fails the
-> application's settings validation -- either way the container exits at boot instead of
-> starting with a partially-applied allow-list. Use one range (widen it, or front Magpie with a
-> proxy that does the allow-listing) until this is fixed; see issue
-> [#612](https://github.com/SouthwestCCDC/magpie/issues/612).
 
 ### S3 backup (optional)
 
@@ -156,4 +149,4 @@ strips them from an upgraded install's `.env`; remove them from your own `.env` 
 
 ---
 
-*(AI-generated via Devin)*
+*(AI-generated via Devin; refreshed for v0.2.0 final via Devin)*

@@ -33,7 +33,8 @@ naming convention" -- it makes that setup content-addressed, tagged, authenticat
 ## 5-Minute Quick Start
 
 This gets you from `git clone` to a working `push`/`get` against a **local, throwaway**
-server. For a real deployment, use the [installer](docs/quickstart.md) instead.
+server. For a real deployment, use the digest-pinned release assets and plain Compose in the
+[Quick Start](docs/quickstart.md); the installer is optional.
 
 **Prerequisites:** git, Docker with Compose v2, and [`uv`](https://docs.astral.sh/uv/).
 You do *not* need Python 3.13 installed -- `uv` fetches it for the client.
@@ -95,6 +96,15 @@ magpie push hello.txt --to demo/greeting
 magpie ls demo/greeting
 magpie get demo/greeting:latest -o roundtrip.txt
 cat roundtrip.txt                       # Hello Magpie
+cmp hello.txt roundtrip.txt             # exact byte-for-byte match
+
+# Anonymous artifact downloads are denied with 401; a token-authorized download succeeds.
+anonymous_status="$(curl -sS -o /dev/null -w '%{http_code}' \
+  http://localhost:8080/artifacts/demo/greeting/latest)"
+test "$anonymous_status" = 401
+curl -fsS -H "Authorization: Bearer $MAGPIE_TOKEN" \
+  http://localhost:8080/artifacts/demo/greeting/latest -o authenticated.txt
+cmp hello.txt authenticated.txt
 ```
 
 `magpie get` without `-o` writes a file named after the artifact (`greeting`), not after the
@@ -167,21 +177,23 @@ comparison.
 ## Installation
 
 ```bash
-# Server: use the installer (resolves and pins the right image tag, sets up systemd)
+# Server: download the release assets and use their digest-pinned Compose file
+# see docs/quickstart.md and docs/releases.md#release-assets
+
+# Optional installer: configures the same release image and sets up systemd
 sudo ./scripts/magpie-deploy.sh install --noninteractive
 
 # Client: standalone CLI install (brings its own Python 3.13)
 uv tool install git+https://github.com/SouthwestCCDC/magpie
 ```
 
-Pin production servers to a released bundled image (`ghcr.io/southwestccdc/magpie:X.Y.Z-bundled`);
-`latest` is not a safe target for the v0.2.0 compose topology. See the [Installation
+Use the release's digest-pinned `docker-compose.yml` for production. See the [Installation
 Guide](docs/installation.md) for server-vs-client details and [Release
 Notes](docs/releases.md) for version history.
 
 ## Documentation
 
-- [Quick Start](docs/quickstart.md) -- deploy a real server with the installer
+- [Quick Start](docs/quickstart.md) -- deploy a real server from release assets; installer optional
 - [Installation Guide](docs/installation.md) -- server and client installation, admin tokens, upgrades
 - [Configuration Reference](docs/configuration.md) -- every environment variable, and which ones you actually need
 - [Architecture](docs/architecture.md) -- components, request path, dev vs production
@@ -202,4 +214,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow.
 
 ---
 *Documentation improved with AI assistance (Claude Code w/ Sonnet 4.5; first-user-experience
-overhaul via Devin).*
+overhaul via Devin; refreshed for v0.2.0 final via Devin).*

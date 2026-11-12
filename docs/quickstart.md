@@ -1,7 +1,8 @@
 # Quick Start Guide
 
-Get a **real** Magpie server running in 5 minutes using the installer script. If you just want
-to try Magpie on a throwaway local stack first, use the
+Get a **real** Magpie server running in 5 minutes from the release's digest-pinned Docker
+Compose assets. The installer is optional for hosts where you want systemd and account
+management. For a throwaway local stack, use the
 [5-Minute Quick Start](../README.md#5-minute-quick-start) in the README instead.
 
 **Prerequisites:** Debian 12/13, git, Docker with Compose v2, curl, `uv`
@@ -11,33 +12,39 @@ its own for the CLI.
 ## 1. Deploy Server
 
 ```bash
-git clone https://github.com/SouthwestCCDC/magpie
-cd magpie
-sudo ./scripts/magpie-deploy.sh install --noninteractive
-# Copy the admin token from install output. With the default
-# MAGPIE_ADMIN_TOKEN_SINK=file, if it wasn't shown (or you lost it), read
-# it instead:
-# sudo cat /opt/magpie/data/admin-token
-# To reset it: cd /opt/magpie && docker compose exec magpie magpie-ctl init --reset-admin-token
-# (the new token is delivered through the same configured sink, i.e. also
-# written to that file, not printed to the terminal)
+V=v0.2.0
+base=https://github.com/SouthwestCCDC/magpie/releases/download/$V
+curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/env.example" -fsSLO "$base/SHA256SUMS"
+grep -E ' (docker-compose\.yml|env\.example)$' SHA256SUMS | sha256sum -c
+cp env.example .env
+echo 'MAGPIE_ADMIN_TOKEN_SINK=file' >> .env
+# Edit .env for your data directory, runtime uid/gid, and trusted proxy.
+docker compose up -d
 ```
 
-Magpie serves plain HTTP only -- it does not terminate TLS itself. For a
-public deployment, put a reverse proxy (nginx, Caddy, a cloud load
-balancer, etc.) in front of it and forward to `http://127.0.0.1:8080`
-(or whatever port `MAGPIE_HTTP_PORT`/`--http-port` was set to). If
-`MAGPIE_BIND_IP`/`--bind-ip` was set to bind a specific host address
-instead of the default (all interfaces), forward to that address instead
--- 127.0.0.1 won't be listening.
+The release's `docker-compose.yml` pins its bundled image by digest. Keep it with the matching
+`env.example` and `SHA256SUMS`; see [Release Assets](releases.md#release-assets). Magpie serves
+plain HTTP on `:8080` only. For a public deployment, put an external reverse proxy in front of
+it for TLS and forward to `http://127.0.0.1:8080` (or the address configured by
+`MAGPIE_BIND_IP`).
+
+With the default `MAGPIE_DATA_DIR=./data` and file sink, retrieve the first-boot admin token
+with:
+
+```bash
+sudo cat data/admin-token
+```
 
 See [Installation Guide](installation.md) for advanced configuration.
+
+The installer is an optional alternative when you want systemd units and account management:
+clone the repository and run `sudo ./scripts/magpie-deploy.sh install --noninteractive`.
 
 ## 2. Install Client
 
 ```bash
 # Installs `magpie` and `magpie-ctl` into ~/.local/bin, isolated, with their own Python
-uv tool install git+https://github.com/SouthwestCCDC/magpie
+uv tool install 'git+https://github.com/SouthwestCCDC/magpie@v0.2.0'
 export MAGPIE_SERVER=http://localhost:8080
 export MAGPIE_TOKEN=mgp_ADMIN_...  # Token from step 1
 magpie status  # Verify connection
@@ -94,4 +101,4 @@ magpie info builds/app:latest
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin)*

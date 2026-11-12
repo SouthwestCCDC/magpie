@@ -65,8 +65,9 @@ Two paths behave specially:
   inside `MAGPIE_ALLOWED_CIDRS` is treated as user `cidr-bypass` with `read` scope and needs no
   token. Writes never bypass. Because the container sits behind a proxy, this only works when
   `MAGPIE_TRUSTED_PROXIES` names the upstream hop -- otherwise the client IP Caddy sees is the
-  proxy's and every anonymous read 401s. (In v0.2.0 the allow-list accepts a single range;
-  see [issue #612](https://github.com/SouthwestCCDC/magpie/issues/612).)
+  proxy's and every anonymous read 401s. Comma-separated CIDR ranges are the documented form;
+  whitespace or mixed separators are also accepted (e.g.,
+  `10.0.0.0/8,192.168.1.0/24`).
 - `/artifacts/public/*` is served with **no authentication at all**, and Caddy enables `browse`
   for it, so anonymous callers can *enumerate* the namespace (directory index listing `blobs/`,
   `metadata/`, tag symlinks) as well as fetch known paths. Anything pushed under `public/` is
@@ -99,7 +100,7 @@ Both use the same `docker-compose.yml`. The difference is whether
 
 | | Local development | Production |
 |---|---|---|
-| Command | `just up` / `docker compose up -d --build` | `sudo ./scripts/magpie-deploy.sh install` (or `docker compose -f docker-compose.yml up -d`) |
+| Command | `just up` / `docker compose up -d --build` | Release asset `docker-compose.yml` with `docker compose up -d`; installer is optional |
 | Compose files | `docker-compose.yml` **+** `docker-compose.override.yml` | `docker-compose.yml` only |
 | Image | built locally from `Dockerfile.bundled` | pinned release `ghcr.io/southwestccdc/magpie:X.Y.Z-bundled` via `MAGPIE_IMAGE` |
 | `MAGPIE_ADMIN_TOKEN_SINK` | defaults to `file` (overlay convenience) | **must be set explicitly**; container refuses to boot otherwise |
@@ -110,9 +111,11 @@ Both use the same `docker-compose.yml`. The difference is whether
 | Lifecycle | `docker compose down`; delete `./data` to reset to first boot | systemd unit, backups, `magpie-deploy.sh update` |
 | Client | `uv tool install git+https://github.com/SouthwestCCDC/magpie` (tracks `default`) | install the CLI at the **same minor version as the server** -- an older client gets `426 Upgrade Required` |
 
-Everything the canonical file hardens stays hardened in development too: the overlay only adds
-a build context, the file-sink default, and the test-endpoint toggle. It does not relax
-`read_only`, the dropped capabilities, or the fail-closed environment.
+The canonical file drops all capabilities and adds only `SETUID`, `SETGID`, `CHOWN`, and
+`DAC_OVERRIDE` for the wrapper's root startup and ownership fixups; the wrapper then runs the
+supervised processes as the configured non-root uid. The root filesystem is read-only, with
+writable tmpfs mounts for `/run`, `/tmp`, and `/var/lib/caddy`. Development does not relax this
+hardening.
 
 ## Where state lives
 
@@ -136,4 +139,4 @@ disaster -- see [Backup & Restore](backup-restore.md).
 
 ---
 
-*(AI-generated via Devin)*
+*(AI-generated via Devin; refreshed for v0.2.0 final via Devin)*

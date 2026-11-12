@@ -4,7 +4,7 @@ This document defines the API compatibility contract for Magpie, including what 
 
 ## Pre-1.0 Stability
 
-**Current status:** Magpie is at version `0.1.x` (pre-1.0).
+**Current status:** Magpie is at version `0.2.x` (pre-1.0).
 
 During the `0.x` series, API changes are expected as we refine the interface based on operational experience. However, we still aim to minimize breaking changes:
 
@@ -196,4 +196,4 @@ def test_artifact_info_with_new_field():
 
 ---
 
-*AI-generated documentation via Claude Code w/ Opus 4.6*
+*AI-generated documentation via Claude Code w/ Opus 4.6; refreshed for v0.2.0 final via Devin*
