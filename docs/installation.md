@@ -167,7 +167,7 @@ Key environment variables (see [.env.example](../.env.example) for all):
 - `MAGPIE_STORAGE_PATH` - Artifact storage (default: `/data/artifacts`)
 - `MAGPIE_RETENTION_DAYS` - GC retention period (default: 90)
 - `MAGPIE_ADMIN_TOKEN_SINK` - Admin bootstrap token delivery: `file`/`exec`/`discard`/`stdout` (required, no default; see [Admin Token Delivery](#admin-token-delivery) above)
-- `MAGPIE_ALLOWED_CIDRS` - CIDR ranges allowed to bypass auth for read-only access (default: none)
+- `MAGPIE_ALLOWED_CIDRS` - CIDR ranges allowed to bypass auth for read-only access (default: none). Comma-separated is the documented form; whitespace or mixed separators are also accepted.
 - `MAGPIE_TRUSTED_PROXIES` - IPs/CIDRs whose `X-Forwarded-For` the bundled Caddy trusts (default: none; see [Trusted Proxies](#trusted-proxies) below)
 - `MAGPIE_UID` / `MAGPIE_GID` - uid/gid the container runs as (`10001` in `.env.example`; empty = the data directory's owner; see [Runtime user](#runtime-user) below)
 
@@ -431,4 +431,4 @@ Next: [Production Checklist](production-checklist.md) → [User Guide](user-guid
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; multi-CIDR separators clarified for #612 via Devin)*

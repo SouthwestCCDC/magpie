@@ -40,9 +40,8 @@ services:
       - allowed-net
       - external-net
     environment:
-      # Only allow IPs from allowed-net subnet (172.18.0.0/24)
-      # external-net IPs (192.168.100.x) should be denied
-      - MAGPIE_ALLOWED_CIDRS=172.18.0.0/24
+      # Include allowed-net and an additional range; external-net stays denied.
+      - MAGPIE_ALLOWED_CIDRS=10.99.0.0/16,172.18.0.0/24
 
   # Test runner for positive CIDR cases (inside allowed CIDR)
   # This container has an IP in 172.18.0.x (within 172.18.0.0/24), which IS in the allow-list

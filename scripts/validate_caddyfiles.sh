@@ -17,14 +17,9 @@
 # 255.255.255.255/32 placeholder default) and invalid with an operator's
 # value in place. Each case below is a shape .env can actually hold.
 #
-# NOTE (pre-existing, deliberately not changed here): Caddy's client_ip /
-# trusted_proxies matchers take a WHITESPACE-separated list, while
-# docker-compose.yml, .env.example, and src/magpie/config.py all document
-# MAGPIE_ALLOWED_CIDRS as comma-separated ("10.0.0.0/8,192.168.1.0/24").
-# A comma-separated multi-CIDR value makes Caddy fail to provision, so the
-# matrix below uses the whitespace form Caddy actually accepts. See the
-# issue linked from PR for this discrepancy; fixing it is a product
-# decision outside this PR's scope.
+# The wrapper translates the documented comma-separated MAGPIE_ALLOWED_CIDRS
+# into the whitespace-separated form Caddy's client_ip matcher expects. The
+# matrix below uses the whitespace form Caddy sees after that translation.
 #
 # Usage: scripts/validate_caddyfiles.sh [Caddyfile ...]
 #        MAGPIE_CADDY_IMAGE=caddy:2.11.4-alpine scripts/validate_caddyfiles.sh
