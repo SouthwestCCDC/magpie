@@ -51,21 +51,24 @@ SKIP_CODE=75
 # Weekly full scrub, Sunday at 4:00 AM (after the nightly GC run).
 # A full scrub re-reads every byte in storage, so keep it off-peak.
 # Format: minute hour day month weekday user command
-0 4 * * 0 root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --quiet
+# Uses `docker compose exec` into the RUNNING magpie container. With the
+# v0.2.0+ bundled single-container image, whose entrypoint is a process
+# supervisor that ignores its arguments, `docker compose run magpie
+# magpie-ctl verify` boots a second server that never exits instead of running
+# verify. The trade-off is that the scrub fails loudly if the container is
+# stopped when cron fires.
+0 4 * * 0 root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl verify --quiet
 
 # Daily scrub of competition-critical crypto material only. Scoped with --path,
 # so it is cheap enough to run every day even on a large store.
-0 3 * * * root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --path openvpn --quiet
+0 3 * * * root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl verify --path openvpn --quiet
 
 # Alternative: bound each run with --max-bytes. NOTE: the walk always starts at
 # the beginning of the store and keeps no cursor, so a bounded run repeatedly
 # verifies the same head of the store and never advances. Use it only to cap the
 # cost of a smoke check; to cover everything, scope separate entries with --path
 # or schedule an unbounded full scrub off-peak.
-# 0 4 * * * root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml run --rm -T magpie magpie-ctl verify --max-bytes 10737418240 --quiet
-
-# Alternative: Use `exec` into the running magpie container (requires container to be running)
-# 0 4 * * 0 root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl verify --quiet
+# 0 4 * * * root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK docker compose -f $MAGPIE_DIR/docker-compose.yml exec -T magpie magpie-ctl verify --max-bytes 10737418240 --quiet
 
 # Alternative: Direct execution (if not using Docker)
 # 0 4 * * 0 root flock -n -E $SKIP_CODE $VERIFY_LOCK flock -w $GC_WAIT -E $SKIP_CODE $GC_LOCK /usr/local/bin/magpie-ctl verify --quiet

@@ -26,7 +26,7 @@
 [Unit]
 Description=Magpie Integrity Verification
 Documentation=https://github.com/SouthwestCCDC/magpie
-After=network.target docker.service
+After=network.target docker.service magpie.service
 Requires=docker.service
 
 [Service]
@@ -39,22 +39,62 @@ Type=oneshot
 # The GC lock uses a bounded wait (-w 3600) so an overrunning collection delays
 # the scrub instead of cancelling it, and both locks use `-E 75` so a run that
 # never started is distinguishable from a scrub that failed on broken storage.
-# Uses `docker compose run` so verification works even if the main `magpie`
-# container is stopped. Adjust path to match your installation.
+# Uses `docker compose exec` into the RUNNING magpie container. This requires
+# the container to be up (verification fails loudly if the service is stopped
+# when this unit triggers) -- but it is the only form that works with the
+# v0.2.0+ bundled single-container image, whose entrypoint is a process
+# supervisor that ignores its arguments: `docker compose run magpie
+# magpie-ctl verify` there boots a second server that never exits, so verify
+# never runs and the oneshot blocks until TimeoutStartSec.
+# Adjust path to match your installation.
 WorkingDirectory=/opt/magpie
-ExecStart=/usr/bin/flock -n -E 75 /var/run/magpie-verify.lock /usr/bin/flock -w 3600 -E 75 /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl verify --quiet
+#
+# After= only orders unit START, and magpie.service is Type=simple running
+# `docker compose up`, so it counts as started long before the container is
+# serving. With magpie-verify.timer's Persistent=true, a missed run is replayed
+# at boot, where the exec below would otherwise race the container coming up.
+# So wait (bounded) for the container to report healthy first -- the image's
+# HEALTHCHECK covers uvicorn answering /health, which implies the entrypoint's
+# DB init finished. 5 minutes, then fail loudly rather than hang until
+# TimeoutStartSec; the next scheduled run recovers on its own since a full scrub
+# is read-only and does not depend on a previous run completing.
+#
+# `docker inspect` rather than `compose ps --format <go-template>`: the
+# template form of `ps` needs a recent Compose v2, and an image with no
+# HEALTHCHECK reports an empty .State.Health, which is distinguishable here
+# but not through `ps` -- so that case exits nonzero at once with a real
+# message instead of burning the whole 300s bound waiting for a status that
+# can never arrive. No container yet (empty `ps -q`) keeps waiting:
+# magpie.service may still be creating it.
+#
+# The magpie.service check up front is what separates "coming up" from
+# "deliberately stopped": during planned downtime the container never appears,
+# and without it every timer firing would sit here for the full 300s and then
+# report a bare exit 124. Ordering means magpie.service has already been
+# started when this runs, so "not active" is a real answer, not a race.
+# It is conditional on the unit EXISTING (`systemctl cat`) because this file is
+# also copied on its own, without magpie.service, for a stack brought up by a
+# hand-run `docker compose up -d` or a differently-named unit -- there, only
+# the container wait below applies, exactly as before.
+#
+# Drop this ExecStartPre entirely if you switch to the Direct execution
+# alternative below: it is specific to `exec` into a healthy bundled container.
+ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'if /usr/bin/systemctl cat magpie.service >/dev/null 2>&1 && ! /usr/bin/systemctl is-active --quiet magpie.service; then echo "magpie.service is not active; not running scrub (start it to resume scheduled scrubs)" >&2; exit 1; fi; while :; do cid=$(/usr/bin/docker compose ps -q magpie 2>/dev/null); if [ -n "$cid" ]; then state=$(/usr/bin/docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}" "$cid" 2>/dev/null); case "$state" in healthy) exit 0 ;; nohealthcheck) echo "magpie container has no HEALTHCHECK; cannot confirm readiness before verify" >&2; exit 1 ;; esac; fi; sleep 5; done'
+ExecStart=/usr/bin/flock -n -E 75 /var/run/magpie-verify.lock /usr/bin/flock -w 3600 -E 75 /var/run/magpie-gc.lock /usr/bin/docker compose exec -T magpie magpie-ctl verify --quiet
 
 # Alternative: scope the scrub to competition-critical crypto material only,
 # which is cheap enough to run daily even on a large store.
-# ExecStart=/usr/bin/flock -n -E 75 /var/run/magpie-verify.lock /usr/bin/flock -w 3600 -E 75 /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl verify --path openvpn --quiet
+# ExecStart=/usr/bin/flock -n -E 75 /var/run/magpie-verify.lock /usr/bin/flock -w 3600 -E 75 /var/run/magpie-gc.lock /usr/bin/docker compose exec -T magpie magpie-ctl verify --path openvpn --quiet
 
 # Alternative: bound the work of each run. NOTE: the walk always starts at the
 # beginning of the store and keeps no cursor, so a bounded run repeatedly covers
 # the same head of the store rather than rolling forward. Prefer --path scoping
 # to cover the whole store in pieces.
-# ExecStart=/usr/bin/flock -n -E 75 /var/run/magpie-verify.lock /usr/bin/flock -w 3600 -E 75 /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl verify --max-bytes 10737418240 --quiet
+# ExecStart=/usr/bin/flock -n -E 75 /var/run/magpie-verify.lock /usr/bin/flock -w 3600 -E 75 /var/run/magpie-gc.lock /usr/bin/docker compose exec -T magpie magpie-ctl verify --max-bytes 10737418240 --quiet
 
 # Alternative: Direct execution (if not using Docker)
+# Delete the ExecStartPre= line above if you use this -- there is no container
+# to wait for.
 # ExecStart=/usr/bin/flock -n -E 75 /var/run/magpie-verify.lock /usr/bin/flock -w 3600 -E 75 /var/run/magpie-gc.lock /usr/local/bin/magpie-ctl verify --quiet
 
 # User configuration (optional)
@@ -63,9 +103,10 @@ ExecStart=/usr/bin/flock -n -E 75 /var/run/magpie-verify.lock /usr/bin/flock -w 
 # User=magpie
 
 # Environment overrides (optional)
-# NOTE: For Docker deployments using `docker compose run`, these environment
+# NOTE: For Docker deployments using `docker compose exec`, these environment
 # variables are NOT passed to the container. Configure settings in the
 # container's .env file or docker-compose.yml, or use CLI flags instead.
+# These Environment= lines only apply when using direct execution (non-Docker).
 # Environment=MAGPIE_STORAGE_PATH=/data/artifacts
 
 # Logging
