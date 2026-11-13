@@ -493,7 +493,7 @@ def blob_path(artifact_dir: Path, hash_ref: str) -> Path:
 
     Args:
         artifact_dir: Artifact directory path.
-        hash_ref: Hash reference string (e.g., '@abc12345...' or full hash).
+        hash_ref: Hash reference string (e.g., '@abc1234567890def' or full hash).
 
     Returns:
         Path to the blob file.
@@ -513,7 +513,7 @@ def canonical_blob_path(artifact_dir: Path, hash_ref: str) -> Path:
 
     Args:
         artifact_dir: Artifact directory path.
-        hash_ref: Hash reference string (e.g., '@abc12345...' or full hash).
+        hash_ref: Hash reference string (e.g., '@abc1234567890def' or full hash).
 
     Returns:
         Path to the blob file at the current hash-name width.
@@ -530,7 +530,7 @@ def metadata_path(artifact_dir: Path, hash_ref: str) -> Path:
 
     Args:
         artifact_dir: Artifact directory path.
-        hash_ref: Hash reference string (e.g., '@abc12345...' or full hash).
+        hash_ref: Hash reference string (e.g., '@abc1234567890def' or full hash).
 
     Returns:
         Path to the metadata JSON file.
