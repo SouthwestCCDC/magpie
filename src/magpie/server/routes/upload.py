@@ -7,12 +7,14 @@ import hashlib
 import os
 import re
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from python_multipart.exceptions import ParseError
 from python_multipart.multipart import MultipartParser
@@ -21,11 +23,35 @@ from magpie.config import MagpieSettings
 from magpie.server.deps import get_magpie_settings, get_storage_service, require_write_scope
 from magpie.storage.exceptions import InvalidArtifactPathError
 from magpie.storage.paths import normalize_artifact_path
-from magpie.storage.service import StorageService
+from magpie.storage.service import ArtifactInfo, StorageService
 
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+_FINALIZE_LOCK = threading.Lock()
+
+
+def _store_artifact_serialized(
+    storage_service: StorageService,
+    *,
+    artifact_path: str,
+    temp_file_path: Path,
+    full_hash: str,
+    uploaded_by: str,
+    source_uri: str | None,
+    no_latest: bool,
+) -> tuple[ArtifactInfo, bool]:
+    # Nesting checks and write-once provenance sidecars rely on serialized finalization.
+    with _FINALIZE_LOCK:
+        return storage_service.store_artifact_from_temp(
+            artifact_path=artifact_path,
+            temp_file_path=temp_file_path,
+            full_hash=full_hash,
+            uploaded_by=uploaded_by,
+            source_uri=source_uri,
+            no_latest=no_latest,
+        )
 
 
 class UploadSizeExceededError(Exception):
@@ -523,7 +549,12 @@ async def upload_artifact(
     start_time = time.perf_counter()
 
     try:
-        info, is_duplicate = storage_service.store_artifact_from_temp(
+        # store_artifact_from_temp() does blocking filesystem IO (nesting check,
+        # blob move, metadata/manifest writes, symlink reconcile), so it runs in
+        # the threadpool to keep the event loop free for concurrent requests.
+        info, is_duplicate = await run_in_threadpool(
+            _store_artifact_serialized,
+            storage_service,
             artifact_path=path,
             temp_file_path=temp_file_path,
             full_hash=full_hash,
