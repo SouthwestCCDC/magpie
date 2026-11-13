@@ -888,7 +888,7 @@ class TestBundledImageStartupMigration:
                 output = revert.stdout + revert.stderr
                 assert revert.returncode != 0, output
                 assert "irreversible" in output
-                assert "restore a backup" in output
+                assert "restore a backup" in output.lower()
                 assert _host_db_version(db_path) == CURRENT_DATA_FORMAT_VERSION
                 assert _host_token_names(db_path) == ["pre-existing"]
                 # Written as the runtime user, not root (see _own_uid_gid_args()).
