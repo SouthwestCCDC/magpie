@@ -1,0 +1,109 @@
+# Installer validation (issue #572)
+#
+# Tier 1 (every PR, ~2 minutes): static checks on the installer and every
+# other shell script in the repo -- `bash -n`, `shellcheck -x` -- plus
+# `caddy validate` on the Caddyfiles the installed stack actually runs, in
+# each shape the installer's generated .env can put them in (issue #430),
+# plus the installer's function-level test scripts
+# (scripts/test_installer_*.sh).
+#
+# Tier 2 (every PR, push and nightly, ~10 minutes): a REAL install on a
+# full VM with real systemd and Docker -- `magpie-deploy.sh install
+# --from-source` -- then assertions on the resulting installation, then
+# `uninstall --purge` and a leftover check (issues #354, #433). It runs
+# unconditionally so that it can be a required check, and so the commit a
+# release is tagged from (usually a version-bump PR) has run it too.
+#
+# Tier 3 (the PUBLISHED installer and image, the --release path) runs in
+# release.yml's verify job, before the release is published (#571).
+
+name: Installer
+
+on:
+  pull_request:
+  push:
+    branches: [main, default]
+  schedule:
+    # Nightly, 04:30 UTC -- catches drift that no PR touched (base image
+    # updates, Docker/Caddy releases, upstream package changes).
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Tier 1 -- static, cheap, every PR.
+  static:
+    name: Tier 1 -- static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      # No apt: `apt-get update` against the runner's Azure mirrors hung for
+      # 10 minutes and burned the whole job timeout on the first run of this
+      # workflow. The runner-image ShellCheck drifted to 0.11.0 and turned
+      # Tier 1 red (#676), so install the verified upstream pin unconditionally.
+      - name: Install shellcheck
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          set -euo pipefail
+          url="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          archive="/tmp/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl -fsSL --retry 3 "$url" -o "$archive"
+          printf '%s  %s\n' "$SHELLCHECK_SHA256" "$archive" | sha256sum --check
+          tar -xJf "$archive" -C /tmp
+          sudo install -m 0755 "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          version="$(shellcheck --version | sed -n 's/^version: //p')"
+          if [[ "$version" != "${SHELLCHECK_VERSION#v}" ]]; then
+            echo "Expected ShellCheck ${SHELLCHECK_VERSION#v}, found ${version:-none}" >&2
+            exit 1
+          fi
+          shellcheck --version
+
+      - name: bash -n + shellcheck (all tracked shell scripts)
+        run: ./scripts/lint_shell.sh
+
+      # Runs caddy in the same image version Dockerfile.bundled pins, so
+      # this validates against the binary the install actually serves with.
+      - name: caddy validate (all Caddyfiles, all env shapes)
+        run: ./scripts/validate_caddyfiles.sh
+
+      # They source magpie-deploy.sh and stub docker/systemctl, so they need
+      # neither root nor a real install. Each exits non-zero on failure.
+      - name: Installer unit tests (scripts/test_installer_*.sh)
+        run: |
+          set -euo pipefail
+          for t in scripts/test_installer_*.sh; do
+            echo "::group::$t"
+            bash "$t"
+            echo "::endgroup::"
+          done
+
+  # Tier 2 -- real install on a real VM. Runs on every PR and push, even
+  # version-only ones, so the commit that gets tagged has been installed.
+  install:
+    name: Tier 2 -- real install + purge
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The installer installs THIS checkout's committed HEAD via
+          # `--source-dir` (a local `git clone`), so it needs real history,
+          # not just a detached tree.
+          fetch-depth: 0
+
+      - name: Real install, assertions, uninstall --purge
+        # MAGPIE_E2E_FORCE is not set: a hosted runner has no pre-existing
+        # magpie installation, so the harness's refusal-to-clobber
+        # preflight should pass on its own. If it ever trips, that is worth
+        # seeing rather than overriding.
+        run: sudo ./scripts/test_install_e2e.sh

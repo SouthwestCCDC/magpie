@@ -1,42 +1,59 @@
 # Quick Start Guide
 
-Get Magpie running in 5 minutes using the installer script.
+Get a **real** Magpie server running in 5 minutes from the release's digest-pinned Docker
+Compose assets. The installer is optional for hosts where you want systemd and account
+management. For a throwaway local stack, use the
+[5-Minute Quick Start](../README.md#5-minute-quick-start) in the README instead.
 
-**Prerequisites:** Debian 12/13, Python 3.13+, git, Docker with Compose v2, curl, `uv` ([install](https://docs.astral.sh/uv/))
+**Prerequisites:** Debian 12/13, git, Docker with Compose v2, curl, `uv`
+([install](https://docs.astral.sh/uv/)). You do not need a system Python 3.13 -- `uv` fetches
+its own for the CLI.
 
 ## 1. Deploy Server
 
 ```bash
-git clone https://github.com/SouthwestCCDC/magpie
-cd magpie
-sudo ./scripts/magpie-deploy.sh install --noninteractive
-# Copy the admin token from install output. With the default
-# MAGPIE_ADMIN_TOKEN_SINK=file, if it wasn't shown (or you lost it), read
-# it instead:
-# sudo cat /opt/magpie/data/admin-token
-# To reset it: cd /opt/magpie && docker compose exec magpie magpie-ctl init --reset-admin-token
-# (the new token is delivered through the same configured sink, i.e. also
-# written to that file, not printed to the terminal)
+base=https://github.com/SouthwestCCDC/magpie/releases/latest/download
+curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/env.example" -fsSLO "$base/SHA256SUMS"
+grep -E ' (docker-compose\.yml|env\.example)$' SHA256SUMS | sha256sum -c
+cp env.example .env
+echo 'MAGPIE_ADMIN_TOKEN_SINK=file' >> .env
+# Edit .env for your data directory, runtime uid/gid, and trusted proxy.
+docker compose up -d
 ```
 
-Magpie serves plain HTTP only -- it does not terminate TLS itself. For a
-public deployment, put a reverse proxy (nginx, Caddy, a cloud load
-balancer, etc.) in front of it and forward to `http://127.0.0.1:8080`
-(or whatever port `MAGPIE_HTTP_PORT`/`--http-port` was set to). If
-`MAGPIE_BIND_IP`/`--bind-ip` was set to bind a specific host address
-instead of the default (all interfaces), forward to that address instead
--- 127.0.0.1 won't be listening.
+The release's `docker-compose.yml` pins its bundled image by digest. Keep it with the matching
+`env.example` and `SHA256SUMS`; see [Release Assets](releases.md#release-assets). Magpie serves
+plain HTTP on `:8080` only. For a public deployment, put an external reverse proxy in front of
+it for TLS and forward to `http://127.0.0.1:8080` (or the address configured by
+`MAGPIE_BIND_IP`).
+
+With the default `MAGPIE_DATA_DIR=./data` and file sink, retrieve the first-boot admin token
+with:
+
+```bash
+sudo cat data/admin-token
+```
 
 See [Installation Guide](installation.md) for advanced configuration.
+
+The installer is an optional alternative when you want systemd units and account management:
+clone the repository and run `sudo ./scripts/magpie-deploy.sh install --noninteractive`.
 
 ## 2. Install Client
 
 ```bash
-uv pip install -e .
-export MAGPIE_SERVER=http://localhost:8080
+MAGPIE_SERVER=${MAGPIE_SERVER:-http://localhost:8080}
+# Client and server minor versions must match.
+V="$(curl -fsS "${MAGPIE_SERVER}/health" | sed -E 's/.*"version" *: *"([^"]+)".*/\1/; s/^([0-9]+\.[0-9]+\.[0-9]+)(a|b|rc)([0-9]+)$/\1-\2\3/')"
+uv tool install "git+https://github.com/SouthwestCCDC/magpie@v${V}"
+export MAGPIE_SERVER
 export MAGPIE_TOKEN=mgp_ADMIN_...  # Token from step 1
 magpie status  # Verify connection
 ```
+
+Keep the client's minor version matched to the server's -- an older CLI is rejected with
+`426 Upgrade Required` ([details](api-compatibility.md#version-coupling)). Working from a repo
+checkout, `uv sync` plus `uv run magpie ...` does the same job for development.
 
 ## 3. Upload and Download
 
@@ -44,8 +61,12 @@ magpie status  # Verify connection
 echo "Hello Magpie" > hello.txt
 magpie push hello.txt --to demo/greeting
 magpie ls demo/greeting
-magpie get demo/greeting:latest
+magpie get demo/greeting:latest -o roundtrip.txt
+cat roundtrip.txt
 ```
+
+Without `-o`, the download is named after the artifact (`greeting`), not the file you uploaded:
+content is addressed by hash and the original filename is not stored.
 
 ## Common Patterns
 
@@ -53,7 +74,7 @@ magpie get demo/greeting:latest
 # Tag management
 magpie push app.tar.gz --to apps/myapp
 magpie tag apps/myapp:latest --as stable
-magpie tag apps/myapp@abcdef1234567890 --as v1.0.0  # Pin specific version
+magpie tag apps/myapp:@abcdef1234567890 --as v1.0.0  # Pin specific version (note the `:` before `@`)
 
 # Scripting
 magpie get apps/myapp:stable -o myapp.tar.gz
@@ -67,16 +88,25 @@ magpie info builds/app:latest
 
 ## Troubleshooting
 
-- **Connection refused:** `sudo ./scripts/magpie-deploy.sh status`
+- **Connection refused:** run `docker compose ps`, then inspect `docker compose logs magpie`.
+  If the service is stopped, run `docker compose up -d`.
 - **Auth errors:** `magpie status`
-- **Port conflict:** Reinstall with `--http-port 8888`
+- **Port conflict:** set `MAGPIE_HTTP_PORT=8888` in `.env` (and adjust `MAGPIE_BIND_IP` if
+  needed), then run `docker compose up -d` and export
+  `MAGPIE_SERVER=http://localhost:8888` for the client. Point any external reverse
+  proxy upstream at the new port.
+
+For installer-managed hosts, `sudo ./scripts/magpie-deploy.sh status` provides the equivalent
+status check; configure `--http-port`/`--bind-ip` through the installer.
 
 ## Next Steps
 
+- [Architecture](architecture.md) - what's inside the container, and dev vs production
 - [Installation Guide](installation.md) - Advanced deployment options and reverse-proxy setup
+- [Configuration Reference](configuration.md) - every environment variable
 - [User Guide](user-guide.md) - Complete CLI reference
 - [Production Checklist](production-checklist.md) - Pre-deployment verification
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; latest-release URLs, Compose troubleshooting, and health-derived client install updated via Devin; prerelease tag mapping updated via Devin; hash-ref width via Devin)*
