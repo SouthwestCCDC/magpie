@@ -26,6 +26,7 @@ from magpie.config import MagpieSettings
 from magpie.server.app import app
 from magpie.server.deps import get_storage_service
 from magpie.storage.gc import run_gc
+from magpie.storage.hash import HASH_NAME_LENGTH
 from magpie.storage.service import StorageService
 
 
@@ -715,7 +716,7 @@ class TestGCLockContention:
                 file_stream=file_stream1,
                 uploaded_by="setup",
             )
-            expected_deletable_hashes.append(info1.hash[:8])
+            expected_deletable_hashes.append(info1.hash[:HASH_NAME_LENGTH])
 
             # Second upload (becomes "latest", old becomes untagged)
             content2 = f"new version {i}".encode()

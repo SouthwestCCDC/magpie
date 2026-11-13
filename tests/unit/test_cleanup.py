@@ -15,6 +15,7 @@ from magpie.storage.cleanup import (
     cleanup_artifact_directories,
     is_empty_directory,
 )
+from magpie.storage.hash import HASH_NAME_LENGTH
 from magpie.storage.manifest import Manifest, read_manifest, update_tag, write_manifest
 
 # Bounds for the concurrency tests below: a crashed/deadlocked worker thread
@@ -71,13 +72,13 @@ def create_artifact_structure(
         blobs_dir = artifact_dir / "blobs"
         blobs_dir.mkdir(exist_ok=True)
         for blob_hash in blobs:
-            (blobs_dir / blob_hash[:8]).write_bytes(b"blob content")
+            (blobs_dir / blob_hash[:HASH_NAME_LENGTH]).write_bytes(b"blob content")
 
     if metadata:
         metadata_dir = artifact_dir / "metadata"
         metadata_dir.mkdir(exist_ok=True)
         for meta_hash in metadata:
-            meta_file = metadata_dir / f"{meta_hash[:8]}.json"
+            meta_file = metadata_dir / f"{meta_hash[:HASH_NAME_LENGTH]}.json"
             meta_content = {
                 "hash": meta_hash,
                 "uploaded_by": "test",

@@ -33,7 +33,7 @@ def amend(ctx: CLIContext, artifact_ref: str, source_uri: str | None) -> None:
 
         magpie amend images/ubuntu:latest --source-uri https://github.com/example/repo
 
-        magpie amend images/ubuntu:@abc12345 --source-uri ""
+        magpie amend images/ubuntu:@abc1234567890def --source-uri ""
 
         magpie amend builds/app --source-uri https://ci.example.com/builds/123
     """

@@ -274,7 +274,7 @@ class TestTagging:
         env["MAGPIE_TOKEN"] = write_token
 
         # Create tag via CLI
-        # Hash ref format: @{first 8 chars of hash}
+        # Current-width hash ref from short_hash().
         hash_ref = short_hash(artifact_hash)
         result = subprocess.run(
             [
@@ -345,7 +345,7 @@ class TestArtifactInfo:
         env["MAGPIE_TOKEN"] = write_token
 
         # Info command takes artifact_ref in path:ref format
-        # Use the hash ref format: @{first 8 chars of hash}
+        # Use the current-width hash ref from short_hash().
         hash_ref = short_hash(artifact_hash)
         result = subprocess.run(
             [

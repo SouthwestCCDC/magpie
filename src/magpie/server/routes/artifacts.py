@@ -44,7 +44,7 @@ class VersionInfo(BaseModel):
     """Information about a single artifact version."""
 
     hash: str  # Full SHA-256 hash
-    hash_ref: str  # Short hash ref like @abc12345
+    hash_ref: str  # Short hash ref like @abc1234567890def
     tags: list[str]  # Tags pointing to this version
     uploaded_by: str
     uploaded_at: datetime
@@ -62,7 +62,7 @@ class ArtifactInfoResponse(BaseModel):
     """Response model for specific artifact version info."""
 
     hash: str  # Full SHA-256 hash
-    hash_ref: str  # Short hash ref like @abc12345
+    hash_ref: str  # Short hash ref like @abc1234567890def
     uploaded_by: str
     uploaded_at: datetime
     source_uri: str | None
@@ -131,7 +131,7 @@ async def get_artifact_info(
     requests will receive 401 before any path resolution occurs.
 
     Resolves the ref parameter as either a tag name (e.g., "latest") or a
-    hash reference (e.g., "@abc12345") and returns the artifact's metadata.
+    hash reference (e.g., "@abc1234567890def") and returns the artifact's metadata.
 
     Args:
         path: Logical path for the artifact (e.g., "project/component").
@@ -192,7 +192,7 @@ async def create_tag(
     path = _normalize_path(path)
 
     # Resolve ref (tag name or hash ref) to get the hash_ref
-    # This handles both "latest" (tag) and "@abc123" (hash ref) formats
+    # This handles both "latest" (tag) and "@abc1234567890def" (hash ref) formats
     existing_info = storage_service.get_artifact_info(path, ref)
 
     # Now create the tag using the resolved hash_ref

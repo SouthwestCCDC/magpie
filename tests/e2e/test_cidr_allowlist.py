@@ -122,7 +122,7 @@ class TestCIDRAllowListReadAccess:
         hash_ref = upload_response.json()["hash_ref"]
 
         # Test: Get artifact info without authentication (CIDR bypass)
-        # Use the hash_ref (e.g., @abc12345) for the ref parameter
+        # Use the current-width hash_ref (e.g., @abc1234567890def) for the ref parameter
         info_response = cidr_http_client.get(
             f"/api/v1/artifacts/cidr-test/info-access/{hash_ref}/info"
         )

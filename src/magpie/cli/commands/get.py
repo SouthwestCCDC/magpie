@@ -56,7 +56,7 @@ def get(
 
         magpie get images/ubuntu:latest
 
-        magpie get images/ubuntu:@abc12345 -o ubuntu.tar.gz
+        magpie get images/ubuntu:@abc1234567890def -o ubuntu.tar.gz
 
         magpie get builds/app --no-verify
     """

@@ -866,17 +866,14 @@ class TestBundledImageStartupMigration:
             finally:
                 _cleanup(name)
 
-    def test_migrate_to_reverts_via_docker_exec_and_restart_migrates_forward(
+    def test_migrate_to_one_refuses_irreversible_v2_via_docker_exec(
         self, bundled_image: str
     ) -> None:
-        """Issue #646: the documented downgrade step works in a running container,
-        as the runtime user, and the next start of the same image migrates forward
-        again (startup never stays below its own format).
-        """
-        name = f"magpie-bundled-e2e-mig-revert-{uuid.uuid4().hex[:8]}"
-        with tempfile.TemporaryDirectory(prefix="magpie_bundled_mig_revert_") as tmp:
+        """A v2 build refuses to revert its blob-name width in place."""
+        name = f"magpie-bundled-e2e-mig-irreversible-{uuid.uuid4().hex[:8]}"
+        with tempfile.TemporaryDirectory(prefix="magpie_bundled_mig_irreversible_") as tmp:
             data_dir = Path(tmp)
-            db_path = _host_db(data_dir, user_version=0)
+            db_path = _host_db(data_dir, user_version=1)
             _cleanup(name)
             try:
                 _run_container(bundled_image, data_dir, name, extra_args=_own_uid_gid_args())
@@ -884,29 +881,20 @@ class TestBundledImageStartupMigration:
                 assert _host_db_version(db_path) == CURRENT_DATA_FORMAT_VERSION
 
                 revert = subprocess.run(
-                    ["docker", "exec", name, "magpie-ctl", "migrate", "--to", "0"],
+                    ["docker", "exec", name, "magpie-ctl", "migrate", "--to", "1"],
                     capture_output=True,
                     text=True,
                 )
-                assert revert.returncode == 0, revert.stdout + revert.stderr
-                assert f"v{CURRENT_DATA_FORMAT_VERSION} -> v0" in revert.stdout
-                assert _host_db_version(db_path) == 0
+                output = revert.stdout + revert.stderr
+                assert revert.returncode != 0, output
+                assert "irreversible" in output
+                assert "restore a backup" in output
+                assert _host_db_version(db_path) == CURRENT_DATA_FORMAT_VERSION
                 assert _host_token_names(db_path) == ["pre-existing"]
                 # Written as the runtime user, not root (see _own_uid_gid_args()).
                 run_uid = os.getuid() or 1000
                 owners = {p.stat().st_uid for p in data_dir.iterdir()}
                 assert owners == {run_uid}, owners
-
-                subprocess.run(["docker", "stop", name], check=True, capture_output=True)
-                subprocess.run(["docker", "start", name], check=True, capture_output=True)
-                for _ in range(30):
-                    if _logs(name).count("caddy started") >= 2:
-                        break
-                    time.sleep(1)
-                log_text = _logs(name)
-                assert log_text.count("caddy started") >= 2, log_text
-                assert log_text.count("Migrated data format: v0 ->") == 2, log_text
-                assert _host_db_version(db_path) == CURRENT_DATA_FORMAT_VERSION
             finally:
                 _cleanup(name)
 

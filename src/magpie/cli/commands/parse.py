@@ -8,7 +8,7 @@ and ref:
 
 Examples:
     images/ubuntu:latest       -> ArtifactRef("images/ubuntu", "latest")
-    images/ubuntu:@abc12345    -> ArtifactRef("images/ubuntu", "@abc12345")
+    images/ubuntu:@abc1234567890def -> ArtifactRef("images/ubuntu", "@abc1234567890def")
     images/ubuntu              -> ArtifactRef("images/ubuntu", "latest")  [default ref]
 
 The @ prefix is used for hash references (abbreviated or full SHA-256 digests),
@@ -58,7 +58,7 @@ class ArtifactRef:
     Attributes:
         path: Artifact path (e.g., "images/ubuntu").
         ref: Reference to a specific version - either a tag name (e.g., "latest")
-             or a hash ref (e.g., "@abc12345").
+             or a hash ref (e.g., "@abc1234567890def").
     """
 
     path: str
@@ -85,7 +85,9 @@ def parse_artifact_ref(artifact_ref: str, default_ref: str = "latest") -> Artifa
 
     Examples:
         "images/ubuntu:latest" -> ArtifactRef(path="images/ubuntu", ref="latest")
-        "images/ubuntu:@abc12345" -> ArtifactRef(path="images/ubuntu", ref="@abc12345")
+        "images/ubuntu:@abc1234567890def" -> ArtifactRef(
+            path="images/ubuntu", ref="@abc1234567890def"
+        )
         "images/ubuntu" -> ArtifactRef(path="images/ubuntu", ref="latest")
         "project/images/ubuntu:v1.0" -> ArtifactRef(path="project/images/ubuntu", ref="v1.0")
         "/images/ubuntu:latest" -> ArtifactRef(path="images/ubuntu", ref="latest")

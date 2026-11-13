@@ -15,6 +15,7 @@ from magpie.storage.gc import (
     get_blob_age_days,
     run_gc,
 )
+from magpie.storage.hash import HASH_NAME_LENGTH
 from magpie.utils.formatting import format_size
 
 
@@ -35,10 +36,9 @@ def create_artifact_with_blobs(
 ) -> Path:
     """Helper to create an artifact directory with blobs and manifest.
 
-    Simulates the actual storage scheme where:
+    Simulates the current storage scheme where:
     - Manifest stores full hashes
-    - Blob files use first 8 chars of hash
-    - Metadata files use first 8 chars of hash (but contain full hash inside)
+    - Blob and metadata filenames use the configured hash-name width
 
     Args:
         storage_path: Base storage path.
@@ -69,8 +69,8 @@ def create_artifact_with_blobs(
     blob_ages_days = blob_ages_days or {}
 
     for blob_hash in all_hashes:
-        # Blob and metadata files use short hash (first 8 chars)
-        short_hash = blob_hash[:8]
+        # Blob and metadata files use the current hash-name width.
+        short_hash = blob_hash[:HASH_NAME_LENGTH]
 
         # Create blob file with short hash name
         blob_file = blobs_dir / short_hash
@@ -146,11 +146,11 @@ class TestGetBlobAgeDays:
         )
 
         # Delete metadata to force mtime fallback
-        metadata_file = artifact_dir / "metadata" / "hash1234.json"
+        metadata_file = artifact_dir / "metadata" / "hash1234567890.json"
         metadata_file.unlink()
 
         now = datetime.now(timezone.utc)
-        age = get_blob_age_days(artifact_dir, "hash1234", now)
+        age = get_blob_age_days(artifact_dir, "hash1234567890", now)
 
         # File was just created, so age should be 0
         assert age == 0
@@ -274,7 +274,7 @@ class TestRunGC:
         assert result.blobs_found == 2
         assert result.blobs_deleted == 1
         assert len(blobs) == 1
-        assert blobs[0].blob_hash == "untagged"
+        assert blobs[0].blob_hash == "untagged_hash_xy"
 
     def test_dry_run_does_not_delete(self, storage_root: Path) -> None:
         """Dry run doesn't delete blobs."""
@@ -286,7 +286,7 @@ class TestRunGC:
             blob_ages_days={"tagged_hash_abc": 0, "untagged_hash_xyz": 100},
         )
 
-        blob_file = artifact_dir / "blobs" / "untagged"
+        blob_file = artifact_dir / "blobs" / "untagged_hash_xy"
         assert blob_file.exists()
 
         result, blobs = run_gc(
@@ -308,7 +308,7 @@ class TestRunGC:
             blob_ages_days={"tagged_hash_abc": 0, "old_untagged_xyz": 100},
         )
 
-        blob_file = artifact_dir / "blobs" / "old_unta"
+        blob_file = artifact_dir / "blobs" / "old_untagged_xyz"
         assert blob_file.exists()
 
         result, blobs = run_gc(
@@ -333,7 +333,7 @@ class TestRunGC:
             },
         )
 
-        blob_file = artifact_dir / "blobs" / "young_un"
+        blob_file = artifact_dir / "blobs" / "young_untagged_x"
         assert blob_file.exists()
 
         result, blobs = run_gc(
@@ -355,7 +355,7 @@ class TestRunGC:
             blob_ages_days={"old_tagged_hash": 365},  # Very old but tagged
         )
 
-        blob_file = artifact_dir / "blobs" / "old_tagg"
+        blob_file = artifact_dir / "blobs" / "old_tagged_hash"
         assert blob_file.exists()
 
         result, blobs = run_gc(
@@ -376,7 +376,7 @@ class TestRunGC:
         metadata_dir.mkdir(parents=True)
 
         full_hash = "abcdef0123456789" + "0" * 48
-        blob_name = full_hash[:16]
+        blob_name = full_hash[:HASH_NAME_LENGTH]
         (blobs_dir / blob_name).write_bytes(b"tagged content")
         (metadata_dir / f"{blob_name}.json").write_text(
             json.dumps(
@@ -404,28 +404,23 @@ class TestRunGC:
         artifact_dir = create_artifact_with_blobs(
             storage_root,
             "test/artifact",
-            tagged_hashes={"latest": "tagged_hash_abc", "broken": "../../etc/passwd"},
+            tagged_hashes={"latest": "tagged_hash_abc"},
             untagged_hashes=["untagged_hash_xyz"],
             blob_ages_days={"tagged_hash_abc": 0, "untagged_hash_xyz": 100},
         )
+        manifest_file = artifact_dir / ".magpie"
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        manifest["tags"]["broken"] = "../../etc/passwd"
+        manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
 
         result, blobs = run_gc(storage_path=storage_root, retention_days=30, dry_run=False)
 
         assert result.artifacts_scanned == 1
         assert result.blobs_deleted == 1
-        assert (artifact_dir / "blobs" / "tagged_h").exists()
+        assert (artifact_dir / "blobs" / "tagged_hash_abc").exists()
 
     def test_preserves_tagged_blobs_with_full_sha256_hash(self, storage_root: Path) -> None:
-        """Tagged blobs with full SHA-256 hashes are preserved.
-
-        Regression test for issue where GC used full 64-char hashes for tag
-        comparison, but blob files use short 8-char hashes. This caused tagged
-        blobs to be incorrectly garbage collected because "abcd1234..." (64 chars)
-        != "abcd1234" (8 chars).
-
-        The fix is to truncate manifest hashes to 8 chars before comparison:
-            tagged_hashes = {h[:8] for h in manifest.tags.values()}
-        """
+        """Tagged blobs remain protected when manifests store full SHA-256 hashes."""
         # Use a realistic full SHA-256 hash (64 hex characters)
         full_hash = "a1b2c3d4e5f67890abcdef1234567890fedcba0987654321a1b2c3d4e5f67890"
         assert len(full_hash) == 64, "Test requires 64-char hash"
@@ -438,11 +433,11 @@ class TestRunGC:
             blob_ages_days={full_hash: 365},  # Very old but tagged
         )
 
-        # Blob file uses short hash (first 8 chars)
-        short_hash = full_hash[:8]
+        # Blob file uses the current hash-name width.
+        short_hash = full_hash[:HASH_NAME_LENGTH]
         blob_file = artifact_dir / "blobs" / short_hash
         assert blob_file.exists()
-        assert blob_file.name == "a1b2c3d4"
+        assert blob_file.name == "a1b2c3d4e5f67890"
 
         result, blobs = run_gc(
             storage_path=storage_root,
@@ -468,7 +463,7 @@ class TestRunGC:
             blob_ages_days={"tagged_hash_abc": 0, "old_untagged_xyz": 100},
         )
 
-        blob_file = artifact_dir / "blobs" / "old_unta"
+        blob_file = artifact_dir / "blobs" / "old_untagged_xyz"
         assert blob_file.exists()
 
         result, blobs = run_gc(
@@ -567,8 +562,8 @@ class TestRunGC:
             blob_ages_days={"old_hash_xyz": 100},
         )
 
-        blob_file = artifact_dir / "blobs" / "old_hash"
-        metadata_file = artifact_dir / "metadata" / "old_hash.json"
+        blob_file = artifact_dir / "blobs" / "old_hash_xyz"
+        metadata_file = artifact_dir / "metadata" / "old_hash_xyz.json"
         assert blob_file.exists()
         assert metadata_file.exists()
 

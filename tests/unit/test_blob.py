@@ -218,7 +218,7 @@ class TestReadBlob:
         stream = io.BytesIO(content)
         full_hash, hash_ref, _ = store_blob(artifact_dir, stream, test_config)
 
-        # read_blob works with short hash (strips @ prefix, uses first 8 chars)
+        # read_blob resolves the current-width ref to its stored name.
         result = read_blob(artifact_dir, hash_ref)
 
         assert result.exists()
@@ -236,7 +236,7 @@ class TestReadBlob:
         stream = io.BytesIO(content)
         full_hash, hash_ref, _ = store_blob(artifact_dir, stream, test_config)
 
-        # Use @ prefix - blob_path strips it and uses first 8 chars
+        # Use @ prefix - blob_path resolves the current-width ref.
         result = read_blob(artifact_dir, hash_ref)
 
         assert result.exists()
@@ -269,7 +269,7 @@ class TestCheckBlobExists:
         stream = io.BytesIO(content)
         full_hash, hash_ref, _ = store_blob(artifact_dir, stream, test_config)
 
-        # Works with @ prefix (strips prefix and uses first 8 chars)
+        # Works with the @-prefixed current-width ref.
         result = check_blob_exists(artifact_dir, hash_ref)
 
         assert result is True
