@@ -18,7 +18,9 @@ from magpie.cli.formatting import (
 )
 from magpie.cli.progress import count_progress, processing_spinner
 from magpie.ctl import CTLContext
+from magpie.storage.exceptions import AmbiguousHashRefError, InvalidArtifactPathError
 from magpie.storage.manifest import Manifest, read_manifest
+from magpie.storage.paths import candidate_hash_names, resolve_blob_name, resolve_metadata_name
 from magpie.utils.formatting import format_size
 
 if TYPE_CHECKING:
@@ -73,8 +75,16 @@ def _get_blobs_for_manifest(artifact_dir: Path, manifest: Manifest) -> list[Path
     unique_hashes = set(manifest.tags.values())
 
     for hash_ref in unique_hashes:
-        # Hash refs are stored as "@abc12345" - strip @ and use first 8 chars
-        blob_name = hash_ref.lstrip("@")[:8]
+        # Manifests store full hashes; blobs are stored under a truncated name
+        # whose width depends on the release that wrote them. A manifest is
+        # operator-editable, so an unusable tag target skips this hash rather
+        # than aborting the sync.
+        try:
+            blob_name = resolve_blob_name(artifact_dir, hash_ref)
+        except (AmbiguousHashRefError, InvalidArtifactPathError):
+            continue
+        if blob_name is None:
+            continue
         blob_path = blobs_dir / blob_name
         if blob_path.exists():
             blobs.append(blob_path)
@@ -101,9 +111,14 @@ def _get_metadata_for_manifest(artifact_dir: Path, manifest: Manifest) -> list[P
     unique_hashes = set(manifest.tags.values())
 
     for hash_ref in unique_hashes:
-        # Hash refs are stored as "@abc12345" - strip @ and use first 8 chars
-        metadata_name = f"{hash_ref.lstrip('@')[:8]}.json"
-        metadata_path = metadata_dir / metadata_name
+        # Sidecars mirror their blob's stored filename.
+        try:
+            name = resolve_metadata_name(artifact_dir, hash_ref)
+        except (AmbiguousHashRefError, InvalidArtifactPathError):
+            continue
+        if name is None:
+            continue
+        metadata_path = metadata_dir / f"{name}.json"
         if metadata_path.exists():
             metadata_files.append(metadata_path)
 
@@ -492,10 +507,11 @@ def _verify_restored_data(storage_path: Path) -> tuple[int, int, list[str]]:
 
             # Check all referenced blobs exist
             for tag_name, hash_ref in manifest.tags.items():
-                blob_name = hash_ref.lstrip("@")[:8]
-                blob_path = artifact_dir / "blobs" / blob_name
-                if not blob_path.exists():
-                    errors.append(f"Missing blob for {relative_path}:{tag_name} - {blob_name}")
+                blob_name = resolve_blob_name(artifact_dir, hash_ref)
+                if blob_name is None:
+                    errors.append(
+                        f"Missing blob for {relative_path}:{tag_name} - {hash_ref.lstrip('@')}"
+                    )
                 else:
                     blobs_verified += 1
 
@@ -1295,6 +1311,39 @@ def _get_s3_file_size_aws(
         return {}
 
 
+def _parse_manifest_tags(content: str) -> dict[str, str] | None:
+    """Parse a manifest's tag map, or report that it cannot be read.
+
+    A backup holds whatever an operator (or an older release) wrote, so the
+    content may not even be an object with a tag map. Distinguishing that
+    from a manifest that simply has no tags matters: a manifest whose
+    targets cannot be read must not let its blobs look orphaned.
+
+    Args:
+        content: JSON content of the manifest file.
+
+    Returns:
+        The tag names mapped to their targets, dropping entries whose target
+        is not a non-empty string, or None if the content is not a manifest.
+    """
+    import json
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    tags = data.get("tags", {})
+    if not isinstance(tags, dict):
+        return None
+    return {
+        name: target
+        for name, target in tags.items()
+        if isinstance(name, str) and isinstance(target, str) and target
+    }
+
+
 def _parse_manifest_content(content: str) -> set[str]:
     """Parse manifest JSON and extract tagged blob hashes.
 
@@ -1302,17 +1351,38 @@ def _parse_manifest_content(content: str) -> set[str]:
         content: JSON content of the manifest file.
 
     Returns:
-        Set of blob hash names (8-char prefixes, without @ symbol).
+        Set of blob hash names (every stored prefix width, without @ symbol).
+        Unreadable content yields no names; callers that delete on the result
+        must handle that case through :func:`_parse_manifest_tags`.
     """
-    import json
+    # A remote manifest gives no view of the layout its blobs were written
+    # with, so treat every stored width as referenced rather than reporting
+    # blobs from either layout as orphans. An unusable tag target names no
+    # blob, so it contributes nothing.
+    names: set[str] = set()
+    for hash_ref in (_parse_manifest_tags(content) or {}).values():
+        try:
+            names.update(candidate_hash_names(hash_ref))
+        except InvalidArtifactPathError:
+            continue
+    return names
 
-    try:
-        data = json.loads(content)
-        tags = data.get("tags", {})
-        # Extract blob names from hash refs (e.g., "@abc12345" -> "abc12345")
-        return {hash_ref.lstrip("@")[:8] for hash_ref in tags.values() if hash_ref}
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return set()
+
+def _parse_manifest_tag_targets(content: str) -> set[str]:
+    """Parse manifest JSON and extract the distinct blobs its tags point at.
+
+    Reported counts use this rather than :func:`_parse_manifest_content`,
+    whose set holds one name per stored width per tag target and so overstates
+    how many blobs are tagged.
+
+    Args:
+        content: JSON content of the manifest file.
+
+    Returns:
+        Set of tag targets with any '@' prefix removed.
+    """
+    tags = _parse_manifest_tags(content) or {}
+    return {hash_ref.lstrip("@").lower() for hash_ref in tags.values()}
 
 
 def _extract_blob_name_from_path(path: str) -> str | None:
@@ -1379,16 +1449,22 @@ def _find_orphaned_blobs(
         click.echo("Parsing manifests...")
 
     tagged_blobs: set[str] = set()
+    tag_targets: set[str] = set()
+    # Blobs under an artifact whose manifest could not be read are left alone:
+    # its tag targets are unknown, so calling them orphans could delete a
+    # tagged blob.
+    unreadable_blob_dirs: set[str] = set()
     for manifest_path in manifest_paths:
         content = get_content(bucket, prefix, manifest_path, debug)
-        if content:
-            hashes = _parse_manifest_content(content)
-            tagged_blobs.update(hashes)
-        else:
+        if not content or _parse_manifest_tags(content) is None:
             errors.append(f"Failed to read manifest: {manifest_path}")
+            unreadable_blob_dirs.add(f"{manifest_path.removesuffix('.magpie')}blobs/")
+            continue
+        tagged_blobs.update(_parse_manifest_content(content))
+        tag_targets.update(_parse_manifest_tag_targets(content))
 
     if debug:
-        click.echo(f"Found {len(tagged_blobs)} unique tagged blob hashes", err=True)
+        click.echo(f"Found {len(tag_targets)} unique tagged blob hashes", err=True)
 
     # Step 3: List all blob files in S3
     if not quiet and not is_json_output():
@@ -1404,11 +1480,13 @@ def _find_orphaned_blobs(
     # Step 4: Find orphaned blobs (not referenced by any manifest)
     orphaned_paths: list[str] = []
     for blob_path in blob_paths:
+        if any(blob_path.startswith(blob_dir) for blob_dir in unreadable_blob_dirs):
+            continue
         blob_name = _extract_blob_name_from_path(blob_path)
         if blob_name and blob_name not in tagged_blobs:
             orphaned_paths.append(blob_path)
 
-    return orphaned_paths, len(manifest_paths), len(tagged_blobs), len(blob_paths), errors
+    return orphaned_paths, len(manifest_paths), len(tag_targets), len(blob_paths), errors
 
 
 @sync.command("gc-s3")

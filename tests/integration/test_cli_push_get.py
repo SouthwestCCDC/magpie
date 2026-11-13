@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from magpie.cli import cli
 from magpie.cli.commands.parse import parse_artifact_ref
+from magpie.storage.paths import canonical_hash_name
 from magpie.storage.service import StorageService
 from tests.integration.conftest import (
     MockClientWithDownload,
@@ -1097,10 +1098,10 @@ class TestPushOutputFeatures:
             )
 
         assert result.exit_code == 0, f"Exit code: {result.exit_code}, Output: {result.output}"
-        # Download URL should use blobs/ path with short hash (no @ prefix)
-        short_hash = expected_hash[:8]
-        expected_url = f"Download: http://test/artifacts/download/hash-test/blobs/{short_hash}"
-        assert expected_url in result.output
+        # Download URL should use blobs/ path with the stored name (no @ prefix)
+        hash_name = canonical_hash_name(expected_hash)
+        expected_url = f"Download: http://test/artifacts/download/hash-test/blobs/{hash_name}"
+        assert f"{expected_url}\n" in result.output
 
     def test_push_shows_source_uri_info_when_not_provided(
         self, cli_runner: CliRunner, api_client: TestClient, tmp_path: Path

@@ -38,11 +38,10 @@ class TestOpenTelemetryDoesNotBreakWorkflow:
             files={"file": ("artifact", test_artifact_content, "application/octet-stream")},
         )
         assert upload_response.status_code == 200
-        artifact_hash = upload_response.json()["hash"]
 
         # Tag
         # API expects ref to be either a tag name or @{short_hash} format
-        hash_ref = f"@{artifact_hash[:8]}"
+        hash_ref = upload_response.json()["hash_ref"]
         tag_response = authenticated_client.post(
             f"/api/v1/artifacts/{artifact_path}/{hash_ref}/tags",
             json={"tag_name": "v1.0"},
@@ -50,8 +49,9 @@ class TestOpenTelemetryDoesNotBreakWorkflow:
         assert tag_response.status_code in (200, 201)
 
         # Download (uses /artifacts/ endpoint which serves files directly)
-        # Blobs are stored with short 8-char hash prefix
-        short_hash = artifact_hash[:8]
+        # Blobs are stored under a truncated hash; the ref the server
+        # returned is that filename, so don't hardcode the width here.
+        short_hash = hash_ref.lstrip("@")
         download_response = authenticated_client.get(
             f"/artifacts/{artifact_path}/blobs/{short_hash}"
         )

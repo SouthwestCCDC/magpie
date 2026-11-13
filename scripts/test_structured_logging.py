@@ -37,7 +37,7 @@ def test_json_logging():
         "upload_complete",
         artifact_path="images/infra/vrouter.qcow2",
         hash="abc12345def67890",
-        hash_ref="@abc12345",
+        hash_ref="@abc1234567890def",
         size_bytes=1073741824,
         duration_ms=4523.45,
         uploaded_by="admin",
@@ -49,7 +49,7 @@ def test_json_logging():
         operation="create_tag",
         tag_name="stable",
         artifact_path="images/infra/vrouter.qcow2",
-        hash_ref="@abc12345",
+        hash_ref="@abc1234567890def",
     )
 
     logger.info(
@@ -70,7 +70,7 @@ def test_json_logging():
         reason="invalid_token",
     )
 
-    logger.info(
+    logger.info(  # nosec B106
         "auth_validation_success",
         token_name="deployment-bot",
         scope="write",

@@ -3,17 +3,20 @@
 Provides the migration mechanism the bundled image's wrapper.sh runs on
 every container start (before serving traffic, under the init lock) and
 `magpie-deploy.sh update` also calls after swapping in a new image, so a
-future release that actually
-changes the token DB schema or the on-disk /data layout has somewhere to
-register a transform. As of v0.2.0 there is nothing to transform (the
+future release that changes the token DB schema or the on-disk /data
+layout has somewhere to register a transform. As of v0.2.0 there is
+nothing to transform (the
 bundled single-container image reads the same /data layout the pre-0.2.0
 two-container topology used), so this only stamps a baseline version.
 
-Startup only ever migrates forward. Going back to an older build is an
-explicit operator step (issue #646): `magpie-ctl migrate --to N`, run with
-the newer build (the only one that knows how to undo its own steps),
-reverts the database to data-format version N before the older build is
-started.
+Version 2 records the widened blob hash-name prefix (issue #529); no data
+rewrite is needed because reads resolve both old and new widths. Startup
+only ever migrates forward. Going back to an older build is an explicit
+operator step (issue #646): `magpie-ctl migrate --to N`, run with the newer
+build, reverts reversible steps before the older build is started. Version 2
+cannot be reverted by resetting its stamp: an 8-character-only build would
+then silently 404 blobs written under 16-character names. Restore a pre-v2
+backup (see docs/backup-restore.md) to go back across version 2.
 """
 
 from __future__ import annotations
@@ -47,7 +50,7 @@ if TYPE_CHECKING:
 # constant becomes that step's version. Read back by
 # `magpie-deploy.sh update`'s assert_post_update() (via --check) to confirm
 # a migration actually advanced the stamp.
-CURRENT_DATA_FORMAT_VERSION = 1
+CURRENT_DATA_FORMAT_VERSION = 2
 
 
 class MigrationStep(NamedTuple):
@@ -94,6 +97,24 @@ def _revert_step_1_baseline(conn: sqlite3.Connection) -> None:
     """Undo version 1: nothing to transform; the stamp drops back to 0."""
 
 
+def _step_2_widened_blob_hash_names(conn: sqlite3.Connection) -> None:
+    """Version 2: blobs are named by a wider SHA-256 prefix (issue #529).
+
+    No data transform. Blobs and metadata sidecars written from this
+    release on are named by the first
+    :data:`magpie.storage.hash.HASH_NAME_LENGTH` hex characters of the
+    digest instead of the first 8, but every read resolves a hash ref
+    against both widths (see :func:`magpie.storage.paths.resolve_blob_name`),
+    so existing blobs keep resolving in place. Renaming them in bulk would
+    rewrite the whole blob store for no functional gain.
+
+    Version 2 is irreversible. A revert cannot make blobs written under
+    16-character names readable by an 8-character-only build; reverting
+    only the stamp would turn a fail-closed downgrade into silent 404s.
+    Restore a pre-v2 backup (see docs/backup-restore.md) to go back.
+    """
+
+
 # Ordered oldest-to-newest; run_migrations() applies every step whose
 # version exceeds the database's current stamp, in this order, and
 # revert_database() reverts them newest-first.
@@ -103,6 +124,12 @@ _MIGRATIONS: tuple[MigrationStep, ...] = (
         "baseline data-format version marker",
         _step_1_baseline,
         revert=_revert_step_1_baseline,
+    ),
+    MigrationStep(
+        2,
+        "widened blob hash-name prefix (reads stay backward-compatible)",
+        _step_2_widened_blob_hash_names,
+        irreversible=True,
     ),
 )
 

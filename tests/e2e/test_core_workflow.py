@@ -19,6 +19,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from magpie.storage.hash import short_hash
 from tests.e2e.conftest import PROJECT_ROOT, create_token_via_api
 
 
@@ -273,8 +274,8 @@ class TestTagging:
         env["MAGPIE_TOKEN"] = write_token
 
         # Create tag via CLI
-        # Hash ref format: @{first 8 chars of hash}
-        hash_ref = f"@{artifact_hash[:8]}"
+        # Current-width hash ref from short_hash().
+        hash_ref = short_hash(artifact_hash)
         result = subprocess.run(
             [
                 "uv",
@@ -308,7 +309,7 @@ class TestTagging:
 
         # Create tag via API
         # API expects ref to be either a tag name or @{short_hash} format
-        hash_ref = f"@{artifact_hash[:8]}"
+        hash_ref = short_hash(artifact_hash)
         response = authenticated_client.post(
             f"/api/v1/artifacts/e2e-tests/api-tag-test/{hash_ref}/tags",
             json={"tag_name": "v1.0"},
@@ -344,8 +345,8 @@ class TestArtifactInfo:
         env["MAGPIE_TOKEN"] = write_token
 
         # Info command takes artifact_ref in path:ref format
-        # Use the hash ref format: @{first 8 chars of hash}
-        hash_ref = f"@{artifact_hash[:8]}"
+        # Use the current-width hash ref from short_hash().
+        hash_ref = short_hash(artifact_hash)
         result = subprocess.run(
             [
                 "uv",
@@ -381,7 +382,7 @@ class TestArtifactInfo:
 
         # Get info via API
         # API expects ref to be either a tag name or @{short_hash} format
-        hash_ref = f"@{artifact_hash[:8]}"
+        hash_ref = short_hash(artifact_hash)
         response = authenticated_client.get(
             f"/api/v1/artifacts/e2e-tests/api-info-test/{hash_ref}/info"
         )

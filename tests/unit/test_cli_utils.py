@@ -104,6 +104,20 @@ class TestFormatAuthError:
         result = format_auth_error(response, "Download")
         assert result == "Download failed (400): Bad request"
 
+    def test_format_with_magpie_error_body(self) -> None:
+        """Magpie's own errors put their explanation in 'message', not 'detail'."""
+        response = Mock()
+        response.status_code = 400
+        response.json.return_value = {
+            "error": "AmbiguousHashRefError",
+            "message": "Hash ref @abc matches 2 blobs",
+            "detail": None,
+        }
+        response.text = '{"error": "AmbiguousHashRefError"}'
+
+        result = format_auth_error(response, "Info")
+        assert result == "Info failed (400): Hash ref @abc matches 2 blobs"
+
     def test_format_with_json_parse_error(self) -> None:
         """Falls back to response.text when JSON parsing fails."""
         response = Mock()

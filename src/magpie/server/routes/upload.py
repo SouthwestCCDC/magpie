@@ -274,7 +274,7 @@ class UploadResponse(BaseModel):
     """Response model for successful artifact upload."""
 
     hash: str  # Full SHA-256 hash
-    hash_ref: str  # Short hash ref like @abc12345
+    hash_ref: str  # Short hash ref like @abc1234567890def
     artifact_path: str  # Path where artifact was stored
     is_duplicate: bool  # True if blob already existed
     download_url: str  # URL to download artifact

@@ -6,6 +6,8 @@ import io
 
 from fastapi.testclient import TestClient
 
+from magpie.storage.hash import HASH_NAME_LENGTH, compute_hash
+from magpie.storage.paths import artifact_dir_path
 from magpie.storage.service import StorageService
 
 
@@ -314,3 +316,30 @@ class TestMalformedMultipartHandling:
 
         assert response.status_code == 400
         assert "Malformed multipart payload" in response.json()["detail"]
+
+
+class TestHashPrefixCollisionResponse:
+    """A genuine hash-name collision is a 409, not an opaque 500 (issue #529)."""
+
+    def test_collision_returns_409_with_typed_error(
+        self,
+        client_no_raise: TestClient,
+        test_storage_service: StorageService,
+    ) -> None:
+        """Planting different content under the upload's filename yields 409."""
+        content = b"content whose filename is already taken"
+        artifact_path = "collision/upload"
+        artifact_dir = artifact_dir_path(test_storage_service.config.storage_path, artifact_path)
+        blobs_dir = artifact_dir / "blobs"
+        blobs_dir.mkdir(parents=True)
+        squatter = blobs_dir / compute_hash(content)[:HASH_NAME_LENGTH]
+        squatter.write_bytes(b"unrelated content")
+
+        response = client_no_raise.post(
+            f"/api/v1/upload/{artifact_path}",
+            files={"file": ("artifact.bin", io.BytesIO(content), "application/octet-stream")},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["error"] == "HashPrefixCollisionError"
+        assert squatter.read_bytes() == b"unrelated content"

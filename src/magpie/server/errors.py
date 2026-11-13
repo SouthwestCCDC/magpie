@@ -9,9 +9,11 @@ from pydantic import BaseModel
 
 from magpie.config import get_settings
 from magpie.storage.exceptions import (
+    AmbiguousHashRefError,
     ArtifactNotFoundError,
     BlobExistsError,
     HashMismatchError,
+    HashPrefixCollisionError,
     InvalidArtifactPathError,
     ManifestCorruptError,
     StorageError,
@@ -50,6 +52,25 @@ async def artifact_not_found_handler(
 async def blob_exists_handler(request: "Request", exc: BlobExistsError) -> "JSONResponse":
     """Handle BlobExistsError -> HTTP 409."""
     return _make_error_response(409, "BlobExistsError", str(exc))
+
+
+async def hash_prefix_collision_handler(
+    request: "Request", exc: HashPrefixCollisionError
+) -> "JSONResponse":
+    """Handle HashPrefixCollisionError -> HTTP 409.
+
+    The upload is well-formed but cannot be stored because a different blob
+    already occupies its filename, so this is a conflict with server state
+    rather than an internal error.
+    """
+    return _make_error_response(409, "HashPrefixCollisionError", str(exc))
+
+
+async def ambiguous_hash_ref_handler(
+    request: "Request", exc: AmbiguousHashRefError
+) -> "JSONResponse":
+    """Handle AmbiguousHashRefError -> HTTP 400."""
+    return _make_error_response(400, "AmbiguousHashRefError", str(exc))
 
 
 async def hash_mismatch_handler(request: "Request", exc: HashMismatchError) -> "JSONResponse":
@@ -91,6 +112,8 @@ def register_exception_handlers(app: "FastAPI") -> None:
     app.add_exception_handler(ArtifactNotFoundError, artifact_not_found_handler)
     app.add_exception_handler(BlobExistsError, blob_exists_handler)
     app.add_exception_handler(HashMismatchError, hash_mismatch_handler)
+    app.add_exception_handler(HashPrefixCollisionError, hash_prefix_collision_handler)
+    app.add_exception_handler(AmbiguousHashRefError, ambiguous_hash_ref_handler)
     app.add_exception_handler(InvalidArtifactPathError, invalid_artifact_path_handler)
     app.add_exception_handler(ManifestCorruptError, manifest_corrupt_handler)
     app.add_exception_handler(StorageError, storage_error_handler)

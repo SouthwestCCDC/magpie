@@ -31,7 +31,7 @@ def tag(ctx: CLIContext, artifact_ref: str, tag_name: str) -> None:
 
         magpie tag images/ubuntu:latest --as v1.0
 
-        magpie tag images/ubuntu:@abc12345 --as stable
+        magpie tag images/ubuntu:@abc1234567890def --as stable
 
         magpie tag builds/app --as release-1.0
     """

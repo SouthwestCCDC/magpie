@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from magpie.storage.hash import compute_hash, short_hash
+from magpie.storage.exceptions import InvalidArtifactPathError
+from magpie.storage.hash import HASH_NAME_LENGTH, compute_hash, short_hash
 from magpie.storage.paths import (
     artifact_dir_path,
     blob_path,
@@ -73,16 +74,16 @@ class TestShortHash:
     """Tests for short_hash function."""
 
     def test_short_hash_format(self) -> None:
-        """short_hash should return @ prefix + 8 chars."""
+        """short_hash should return @ prefix + HASH_NAME_LENGTH chars."""
         full_hash = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         result = short_hash(full_hash)
-        assert result == "@b94d27b9"
+        assert result == f"@{full_hash[:HASH_NAME_LENGTH]}"
 
     def test_short_hash_length(self) -> None:
-        """short_hash should always return 9 characters (@ + 8)."""
+        """short_hash should always return @ + HASH_NAME_LENGTH characters."""
         full_hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
         result = short_hash(full_hash)
-        assert len(result) == 9
+        assert len(result) == HASH_NAME_LENGTH + 1
 
     def test_short_hash_starts_with_at(self) -> None:
         """short_hash should always start with @ symbol."""
@@ -90,11 +91,12 @@ class TestShortHash:
         result = short_hash(full_hash)
         assert result.startswith("@")
 
-    def test_short_hash_extracts_first_8_chars(self) -> None:
-        """short_hash should extract exactly the first 8 characters."""
-        full_hash = "12345678xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    def test_short_hash_extracts_leading_chars(self) -> None:
+        """short_hash should extract exactly the leading hash-name characters."""
+        full_hash = "1234567890abcdefxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
         result = short_hash(full_hash)
-        assert result == "@12345678"
+        assert result == "@1234567890abcdef"
+        assert HASH_NAME_LENGTH == 16
 
 
 class TestArtifactDirPath:
@@ -140,12 +142,18 @@ class TestBlobPath:
         assert result == Path("/data/artifacts/project/blobs/abc12345")
 
     def test_blob_path_full_hash(self) -> None:
-        """blob_path should truncate full hash to first 8 chars."""
+        """blob_path should truncate a full hash to the stored hash-name width."""
         artifact_dir = Path("/data/artifacts/project")
         full_hash = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         result = blob_path(artifact_dir, full_hash)
-        # Blobs are stored with short hash (first 8 chars)
-        assert result == Path(f"/data/artifacts/project/blobs/{full_hash[:8]}")
+        assert result == Path(f"/data/artifacts/project/blobs/{full_hash[:HASH_NAME_LENGTH]}")
+
+    def test_blob_path_rejects_traversal_ref(self) -> None:
+        """A hash ref becomes a filename component, so separators are refused."""
+        artifact_dir = Path("/data/artifacts/project")
+        for ref in ("@../../../../etc/passwd", "@..", "ab/cd"):
+            with pytest.raises(InvalidArtifactPathError):
+                blob_path(artifact_dir, ref)
 
 
 class TestMetadataPath:

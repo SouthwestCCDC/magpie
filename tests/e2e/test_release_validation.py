@@ -19,6 +19,7 @@ from packaging.version import parse
 from magpie import __version__
 from magpie.cli.formatting import ExitCode
 from magpie.server.middleware import get_min_client_version
+from magpie.storage.hash import short_hash
 from tests.e2e.conftest import PROJECT_ROOT, create_token_via_api
 
 
@@ -395,7 +396,7 @@ class TestGarbageCollectionDryRun:
 
         # Create a named tag to ensure it's protected
         tag_response = authenticated_client.post(
-            f"/api/v1/artifacts/e2e-tests/release-validation/gc-tagged/@{tagged_hash[:8]}/tags",
+            f"/api/v1/artifacts/e2e-tests/release-validation/gc-tagged/{short_hash(tagged_hash)}/tags",
             json={"tag_name": "keep-this"},
         )
         assert tag_response.status_code in (200, 201)
@@ -540,7 +541,7 @@ class TestTagLifecycleAndStorage:
 
         # Create named tag
         tag_response = authenticated_client.post(
-            f"/api/v1/artifacts/e2e-tests/release-validation/tag-lifecycle/@{artifact_hash[:8]}/tags",
+            f"/api/v1/artifacts/e2e-tests/release-validation/tag-lifecycle/{short_hash(artifact_hash)}/tags",
             json={"tag_name": "reg2026"},
         )
         assert tag_response.status_code in (200, 201)
@@ -566,7 +567,7 @@ class TestTagLifecycleAndStorage:
 
         # Verify artifact info still accessible via hash ref (API endpoint)
         info_response = authenticated_client.get(
-            f"/api/v1/artifacts/e2e-tests/release-validation/tag-lifecycle/@{artifact_hash[:8]}/info"
+            f"/api/v1/artifacts/e2e-tests/release-validation/tag-lifecycle/{short_hash(artifact_hash)}/info"
         )
         assert info_response.status_code == 200
         assert info_response.json()["hash"] == artifact_hash

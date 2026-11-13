@@ -26,6 +26,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from magpie.storage.hash import short_hash
 from tests.e2e.conftest import create_token_via_api
 
 
@@ -121,7 +122,7 @@ class TestCIDRAllowListReadAccess:
         hash_ref = upload_response.json()["hash_ref"]
 
         # Test: Get artifact info without authentication (CIDR bypass)
-        # Use the hash_ref (e.g., @abc12345) for the ref parameter
+        # Use the current-width hash_ref (e.g., @abc1234567890def) for the ref parameter
         info_response = cidr_http_client.get(
             f"/api/v1/artifacts/cidr-test/info-access/{hash_ref}/info"
         )
@@ -219,7 +220,7 @@ class TestCIDRAllowListWriteBlocked:
 
         # Test: Attempt to amend without authentication
         amend_response = cidr_http_client.patch(
-            f"/api/v1/artifacts/cidr-test/amend-blocked/@{artifact_hash[:8]}",
+            f"/api/v1/artifacts/cidr-test/amend-blocked/{short_hash(artifact_hash)}",
             json={"description": "Should fail"},
         )
         assert amend_response.status_code == 401, (
@@ -244,7 +245,7 @@ class TestCIDRAllowListWriteBlocked:
 
         # Test: Attempt to add tag without authentication
         tag_response = cidr_http_client.post(
-            f"/api/v1/artifacts/cidr-test/tag-add-blocked/@{artifact_hash[:8]}/tags",
+            f"/api/v1/artifacts/cidr-test/tag-add-blocked/{short_hash(artifact_hash)}/tags",
             json={"tag_name": "unauthorized-tag"},
         )
         assert tag_response.status_code == 401, (
@@ -268,7 +269,7 @@ class TestCIDRAllowListWriteBlocked:
         artifact_hash = upload_response.json()["hash"]
 
         tag_response = cidr_authenticated_client.post(
-            f"/api/v1/artifacts/cidr-test/tag-delete-blocked/@{artifact_hash[:8]}/tags",
+            f"/api/v1/artifacts/cidr-test/tag-delete-blocked/{short_hash(artifact_hash)}/tags",
             json={"tag_name": "temp-tag"},
         )
         assert tag_response.status_code in (200, 201)

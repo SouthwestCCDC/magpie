@@ -25,7 +25,7 @@ class Manifest(BaseModel):
     """
 
     version: int = 1
-    tags: dict[str, str] = {}  # Maps tag name -> hash ref (e.g., "latest" -> "@abc12345")
+    tags: dict[str, str] = {}  # Maps tag name -> hash ref (e.g., "latest" -> "@abc1234567890def")
 
 
 def read_manifest(artifact_dir: Path) -> Manifest:

@@ -231,8 +231,10 @@ def _display_versions_table(versions: list[dict]) -> None:
         versions: List of version dictionaries from API response.
     """
     # Print table header
-    click.echo(f"{'HASH':<12} {'TAGS':<20} {'UPLOADED_BY':<15} {'UPLOADED_AT'}")
-    click.echo("-" * 70)
+    # Wide enough for '@' plus a current-width hash name; legacy 8-char refs
+    # are shorter and pad out to the same column.
+    click.echo(f"{'HASH':<18} {'TAGS':<20} {'UPLOADED_BY':<15} {'UPLOADED_AT'}")
+    click.echo("-" * 76)
 
     # Print each version
     for version in versions:
@@ -245,7 +247,7 @@ def _display_versions_table(versions: list[dict]) -> None:
         if len(tags) > 18:
             tags = tags[:15] + "..."
 
-        click.echo(f"{hash_ref:<12} {tags:<20} {uploaded_by:<15} {uploaded_at}")
+        click.echo(f"{hash_ref:<18} {tags:<20} {uploaded_by:<15} {uploaded_at}")
 
 
 def _format_datetime(dt_str: str) -> str:

@@ -6,6 +6,7 @@ import io
 
 from fastapi.testclient import TestClient
 
+from magpie.storage.hash import HASH_NAME_LENGTH
 from magpie.storage.service import StorageService
 
 
@@ -175,7 +176,7 @@ class TestVersionMetadata:
 
         assert len(data["versions"]) == 1
         assert data["versions"][0]["hash_ref"].startswith("@")
-        assert len(data["versions"][0]["hash_ref"]) == 9  # @ + 8 chars
+        assert len(data["versions"][0]["hash_ref"]) == HASH_NAME_LENGTH + 1  # @ + hash name
 
 
 class TestResponseFormat:

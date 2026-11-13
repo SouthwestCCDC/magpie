@@ -74,7 +74,7 @@ content is addressed by hash and the original filename is not stored.
 # Tag management
 magpie push app.tar.gz --to apps/myapp
 magpie tag apps/myapp:latest --as stable
-magpie tag apps/myapp:@abcdef12 --as v1.0.0  # Pin specific version (note the `:` before `@`)
+magpie tag apps/myapp:@abcdef1234567890 --as v1.0.0  # Pin specific version (note the `:` before `@`)
 
 # Scripting
 magpie get apps/myapp:stable -o myapp.tar.gz
@@ -109,4 +109,4 @@ status check; configure `--http-port`/`--bind-ip` through the installer.
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; latest-release URLs, Compose troubleshooting, and health-derived client install updated via Devin; prerelease tag mapping updated via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; latest-release URLs, Compose troubleshooting, and health-derived client install updated via Devin; prerelease tag mapping updated via Devin; hash-ref width via Devin)*

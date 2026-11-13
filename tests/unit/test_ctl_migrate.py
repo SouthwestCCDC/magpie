@@ -79,11 +79,29 @@ class TestRunMigrations:
         assert version_before == 0
         assert version_after == CURRENT_DATA_FORMAT_VERSION
         # Against len(_MIGRATIONS) (the actual step count), not
-        # CURRENT_DATA_FORMAT_VERSION -- the two only coincide today
-        # because there's a single step at version 1. A registry with a
-        # gap (e.g. steps at versions 1 and 5, CURRENT=5) would have
+        # CURRENT_DATA_FORMAT_VERSION -- the two happen to coincide today
+        # because the steps are contiguous at versions 1 and 2. A registry with
+        # a gap (e.g. steps at versions 1 and 5, CURRENT=5) would have
         # len(applied) == 2, not 5.
         assert len(applied) == len(_MIGRATIONS)
+
+    def test_upgrade_from_v1_install_applies_only_newer_steps(self, tmp_path: Path) -> None:
+        """A v0.2.0 install (stamped v1) advances without re-running the baseline."""
+        db_path = tmp_path / "magpie.db"
+        init_database(db_path)
+        conn = get_connection(db_path)
+        try:
+            conn.execute("PRAGMA user_version = 1")
+            conn.commit()
+            version_before, version_after, applied = run_migrations(conn)
+        finally:
+            conn.close()
+
+        assert version_before == 1
+        assert version_after == CURRENT_DATA_FORMAT_VERSION
+        assert applied == [
+            f"v{step.version}: {step.description}" for step in _MIGRATIONS if step.version > 1
+        ]
 
     def test_idempotent_on_already_current_database(self, tmp_path: Path) -> None:
         """Running migrations twice applies nothing the second time."""
@@ -788,17 +806,17 @@ class TestRevertDatabase:
 
     def test_reverts_current_database_to_zero(self, tmp_path: Path) -> None:
         db_path = tmp_path / "magpie.db"
-        migrate_database(db_path)
+        _stamped_db(db_path, 1)
 
         version_before, version_after, reverted, _ = revert_database(db_path, 0)
 
-        assert (version_before, version_after) == (CURRENT_DATA_FORMAT_VERSION, 0)
-        assert len(reverted) == len(_MIGRATIONS)
+        assert (version_before, version_after) == (1, 0)
+        assert len(reverted) == 1
         assert _version(db_path) == 0
 
     def test_reverted_database_migrates_forward_again(self, tmp_path: Path) -> None:
         db_path = tmp_path / "magpie.db"
-        migrate_database(db_path)
+        _stamped_db(db_path, 1)
         revert_database(db_path, 0)
 
         _, version_after, applied, _ = migrate_database(db_path)
@@ -995,21 +1013,21 @@ class TestMigrateToCommand:
     def test_to_zero_reverts_and_reports(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
+        _stamped_db(test_settings.database_path, 1)
         with patch("magpie.ctl.get_settings", return_value=test_settings):
-            cli_runner.invoke(cli, ["migrate"])
             result = cli_runner.invoke(cli, ["migrate", "--to", "0"])
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        assert f"Reverted data format: v{CURRENT_DATA_FORMAT_VERSION} -> v0" in result.output
+        assert "Reverted data format: v1 -> v0" in result.output
         assert _version(test_settings.database_path) == 0
 
     def test_to_json_output(self, cli_runner: CliRunner, test_settings: MagpieSettings) -> None:
+        _stamped_db(test_settings.database_path, 1)
         with patch("magpie.ctl.get_settings", return_value=test_settings):
-            cli_runner.invoke(cli, ["migrate"])
             result = cli_runner.invoke(cli, ["--format", "json", "migrate", "--to", "0"])
 
         assert result.exit_code == 0, f"Output: {result.output}"
-        assert f'"version_before": {CURRENT_DATA_FORMAT_VERSION}' in result.output
+        assert '"version_before": 1' in result.output
         assert '"version_after": 0' in result.output
         assert '"reverted"' in result.output
 
@@ -1031,8 +1049,8 @@ class TestMigrateToCommand:
     def test_to_above_current_is_refused(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
     ) -> None:
+        _stamped_db(test_settings.database_path, 1)
         with patch("magpie.ctl.get_settings", return_value=test_settings):
-            cli_runner.invoke(cli, ["migrate"])
             result = cli_runner.invoke(cli, ["migrate", "--to", "0"])
             result = cli_runner.invoke(cli, ["migrate", "--to", "1"])
 
@@ -1096,6 +1114,19 @@ class TestMigrateToCommand:
         assert "irreversible" in result.output
         assert "Restore a backup" in result.output
         assert _version(test_settings.database_path) == 1
+
+    def test_to_one_from_v2_refuses_irreversible_hash_width(
+        self, cli_runner: CliRunner, test_settings: MagpieSettings
+    ) -> None:
+        with patch("magpie.ctl.get_settings", return_value=test_settings):
+            migrated = cli_runner.invoke(cli, ["migrate"])
+            assert migrated.exit_code == 0, migrated.output
+            result = cli_runner.invoke(cli, ["migrate", "--to", "1"])
+
+        assert result.exit_code != 0, f"Output: {result.output}"
+        assert "irreversible" in result.output
+        assert "widened blob hash-name prefix" in result.output
+        assert _version(test_settings.database_path) == CURRENT_DATA_FORMAT_VERSION == 2
 
     def test_newer_than_supported_refusal_suggests_migrate_to(
         self, cli_runner: CliRunner, test_settings: MagpieSettings
@@ -1235,13 +1266,13 @@ class TestPreMigrationSnapshot:
 
     def test_revert_keeps_a_copy_of_the_newer_database(self, tmp_path: Path) -> None:
         db_path = tmp_path / "magpie.db"
-        migrate_database(db_path)
+        _stamped_db(db_path, 1)
 
         *_, snapshot = revert_database(db_path, 0)
 
         assert snapshot is not None
         assert snapshot.name.endswith(".pre-revert-to-v0")
-        assert _version(snapshot) == CURRENT_DATA_FORMAT_VERSION
+        assert _version(snapshot) == 1
         assert _version(db_path) == 0
 
     def test_cli_reports_the_copy(

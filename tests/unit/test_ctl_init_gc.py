@@ -14,6 +14,7 @@ from click.testing import CliRunner
 
 from magpie.config import MagpieSettings
 from magpie.ctl import cli
+from magpie.storage.hash import HASH_NAME_LENGTH
 
 
 @pytest.fixture
@@ -41,10 +42,9 @@ def create_artifact_with_blobs(
 ) -> None:
     """Helper to create an artifact directory with blobs and manifest.
 
-    Simulates the actual storage scheme where:
+    Simulates the current storage scheme where:
     - Manifest stores full hashes
-    - Blob files use first 8 chars of hash
-    - Metadata files use first 8 chars of hash (but contain full hash inside)
+    - Blob and metadata filenames use the configured hash-name width
 
     Args:
         storage_path: Base storage path.
@@ -72,9 +72,8 @@ def create_artifact_with_blobs(
     blob_ages_days = blob_ages_days or {}
 
     for blob_hash in all_hashes:
-        # Blob and metadata files use short hash (first 8 chars, @ prefix stripped)
-        # This matches blob_path() behavior in src/magpie/storage/paths.py
-        short_hash = blob_hash.lstrip("@")[:8]
+        # Blob and metadata files use the current hash-name width.
+        short_hash = blob_hash.lstrip("@")[:HASH_NAME_LENGTH]
 
         # Create blob file with short hash name (no @ prefix)
         blob_file = blobs_dir / short_hash
@@ -725,8 +724,7 @@ class TestGCCommand:
             blob_ages_days={"tagged_hash_abc": 0, "untagged_hash_xyz": 100},
         )
 
-        # Blob files use short hash (first 8 chars)
-        blob_file = test_settings.storage_path / "test/artifact/blobs/untagged"
+        blob_file = test_settings.storage_path / "test/artifact/blobs/untagged_hash_xy"
         assert blob_file.exists()
 
         with patch("magpie.ctl.get_settings", return_value=test_settings):
@@ -750,8 +748,8 @@ class TestGCCommand:
             blob_ages_days={"tagged_hash_abc": 0, "old_untagged_xyz": 100},
         )
 
-        # Blob files use short hash (first 8 chars)
-        blob_file = test_settings.storage_path / "test/artifact/blobs/old_unta"
+        # Blob files use the current hash-name width.
+        blob_file = test_settings.storage_path / "test/artifact/blobs/old_untagged_xyz"
         assert blob_file.exists()
 
         with patch("magpie.ctl.get_settings", return_value=test_settings):
@@ -778,8 +776,8 @@ class TestGCCommand:
             },
         )
 
-        # Blob files use short hash (first 8 chars)
-        blob_file = test_settings.storage_path / "test/artifact/blobs/young_un"
+        # Blob files use the current hash-name width.
+        blob_file = test_settings.storage_path / "test/artifact/blobs/young_untagged_x"
         assert blob_file.exists()
 
         with patch("magpie.ctl.get_settings", return_value=test_settings):
@@ -804,8 +802,8 @@ class TestGCCommand:
         )
 
         artifact_dir = test_settings.storage_path / "test/artifact"
-        # Blob files use short hash (first 8 chars)
-        blob_file = artifact_dir / "blobs/old_unta"
+        # Blob files use the current hash-name width.
+        blob_file = artifact_dir / "blobs/old_untagged_xyz"
         assert blob_file.exists()
 
         with patch("magpie.ctl.get_settings", return_value=test_settings):
@@ -845,8 +843,8 @@ class TestGCCommand:
             blob_ages_days={"old_tagged_hash": 365},  # Very old but tagged
         )
 
-        # Blob files use short hash (first 8 chars)
-        blob_file = test_settings.storage_path / "test/artifact/blobs/old_tagg"
+        # Blob files use the current hash-name width.
+        blob_file = test_settings.storage_path / "test/artifact/blobs/old_tagged_hash"
         assert blob_file.exists()
 
         with patch("magpie.ctl.get_settings", return_value=test_settings):
@@ -871,7 +869,7 @@ class TestGCCommand:
             blob_ages_days={"@abc12345": 365, "@def67890": 365, "zzz99999": 365},
         )
 
-        # Blob files use short hash WITHOUT the @ prefix (first 8 chars after stripping @)
+        # These eight-character names model files written before hash-name widening.
         tagged_blob1 = test_settings.storage_path / "test/artifact/blobs/abc12345"
         tagged_blob2 = test_settings.storage_path / "test/artifact/blobs/def67890"
         untagged_blob = test_settings.storage_path / "test/artifact/blobs/zzz99999"
@@ -937,7 +935,7 @@ class TestGCCommand:
             },
         )
 
-        blob_file = test_settings.storage_path / "test/artifact/blobs/untagged"
+        blob_file = test_settings.storage_path / "test/artifact/blobs/untagged_hash_xy"
         assert blob_file.exists()
 
         # With --retention-days=10, the 15-day-old blob should be deleted
@@ -964,7 +962,7 @@ class TestGCCommand:
             },
         )
 
-        blob_file = test_settings.storage_path / "test/artifact/blobs/brand_ne"
+        blob_file = test_settings.storage_path / "test/artifact/blobs/brand_new_hash_x"
         assert blob_file.exists()
 
         # With --retention-days=0, even new blobs should be deleted
@@ -991,7 +989,7 @@ class TestGCCommand:
             },
         )
 
-        blob_file = test_settings.storage_path / "test/artifact/blobs/young_ha"
+        blob_file = test_settings.storage_path / "test/artifact/blobs/young_hash_xyz"
         assert blob_file.exists()
 
         # With --retention-days=7, the 5-day-old blob should be preserved
@@ -1019,7 +1017,7 @@ class TestGCCommand:
             },
         )
 
-        blob_file = test_settings.storage_path / "test/artifact/blobs/old_hash"
+        blob_file = test_settings.storage_path / "test/artifact/blobs/old_hash_xyz"
         assert blob_file.exists()
 
         # Without --retention-days, should use config's 30 days

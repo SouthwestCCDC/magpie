@@ -35,7 +35,7 @@ def info(ctx: CLIContext, artifact_ref: str) -> None:
 
         magpie info images/ubuntu:latest
 
-        magpie info images/ubuntu:@abc12345
+        magpie info images/ubuntu:@abc1234567890def
 
         magpie info builds/app
     """
