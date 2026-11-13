@@ -27,6 +27,7 @@ import pytest
 from magpie.config import MagpieSettings
 from magpie.server.app import app
 from magpie.server.deps import get_magpie_settings, get_storage_service
+from magpie.server.routes import upload as upload_routes
 from magpie.storage.service import ArtifactInfo, StorageService
 
 # Generous upper bound: these awaits complete in milliseconds when the event
@@ -50,6 +51,9 @@ class GatedStorageService(StorageService):
         super().__init__(config)
         self.started = threading.Event()
         self.release = threading.Event()
+        self.second_store_started = threading.Event()
+        self._store_entry_lock = threading.Lock()
+        self._store_calls = 0
 
     def _gate(self) -> None:
         self.started.set()
@@ -57,6 +61,10 @@ class GatedStorageService(StorageService):
 
     def store_artifact_from_temp(self, *args, **kwargs) -> tuple[ArtifactInfo, bool]:
         """Gate the upload write path."""
+        with self._store_entry_lock:
+            self._store_calls += 1
+            if self._store_calls == 2:
+                self.second_store_started.set()
         self._gate()
         return super().store_artifact_from_temp(*args, **kwargs)
 
@@ -120,6 +128,25 @@ async def http_client(overridden_app: None) -> AsyncIterator[httpx.AsyncClient]:
         yield client
 
 
+@pytest.fixture
+def second_finalization_submitted(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:
+    """Signal once a second upload has submitted finalization to the threadpool."""
+    original = upload_routes.run_in_threadpool
+    submitted = asyncio.Event()
+    calls = 0
+
+    async def tracked_run_in_threadpool(func, *args, **kwargs):
+        nonlocal calls
+        if func is upload_routes._store_artifact_serialized:
+            calls += 1
+            if calls == 2:
+                submitted.set()
+        return await original(func, *args, **kwargs)
+
+    monkeypatch.setattr(upload_routes, "run_in_threadpool", tracked_run_in_threadpool)
+    return submitted
+
+
 async def _assert_loop_responsive_while(
     http_client: httpx.AsyncClient,
     gated_storage_service: GatedStorageService,
@@ -167,6 +194,102 @@ class TestEventLoopNotBlockedByStorageIO:
 
         assert response.status_code == 200
         assert response.json()["artifact_path"] == "slow/upload"
+
+    async def test_upload_finalization_is_serialized(
+        self,
+        http_client: httpx.AsyncClient,
+        gated_storage_service: GatedStorageService,
+        second_finalization_submitted: asyncio.Event,
+    ) -> None:
+        """Concurrent uploads do not enter finalization together."""
+        first_request = asyncio.create_task(
+            http_client.post(
+                "/api/v1/upload/serial/first",
+                files={"file": ("first.bin", b"first upload", "application/octet-stream")},
+            )
+        )
+        second_request: asyncio.Task[httpx.Response] | None = None
+        try:
+            first_started = await asyncio.wait_for(
+                asyncio.to_thread(gated_storage_service.started.wait, LOOP_RESPONSIVE_TIMEOUT),
+                timeout=LOOP_RESPONSIVE_TIMEOUT,
+            )
+            assert first_started, "First upload never entered storage finalization"
+
+            second_request = asyncio.create_task(
+                http_client.post(
+                    "/api/v1/upload/serial/second",
+                    files={"file": ("second.bin", b"second upload", "application/octet-stream")},
+                )
+            )
+            await asyncio.wait_for(
+                second_finalization_submitted.wait(), timeout=LOOP_RESPONSIVE_TIMEOUT
+            )
+            second_entered = await asyncio.to_thread(
+                gated_storage_service.second_store_started.wait, 0.25
+            )
+            assert not second_entered, "Second upload entered while the first was gated"
+
+            health = await asyncio.wait_for(
+                http_client.get("/health"), timeout=LOOP_RESPONSIVE_TIMEOUT
+            )
+            assert health.status_code == 200
+        finally:
+            gated_storage_service.release.set()
+            requests = [first_request]
+            if second_request is not None:
+                requests.append(second_request)
+            responses = await asyncio.gather(*requests, return_exceptions=True)
+
+        assert all(isinstance(response, httpx.Response) for response in responses), responses
+        assert [response.status_code for response in responses] == [200, 200]
+
+    async def test_concurrent_nested_uploads_leave_one_artifact(
+        self,
+        http_client: httpx.AsyncClient,
+        gated_storage_service: GatedStorageService,
+        second_finalization_submitted: asyncio.Event,
+    ) -> None:
+        """Serialized finalization preserves artifact nesting checks."""
+        parent_request = asyncio.create_task(
+            http_client.post(
+                "/api/v1/upload/nest/a",
+                files={"file": ("parent.bin", b"parent upload", "application/octet-stream")},
+            )
+        )
+        child_request: asyncio.Task[httpx.Response] | None = None
+        try:
+            first_started = await asyncio.wait_for(
+                asyncio.to_thread(gated_storage_service.started.wait, LOOP_RESPONSIVE_TIMEOUT),
+                timeout=LOOP_RESPONSIVE_TIMEOUT,
+            )
+            assert first_started, "First upload never entered storage finalization"
+
+            child_request = asyncio.create_task(
+                http_client.post(
+                    "/api/v1/upload/nest/a/b",
+                    files={"file": ("child.bin", b"child upload", "application/octet-stream")},
+                )
+            )
+            await asyncio.wait_for(
+                second_finalization_submitted.wait(), timeout=LOOP_RESPONSIVE_TIMEOUT
+            )
+            second_entered = await asyncio.to_thread(
+                gated_storage_service.second_store_started.wait, 0.25
+            )
+            assert not second_entered, "Nested upload entered while the first was gated"
+        finally:
+            gated_storage_service.release.set()
+            requests = [parent_request]
+            if child_request is not None:
+                requests.append(child_request)
+            responses = await asyncio.gather(*requests, return_exceptions=True)
+
+        assert all(isinstance(response, httpx.Response) for response in responses), responses
+        assert sorted(response.status_code for response in responses) == [200, 400]
+        rejected = next(response for response in responses if response.status_code == 400)
+        assert rejected.json()["error"] == "InvalidArtifactPathError"
+        assert "nested under existing artifact" in rejected.json()["message"]
 
     async def test_list_artifacts_does_not_block_event_loop(
         self, http_client: httpx.AsyncClient, gated_storage_service: GatedStorageService
