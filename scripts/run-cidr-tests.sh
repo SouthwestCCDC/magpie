@@ -25,6 +25,7 @@ set -euo pipefail
 export MAGPIE_HTTP_PORT=8080
 
 # Cleanup function to ensure containers are removed on exit
+# shellcheck disable=SC2329  # invoked via trap
 cleanup() {
     echo "Cleaning up..."
     # `|| echo ... >&2` (not a bare command) matters here specifically

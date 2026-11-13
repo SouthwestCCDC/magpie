@@ -17,7 +17,7 @@
 [Unit]
 Description=Magpie Garbage Collection
 Documentation=https://github.com/SouthwestCCDC/magpie
-After=network.target docker.service
+After=network.target docker.service magpie.service
 Requires=docker.service
 
 [Service]
@@ -27,17 +27,57 @@ Type=oneshot
 # Uses `flock -n` to prevent concurrent runs. If GC is already running, flock
 # exits immediately with a non-zero status. Unlike ConditionPathExists, flock
 # automatically handles stale lock files from crashed processes.
-# Uses `docker compose run` so GC works even if the main `magpie` container is
-# stopped (e.g., during maintenance). Adjust path to match your installation.
+# Uses `docker compose exec` into the RUNNING magpie container. This requires
+# the container to be up (GC fails loudly if the service is stopped when this
+# unit triggers) -- but it is the only form that works with the v0.2.0+
+# bundled single-container image, whose entrypoint is a process supervisor
+# that ignores its arguments: `docker compose run magpie magpie-ctl gc` there
+# boots a second server that never exits, so GC never runs and the oneshot
+# blocks until TimeoutStartSec.
+# Adjust path to match your installation.
 WorkingDirectory=/opt/magpie
-ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl gc --quiet
+#
+# After= only orders unit START, and magpie.service is Type=simple running
+# `docker compose up`, so it counts as started long before the container is
+# serving. With magpie-gc.timer's Persistent=true, a missed run is replayed at
+# boot, where the exec below would otherwise race the container coming up. So
+# wait (bounded) for the container to report healthy first -- the image's
+# HEALTHCHECK covers uvicorn answering /health, which implies the entrypoint's
+# DB init finished. 5 minutes, then fail loudly rather than hang until
+# TimeoutStartSec; the next scheduled run recovers on its own since GC is
+# retention-based, not incremental.
+#
+# `docker inspect` rather than `compose ps --format <go-template>`: the
+# template form of `ps` needs a recent Compose v2, and an image with no
+# HEALTHCHECK reports an empty .State.Health, which is distinguishable here
+# but not through `ps` -- so that case exits nonzero at once with a real
+# message instead of burning the whole 300s bound waiting for a status that
+# can never arrive. No container yet (empty `ps -q`) keeps waiting:
+# magpie.service may still be creating it.
+#
+# The magpie.service check up front is what separates "coming up" from
+# "deliberately stopped": during planned downtime the container never appears,
+# and without it every timer firing would sit here for the full 300s and then
+# report a bare exit 124. Ordering means magpie.service has already been
+# started when this runs, so "not active" is a real answer, not a race.
+# It is conditional on the unit EXISTING (`systemctl cat`) because this file is
+# also copied on its own, without magpie.service, for a stack brought up by a
+# hand-run `docker compose up -d` or a differently-named unit -- there, only
+# the container wait below applies, exactly as before.
+#
+# Drop this ExecStartPre entirely if you switch to either alternative ExecStart
+# below: it is specific to `exec` into a healthy bundled container.
+ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'if /usr/bin/systemctl cat magpie.service >/dev/null 2>&1 && ! /usr/bin/systemctl is-active --quiet magpie.service; then echo "magpie.service is not active; not running GC (start it to resume scheduled GC)" >&2; exit 1; fi; while :; do cid=$(/usr/bin/docker compose ps -q magpie 2>/dev/null); if [ -n "$cid" ]; then state=$(/usr/bin/docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealthcheck{{end}}" "$cid" 2>/dev/null); case "$state" in healthy) exit 0 ;; nohealthcheck) echo "magpie container has no HEALTHCHECK; cannot confirm readiness before GC" >&2; exit 1 ;; esac; fi; sleep 5; done'
+ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose exec -T magpie magpie-ctl gc --quiet
 
-# Alternative: Use `exec` into the running magpie container instead of `run`.
-# NOTE: This requires the `magpie` container to already be running; GC will
-# fail if the service is stopped when this unit triggers.
-# ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose exec -T magpie magpie-ctl gc --quiet
+# Alternative (pre-0.2.0 two-container topology ONLY -- see above): a one-off
+# container, which also works while the main container is stopped. Delete the
+# ExecStartPre= line above if you use this -- waiting for a healthy container
+# defeats the point of a form that runs without one.
+# ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/bin/docker compose run --rm -T magpie magpie-ctl gc --quiet
 
-# Alternative: Direct execution (if not using Docker)
+# Alternative: Direct execution (if not using Docker). Delete the ExecStartPre=
+# line above if you use this -- there is no container to wait for.
 # ExecStart=/usr/bin/flock -n /var/run/magpie-gc.lock /usr/local/bin/magpie-ctl gc --quiet
 
 # User configuration (optional)
@@ -69,7 +109,7 @@ PrivateTmp=true
 ReadWritePaths=/var/run
 # If using direct execution, also add:
 # ReadWritePaths=/data/artifacts
-# 
+#
 # NOTE: ProtectHome=true and ProtectSystem=strict may prevent access to
 # MAGPIE_DATA_DIR if configured to paths in /home or other protected locations.
 # If you encounter permission errors, either:

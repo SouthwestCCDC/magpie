@@ -164,6 +164,7 @@ test_env_file_not_sourced() {
     fi
     log "  ✓ well-formed KEY=value lines still parse correctly"
 
+    # shellcheck disable=SC2016  # literal command-substitution marker is test data
     if [[ "${parsed[MAGPIE_IMAGE]:-}" != *'$(touch'* ]]; then
         fail "read_env_file did not preserve the value literally"
     fi
@@ -436,6 +437,7 @@ test_source_env_detection_is_not_vacuous() {
     local reintroduced="${TEST_DIR}/magpie-deploy-with-source-reintroduced.sh"
     {
         cat "$DEPLOY_SCRIPT"
+        # shellcheck disable=SC2016  # source statement is literal test input
         echo '    source "${INSTALL_DIR}/etc/.env"  # test-only: simulates a reintroduced vulnerability'
     } > "$reintroduced"
 
