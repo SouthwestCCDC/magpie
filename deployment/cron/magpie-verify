@@ -16,9 +16,10 @@
 #    crontab -e
 #    # Then paste the command portion only, removing the 'root' user field.
 #
-# Exit codes: 0 clean, 1 operational error, 3 missing blob/metadata,
-# 5 content mismatch, 75 the run was skipped because a lock was held (see
-# SKIP_CODE below) - the scrub never started, so storage was NOT checked and
+# Exit codes: 0 clean, 1 operational error, 3 tagged blobs or their
+# metadata sidecars are missing, 5 content mismatch, 75 the run was skipped
+# because a lock was held (see SKIP_CODE below) - the scrub never started, so
+# storage was NOT checked and
 # nothing was found wrong. Cron mails the output to the crontab owner and
 # records the exit status, so the entries below deliberately do NOT pipe into
 # `logger`: in a pipeline the job's status becomes the status of the last

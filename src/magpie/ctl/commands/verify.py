@@ -79,7 +79,7 @@ def verify(
     \b
     0  all verified blobs matched their recorded hash
     1  operational error (storage unreadable, invalid path)
-    3  blobs or metadata sidecars are missing
+    3  tagged blobs or their metadata sidecars are missing
     5  content mismatch: stored bytes do not match recorded SHA-256
 
     Examples:
@@ -148,7 +148,8 @@ def verify_exit_code(result: VerifyResult) -> int:
         result: Completed VerifyResult.
 
     Returns:
-        Exit code: 0 clean, 5 mismatch, 3 missing blob/metadata, 1 other error.
+        Exit code: 0 clean, 5 mismatch, 3 tagged blobs or their metadata sidecars
+        are missing, 1 other error.
     """
     if result.mismatched > 0:
         return ExitCode.INTEGRITY_ERROR

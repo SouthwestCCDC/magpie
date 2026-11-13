@@ -328,8 +328,8 @@ artifacts were being deleted, re-run it before treating the finding as data loss
 | Code | Meaning |
 | ---- | ------- |
 | 0 | Every verified blob matched its recorded hash |
-| 1 | Operational error (unreadable storage, invalid `--path`, corrupt metadata sidecar, orphan sidecar) |
-| 3 | A tagged blob or a metadata sidecar is missing |
+| 1 | Operational error (unreadable storage, invalid `--path`, corrupt metadata sidecar, orphan sidecar, or untagged blob without a metadata sidecar) |
+| 3 | Tagged blobs or their metadata sidecars are missing |
 | 5 | Content mismatch: stored bytes do not match the recorded SHA-256 |
 | 75 | The run was skipped because the verify or GC lock was held (from `flock -E 75`, not from the scrub) |
 
@@ -340,6 +340,9 @@ schedule never gets a turn and nothing is being verified.
 Alert on any other non-zero exit, and page on `5` — it means an artifact is
 damaged or tampered with and should be restored from backup rather than
 re-uploaded over.
+An untagged blob without a metadata sidecar is an operational error (exit `1`),
+not a data-loss finding; re-run the scrub if it persists past GC retention,
+since GC should remove it.
 For scraping, `magpie-ctl --format json verify` emits per-issue detail and full
 counters and still exits non-zero. See [../docs/monitoring.md](../docs/monitoring.md).
 
@@ -420,4 +423,4 @@ execution.
 
 ---
 
-*Note: This documentation was generated with AI assistance (Claude Code w/ Opus 4.5).*
+*Note: This documentation was generated with AI assistance (Claude Code w/ Opus 4.5; untagged metadata-less blobs exit 1, via Devin).*

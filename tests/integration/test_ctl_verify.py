@@ -145,7 +145,7 @@ class TestVerifyDetectsDamage:
         assert "MISSING_BLOB: openvpn/ca" in result.output
         assert "Missing blob: 1" in result.output
 
-    def test_missing_metadata_exits_not_found(
+    def test_tagged_missing_metadata_exits_not_found(
         self, verify_env: tuple[CliRunner, Path, StorageService]
     ) -> None:
         runner, storage_path, service = verify_env
@@ -157,6 +157,22 @@ class TestVerifyDetectsDamage:
         assert result.exit_code == 3
         assert "MISSING_METADATA: openvpn/ca" in result.output
         assert "Missing metadata: 1" in result.output
+
+    def test_untagged_missing_metadata_exits_general_error(
+        self, verify_env: tuple[CliRunner, Path, StorageService]
+    ) -> None:
+        runner, storage_path, service = verify_env
+        full_hash = store(service, "openvpn/ca", b"critical key material")
+        assert service.remove_tag("openvpn/ca", "latest")
+        metadata_path(storage_path / "openvpn/ca", full_hash).unlink()
+
+        result = runner.invoke(ctl_cli, ["verify"])
+
+        assert result.exit_code == 1
+        assert "ERROR: openvpn/ca/" in result.output
+        assert "Untagged blob has no metadata sidecar" in result.output
+        assert "Missing metadata: 0" in result.output
+        assert "Errors: 1" in result.output
 
     def test_corrupt_metadata_exits_general_error(
         self, verify_env: tuple[CliRunner, Path, StorageService]

@@ -178,11 +178,11 @@ Exit codes are suitable for cron/monitoring:
 | Code | Meaning |
 | ---- | ------- |
 | 0 | Every verified blob matched its recorded hash |
-| 1 | Operational error (unreadable storage, invalid `--path`, corrupt metadata sidecar, orphan sidecar) |
-| 3 | A tagged blob or a metadata sidecar is missing |
+| 1 | Operational error (unreadable storage, invalid `--path`, corrupt metadata sidecar, orphan sidecar, or untagged blob without a metadata sidecar) |
+| 3 | Tagged blobs or their metadata sidecars are missing |
 | 5 | Content mismatch: stored bytes do not match the recorded SHA-256 |
 
-`Missing blob` is reported only for blobs a tag still points at, since those are the ones GC never collects; a blob recorded only by a leftover metadata sidecar is reported as an orphan sidecar under `Errors` (exit `1`), meaning storage bookkeeping to clean up rather than lost content.
+`Missing blob` is reported only for blobs a tag still points at, since those are the ones GC never collects. Untagged blobs with a metadata sidecar are reported as orphan-sidecar errors (exit `1`); untagged blobs without a sidecar are also errors (exit `1`), not data loss—re-run the scrub if one persists past GC retention, since GC should remove it.
 
 Avoid running a scrub while GC is deleting blobs: GC unlinks a blob before its metadata sidecar, so an overlapping scrub sees records in flux. The shipped cron/systemd units take the GC lock to prevent this, waiting up to an hour for it and reporting a skipped run as `75` (a `flock` status, never produced by `verify` itself) so it is not mistaken for a storage problem.
 
@@ -213,4 +213,4 @@ Requires `MAGPIE_S3_BUCKET` and AWS credentials.
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; multi-CIDR separators clarified for #612 via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; multi-CIDR separators clarified for #612 via Devin; untagged metadata-less blobs exit 1, via Devin)*

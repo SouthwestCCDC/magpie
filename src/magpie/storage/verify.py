@@ -341,6 +341,20 @@ def _verify_blob(
         if reread is None:
             if not _exists(blob_file):
                 return _BlobOutcome(None, 0, present=False)
+            if not _is_still_tagged(artifact_dir, blob_ref, budget):
+                return _BlobOutcome(
+                    VerifyIssue(
+                        artifact_path=artifact_path,
+                        blob_ref=blob_ref,
+                        status=VerifyStatus.ERROR,
+                        message=(
+                            "Untagged blob has no metadata sidecar; recorded hash is "
+                            "unknown (usually an upload still in progress or an "
+                            "interrupted upload; GC removes it)"
+                        ),
+                    ),
+                    0,
+                )
             return _BlobOutcome(
                 VerifyIssue(
                     artifact_path=artifact_path,

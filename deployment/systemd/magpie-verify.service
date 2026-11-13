@@ -16,9 +16,10 @@
 # View logs (including any integrity findings):
 #   journalctl -u magpie-verify.service
 #
-# Exit codes: 0 clean, 1 operational error, 3 missing blob/metadata,
-# 5 content mismatch, 75 the run was skipped because a lock was held. A failed
-# unit state means the scrub found something, except for 75: that run never
+# Exit codes: 0 clean, 1 operational error, 3 tagged blobs or their
+# metadata sidecars are missing, 5 content mismatch, 75 the run was skipped
+# because a lock was held. A failed unit state means the scrub found
+# something, except for 75: that run never
 # started, so storage was not checked at all. Alert on a repeated 75 (the
 # schedule is never getting a turn), not on a single one.
 # See docs/monitoring.md for alerting guidance.

@@ -116,7 +116,7 @@ See [user-guide.md](user-guide.md) for garbage collection operations and retenti
 
 `magpie-ctl verify` re-reads stored blobs and compares them to the SHA-256 recorded at upload time. Nothing else in Magpie re-checks stored bytes, so a scheduled scrub is the only detection for bit-rot or tampering of artifacts like OpenVPN CA/cert/key material.
 
-**Exit codes** (see [user-guide.md](user-guide.md) for the full table): `0` clean, `1` operational error, `3` missing blob/metadata, `5` content mismatch. A cron job or systemd timer that logs stderr and alerts on non-zero status is sufficient; alert separately on `5`, which indicates damaged or tampered content rather than a bookkeeping problem.
+**Exit codes** (see [user-guide.md](user-guide.md) for the full table): `0` clean, `1` operational error (including an untagged blob without a metadata sidecar), `3` tagged blobs or their metadata sidecars are missing, `5` content mismatch. A cron job or systemd timer that logs stderr and alerts on non-zero status is sufficient; alert separately on `5`, which indicates damaged or tampered content rather than a bookkeeping problem.
 
 The shipped schedules add one status that does not come from the scrub: `75` means `flock` could not take the verify or GC lock, so the run was skipped and storage was **not** checked (the lock is taken with `-E 75` precisely so this is not confused with exit `1`). A single `75` is normal when a collection runs long; alert when it repeats, because then nothing is being verified at all.
 
@@ -166,7 +166,7 @@ The command still exits non-zero when JSON output is requested, so monitoring ca
 
 Do not pipe these into `logger`: in a shell pipeline the job's exit status becomes the status of the last command, which discards the scrub result. Let cron capture the output, or wrap the pipeline in `bash -o pipefail -c`.
 
-**`missing_blob` means a *tagged* blob is gone.** A tag is what makes a blob durable — GC never collects a tagged blob — so exit `3` is a data-loss claim. A blob recorded only by a metadata sidecar is untagged and collectable, so if its file is absent the scrub reports an orphan sidecar under `errors` (exit `1`): bookkeeping debris to clean up, not lost content.
+**`missing_blob` means a *tagged* blob is gone.** A tag makes a blob durable and GC never collects a tagged blob, so exit `3` is a data-loss claim. Untagged blobs with a metadata sidecar are reported as orphan-sidecar errors (exit `1`); untagged blobs without a sidecar are also errors (exit `1`), not data loss—re-scrub if one persists past GC retention, since GC should remove it.
 
 **Prefer not to overlap a scrub with GC.** GC unlinks a blob before its metadata sidecar, so a scrub walking an artifact mid-collection sees records in flux; verification re-reads the manifest after a short pause before claiming a missing blob, and takes the GC lock in the shipped units (`/var/run/magpie-gc.lock`, see [../deployment/](../deployment/)). That lock is waited on with a bound (`flock -w 3600`) rather than skipped outright, so a long collection postpones the scrub instead of cancelling it. Deletions through the API do not take that lock, so re-run a scrub that reports missing blobs during heavy deletion activity before treating it as data loss.
 
@@ -176,4 +176,4 @@ See [../deployment/README.md](../deployment/README.md) for ready-made cron and s
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; untagged metadata-less blobs exit 1, via Devin)*

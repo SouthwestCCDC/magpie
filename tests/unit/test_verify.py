@@ -189,7 +189,7 @@ class TestRunVerifyCorruption:
         assert len(result.issues) == 1
 
     def test_missing_metadata_is_reported(self, storage_path: Path) -> None:
-        write_blob(storage_path, "openvpn/ca", b"content", metadata=False)
+        write_blob(storage_path, "openvpn/ca", b"content", tag="latest", metadata=False)
 
         result = run_verify(storage_path)
 
@@ -197,6 +197,20 @@ class TestRunVerifyCorruption:
         assert result.ok == 0
         assert result.missing_metadata == 1
         assert result.issues[0].status == VerifyStatus.MISSING_METADATA
+
+    def test_untagged_blob_without_metadata_is_an_error(self, storage_path: Path) -> None:
+        write_blob(storage_path, "openvpn/ca", b"content", tag=None, metadata=False)
+
+        result = run_verify(storage_path)
+
+        assert result.errors == 1
+        assert result.missing_metadata == 0
+        assert result.issues[0].status == VerifyStatus.ERROR
+        assert result.issues[0].message == (
+            "Untagged blob has no metadata sidecar; recorded hash is unknown "
+            "(usually an upload still in progress or an interrupted upload; "
+            "GC removes it)"
+        )
 
     def test_corrupt_metadata_is_reported(self, storage_path: Path) -> None:
         full_hash = write_blob(storage_path, "openvpn/ca", b"content")
@@ -370,11 +384,12 @@ class TestRunVerifyConcurrentUpload:
         assert result.ok == 1
 
     def test_sidecar_that_stays_absent_is_still_reported(self, storage_path: Path) -> None:
-        write_blob(storage_path, "openvpn/ca", b"content", metadata=False)
+        write_blob(storage_path, "openvpn/ca", b"content", tag="latest", metadata=False)
 
         result = run_verify(storage_path)
 
         assert result.missing_metadata == 1
+        assert result.issues[0].status == VerifyStatus.MISSING_METADATA
 
 
 class TestRunVerifyConcurrentCollection:
