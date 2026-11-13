@@ -198,6 +198,7 @@ class ExitCode:
     - 2: Network/connection error (DNS, connection refused, timeout)
     - 3: Not found (artifact doesn't exist)
     - 4: Authentication error (invalid/expired token)
+    - 5: Integrity error (stored content does not match its recorded hash)
     """
 
     SUCCESS = 0
@@ -205,6 +206,7 @@ class ExitCode:
     NETWORK_ERROR = 2
     NOT_FOUND = 3
     AUTH_ERROR = 4
+    INTEGRITY_ERROR = 5
 
 
 # Standard error codes for consistency across commands
