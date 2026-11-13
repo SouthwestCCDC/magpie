@@ -37,9 +37,10 @@
 # 2.11.2+ required: GHSA-7r4p-vjf4-gxv4 (CVE-2026-30851, CVSS 8.1) affects
 # v2.10.0-v2.11.1. #525's X-Magpie-* header strip treats "the inner Caddy
 # runs a patched build" as a load-bearing invariant.
-ARG CADDY_VERSION=2.11.4
-
-FROM caddy:${CADDY_VERSION}-alpine AS caddy-src
+#
+# Every base image is pinned by digest so a release builds from exactly what
+# CI tested; Dependabot (docker ecosystem) proposes the bumps.
+FROM caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b AS caddy-src
 
 # Strip the cap_net_bind_service file capability the upstream Caddy image
 # sets on the binary (so Caddy can bind :80 without running as root).
@@ -57,15 +58,19 @@ FROM caddy:${CADDY_VERSION}-alpine AS caddy-src
 # stripped copy in this RUN's layer, permanently doubling the ~48MB
 # binary's footprint in the final image. Stripping before the COPY means
 # only the already-stripped binary is ever copied into the runtime stage.
+# Builder-only and removed again in the same layer, so no version pin.
+# hadolint ignore=DL3018
 RUN apk add --no-cache libcap-utils && \
     setcap -r /usr/bin/caddy && \
     apk del libcap-utils
 
-FROM python:3.13-slim AS base
+FROM ghcr.io/astral-sh/uv:0.12.23@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e608e11c93ad4f5bba55b21 AS uv
+
+FROM python:3.13-slim@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81 AS base
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=uv /uv /usr/local/bin/uv
 
 # Install dependencies (cached layer)
 FROM base AS deps
@@ -124,6 +129,7 @@ RUN uv sync --frozen --no-dev
 # wrong uid. Every documented `docker exec ... magpie-ctl` usage (see
 # docs/, deployment/README.md, scripts/magpie-deploy.sh) depends on the
 # wrapper actually being what bare `magpie-ctl` resolves to.
+# hadolint ignore=DL3059
 RUN rm /app/.venv/bin/magpie-ctl
 
 # Wrapper for magpie-ctl that drops privileges when invoked via docker exec

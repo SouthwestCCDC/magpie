@@ -5,7 +5,7 @@ Before deploying to production:
 ## Pre-Deployment
 - [ ] A reverse proxy is planned/provisioned for TLS termination in front
       of magpie -- the bundled image serves plain HTTP only. See
-      [installation.md](installation.md#production-deployment).
+      [installation.md](installation.md#server-installation).
 - [ ] Firewall allows the port your reverse proxy listens on (typically 80/443)
 - [ ] Persistent storage provisioned for `MAGPIE_DATA_DIR`
 - [ ] Backup destination configured (see [backup-restore.md](backup-restore.md))
@@ -39,27 +39,20 @@ Before deploying to production:
 
 ## Deploy
 ```bash
-export MAGPIE_DATA_DIR=/path/to/persistent/storage
-export MAGPIE_ADMIN_TOKEN_SINK=file   # or exec / discard / stdout
-export MAGPIE_IMAGE=ghcr.io/southwestccdc/magpie:X.Y.Z-bundled   # see note below
-docker compose -f docker-compose.yml up -d
+base=https://github.com/SouthwestCCDC/magpie/releases/latest/download
+curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/env.example" -fsSLO "$base/SHA256SUMS"
+grep -E ' (docker-compose\.yml|env\.example)$' SHA256SUMS | sha256sum -c
+cp env.example .env
+echo 'MAGPIE_ADMIN_TOKEN_SINK=file' >> .env
+# Set MAGPIE_DATA_DIR, MAGPIE_UID/GID, MAGPIE_BIND_IP, and
+# MAGPIE_TRUSTED_PROXIES in .env as appropriate for your host.
+docker compose up -d
 ```
 
-`MAGPIE_IMAGE` must be set explicitly to a published `<version>-bundled`
-tag -- without it, `docker-compose.yml` falls back to
-`ghcr.io/southwestccdc/magpie:latest`, a different, currently-incompatible
-image (built from the plain `Dockerfile`, container port 8000, not this
-compose file's 8080). Prefer
-[`scripts/magpie-deploy.sh`](../scripts/magpie-deploy.sh) for a normal
-install -- it resolves and pins the correct tag automatically; see
-[installation.md](installation.md#production-deployment).
-
-`-f docker-compose.yml` pins the canonical operator file explicitly -- a
-bare `docker compose up` from a repo checkout auto-merges
-`docker-compose.override.yml` (the local-development overlay: builds from
-source, defaults the admin-token sink, enables test endpoints), which must
-never run in production. Every `docker compose` command on this page pins
-it the same way.
+Each release's `docker-compose.yml` pins its bundled image by digest. Keep it with the matching
+`env.example` and `SHA256SUMS`; see [Release Assets](releases.md#release-assets). The installer
+is an optional alternative for hosts where you want systemd and account management; see
+[Installation](installation.md#server-installation).
 
 Retrieve the admin token per the chosen sink -- see
 [installation.md](installation.md#admin-token-delivery) for the `file`,
@@ -94,4 +87,4 @@ docker compose -f docker-compose.yml exec magpie \
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; refreshed for v0.2.0 final via Devin; latest-release URLs updated via Devin)*

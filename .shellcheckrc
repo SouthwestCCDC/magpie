@@ -1,0 +1,16 @@
+# ShellCheck configuration -- see scripts/lint_shell.sh (Tier 1 of the
+# installer CI, issue #430). Kept here rather than as CI-only flags so a
+# local `just lint-shell`, the pre-commit hook, and CI all agree on what
+# counts as a finding.
+
+# Follow `source`d files where the path is resolvable (the installer test
+# harnesses source scripts/magpie-deploy.sh).
+external-sources=true
+
+# SC2006 (legacy backticks) is deliberately NOT disabled, even though its
+# only hits are `inline code` backticks in prose comments: inside an
+# UNQUOTED heredoc those comments are real command substitutions. One such
+# comment in generate_systemd_service() was running `docker compose` at
+# install time and splicing its 58-line help output into the generated
+# magpie.service (fixed in the same PR that added this file). Use single
+# quotes for inline code in shell comments.
