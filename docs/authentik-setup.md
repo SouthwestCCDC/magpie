@@ -4,8 +4,8 @@
 > `docker-compose.prod.yml`, neither of which exists in the v0.2.0 bundled single-container
 > topology -- Caddy's config is baked into the image and is not operator-facing, and
 > `AUTHENTIK_HOST` is no longer consumed. On v0.2.0+, put SSO on the external reverse proxy
-> that terminates TLS in front of Magpie (the flow below is the pattern to reproduce there).
-> Bearer-token access for CLI, API, and automation is unaffected either way. See
+> that terminates TLS in front of Magpie. SSO at that proxy does not replace Magpie's
+> own access checks; protected routes still follow the bundled Caddy's rules. See
 > [Architecture](architecture.md) and [Configuration Reference](configuration.md).
 
 Optional browser-based SSO for human access to artifacts. Bearer tokens remain the primary auth method for CLI, API, and automation.
@@ -79,4 +79,4 @@ curl -H "Authorization: Bearer $MAGPIE_TOKEN" https://magpie.example.com/api/v1/
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; v0.2.1 note updated via Devin)*

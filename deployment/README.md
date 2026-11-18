@@ -7,6 +7,12 @@ This directory contains deployment configurations for Magpie services.
 Magpie's garbage collection (GC) removes untagged blobs older than the retention
 period (default: 90 days). GC should run periodically to reclaim disk space.
 
+The [installer](../docs/installation.md#option-b-optional-installer) already sets up
+`magpie-gc.timer` and `magpie-gc.service`, using the same Compose wrapper as
+`magpie.service`. Do not replace those generated units with the standalone examples below.
+For a manual Compose install, set the example unit's `WorkingDirectory` (or the cron
+example's `MAGPIE_DIR`) to the directory containing the release Compose file and `.env`.
+
 ### Quick Start (systemd)
 
 ```bash
@@ -51,7 +57,7 @@ The systemd timer provides:
 - Persistent scheduling (runs missed jobs after reboot)
 - Randomized delay to reduce load spikes
 - Integration with journald for logging
-- Condition-based execution (skips if lock file exists)
+- Nonblocking `flock` prevents overlapping runs; an idle lock file does not block GC
 
 Files:
 - `systemd/magpie-gc.service` - Oneshot service that runs GC
@@ -194,11 +200,14 @@ If using a non-default storage path:
 
 ```bash
 # Environment variable
-MAGPIE_STORAGE_PATH=/mnt/artifacts
+MAGPIE_STORAGE_PATH=/mnt/artifacts   # direct (non-Docker) execution
 
 # Or in systemd service
 Environment=MAGPIE_STORAGE_PATH=/mnt/artifacts
 ```
+
+With the bundled Compose stack, set `MAGPIE_DATA_DIR` to change the host storage
+location; the artifact path inside the container remains `/data/artifacts`.
 
 ## Monitoring
 
@@ -312,4 +321,4 @@ execution.
 
 ---
 
-*Note: This documentation was generated with AI assistance (Claude Code w/ Opus 4.5).*
+*Note: This documentation was generated with AI assistance (Claude Code w/ Opus 4.5; v0.2.1 docs audit via Devin).*

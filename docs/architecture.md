@@ -6,8 +6,8 @@ day to day (content addressing, tags, garbage collection), see the
 
 ## The short version
 
-Since v0.2.0 Magpie ships as **one container** running **two processes**, over **one directory
-of files**:
+Since v0.2.0 Magpie bundles **Caddy and FastAPI in one container** with a single persistent
+data directory:
 
 ```
   magpie CLI / curl / CI
@@ -16,32 +16,32 @@ of files**:
   your reverse proxy (nginx, Caddy, cloud LB)  --  terminates TLS
         |
         v  HTTP :8080
-  +--------------------------- magpie container ---------------------------+
-  |  Caddy  --  auth gate; serves /artifacts/* directly from disk          |
-  |    |  forward_auth / reverse_proxy                                     |
-  |    v                                                                   |
-  |  FastAPI (uvicorn, 127.0.0.1:8000)  --  uploads, tags, metadata, auth  |
-  +------------------------------------------------------------------------+
-        |
-        v  bind mount
-  /data:  artifacts/  (content-addressed blobs + tag symlinks)
-          magpie.db   (SQLite -- tokens only)
+  +------------------------ Magpie container -----------------------+
+  | Caddy                                                           |
+  |   |-- /artifacts/* -----> files from /data/artifacts            |
+  |   |                       (access check on protected paths)     |
+  |   |                                                             |
+  |   `-- auth checks, API, /health --> FastAPI (127.0.0.1:8000)    |
+  |                                         |                       |
+  |                                         `--> /data              |
+  +-----------------------------------------------------------------+
+              /data (host bind mount)
+                artifacts/  (blobs, manifests, metadata, tag symlinks)
+                magpie.db   (SQLite token database)
 ```
 
 | Piece | Where it lives | Responsibility |
 |-------|----------------|----------------|
-| Caddy | inside the image, config baked in (`docker/bundled/Caddyfile`) | Listens on `:8080`; authenticates every request; **serves artifact downloads itself** off `/data`; proxies everything else to FastAPI |
+| Caddy | inside the image, config baked in ([Caddyfile](../docker/bundled/Caddyfile)) | Listens on `:8080`; gates protected routes, serves files from `/data`, and proxies API and health requests to FastAPI |
 | FastAPI / uvicorn | inside the image, bound to `127.0.0.1:8000` | Uploads, hashing and dedupe, tag mutations, metadata, token management, GC, and the auth decisions Caddy defers to |
 | `/data` | host bind mount (`MAGPIE_DATA_DIR`) | `artifacts/` (blobs + tag symlinks), `magpie.db` (tokens), `admin-token` (with the file sink) |
 | Your reverse proxy | outside Magpie entirely | TLS, HSTS, hostnames, and any org-wide access control |
 
 ## Why Caddy serves the files
 
-Artifact downloads never touch Python. Caddy's `file_server` reads the blob off disk and
-streams it with the kernel doing the copying, so a multi-gigabyte pull costs Magpie disk I/O
-and nothing else -- no uvicorn worker held open, no Python-level buffering, no memory
-proportional to artifact size. FastAPI stays free for the small, stateful requests (upload,
-tag, metadata) where application logic is actually required.
+Download response bodies do not pass through Python. Caddy serves the blob from disk while
+FastAPI handles token validation and application operations such as uploads, tags, and
+metadata.
 
 The cost of that split is that authorization has to happen *before* Caddy hands the file
 over, which is what `forward_auth` is for:
@@ -59,15 +59,15 @@ Writes and admin operations (`/api/v1/upload/*`, tag mutations, `PATCH` on an ar
 proxied to FastAPI, which enforces the *scope* (`read` / `write` / `admin`) itself. Caddy only
 answers "is this a real token?"; FastAPI answers "may it do this?".
 
-Two paths behave specially:
+Not every route needs a bearer token:
 
-- `GET /api/v1/artifacts*` and `GET /artifacts/*` accept an **IP allow-list bypass**: a client
-  inside `MAGPIE_ALLOWED_CIDRS` is treated as user `cidr-bypass` with `read` scope and needs no
-  token. Writes never bypass. Because the container sits behind a proxy, this only works when
-  `MAGPIE_TRUSTED_PROXIES` names the upstream hop -- otherwise the client IP Caddy sees is the
-  proxy's and every anonymous read 401s. Comma-separated CIDR ranges are the documented form;
-  whitespace or mixed separators are also accepted (e.g.,
-  `10.0.0.0/8,192.168.1.0/24`).
+- `GET /health` is public and proxies to FastAPI. The image health check calls it through
+  Caddy, so it checks that both services respond.
+- Artifact API reads (`GET /api/v1/artifacts*`) and protected file downloads accept requests
+  from `MAGPIE_ALLOWED_CIDRS` without a token. For API reads, Caddy passes a synthetic
+  read-only identity to FastAPI. Writes and admin operations still need a token. Behind a
+  reverse proxy, configure [trusted proxies](installation.md#trusted-proxies) so Caddy checks
+  the client's address rather than the proxy's.
 - `/artifacts/public/*` is served with **no authentication at all**, and Caddy enables `browse`
   for it, so anonymous callers can *enumerate* the namespace (directory index listing `blobs/`,
   `metadata/`, tag symlinks) as well as fetch known paths. Anything pushed under `public/` is
@@ -94,22 +94,22 @@ Consequences worth knowing:
 
 ## Dev vs production
 
-Both use the same `docker-compose.yml`. The difference is whether
-`docker-compose.override.yml` gets merged -- bare `docker compose up` merges it automatically;
-`docker compose -f docker-compose.yml up -d` does not, and neither does the installer.
+In a repo checkout, bare `docker compose up` merges the checked-in **development** override.
+Specifying `-f docker-compose.yml` disables that automatic merge. The installer never uses
+the checkout's override, but it does load a separate
+[site override](installation.md#site-specific-compose-settings) from the install directory.
 
-| | Local development | Production |
-|---|---|---|
-| Command | `just up` / `docker compose up -d --build` | Release asset `docker-compose.yml` with `docker compose up -d`; installer is optional |
-| Compose files | `docker-compose.yml` **+** `docker-compose.override.yml` | `docker-compose.yml` only |
-| Image | built locally from `Dockerfile.bundled` | pinned release `ghcr.io/southwestccdc/magpie:X.Y.Z-bundled` via `MAGPIE_IMAGE` |
-| `MAGPIE_ADMIN_TOKEN_SINK` | defaults to `file` (overlay convenience) | **must be set explicitly**; container refuses to boot otherwise |
-| Admin token location | `./data/admin-token` (root-owned, `0600`) | `<install dir>/data/admin-token`, or your secret store via `sink=exec` |
-| Config source | shell environment | `<install dir>/etc/.env` |
-| TLS | none -- `http://localhost:8080` | external reverse proxy terminates TLS; publish `:8080` privately |
-| Test endpoints | `/api/v1/_test/*` available if `MAGPIE_ENABLE_TEST_ENDPOINTS=true` | never enabled |
-| Lifecycle | `docker compose down`; delete `./data` to reset to first boot | systemd unit, backups, `magpie-deploy.sh update` |
-| Client | `uv tool install git+https://github.com/SouthwestCCDC/magpie` (tracks `default`) | install the CLI at the **same minor version as the server** -- an older client gets `426 Upgrade Required` |
+| | Local development | Release Compose | Installer-managed |
+|---|---|---|---|
+| Compose files | Repo base file + development override | Digest-pinned release asset | Installed base file + optional site override |
+| Config | Shell or local `.env` | `.env` next to the release file | `<install dir>/etc/.env` |
+| Image | Built from the checkout | Release image pinned by digest | Selected release image tag |
+| First-boot token sink | Defaults to `file` | Set explicitly before first boot | Installer defaults to `file` |
+| Lifecycle | `docker compose up -d --build` / `down` | `docker compose up -d` / `down` | `magpie.service` and `magpie-deploy.sh update` |
+
+With the file sink, the token file is owned by the runtime UID and written with mode
+`0600`. Use the [installation guide](installation.md) to match the CLI to the server
+release and put production instances behind a TLS proxy.
 
 The canonical file drops all capabilities and adds only `SETUID`, `SETGID`, `CHOWN`, and
 `DAC_OVERRIDE` for the wrapper's root startup and ownership fixups; the wrapper then runs the
@@ -123,8 +123,12 @@ hardening.
 |-------|----------|-------|
 | Artifact bytes | `/data/artifacts/` blobs, addressed by SHA-256 | The source of truth. Plain files -- `tar` them, `rsync` them, read them without Magpie running. |
 | Tags | symlinks alongside the blobs | Moving a tag is a symlink swap; content is immutable. |
-| Tokens | `/data/magpie.db` (SQLite) | Hashed tokens and their scopes. **Only** thing in the database. |
-| First-boot admin token | `/data/admin-token` with `sink=file` | Written `0600` on first boot with an empty data directory; re-issued by `magpie-ctl init --reset-admin-token`. |
+| Tokens | `/data/magpie.db` (SQLite) | Hashed tokens and their scopes; no artifact data. |
+| First-boot admin token | `/data/admin-token` with `sink=file` | Written `0600` when the database is first initialized; re-issued by `magpie-ctl init --reset-admin-token`. |
+
+The [startup wrapper](../docker/bundled/wrapper.sh) initializes a missing database and
+runs migrations before starting FastAPI. It starts Caddy only after FastAPI answers
+`/health`. A failed migration stops startup; see [pre-migration database copies](backup-restore.md#pre-migration-database-copies).
 
 Losing `magpie.db` costs you your tokens, not your artifacts: re-run
 `magpie-ctl init --reset-admin-token` and re-issue. Losing `/data/artifacts` is the real
@@ -139,4 +143,4 @@ disaster -- see [Backup & Restore](backup-restore.md).
 
 ---
 
-*(AI-generated via Devin; refreshed for v0.2.0 final via Devin)*
+*(AI-generated via Devin; refreshed for v0.2.0 final and audited against v0.2.1 via Devin)*

@@ -5,7 +5,7 @@ Compose assets. The installer is optional for hosts where you want systemd and a
 management. For a throwaway local stack, use the
 [5-Minute Quick Start](../README.md#5-minute-quick-start) in the README instead.
 
-**Prerequisites:** Debian 12/13, git, Docker with Compose v2, curl, `uv`
+**Prerequisites:** a Linux host, Docker with Compose v2, curl, git, and `uv`
 ([install](https://docs.astral.sh/uv/)). You do not need a system Python 3.13 -- `uv` fetches
 its own for the CLI.
 
@@ -17,8 +17,9 @@ curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/env.example" -fsSLO "$base/
 grep -E ' (docker-compose\.yml|env\.example)$' SHA256SUMS | sha256sum -c
 cp env.example .env
 echo 'MAGPIE_ADMIN_TOKEN_SINK=file' >> .env
-# Edit .env for your data directory, runtime uid/gid, and trusted proxy.
-docker compose up -d
+# Edit .env for your data directory and runtime UID/GID.
+# Set MAGPIE_BIND_IP=127.0.0.1 if the proxy is on this host.
+docker compose -f docker-compose.yml up -d
 ```
 
 The release's `docker-compose.yml` pins its bundled image by digest. Keep it with the matching
@@ -36,8 +37,8 @@ sudo cat data/admin-token
 
 See [Installation Guide](installation.md) for advanced configuration.
 
-The installer is an optional alternative when you want systemd units and account management:
-clone the repository and run `sudo ./scripts/magpie-deploy.sh install --noninteractive`.
+For systemd units and account management, use the
+[optional installer](installation.md#option-b-optional-installer).
 
 ## 2. Install Client
 
@@ -97,7 +98,8 @@ magpie info builds/app:latest
   proxy upstream at the new port.
 
 For installer-managed hosts, `sudo ./scripts/magpie-deploy.sh status` provides the equivalent
-status check; configure `--http-port`/`--bind-ip` through the installer.
+status check. For an existing install, change the port or bind address in
+`<install dir>/etc/.env` and restart `magpie.service`.
 
 ## Next Steps
 
@@ -109,4 +111,4 @@ status check; configure `--http-port`/`--bind-ip` through the installer.
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; latest-release URLs, Compose troubleshooting, and health-derived client install updated via Devin; prerelease tag mapping updated via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; latest-release URLs, Compose troubleshooting, and health-derived client install updated via Devin; prerelease tag mapping updated via Devin; v0.2.1 docs audit via Devin)*
