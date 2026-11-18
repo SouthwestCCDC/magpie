@@ -136,6 +136,7 @@ the bootstrap admin token. The examples use the default database and staging pat
   mkdir -- "$BACKUP_PATH"
   rsync -av --exclude='artifacts/.tmp/' --exclude='magpie.db*' "$MAGPIE_DATA_DIR/" "$BACKUP_PATH/"
   sqlite3 "$MAGPIE_DATA_DIR/magpie.db" ".backup '$BACKUP_PATH/magpie.db'"
+  printf 'Backup saved to %s\n' "$BACKUP_PATH"
 )
 ```
 
@@ -174,13 +175,24 @@ Keep a separate copy of the existing database and its sidecar files before repla
 them. The backup made with SQLite's `.backup` is standalone; do not reuse WAL or
 shared-memory files from the database you're replacing.
 
+Set `BACKUP_PATH` below to the snapshot you want to restore.
+
 ```bash
-docker compose stop magpie
-rm -f "$MAGPIE_DATA_DIR/magpie.db-wal" "$MAGPIE_DATA_DIR/magpie.db-shm"
-cp "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/magpie.db"
-chown "$(stat -c %u:%g "$MAGPIE_DATA_DIR")" "$MAGPIE_DATA_DIR/magpie.db"
-chmod 0600 "$MAGPIE_DATA_DIR/magpie.db"
-docker compose start magpie
+(
+  set -e
+  BACKUP_PATH="/backup/magpie/20260115-103000"
+  MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data}"
+  if [[ ! -f "$BACKUP_PATH/magpie.db" || ! -r "$BACKUP_PATH/magpie.db" ]]; then
+    printf 'Backup database not found or unreadable: %s\n' "$BACKUP_PATH/magpie.db" >&2
+    exit 1
+  fi
+  docker compose stop magpie
+  rm -f "$MAGPIE_DATA_DIR/magpie.db-wal" "$MAGPIE_DATA_DIR/magpie.db-shm"
+  cp "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/magpie.db"
+  chown "$(stat -c %u:%g "$MAGPIE_DATA_DIR")" "$MAGPIE_DATA_DIR/magpie.db"
+  chmod 0600 "$MAGPIE_DATA_DIR/magpie.db"
+  docker compose start magpie
+)
 ```
 
 ## Recovery
