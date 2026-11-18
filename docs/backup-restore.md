@@ -4,7 +4,7 @@
 
 ```
 /data/
-├── magpie.db               # Token database (backup separately)
+├── magpie.db               # Token database (back up using SQLite's backup command)
 └── artifacts/
     ├── {artifact-path}/
     │   ├── .magpie         # Tag-to-hash mappings
@@ -113,8 +113,18 @@ Manual backup, independent of `magpie-deploy.sh update`'s automatic
 pre-update backup above -- for a standalone backup schedule, or a
 non-installer (`docker compose`-direct) deployment.
 
+For the Compose commands below, work in the directory with the release Compose file
+and its `.env`. On an installer-managed host, use `<install dir>/bin/magpie-compose`
+instead of `docker compose` for container commands, and manage the stack with systemd.
+Set `MAGPIE_DATA_DIR` in your shell to the actual host data directory; the shell
+commands do not read the Compose env file.
+
 **Full backup (rsync):**
+Pause uploads, tag changes, and scheduled GC while copying the artifact tree for a
+consistent snapshot. Use a private backup root (mode `0700`): the snapshot can contain
+the bootstrap admin token. The examples use the default database and staging paths.
 ```bash
+umask 077
 MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data}"
 BACKUP_PATH="/backup/magpie/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_PATH"
@@ -133,7 +143,9 @@ Requires `MAGPIE_S3_BUCKET` environment variable. Note: Backs up artifacts only;
 
 ## Restore Procedures
 
-**Full restore:**
+**Full restore:** Stop scheduled GC and the stack before replacing the data directory.
+On an installer-managed host, stop and restart via systemd, not Compose.
+
 ```bash
 BACKUP_PATH="/backup/magpie/20260115-103000"
 MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data}"
@@ -144,24 +156,34 @@ mkdir -p "$MAGPIE_DATA_DIR/artifacts/.tmp"
 OWNER_UID=$(stat -c %u "$MAGPIE_DATA_DIR")
 OWNER_GID=$(stat -c %g "$MAGPIE_DATA_DIR")
 chown -R "$OWNER_UID:$OWNER_GID" "$MAGPIE_DATA_DIR"
-docker compose up -d && sleep 5
+docker compose up -d --wait
 docker compose exec magpie magpie-ctl gc --reconcile-only
 ```
 
-**Tokens-only restore:**
+**Tokens-only restore:** Stop all processes using the database first. For an
+installer-managed stack, stop `magpie-gc.timer`, `magpie-gc.service`, and
+`magpie.service` before replacing the file, then restart the stack and timer.
+Keep a separate copy of the existing database and its sidecar files before replacing
+them. The backup made with SQLite's `.backup` is standalone; do not reuse WAL or
+shared-memory files from the database you're replacing.
+
 ```bash
 docker compose stop magpie
+rm -f "$MAGPIE_DATA_DIR/magpie.db-wal" "$MAGPIE_DATA_DIR/magpie.db-shm"
 cp "$BACKUP_PATH/magpie.db" "$MAGPIE_DATA_DIR/magpie.db"
-sqlite3 "$MAGPIE_DATA_DIR/magpie.db" "PRAGMA wal_checkpoint(TRUNCATE);"
 chown "$(stat -c %u:%g "$MAGPIE_DATA_DIR")" "$MAGPIE_DATA_DIR/magpie.db"
+chmod 0600 "$MAGPIE_DATA_DIR/magpie.db"
 docker compose start magpie
 ```
 
 ## Recovery
 
 **Lost token database:**
+The bundled container initializes a missing database on startup. Restart it and
+retrieve the new token via the configured sink, then reissue scoped tokens. To replace
+the bootstrap token in a running stack instead, use `magpie-ctl init --reset-admin-token`.
+
 ```bash
-docker compose exec magpie magpie-ctl init --reset-admin-token
 docker compose exec magpie magpie-ctl token create --name ci-bot --scope write
 ```
 
@@ -177,4 +199,4 @@ find "$MAGPIE_DATA_DIR/artifacts" -type l ! -exec test -e {} \; -print
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; automatic pre-update backup section added for issue #561 via Claude Code w/ Opus 4.8)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; automatic pre-update backup section added for issue #561 via Claude Code w/ Opus 4.8; v0.2.1 docs audit via Devin)*

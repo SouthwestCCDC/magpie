@@ -9,9 +9,8 @@ Before deploying to production:
 - [ ] Firewall allows the port your reverse proxy listens on (typically 80/443)
 - [ ] Persistent storage provisioned for `MAGPIE_DATA_DIR`
 - [ ] Backup destination configured (see [backup-restore.md](backup-restore.md))
-- [ ] `MAGPIE_ADMIN_TOKEN_SINK` chosen (`file`/`exec`/`discard`/`stdout`) --
-      the canonical `docker-compose.yml` refuses to start without it
-      (fail-closed, no default). See
+- [ ] `MAGPIE_ADMIN_TOKEN_SINK` chosen (`file`/`exec`/`discard`) --
+      first-boot initialization fails without an explicit sink. See
       [installation.md](installation.md#admin-token-delivery).
 
 ## Security Setup
@@ -21,6 +20,9 @@ Before deploying to production:
 - [ ] Admin token delivered and stored securely via the configured sink (or
       intentionally discarded, with a mint-later plan)
 - [ ] HTTPS enabled at your reverse proxy (magpie itself does not terminate TLS)
+- [ ] Magpie's plain HTTP port is reachable only from the reverse proxy (e.g.
+      `MAGPIE_BIND_IP=127.0.0.1` when the proxy is on the same host)
+- [ ] Anything under `public/` is [intentionally public](architecture.md#why-caddy-serves-the-files)
 - [ ] `MAGPIE_TRUSTED_PROXIES` left unset unless the bundled Caddy sits behind
       another reverse proxy you control -- if it does (the standard
       production setup), set it to that proxy's exact address(es), never a
@@ -46,7 +48,7 @@ cp env.example .env
 echo 'MAGPIE_ADMIN_TOKEN_SINK=file' >> .env
 # Set MAGPIE_DATA_DIR, MAGPIE_UID/GID, MAGPIE_BIND_IP, and
 # MAGPIE_TRUSTED_PROXIES in .env as appropriate for your host.
-docker compose up -d
+docker compose -f docker-compose.yml up -d
 ```
 
 Each release's `docker-compose.yml` pins its bundled image by digest. Keep it with the matching
@@ -75,6 +77,9 @@ Retrieve the admin token per the chosen sink -- see
 ```bash
 docker compose -f docker-compose.yml exec magpie magpie-ctl init --reset-admin-token
 ```
+On an installer-managed host, replace `docker compose -f docker-compose.yml` with
+`<install dir>/bin/magpie-compose`.
+
 The new token is delivered through the same configured `MAGPIE_ADMIN_TOKEN_SINK`
 (not printed to stdout unless `sink=stdout`) -- delivery is attempted before
 any database change, so if it fails (e.g. a broken exec command), the prior
@@ -87,4 +92,4 @@ docker compose -f docker-compose.yml exec magpie \
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; refreshed for v0.2.0 final via Devin; latest-release URLs updated via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; refreshed for v0.2.0 final via Devin; latest-release URLs updated via Devin; v0.2.1 docs audit via Devin)*

@@ -17,22 +17,22 @@ and vice versa.
 | Variable | Needed? | Why |
 |----------|---------|-----|
 | `MAGPIE_ADMIN_TOKEN_SINK` | **Required** | How the first-boot admin token is delivered. No default, by design: without it the container exits non-zero on first-boot init and, under `restart: unless-stopped`, boot-loops (`docker compose ps` shows `Restarting (1)`). Use `file` unless you have a secret store. See [Admin Token Delivery](installation.md#admin-token-delivery). |
-| `MAGPIE_IMAGE` | **Required in production** | Use the release's `docker-compose.yml`, whose default pins the bundled image by digest. For a manual override, use a published `X.Y.Z-bundled` tag. The repository compose default (`:latest`) is mutable; see [Release Assets](releases.md#release-assets). |
+| `MAGPIE_IMAGE` | Not needed with release assets | The release's `docker-compose.yml` pins the image by digest unless you override it. The repository Compose default (`:latest`) is mutable; see [Release Assets](releases.md#release-assets). |
 | `MAGPIE_DATA_DIR` | Recommended | Host directory holding artifacts, the token database, and the admin-token file. Defaults to `./data` next to `docker-compose.yml`; set an absolute path for a real deployment. |
 | `MAGPIE_HTTP_PORT` / `MAGPIE_BIND_IP` | Recommended | Where the container's plain-HTTP `:8080` is published. Bind to a loopback/internal address if your reverse proxy is on the same host. |
 | `MAGPIE_TRUSTED_PROXIES` | Only with `MAGPIE_ALLOWED_CIDRS` | The exact address(es) of the proxy in front of Magpie, so client IPs are read from `X-Forwarded-For`. See [Trusted Proxies](installation.md#trusted-proxies). |
 | Everything else | Optional | Retention, upload limits, logging, S3 backup, Sentry/OTel. Defaults are sane. |
 
-Nothing else needs setting for a working server. `MAGPIE_STORAGE_PATH`,
-`MAGPIE_DATABASE_PATH`, and `MAGPIE_DEBUG` are set by `docker-compose.yml` itself -- you only
-override them for unusual layouts.
+`docker-compose.yml` fixes `MAGPIE_STORAGE_PATH` at `/data/artifacts` and `MAGPIE_DEBUG`
+at `false`. It defaults `MAGPIE_DATABASE_PATH` to `/data/magpie.db`; keep the database on
+the persistent volume.
 
 ### Client
 
 | Variable | Needed? | Why |
 |----------|---------|-----|
 | `MAGPIE_SERVER` | **Required** | Base URL of the server (`https://magpie.example.com`, or `http://localhost:8080` locally). |
-| `MAGPIE_TOKEN` | **Required** | Bearer token. Scope depends on what you're doing (`read` to pull, `write` to push). |
+| `MAGPIE_TOKEN` | Required for protected operations | Use `read` to pull, `write` to push, and `admin` for server administration. A [CIDR allow-list](#access-control-consumed-by-the-bundled-caddy) can permit tokenless reads. |
 | `MAGPIE_TIMEOUT`, `MAGPIE_CA_CERT` | Optional | Long uploads over slow links; private CAs. |
 
 `MAGPIE_SERVER` and `MAGPIE_TOKEN` can live in `~/.magpie/config.toml` instead --
@@ -101,7 +101,7 @@ Read by the `magpie` CLI. All can be overridden by CLI flags
 | `MAGPIE_SENTRY_DSN` | *(none)* | Sentry DSN for server-side error tracking |
 | `MAGPIE_SENTRY_TRACES_SAMPLE_RATE` | `1.0` | Sentry performance sampling rate (0.0-1.0) |
 | `MAGPIE_OTEL_ENABLED` | `false` | Enable OpenTelemetry tracing |
-| `MAGPIE_OTEL_ENDPOINT` | *(none)* | OTLP collector endpoint (required when OTel is enabled) |
+| `MAGPIE_OTEL_ENDPOINT` | *(none)* | OTLP gRPC collector endpoint; no exporter is configured without it |
 | `MAGPIE_OTEL_SERVICE_NAME` | `magpie` | Service name reported in traces |
 
 ### Access control (consumed by the bundled Caddy)
@@ -143,10 +143,11 @@ strips them from an upgraded install's `.env`; remove them from your own `.env` 
 
 | Layer | File | Notes |
 |-------|------|-------|
-| Server, real deployment | `<install dir>/etc/.env` (installer) or `.env` next to `docker-compose.yml` | Copy [`.env.example`](../.env.example) and edit. Compose reads `.env` automatically. |
+| Server, release Compose | `.env` next to `docker-compose.yml` | Copy the release's `env.example` to `.env` and run Compose from that directory. |
+| Server, installer-managed | `<install dir>/etc/.env` | The installer writes this file. Its `bin/magpie-compose` wrapper passes it to Compose explicitly. |
 | Server, ad-hoc | shell environment | `export MAGPIE_...` before `docker compose up`. Compose warns `The "MAGPIE_ADMIN_TOKEN_SINK" variable is not set` if it can't resolve that key from either source -- harmless when an override file supplies it, but a boot failure otherwise. |
 | Client | `~/.magpie/config.toml`, environment, or CLI flags | `magpie config --show` prints the effective value of each setting and which source it came from, whether or not a config file exists |
 
 ---
 
-*(AI-generated via Devin; refreshed for v0.2.0 final via Devin)*
+*(AI-generated via Devin; refreshed for v0.2.0 final and audited against v0.2.1 via Devin)*

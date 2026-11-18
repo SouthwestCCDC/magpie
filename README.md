@@ -36,7 +36,7 @@ This gets you from `git clone` to a working `push`/`get` against a **local, thro
 server. For a real deployment, use the digest-pinned release assets and plain Compose in the
 [Quick Start](docs/quickstart.md); the installer is optional.
 
-**Prerequisites:** git, Docker with Compose v2, and [`uv`](https://docs.astral.sh/uv/).
+**Prerequisites:** git, Docker with Compose v2, curl, and [`uv`](https://docs.astral.sh/uv/).
 You do *not* need Python 3.13 installed -- `uv` fetches it for the client.
 
 ### 1. Start the server
@@ -44,7 +44,7 @@ You do *not* need Python 3.13 installed -- `uv` fetches it for the client.
 ```bash
 git clone https://github.com/SouthwestCCDC/magpie
 cd magpie
-docker compose up -d --build          # builds the bundled image from source
+MAGPIE_BIND_IP=127.0.0.1 docker compose up -d --build
 ```
 
 `docker-compose.override.yml` is merged automatically here: it builds the image from
@@ -53,7 +53,7 @@ Compose still prints `warning: The "MAGPIE_ADMIN_TOKEN_SINK" variable is not set
 interpolating the canonical file -- harmless locally, because the overlay sets it. A real
 deployment must set it explicitly; the canonical compose file has no default on purpose.
 
-The stack is a single container serving plain HTTP on <http://localhost:8080>. Wait for it
+The stack serves plain HTTP on <http://127.0.0.1:8080>, bound to loopback only. Wait for it
 to report healthy (roughly 10-30 seconds on first boot), then check it:
 
 ```bash
@@ -124,7 +124,7 @@ for the full CLI, [Configuration Reference](docs/configuration.md) for every env
 
 ### Admin token retrieval
 
-The admin token is generated **only on first boot** (an empty data directory) and delivered
+The admin token is generated when the database is first initialized and delivered
 once, through `MAGPIE_ADMIN_TOKEN_SINK`:
 
 | Situation | What to do |
@@ -135,54 +135,23 @@ once, through `MAGPIE_ADMIN_TOKEN_SINK`:
 | Want to invalidate and re-issue the break-glass token | `docker compose exec magpie magpie-ctl init --reset-admin-token` (the new token goes through the same sink, e.g. back to the file) |
 
 Grepping the logs only works with `sink=stdout`; every other sink deliberately keeps the
-token out of the log stream. See [Admin Token
+token out of the log stream. On an installer-managed host, use
+`<install dir>/bin/magpie-compose` in place of `docker compose`. See [Admin Token
 Delivery](docs/installation.md#admin-token-delivery) for the full matrix.
 
 ## Architecture
 
-One container, two processes, one directory of files:
+One container runs Caddy and FastAPI. Caddy serves files from disk and forwards API requests,
+including token validation, to FastAPI. The data directory holds the artifacts and a SQLite
+token database. The container serves plain HTTP; an external reverse proxy terminates TLS.
 
-```
-  magpie CLI / curl / CI
-        |
-        v  HTTPS
-  your reverse proxy (nginx, Caddy, cloud LB)  --  terminates TLS
-        |
-        v  HTTP :8080
-  +--------------------------- magpie container ---------------------------+
-  |  Caddy  --  auth gate; serves /artifacts/* directly from disk          |
-  |    |  forward_auth / reverse_proxy                                     |
-  |    v                                                                   |
-  |  FastAPI (uvicorn, 127.0.0.1:8000)  --  uploads, tags, metadata, auth  |
-  +------------------------------------------------------------------------+
-        |
-        v  bind mount
-  /data:  artifacts/  (content-addressed blobs + tag symlinks)
-          magpie.db   (SQLite -- tokens only)
-```
-
-- **Caddy** (inside the image, not operator-facing) is the front door on `:8080`. It gates every
-  request against FastAPI's `/api/v1/auth/validate` (or an `MAGPIE_ALLOWED_CIDRS` match), then
-  either proxies API calls to FastAPI or serves artifact downloads *itself*, straight off disk.
-  Downloads never pass through Python, so a 5 GB pull costs Magpie nothing but disk I/O.
-- **FastAPI** (uvicorn on container-loopback `:8000`) handles uploads, hashing/dedupe, tag
-  mutations, metadata, token management, GC, and auth decisions.
-- **The filesystem is the source of truth.** Artifacts are content-addressed blobs under
-  `/data/artifacts` with tags as symlinks; **SQLite (`/data/magpie.db`) stores tokens only.**
-- **TLS is not Magpie's job.** The container speaks plain HTTP on `:8080` and expects an
-  external reverse proxy (nginx, another Caddy, a cloud load balancer) in front of it.
-
-See [Architecture](docs/architecture.md) for the request-path details and a dev-vs-production
-comparison.
+See [Architecture](docs/architecture.md) for the diagram, access rules, and deployment modes.
 
 ## Installation
 
 ```bash
 # Server: download the release assets and use their digest-pinned Compose file
 # see docs/quickstart.md and docs/releases.md#release-assets
-
-# Optional installer: configures the same release image and sets up systemd
-sudo ./scripts/magpie-deploy.sh install --noninteractive
 
 # Client: standalone CLI install (brings its own Python 3.13)
 MAGPIE_SERVER=${MAGPIE_SERVER:-http://localhost:8080}
@@ -193,7 +162,7 @@ export MAGPIE_SERVER
 ```
 
 Use the release's digest-pinned `docker-compose.yml` for production. See the [Installation
-Guide](docs/installation.md) for server-vs-client details and [Release
+Guide](docs/installation.md) for server-vs-client details and the optional systemd installer, and [Release
 Notes](docs/releases.md) for version history.
 
 ## Documentation
@@ -219,4 +188,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow.
 
 ---
 *Documentation improved with AI assistance (Claude Code w/ Sonnet 4.5; first-user-experience
-overhaul via Devin; refreshed for v0.2.0 final via Devin; release tag guidance and local install updated via Devin; prerelease tag mapping updated via Devin).*
+overhaul via Devin; refreshed for v0.2.0 final via Devin; release tag guidance and local install updated via Devin; prerelease tag mapping updated via Devin; v0.2.1 docs audit via Devin).*

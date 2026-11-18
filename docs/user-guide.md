@@ -10,9 +10,9 @@ Content-addressed artifact storage with mutable tags for distributing build arti
 - **Hash Ref**: Short reference to blob: `@abc12345` (first 8 chars)
 
 **Authentication:**
-- Bearer tokens (required for CLI and API access)
-- Optional IP allow-listing lets trusted networks read without a token (see
-  [Configuration Reference](configuration.md#access-control-consumed-by-the-bundled-caddy))
+- Use bearer tokens for protected CLI and API operations.
+- The [IP allow-list](configuration.md#access-control-consumed-by-the-bundled-caddy) can
+  permit list, info, and download operations from trusted networks without a token.
 
 New to Magpie? Start with the [5-Minute Quick Start](../README.md#5-minute-quick-start), then
 [Installation](installation.md) and [Architecture](architecture.md). For Ansible, see
@@ -61,9 +61,6 @@ Server-side variables (storage, retention, admin-token delivery, logging, observ
 allow-listing, S3 backup) live in the [Configuration
 Reference](configuration.md#server-variables); [`.env.example`](../.env.example) is the
 commented template to copy into a real `.env`.
-
-Comma-separated CIDR ranges are the documented form; whitespace or mixed separators are also
-accepted (e.g., `10.0.0.0/8,192.168.1.0/24`).
 
 #### Managing Configuration
 
@@ -114,7 +111,7 @@ magpie get images/ubuntu --force         # Force re-download
 ```bash
 magpie tag images/ubuntu:latest --as stable   # Create tag
 magpie untag images/ubuntu v1.0               # Remove tag
-magpie flush-tag deprecated --dry-run         # Remove globally (preview)
+magpie flush-tag deprecated --dry-run         # Preview global removal (admin token)
 magpie info images/ubuntu:@a1b2c3d4           # View metadata
 magpie amend images/ubuntu:latest --source-uri https://github.com/example/repo  # Update metadata
 ```
@@ -123,18 +120,17 @@ magpie amend images/ubuntu:latest --source-uri https://github.com/example/repo  
 ```bash
 magpie status                    # Check server status/health (requires admin token)
 magpie version                   # Show client version
-magpie version --server-version  # Check connectivity and show both client and server versions
+magpie version --server-version  # Check connectivity and show both versions (no token needed)
 magpie url images/ubuntu         # Get download URL for scripting
 ```
 
 ## Server Initialization
 
-See [installation.md](installation.md) for deployment. For token management:
+The bundled container initializes the database on first boot. Use
+[Admin Token Delivery](installation.md#admin-token-delivery) to retrieve the bootstrap token.
+For token management:
 
 ```bash
-# First initialization (auto-runs on container startup)
-docker compose exec magpie magpie-ctl init
-
 # Create tokens
 docker compose exec magpie magpie-ctl token create --name ci-reader --scope read
 docker compose exec magpie magpie-ctl token list
@@ -142,6 +138,8 @@ docker compose exec magpie magpie-ctl token revoke ci-reader
 ```
 
 **Configuration:** See [installation.md](installation.md) for environment variables and TLS setup.
+On an installer-managed host, use `<install dir>/bin/magpie-compose` instead of
+`docker compose` in these commands.
 
 ## Operations Guide
 
@@ -153,7 +151,7 @@ docker compose exec magpie magpie-ctl token revoke ci-reader
 
 **Garbage collection:**
 ```bash
-magpie gc --dry-run                        # Preview
+magpie gc --dry-run                        # Preview (also requires admin token)
 magpie gc                                  # Run (requires admin token)
 docker compose exec magpie magpie-ctl gc   # Server-side
 ```
@@ -178,11 +176,11 @@ Requires `MAGPIE_S3_BUCKET` and AWS credentials.
 ## Security Notes
 
 - **Token scopes are global** - Cannot restrict tokens to specific paths; use separate instances for strict isolation
-- **IP allow-list is global** - `MAGPIE_ALLOWED_CIDRS` bypasses auth for entire server
+- **IP allow-list is global for artifact reads only** - writes and admin operations still need tokens
 - **Trusted proxies must be scoped tightly** - `MAGPIE_TRUSTED_PROXIES` controls which upstream hop(s) Caddy trusts to set `X-Forwarded-For`; a broad range lets any client on it spoof its source IP and bypass `MAGPIE_ALLOWED_CIDRS`
 - **No built-in rate limiting** - Deploy behind Cloudflare or use Caddy's rate_limit plugin
 - **Tokens don't expire** - Rotate tokens quarterly: `magpie-ctl token revoke old-token` + `token create`
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; multi-CIDR separators clarified for #612 via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; refreshed for v0.2.0 final via Devin; multi-CIDR separators clarified for #612 via Devin; v0.2.1 docs audit via Devin)*

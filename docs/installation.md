@@ -36,8 +36,9 @@ curl -fsSLO "$base/docker-compose.yml" -fsSLO "$base/env.example" -fsSLO "$base/
 grep -E ' (docker-compose\.yml|env\.example)$' SHA256SUMS | sha256sum -c
 cp env.example .env
 echo 'MAGPIE_ADMIN_TOKEN_SINK=file' >> .env
-# Edit .env for your data directory, runtime uid/gid, and trusted proxy.
-docker compose up -d
+# Edit .env for your data directory and runtime UID/GID.
+# Set MAGPIE_BIND_IP=127.0.0.1 if the proxy is on this host.
+docker compose -f docker-compose.yml up -d
 ```
 
 Each release's `docker-compose.yml` pins that release's bundled image by digest; the matching
@@ -48,25 +49,29 @@ pinned image with a mutable tag. See [Release Assets](releases.md#release-assets
 
 ### Option B: optional installer
 
-The installer is a convenience for bare-metal or VM hosts where you want systemd units and
-account management:
+The installer is a convenience for Debian 12/13 hosts where you want systemd units and
+account management. Pick a [published release tag](https://github.com/SouthwestCCDC/magpie/releases)
+for a production install:
 
 ```bash
 git clone https://github.com/SouthwestCCDC/magpie
 cd magpie
-sudo ./scripts/magpie-deploy.sh install --noninteractive
+sudo ./scripts/magpie-deploy.sh install --noninteractive --release v0.2.1 --bind-ip 127.0.0.1
 ```
 
-It clones the repository, pins a released bundled image, writes configuration under
-`<install dir>/etc/.env`, and installs systemd units. It defaults
-`MAGPIE_ADMIN_TOKEN_SINK=file`; see the [Quick Start Guide](quickstart.md).
+Use the loopback binding when the proxy is on the same host; otherwise use an address
+reachable by the proxy over a private network. With `--release`, the installer checks
+out that tag and pins its bundled image tag. Without it, `install` follows the default
+branch and uses the version from its checkout; that is not the same as `update`, which
+defaults to the latest stable release. The installer writes `<install dir>/etc/.env`,
+defaults to the file token sink, and sets up the service and GC timer.
 
 ### Option C: local development stack
 
 ```bash
 git clone https://github.com/SouthwestCCDC/magpie
 cd magpie
-docker compose up -d --build      # `just up` runs the same thing in the foreground
+MAGPIE_BIND_IP=127.0.0.1 docker compose up -d --build
 ```
 
 A bare `docker compose` command merges `docker-compose.override.yml` automatically: it builds
@@ -124,7 +129,9 @@ docker compose -f docker-compose.yml exec magpie \
 docker compose -f docker-compose.yml exec magpie magpie-ctl token list
 ```
 
-(The installer's units use `<install dir>/docker-compose.yml`; run the same commands from there.)
+On an installer-managed host, replace `docker compose -f docker-compose.yml` with
+`<install dir>/bin/magpie-compose` in these and other Compose commands. The wrapper uses
+the install's project, env file, and [site override](#site-specific-compose-settings).
 
 ### 3. Point the client at the server
 
@@ -156,7 +163,7 @@ From a client, with `MAGPIE_SERVER` and `MAGPIE_TOKEN` set:
 # the write/read tokens minted in step 2 are rejected here.
 magpie status                              # server version, storage used, artifact count
 
-# These work with the write-scope token (push/tag) or read-scope token (ls/get):
+# Push needs write scope. List and download work with either read or write scope.
 echo "test" > test.txt
 magpie push test.txt --to test/hello
 magpie ls test/hello
@@ -184,10 +191,9 @@ token and delivers it via the sink configured by `MAGPIE_ADMIN_TOKEN_SINK`.
 It is **never** printed to stdout (and therefore never captured by
 `docker logs` or a log shipper) unless `sink=stdout` is explicitly chosen.
 
-The canonical `docker-compose.yml` requires this variable to be set
-explicitly -- there is no Compose-level default, by design (fail-closed;
-an unset value means the container exits non-zero at boot rather than
-running with no admin token delivered). `docker-compose.override.yml`
+The canonical `docker-compose.yml` has no default for this variable.
+Set it before first boot: initialization fails rather than starting without
+delivering a token. `docker-compose.override.yml`
 (the local-development overlay, merged in automatically by a bare `docker
 compose up` inside a repo checkout) defaults it to `sink=file` for
 frictionless local bootstrap -- that default does not apply to a real
@@ -210,8 +216,8 @@ Choose one:
   **stdin only** (never argv or env, so it can't leak via `ps` or
   `/proc/<pid>/environ`). A non-zero exit is a delivery failure -- see
   below for what that aborts, depending on which command triggered it.
-  This is the general "push into my secret store" mechanism -- e.g.
-  writing straight into Vault:
+  The command must be installed **inside the container** and executable by
+  the runtime UID. For example, if you provide the Vault CLI in a derived image:
   ```bash
   export MAGPIE_ADMIN_TOKEN_SINK=exec
   export MAGPIE_ADMIN_TOKEN_SINK_EXEC_COMMAND='vault kv put -mount=secret bootstrap/magpie/admin-token token=-'
@@ -432,8 +438,8 @@ is what makes the swap safe to run unattended.
 
 **Data-format migration happens at container start.** On every start,
 before it serves traffic, the bundled container brings `magpie.db` to the
-data format its build supports: `magpie-ctl init` on a fresh volume,
-otherwise `magpie-ctl migrate` (a quiet no-op when already current). This
+data format its build supports: it runs `magpie-ctl init` if the database
+doesn't exist, then runs `magpie-ctl migrate` (a quiet no-op when already current). This
 runs under the same `.magpie-init.lock` as first-boot init, so concurrent
 starts against one data directory are serialized, and each migration is
 applied in a single transaction. Before a migration changes anything, a
@@ -528,4 +534,4 @@ upgrade instead. `magpie-deploy.sh update` does not do this for you.
 
 ---
 
-*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin; refreshed for v0.2.0 final via Devin; latest-release URLs, client version guidance, and health-derived install updated via Devin; prerelease tag mapping updated via Devin; multi-CIDR separators clarified for #612 via Devin)*
+*(AI-generated via Claude Code w/ Sonnet 4.5; updated for the v0.2.0 bundled-image topology via Claude Code w/ Opus 4.8; restructured into server/client installation paths via Devin; refreshed for v0.2.0 final via Devin; latest-release URLs, client version guidance, and health-derived install updated via Devin; prerelease tag mapping updated via Devin; multi-CIDR separators clarified for #612 via Devin; v0.2.1 docs audit via Devin)*
