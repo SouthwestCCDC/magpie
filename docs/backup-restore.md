@@ -121,15 +121,22 @@ commands do not read the Compose env file.
 
 **Full backup (rsync):**
 Pause uploads, tag changes, and scheduled GC while copying the artifact tree for a
-consistent snapshot. Use a private backup root (mode `0700`): the snapshot can contain
+consistent snapshot. The example sets the backup root to mode `0700` before copying:
+`rsync -a` can preserve wider permissions on the snapshot itself, which can contain
 the bootstrap admin token. The examples use the default database and staging paths.
 ```bash
-umask 077
-MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data}"
-BACKUP_PATH="/backup/magpie/$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$BACKUP_PATH"
-rsync -av --exclude='artifacts/.tmp/' --exclude='magpie.db*' "$MAGPIE_DATA_DIR/" "$BACKUP_PATH/"
-sqlite3 "$MAGPIE_DATA_DIR/magpie.db" ".backup '$BACKUP_PATH/magpie.db'"
+(
+  set -e
+  umask 077
+  MAGPIE_DATA_DIR="${MAGPIE_DATA_DIR:-./data}"
+  BACKUP_ROOT="/backup/magpie"
+  mkdir -p -- "$BACKUP_ROOT"
+  chmod 0700 -- "$BACKUP_ROOT"
+  BACKUP_PATH="$BACKUP_ROOT/$(date +%Y%m%d-%H%M%S)"
+  mkdir -- "$BACKUP_PATH"
+  rsync -av --exclude='artifacts/.tmp/' --exclude='magpie.db*' "$MAGPIE_DATA_DIR/" "$BACKUP_PATH/"
+  sqlite3 "$MAGPIE_DATA_DIR/magpie.db" ".backup '$BACKUP_PATH/magpie.db'"
+)
 ```
 
 **S3 backup** (tagged artifacts only):
