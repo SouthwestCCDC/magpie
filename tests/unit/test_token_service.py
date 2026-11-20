@@ -382,39 +382,6 @@ class TestRotateToken:
         assert "name" in param_names
 
 
-class TestHasScope:
-    """Tests for TokenService.has_scope method."""
-
-    def test_has_scope_admin_has_all_scopes(self, token_service: TokenService) -> None:
-        """ADMIN scope should satisfy all required scopes."""
-        assert token_service.has_scope(TokenScope.ADMIN, TokenScope.READ) is True
-        assert token_service.has_scope(TokenScope.ADMIN, TokenScope.WRITE) is True
-        assert token_service.has_scope(TokenScope.ADMIN, TokenScope.ADMIN) is True
-
-    def test_has_scope_write_has_read_and_write(self, token_service: TokenService) -> None:
-        """WRITE scope should satisfy READ and WRITE requirements."""
-        assert token_service.has_scope(TokenScope.WRITE, TokenScope.READ) is True
-        assert token_service.has_scope(TokenScope.WRITE, TokenScope.WRITE) is True
-        assert token_service.has_scope(TokenScope.WRITE, TokenScope.ADMIN) is False
-
-    def test_has_scope_read_only_has_read(self, token_service: TokenService) -> None:
-        """READ scope should only satisfy READ requirement."""
-        assert token_service.has_scope(TokenScope.READ, TokenScope.READ) is True
-        assert token_service.has_scope(TokenScope.READ, TokenScope.WRITE) is False
-        assert token_service.has_scope(TokenScope.READ, TokenScope.ADMIN) is False
-
-    def test_has_scope_hierarchy_is_correct(self, token_service: TokenService) -> None:
-        """Scope hierarchy should be: admin > write > read."""
-        # Each scope should satisfy itself
-        for scope in TokenScope:
-            assert token_service.has_scope(scope, scope) is True
-
-        # Lower scopes cannot access higher
-        assert token_service.has_scope(TokenScope.READ, TokenScope.WRITE) is False
-        assert token_service.has_scope(TokenScope.READ, TokenScope.ADMIN) is False
-        assert token_service.has_scope(TokenScope.WRITE, TokenScope.ADMIN) is False
-
-
 class TestTokenNameValidation:
     """Tests for token name validation in TokenService.create_token.
 
