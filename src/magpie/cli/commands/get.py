@@ -148,7 +148,7 @@ def get(
 
         # Download the artifact
         # Hash refs use blobs/ subdirectory, tags are symlinks at root
-        if parsed.ref.startswith("@"):
+        if parsed.is_hash_ref:
             # User requested hash directly - use blobs path
             blob_name = hash_ref.lstrip("@")
             download_url = f"/artifacts/{parsed.path}/blobs/{blob_name}"
