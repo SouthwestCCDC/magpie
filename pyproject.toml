@@ -11,7 +11,6 @@ dependencies = [
     "click>=8.3.3",
     "httpx",
     "pydantic-settings>=2.14.2",
-    "aiofiles",
     "python-multipart>=0.0.30",
     "sentry-sdk[fastapi]",
     "opentelemetry-instrumentation-fastapi",
