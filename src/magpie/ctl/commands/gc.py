@@ -372,13 +372,7 @@ def _output_json(result: GCResult, dry_run: bool) -> None:
     """
     output = {
         "dry_run": dry_run,
-        "artifacts_scanned": result.artifacts_scanned,
-        "blobs_found": result.blobs_found,
-        "blobs_deleted": result.blobs_deleted,
-        "space_reclaimed_bytes": result.space_reclaimed_bytes,
-        "symlinks_checked": result.symlinks_checked,
-        "symlinks_fixed": result.symlinks_fixed,
-        "items_removed": result.items_removed,
+        **result.to_dict(),
         "errors": [],  # Errors are raised as exceptions, so this is always empty on success
     }
     click.echo(json.dumps(output))
