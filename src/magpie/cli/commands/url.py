@@ -71,7 +71,7 @@ def url(ctx: CLIContext, artifact_ref: str) -> None:
         hash_ref = data["hash_ref"]
 
     # Build URL - Hash refs use blobs/ subdirectory, tags are symlinks at root
-    if parsed.ref.startswith("@"):
+    if parsed.is_hash_ref:
         # User requested hash directly - use blobs path
         blob_name = hash_ref.lstrip("@")
         download_url = f"{ctx.server}/artifacts/{parsed.path}/blobs/{blob_name}"
