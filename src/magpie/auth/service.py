@@ -32,13 +32,6 @@ logger = logging.getLogger(__name__)
 # Auto-generated tokens are 54+ chars (10 char prefix + 43 char token_urlsafe(32))
 RECOMMENDED_MIN_TOKEN_LENGTH = 32
 
-# Scope hierarchy levels (higher number = more permissions)
-_SCOPE_LEVELS = {
-    TokenScope.READ: 1,
-    TokenScope.WRITE: 2,
-    TokenScope.ADMIN: 3,
-}
-
 
 @dataclass
 class TokenInfo:
@@ -385,23 +378,6 @@ class TokenService:
         )
         save_token(conn, token, commit=False)
         return plaintext
-
-    def has_scope(self, token_scope: TokenScope, required_scope: TokenScope) -> bool:
-        """Check if token_scope satisfies required_scope.
-
-        Hierarchy: admin > write > read
-        - ADMIN can access everything
-        - WRITE can access write and read operations
-        - READ can only access read operations
-
-        Args:
-            token_scope: The scope of the token being checked.
-            required_scope: The minimum scope required for the operation.
-
-        Returns:
-            True if token_scope has sufficient permissions.
-        """
-        return _SCOPE_LEVELS[token_scope] >= _SCOPE_LEVELS[required_scope]
 
     def generate_plaintext_token(self, scope: TokenScope) -> str:
         """Generate a new plaintext token with appropriate prefix, without persisting it.
