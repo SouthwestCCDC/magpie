@@ -185,6 +185,12 @@ class TestVersionCheckMiddleware:
         with pytest.raises(ValueError, match="Failed to parse min_client_version"):
             VersionCheckMiddleware(app, min_client_version="not-a-version")
 
+    def test_invalid_server_version_raises_at_init(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("magpie.server.middleware.__version__", "not-a-version")
+
+        with pytest.raises(ValueError, match="Failed to parse server_version"):
+            VersionCheckMiddleware(FastAPI(), min_client_version="1.0.0")
+
     def test_dev_server_allows_dev_client(self) -> None:
         """Test that dev server (0.0.0-dev) allows dev client (0.0.0-dev)."""
         app = FastAPI()

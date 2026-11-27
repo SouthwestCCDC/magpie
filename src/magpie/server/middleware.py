@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 
 import structlog
 from fastapi import Request, Response
-from packaging.version import InvalidVersion, Version, parse
+from packaging.version import InvalidVersion, Version
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
@@ -116,21 +116,14 @@ def get_min_client_version(server_version: str) -> str:
     Returns:
         Minimum client version string (e.g., "0.1.0", "0.0.0.dev0")
     """
-    parsed = parse(server_version)
-    # parse() always returns a Version object for valid semver/PEP440 versions
-    if isinstance(parsed, Version):
-        # Handle dev versions (e.g., 0.0.0-dev -> 0.0.0.dev0)
-        if parsed.dev is not None:
-            return f"{parsed.major}.{parsed.minor}.0.dev0"
-        # Handle pre-release versions (e.g., 0.1.0a1 -> 0.1.0a1)
-        elif parsed.pre is not None:
-            pre_type, pre_num = parsed.pre
-            return f"{parsed.major}.{parsed.minor}.0{pre_type}{pre_num}"
-        # Handle stable versions (e.g., 0.1.3 -> 0.1.0)
-        else:
-            return f"{parsed.major}.{parsed.minor}.0"
-    # This fallback is unreachable for standard/dev versions but kept for safety
-    return server_version
+    parsed = Version(server_version)
+    minor_floor = f"{parsed.major}.{parsed.minor}.0"
+    if parsed.dev is not None:
+        return f"{minor_floor}.dev0"
+    if parsed.pre is not None:
+        pre_type, pre_num = parsed.pre
+        return f"{minor_floor}{pre_type}{pre_num}"
+    return minor_floor
 
 
 class VersionCheckMiddleware(BaseHTTPMiddleware):
@@ -158,13 +151,7 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
 
         # Pre-parse and validate min_client_version at startup
         try:
-            parsed = parse(self.min_client_version)
-            if not isinstance(parsed, Version):
-                raise ValueError(
-                    f"Invalid min_client_version: {self.min_client_version!r} "
-                    f"(parsed as {type(parsed).__name__}, expected Version)"
-                )
-            self._parsed_min_client_version = parsed
+            self._parsed_min_client_version = Version(self.min_client_version)
         except InvalidVersion as e:
             raise ValueError(
                 f"Failed to parse min_client_version {self.min_client_version!r}: {e}"
@@ -172,13 +159,7 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
 
         # Pre-parse server version for upgrade-available check
         try:
-            parsed_server = parse(self.server_version)
-            if not isinstance(parsed_server, Version):
-                raise ValueError(
-                    f"Invalid server_version: {self.server_version!r} "
-                    f"(parsed as {type(parsed_server).__name__}, expected Version)"
-                )
-            self._parsed_server_version = parsed_server
+            self._parsed_server_version = Version(self.server_version)
         except InvalidVersion as e:
             raise ValueError(f"Failed to parse server_version {self.server_version!r}: {e}") from e
 
@@ -219,28 +200,25 @@ class VersionCheckMiddleware(BaseHTTPMiddleware):
             client_version_str = version_part[0]
 
             try:
-                parsed_client = parse(client_version_str)
+                client_version = Version(client_version_str)
 
-                if isinstance(parsed_client, Version):
-                    client_version = parsed_client
-
-                    if client_version < self._parsed_min_client_version:
-                        return JSONResponse(
-                            status_code=426,
-                            content={
-                                "error": "Client version too old",
-                                "detail": f"magpie-cli {client_version_str} is not compatible with server {self.server_version}. "
-                                f"Minimum required client version: {self.min_client_version}. "
-                                f"Please upgrade: pip install --upgrade magpie",
-                                "client_version": client_version_str,
-                                "server_version": self.server_version,
-                                "min_client_version": self.min_client_version,
-                            },
-                            headers={
-                                "X-Magpie-Server-Version": self.server_version,
-                                "X-Magpie-Min-Client-Version": self.min_client_version,
-                            },
-                        )
+                if client_version < self._parsed_min_client_version:
+                    return JSONResponse(
+                        status_code=426,
+                        content={
+                            "error": "Client version too old",
+                            "detail": f"magpie-cli {client_version_str} is not compatible with server {self.server_version}. "
+                            f"Minimum required client version: {self.min_client_version}. "
+                            f"Please upgrade: pip install --upgrade magpie",
+                            "client_version": client_version_str,
+                            "server_version": self.server_version,
+                            "min_client_version": self.min_client_version,
+                        },
+                        headers={
+                            "X-Magpie-Server-Version": self.server_version,
+                            "X-Magpie-Min-Client-Version": self.min_client_version,
+                        },
+                    )
             except (ValueError, AttributeError, IndexError):
                 # If parsing fails, allow the request (don't block on malformed User-Agent)
                 logger.debug(
