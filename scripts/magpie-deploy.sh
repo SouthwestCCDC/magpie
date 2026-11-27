@@ -259,50 +259,6 @@ prompt_value() {
     fi
 }
 
-prompt_choice() {
-    local prompt="$1"
-    local options="$2"  # Space-separated
-    local default="$3"
-    local var_name="$4"
-
-    if [[ "$NONINTERACTIVE" == "true" ]]; then
-        printf -v "$var_name" '%s' "$default"
-        return
-    fi
-
-    echo "[magpie] $prompt"
-    local i=1
-    local opt_array=()
-    for opt in $options; do
-        opt_array+=("$opt")
-        local marker=""
-        [[ "$opt" == "$default" ]] && marker=" (default)"
-        echo "  $i) $opt$marker"
-        # Assignment form, not `((i++))` as a bare statement -- see the
-        # same fix on capture_probe_state()'s `checked` counter for why:
-        # a bare `(( expr ))` statement's exit status follows the
-        # expression's TRUTH value (0 result -> exit 1), which would
-        # abort the whole script under `set -euo pipefail` the moment `i`
-        # is ever 0 at this point. `i` starts at 1 here, so this
-        # particular loop never actually hits that today -- fixed anyway
-        # for consistency and to not leave a landmine for a future edit.
-        i=$(( i + 1 ))
-    done
-
-    while true; do
-        read -r -p "[magpie] Enter choice [1-${#opt_array[@]}]: " choice
-        if [[ -z "$choice" ]]; then
-            printf -v "$var_name" '%s' "$default"
-            return
-        fi
-        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#opt_array[@]} )); then
-            printf -v "$var_name" '%s' "${opt_array[$((choice-1))]}"
-            return
-        fi
-        echo "[magpie] Invalid choice. Please enter a number between 1 and ${#opt_array[@]}."
-    done
-}
-
 # =============================================================================
 # Prerequisite checks
 # =============================================================================
