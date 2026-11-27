@@ -1962,11 +1962,6 @@ pull_or_build_image() {
 # Service management
 # =============================================================================
 
-pull_images() {
-    log "Pulling Docker images..."
-    magpie_compose pull
-}
-
 start_services() {
     log "Starting services..."
     systemctl daemon-reload
